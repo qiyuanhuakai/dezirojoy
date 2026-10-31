@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>DeziroJoy.Platform.Tests</AssemblyName>
+    <RootNamespace>DeziroJoy.Platform.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);CA1707</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DeziroJoy.Core\DeziroJoy.Core.csproj" />
+    <ProjectReference Include="..\..\src\DeziroJoy.Platform.Windows\DeziroJoy.Platform.Windows.csproj" />
+    <ProjectReference Include="..\..\src\DeziroJoy.Platform.Linux\DeziroJoy.Platform.Linux.csproj" />
+  </ItemGroup>
+</Project>

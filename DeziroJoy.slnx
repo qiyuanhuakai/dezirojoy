@@ -8,5 +8,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/DeziroJoy.App.Tests/DeziroJoy.App.Tests.csproj" />
     <Project Path="tests/DeziroJoy.Core.Tests/DeziroJoy.Core.Tests.csproj" />
+    <Project Path="tests/DeziroJoy.Platform.Tests/DeziroJoy.Platform.Tests.csproj" />
   </Folder>
 </Solution>

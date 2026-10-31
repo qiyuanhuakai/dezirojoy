@@ -2,6 +2,7 @@
   <PropertyGroup>
     <AssemblyName>DeziroJoy.Platform.Linux</AssemblyName>
     <RootNamespace>DeziroJoy.Platform.Linux</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\DeziroJoy.Core\DeziroJoy.Core.csproj" />
