@@ -4,12 +4,14 @@
         xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
         xmlns:controls="clr-namespace:DeziroJoy.App.Views.Controls"
         xmlns:views="clr-namespace:DeziroJoy.App.Views"
+        xmlns:chrome="using:Avalonia.Controls.Chrome"
         x:Class="DeziroJoy.App.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="DeziroJoy"
         Width="1320" Height="880"
         MinWidth="1180" MinHeight="780"
         WindowStartupLocation="CenterScreen"
+        WindowDecorations="None"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaTitleBarHeightHint="44"
         Background="#101010">
@@ -171,24 +173,27 @@
 
     <Grid RowDefinitions="Auto,*">
 
-        <Border Grid.Row="0" Height="44" Background="#161616" PointerPressed="TitleBarPointerPressed">
+        <Border Grid.Row="0" Height="44" Background="#161616"
+                chrome:WindowDecorationProperties.ElementRole="TitleBar"
+                PointerPressed="TitleBarPointerPressed">
             <Grid ColumnDefinitions="Auto,*,Auto">
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
-                    <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                    <Image x:Name="TitleBarIcon" Width="16" Height="16" VerticalAlignment="Center" />
                     <TextBlock Text="DeziroJoy" FontSize="13" FontWeight="SemiBold"
                                Foreground="{StaticResource TextPrimaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" />
                     <TextBlock Text="手柄映射工具" FontSize="11" Foreground="#8A8A8A"
                                Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
-                    <Button x:Name="MinimizeButton" Classes="caption" Click="MinimizeClick">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <Button x:Name="MinimizeButton" Classes="caption"
+                            chrome:WindowDecorationProperties.ElementRole="MinimizeButton"
+                            Click="MinimizeClick">
                         <Rectangle Width="10" Height="1" Fill="#D0D0D0" />
                     </Button>
-                    <Button x:Name="MaximizeButton" Classes="caption" Click="MaximizeClick">
-                        <Rectangle Width="9" Height="9" Stroke="#D0D0D0" StrokeThickness="1" />
-                    </Button>
-                    <Button x:Name="CloseButton" Classes="caption close" Click="CloseClick">
+                    <Button x:Name="CloseButton" Classes="caption close"
+                            chrome:WindowDecorationProperties.ElementRole="CloseButton"
+                            Click="CloseClick">
                         <Grid Width="10" Height="10">
                             <Rectangle Width="10" Height="1" Fill="#D0D0D0">
                                 <Rectangle.RenderTransform>
@@ -690,6 +695,29 @@
                     </StackPanel>
                 </Grid>
             </Border>
+        </Grid>
+
+        <!-- WindowDecorations="None" strips the native resize border, so the window has to
+             declare its own hit-test zones. Kept as the last child so it sits above the
+             content; each strip is only 4-5px, and the caption buttons start 8px from the
+             right edge, so no strip covers a real control. -->
+        <Grid Grid.RowSpan="2">
+            <Border x:Name="ResizeTop" chrome:WindowDecorationProperties.ElementRole="ResizeN"
+                    Height="4" VerticalAlignment="Top" Background="Transparent" />
+            <Border x:Name="ResizeBottom" chrome:WindowDecorationProperties.ElementRole="ResizeS"
+                    Height="5" VerticalAlignment="Bottom" Background="Transparent" />
+            <Border x:Name="ResizeLeft" chrome:WindowDecorationProperties.ElementRole="ResizeW"
+                    Width="4" HorizontalAlignment="Left" Background="Transparent" />
+            <Border x:Name="ResizeRight" chrome:WindowDecorationProperties.ElementRole="ResizeE"
+                    Width="5" HorizontalAlignment="Right" Background="Transparent" />
+            <Border x:Name="ResizeTopLeft" chrome:WindowDecorationProperties.ElementRole="ResizeNW"
+                    Width="8" Height="8" HorizontalAlignment="Left" VerticalAlignment="Top" Background="Transparent" />
+            <Border x:Name="ResizeTopRight" chrome:WindowDecorationProperties.ElementRole="ResizeNE"
+                    Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Top" Background="Transparent" />
+            <Border x:Name="ResizeBottomLeft" chrome:WindowDecorationProperties.ElementRole="ResizeSW"
+                    Width="8" Height="8" HorizontalAlignment="Left" VerticalAlignment="Bottom" Background="Transparent" />
+            <Border x:Name="ResizeBottomRight" chrome:WindowDecorationProperties.ElementRole="ResizeSE"
+                    Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="Transparent" />
         </Grid>
     </Grid>
 </Window>

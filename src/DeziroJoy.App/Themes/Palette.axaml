@@ -1,0 +1,218 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        DeziroJoy theme token layer.
+
+        Every colour that used to be hardcoded in MainWindow.axaml and the three
+        UserControls now lives here as a named token, with a Dark value that
+        reproduces the original hex exactly and a Light value chosen for
+        readability (WCAG AA text contrast, perceptible borders) rather than by
+        inverting the dark one.
+
+        Consumption rules:
+          * Always resolve these keys with {DynamicResource ...}. A
+            {StaticResource ...} lookup against a ThemeDictionaries key is not
+            supported and throws at runtime.
+          * The eight tokens that already existed at Window scope in
+            MainWindow.axaml (AccentBrush, ConnectedBrush, IdleDotBrush,
+            CardBrush, CardBorderBrush, SubtleBrush, TextPrimaryBrush,
+            TextSecondaryBrush) are deliberately re-declared here at
+            Application scope under the same names, so deleting the
+            Window-scope block later makes every existing
+            {StaticResource ...} reference resolve straight onto the themed
+            token with no rename.
+          * "Default" mirrors Dark. It is the fallback the resource system
+            consults when the live variant has no entry for a key, and keeping
+            it dark preserves the app's default look before ThemeService has
+            applied the persisted preference.
+    -->
+
+    <ResourceDictionary.ThemeDictionaries>
+
+        <!-- ======================= FALLBACK (mirrors Dark) ======================= -->
+        <ResourceDictionary x:Key="Default">
+
+            <!-- Surfaces -->
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#101010" />
+            <SolidColorBrush x:Key="TitleBarBrush" Color="#161616" />
+            <SolidColorBrush x:Key="PanelBrush" Color="#141414" />
+            <SolidColorBrush x:Key="CardBrush" Color="#1B1B1B" />
+            <SolidColorBrush x:Key="SunkenBrush" Color="#151515" />
+            <SolidColorBrush x:Key="SubtleBrush" Color="#232323" />
+            <SolidColorBrush x:Key="ControlHoverBrush" Color="#2C2C2C" />
+            <SolidColorBrush x:Key="CaptionHoverBrush" Color="#2A2A2A" />
+            <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#1E3A48" />
+            <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#DD151515" />
+
+            <!-- Borders, dividers, tracks -->
+            <SolidColorBrush x:Key="CardBorderBrush" Color="#2B2B2B" />
+            <SolidColorBrush x:Key="ControlBorderBrush" Color="#333333" />
+            <SolidColorBrush x:Key="PreviewBorderBrush" Color="#2C2C2C" />
+            <SolidColorBrush x:Key="TrackBrush" Color="#242424" />
+
+            <!-- Text -->
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F0F0F0" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#9A9A9A" />
+            <SolidColorBrush x:Key="HintTextBrush" Color="#7A7A7A" />
+            <SolidColorBrush x:Key="MutedTextBrush" Color="#8A8A8A" />
+            <SolidColorBrush x:Key="ControlForegroundBrush" Color="#DADADA" />
+            <SolidColorBrush x:Key="ToggleForegroundBrush" Color="#B4B4B4" />
+            <SolidColorBrush x:Key="CaptionGlyphBrush" Color="#D0D0D0" />
+            <SolidColorBrush x:Key="BadgeTextBrush" Color="#B9B9B9" />
+            <SolidColorBrush x:Key="OverlayTextBrush" Color="#D6D6D6" />
+            <SolidColorBrush x:Key="PadLabelBrush" Color="#CFCFCF" />
+            <SolidColorBrush x:Key="AccentForegroundBrush" Color="#101010" />
+            <SolidColorBrush x:Key="DangerForegroundBrush" Color="#D0D0D0" />
+
+            <!-- Accent and status -->
+            <SolidColorBrush x:Key="AccentBrush" Color="#4CC2FF" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#6FCFFF" />
+            <SolidColorBrush x:Key="AccentPressedBrush" Color="#6FCFFF" />
+            <SolidColorBrush x:Key="ConnectedBrush" Color="#3FB950" />
+            <SolidColorBrush x:Key="IdleDotBrush" Color="#6E7681" />
+            <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
+
+            <!-- Gamepad visualizer -->
+            <SolidColorBrush x:Key="PadBodyBrush" Color="#1F1F1F" />
+            <SolidColorBrush x:Key="StickPadBrush" Color="#262626" />
+            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="StickRingBrush" Color="#4A4A4A" />
+            <SolidColorBrush x:Key="StickThumbBrush" Color="#D8D8D8" />
+            <SolidColorBrush x:Key="DpadCenterBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="PadIdleBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="PadPressedBrush" Color="#4CC2FF" />
+
+        </ResourceDictionary>
+
+        <!-- =============================== LIGHT =============================== -->
+        <ResourceDictionary x:Key="Light">
+
+            <!--
+                Surfaces. The canvas is a cool light grey so white cards read as
+                raised; the title bar and the right-hand status panel invert
+                their dark-mode relationship and sit above the canvas.
+            -->
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F6F8FA" />
+            <SolidColorBrush x:Key="TitleBarBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="SunkenBrush" Color="#F6F8FA" />
+            <SolidColorBrush x:Key="SubtleBrush" Color="#F0F2F5" />
+            <SolidColorBrush x:Key="ControlHoverBrush" Color="#E9EDF1" />
+            <SolidColorBrush x:Key="CaptionHoverBrush" Color="#E9EDF1" />
+            <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#E6F1F9" />
+            <!-- Translucent scrim over the sunken preview well; keeps the speed pill legible. -->
+            <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#3324292E" />
+
+            <!-- Borders, dividers, tracks -->
+            <SolidColorBrush x:Key="CardBorderBrush" Color="#D0D7DE" />
+            <SolidColorBrush x:Key="ControlBorderBrush" Color="#AFB8C1" />
+            <SolidColorBrush x:Key="PreviewBorderBrush" Color="#C9D1D9" />
+            <SolidColorBrush x:Key="TrackBrush" Color="#C9D1D9" />
+
+            <!--
+                Text. Every value clears 4.5:1 on both the white card and the
+                #F6F8FA canvas, so the same token is safe on either surface.
+            -->
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#1F2328" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#59636E" />
+            <SolidColorBrush x:Key="HintTextBrush" Color="#656E78" />
+            <SolidColorBrush x:Key="MutedTextBrush" Color="#5C6470" />
+            <SolidColorBrush x:Key="ControlForegroundBrush" Color="#24292F" />
+            <SolidColorBrush x:Key="ToggleForegroundBrush" Color="#24292F" />
+            <SolidColorBrush x:Key="CaptionGlyphBrush" Color="#57606A" />
+            <SolidColorBrush x:Key="BadgeTextBrush" Color="#57606A" />
+            <SolidColorBrush x:Key="OverlayTextBrush" Color="#1F2328" />
+            <SolidColorBrush x:Key="PadLabelBrush" Color="#57606A" />
+            <!-- Foreground for content sitting on AccentBrush / DangerBrush. -->
+            <SolidColorBrush x:Key="AccentForegroundBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="DangerForegroundBrush" Color="#FFFFFF" />
+
+            <!--
+                Accent and status. The cyan accent is deepened to a sky blue so
+                it stays readable as text and as a button fill on white; hover
+                and pressed step darker, mirroring how the dark theme steps
+                lighter.
+            -->
+            <SolidColorBrush x:Key="AccentBrush" Color="#0A6FBF" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#08599B" />
+            <SolidColorBrush x:Key="AccentPressedBrush" Color="#064E86" />
+            <SolidColorBrush x:Key="ConnectedBrush" Color="#1A7F37" />
+            <SolidColorBrush x:Key="IdleDotBrush" Color="#57606A" />
+            <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
+
+            <!--
+                Gamepad visualizer. The silhouette becomes a light grey shape on
+                the white status panel; the thumb and the pad labels invert to
+                dark so they stay the most prominent marks, and the idle pad
+                elements darken enough to read as distinct shapes.
+            -->
+            <SolidColorBrush x:Key="PadBodyBrush" Color="#E9EDF1" />
+            <SolidColorBrush x:Key="StickPadBrush" Color="#DCE1E6" />
+            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#AFB8C1" />
+            <SolidColorBrush x:Key="StickRingBrush" Color="#AEB6BE" />
+            <SolidColorBrush x:Key="StickThumbBrush" Color="#57606A" />
+            <SolidColorBrush x:Key="DpadCenterBrush" Color="#D2D8DE" />
+            <SolidColorBrush x:Key="PadIdleBrush" Color="#BFC7CF" />
+            <SolidColorBrush x:Key="PadPressedBrush" Color="#0A6FBF" />
+
+        </ResourceDictionary>
+
+        <!-- =============================== DARK ================================ -->
+        <ResourceDictionary x:Key="Dark">
+
+            <!-- Surfaces -->
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#101010" />
+            <SolidColorBrush x:Key="TitleBarBrush" Color="#161616" />
+            <SolidColorBrush x:Key="PanelBrush" Color="#141414" />
+            <SolidColorBrush x:Key="CardBrush" Color="#1B1B1B" />
+            <SolidColorBrush x:Key="SunkenBrush" Color="#151515" />
+            <SolidColorBrush x:Key="SubtleBrush" Color="#232323" />
+            <SolidColorBrush x:Key="ControlHoverBrush" Color="#2C2C2C" />
+            <SolidColorBrush x:Key="CaptionHoverBrush" Color="#2A2A2A" />
+            <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#1E3A48" />
+            <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#DD151515" />
+
+            <!-- Borders, dividers, tracks -->
+            <SolidColorBrush x:Key="CardBorderBrush" Color="#2B2B2B" />
+            <SolidColorBrush x:Key="ControlBorderBrush" Color="#333333" />
+            <SolidColorBrush x:Key="PreviewBorderBrush" Color="#2C2C2C" />
+            <SolidColorBrush x:Key="TrackBrush" Color="#242424" />
+
+            <!-- Text -->
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F0F0F0" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#9A9A9A" />
+            <SolidColorBrush x:Key="HintTextBrush" Color="#7A7A7A" />
+            <SolidColorBrush x:Key="MutedTextBrush" Color="#8A8A8A" />
+            <SolidColorBrush x:Key="ControlForegroundBrush" Color="#DADADA" />
+            <SolidColorBrush x:Key="ToggleForegroundBrush" Color="#B4B4B4" />
+            <SolidColorBrush x:Key="CaptionGlyphBrush" Color="#D0D0D0" />
+            <SolidColorBrush x:Key="BadgeTextBrush" Color="#B9B9B9" />
+            <SolidColorBrush x:Key="OverlayTextBrush" Color="#D6D6D6" />
+            <SolidColorBrush x:Key="PadLabelBrush" Color="#CFCFCF" />
+            <SolidColorBrush x:Key="AccentForegroundBrush" Color="#101010" />
+            <SolidColorBrush x:Key="DangerForegroundBrush" Color="#D0D0D0" />
+
+            <!-- Accent and status -->
+            <SolidColorBrush x:Key="AccentBrush" Color="#4CC2FF" />
+            <SolidColorBrush x:Key="AccentHoverBrush" Color="#6FCFFF" />
+            <SolidColorBrush x:Key="AccentPressedBrush" Color="#6FCFFF" />
+            <SolidColorBrush x:Key="ConnectedBrush" Color="#3FB950" />
+            <SolidColorBrush x:Key="IdleDotBrush" Color="#6E7681" />
+            <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
+
+            <!-- Gamepad visualizer -->
+            <SolidColorBrush x:Key="PadBodyBrush" Color="#1F1F1F" />
+            <SolidColorBrush x:Key="StickPadBrush" Color="#262626" />
+            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="StickRingBrush" Color="#4A4A4A" />
+            <SolidColorBrush x:Key="StickThumbBrush" Color="#D8D8D8" />
+            <SolidColorBrush x:Key="DpadCenterBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="PadIdleBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="PadPressedBrush" Color="#4CC2FF" />
+
+        </ResourceDictionary>
+
+    </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

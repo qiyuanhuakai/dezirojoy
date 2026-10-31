@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless.XUnit;
+using Avalonia.Layout;
 using Avalonia.Media;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views.Controls;
@@ -80,6 +81,42 @@ public sealed class ControlsGuiTests
 
         Assert.Equal(0.4d, canvas.Opacity);
         Assert.True(label.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void GamepadVisualizer_ABXY_Labels_Are_Centered_On_Their_Buttons()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+        var labels = canvas.Children
+            .OfType<TextBlock>()
+            .Where(t => t.Text is "A" or "B" or "X" or "Y")
+            .ToDictionary(t => t.Text!);
+
+        Assert.Equal(4, labels.Count);
+
+        foreach (var (letter, ellipseName) in new[]
+        {
+            ("Y", "ButtonY"),
+            ("X", "ButtonX"),
+            ("B", "ButtonB"),
+            ("A", "ButtonA"),
+        })
+        {
+            var ellipse = control.FindControl<Ellipse>(ellipseName)!;
+            var label = labels[letter];
+
+            Assert.Equal(Canvas.GetLeft(ellipse), Canvas.GetLeft(label));
+            Assert.Equal(Canvas.GetTop(ellipse), Canvas.GetTop(label));
+            Assert.Equal(ellipse.Width, label.Width);
+            Assert.Equal(ellipse.Height, label.Height);
+            Assert.Equal(TextAlignment.Center, label.TextAlignment);
+            Assert.Equal(VerticalAlignment.Center, label.VerticalAlignment);
+            // Avalonia's TextBlock only honors VerticalAlignment when the text is taller than the
+            // box; LineHeight == box height is what actually centers the glyph ink vertically.
+            Assert.Equal(label.Height, label.LineHeight);
+        }
     }
 
     [AvaloniaFact]

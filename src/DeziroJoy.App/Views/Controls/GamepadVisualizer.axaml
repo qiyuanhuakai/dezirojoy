@@ -63,10 +63,14 @@
             <Ellipse x:Name="ButtonA" Canvas.Left="198" Canvas.Top="104" Width="22" Height="22"
                      Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}" />
 
-            <TextBlock Canvas.Left="203" Canvas.Top="59" Text="Y" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
-            <TextBlock Canvas.Left="179" Canvas.Top="83" Text="X" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
-            <TextBlock Canvas.Left="228" Canvas.Top="83" Text="B" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
-            <TextBlock Canvas.Left="204" Canvas.Top="107" Text="A" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="198" Canvas.Top="56" Width="22" Height="22" LineHeight="22" Text="Y" FontSize="10"
+                       Foreground="#CFCFCF" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="174" Canvas.Top="80" Width="22" Height="22" LineHeight="22" Text="X" FontSize="10"
+                       Foreground="#CFCFCF" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="222" Canvas.Top="80" Width="22" Height="22" LineHeight="22" Text="B" FontSize="10"
+                       Foreground="#CFCFCF" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="198" Canvas.Top="104" Width="22" Height="22" LineHeight="22" Text="A" FontSize="10"
+                       Foreground="#CFCFCF" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
 
             <Ellipse x:Name="BackButton" Canvas.Left="138" Canvas.Top="64" Width="14" Height="14"
                      Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}" />

@@ -1,11 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Chrome;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -68,8 +70,94 @@ public sealed class MainWindowGuiTests
         Assert.NotNull(window.FindControl<Button>("AddMappingButton"));
         Assert.NotNull(window.FindControl<GamepadVisualizer>("GamepadVisualizer"));
         Assert.NotNull(window.FindControl<Button>("MinimizeButton"));
-        Assert.NotNull(window.FindControl<Button>("MaximizeButton"));
         Assert.NotNull(window.FindControl<Button>("CloseButton"));
+    }
+
+    [AvaloniaFact]
+    public void TitleBar_Has_No_MaximizeButton()
+    {
+        var (window, _, _, _) = BuildWindow();
+
+        Assert.Null(window.FindControl<Button>("MaximizeButton"));
+    }
+
+    [AvaloniaFact]
+    public void Window_Declares_All_Eight_Resize_Zones()
+    {
+        var (window, _, _, _) = BuildWindow();
+
+        Assert.Equal(WindowDecorationsElementRole.ResizeN,
+            RoleOf(window, "ResizeTop"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeS,
+            RoleOf(window, "ResizeBottom"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeW,
+            RoleOf(window, "ResizeLeft"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeE,
+            RoleOf(window, "ResizeRight"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeNW,
+            RoleOf(window, "ResizeTopLeft"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeNE,
+            RoleOf(window, "ResizeTopRight"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeSW,
+            RoleOf(window, "ResizeBottomLeft"));
+        Assert.Equal(WindowDecorationsElementRole.ResizeSE,
+            RoleOf(window, "ResizeBottomRight"));
+    }
+
+    [AvaloniaFact]
+    public void Resize_Grips_Do_Not_Cover_The_Caption_Buttons()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var minimize = window.FindControl<Button>("MinimizeButton")!;
+        var close = window.FindControl<Button>("CloseButton")!;
+        var rightGrip = window.FindControl<Border>("ResizeRight")!;
+
+        var gripLeft = rightGrip.TranslatePoint(new Point(0, 0), window)!.Value.X;
+        Assert.True(gripLeft >= close.Bounds.Right,
+            $"resize grip starts at {gripLeft} but the close button ends at {close.Bounds.Right}");
+        Assert.True(minimize.Bounds.Width > 0 && close.Bounds.Width > 0);
+    }
+
+    private static WindowDecorationsElementRole RoleOf(Window window, string gripName)
+    {
+        var grip = window.FindControl<Border>(gripName);
+        Assert.NotNull(grip);
+        return WindowDecorationProperties.GetElementRole(grip!);
+    }
+
+    [AvaloniaFact]
+    public void TitleBar_Shows_The_App_Name_Exactly_Once_And_Clear_Of_Caption_Buttons()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var appNameTexts = window.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .Where(text => text.Text == "DeziroJoy")
+            .ToList();
+
+        var title = Assert.Single(appNameTexts);
+
+        var minimize = window.FindControl<Button>("MinimizeButton")!;
+        var close = window.FindControl<Button>("CloseButton")!;
+
+        var titleRect = RectInWindow(title, window);
+        var minimizeRect = RectInWindow(minimize, window);
+        var closeRect = RectInWindow(close, window);
+
+        Assert.True(titleRect.Right <= minimizeRect.Left,
+            $"Title text right edge {titleRect.Right} overlaps minimize button left edge {minimizeRect.Left}.");
+        Assert.True(minimizeRect.Right <= closeRect.Left,
+            $"Minimize button right edge {minimizeRect.Right} overlaps close button left edge {closeRect.Left}.");
+    }
+
+    private static Rect RectInWindow(Control control, Window window)
+    {
+        var origin = control.TranslatePoint(new Point(0, 0), window);
+        Assert.NotNull(origin);
+        return new Rect(origin!.Value, control.Bounds.Size);
     }
 
     [AvaloniaFact]

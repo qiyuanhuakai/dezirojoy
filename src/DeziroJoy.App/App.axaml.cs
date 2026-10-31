@@ -32,8 +32,12 @@ public partial class App : Application
             services.AddSingleton<IProfileStore>(store);
             services.AddSingleton<EngineHost>();
             services.AddSingleton<MainWindowViewModel>();
+            services.AddSingleton<ThemeService>();
 
             var serviceProvider = services.BuildServiceProvider();
+
+            serviceProvider.GetRequiredService<ThemeService>().ApplyPersisted();
+
             var viewModel = serviceProvider.GetRequiredService<MainWindowViewModel>();
             var host = serviceProvider.GetRequiredService<EngineHost>();
 

@@ -3,6 +3,8 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
@@ -35,7 +37,52 @@ public partial class MainWindow : Window
 
         AvaloniaXamlLoader.Load(this);
         DataContext = viewModel;
+        LoadWindowIcon();
+        ConfigureResizeGrips();
         Wire(host ?? viewModel.Host);
+    }
+
+    private void ConfigureResizeGrips()
+    {
+        // Avalonia has no Cursor type converter for XAML, so the resize directions are
+        // assigned here. The ElementRole attributes on the grips drive the actual
+        // hit-testing; these cursors only give the user the visual affordance.
+        SetGripCursor("ResizeTop", StandardCursorType.SizeNorthSouth);
+        SetGripCursor("ResizeBottom", StandardCursorType.SizeNorthSouth);
+        SetGripCursor("ResizeLeft", StandardCursorType.SizeWestEast);
+        SetGripCursor("ResizeRight", StandardCursorType.SizeWestEast);
+        SetGripCursor("ResizeTopLeft", StandardCursorType.TopLeftCorner);
+        SetGripCursor("ResizeTopRight", StandardCursorType.TopRightCorner);
+        SetGripCursor("ResizeBottomLeft", StandardCursorType.BottomLeftCorner);
+        SetGripCursor("ResizeBottomRight", StandardCursorType.BottomRightCorner);
+    }
+
+    private void SetGripCursor(string name, StandardCursorType type)
+    {
+        if (this.FindControl<Border>(name) is { } grip)
+        {
+            grip.Cursor = new Cursor(type);
+        }
+    }
+
+    private void LoadWindowIcon()
+    {
+        // Avalonia's build targets register <ApplicationIcon> under this key
+        // (see AvaloniaBuildTasks.targets: AvaloniaResource Link="!__AvaloniaDefaultWindowIcon"),
+        // not under its source-relative path "Assets/dezirojoy.ico".
+        var iconUri = new Uri(
+            $"avares://{GetType().Assembly.GetName().Name}/!__AvaloniaDefaultWindowIcon");
+
+        using (var stream = AssetLoader.Open(iconUri))
+        {
+            Icon = new WindowIcon(stream);
+        }
+
+        var titleBarIcon = this.FindControl<Image>("TitleBarIcon")!;
+        using (var stream = AssetLoader.Open(iconUri))
+        {
+            titleBarIcon.Source = new Bitmap(stream);
+        }
     }
 
     private MainWindowViewModel ViewModel => (MainWindowViewModel)DataContext!;
@@ -76,9 +123,6 @@ public partial class MainWindow : Window
 
     private void MinimizeClick(object? sender, RoutedEventArgs e)
         => WindowState = WindowState.Minimized;
-
-    private void MaximizeClick(object? sender, RoutedEventArgs e)
-        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
     private void CloseClick(object? sender, RoutedEventArgs e)
         => Close();
