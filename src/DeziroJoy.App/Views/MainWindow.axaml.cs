@@ -32,7 +32,7 @@ public partial class MainWindow : Window
     {
     }
 
-    public MainWindow(MainWindowViewModel viewModel, EngineHost? host = null)
+    public MainWindow(MainWindowViewModel viewModel, EngineHost? host = null, ThemeService? themes = null)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
 
@@ -40,8 +40,27 @@ public partial class MainWindow : Window
         DataContext = viewModel;
         LoadWindowIcon();
         ConfigureResizeGrips();
+        InstallThemeToggle(themes ?? new ThemeService());
         Wire(host ?? viewModel.Host);
         OpenQaElementForScreenshot();
+    }
+
+    /// <summary>
+    /// Drops the theme toggle into the caption button row, left of minimize. The
+    /// title bar is where the app's chrome preferences live and it has free space
+    /// between the app name and the caption buttons, so the toggle costs no room in
+    /// the already dense left sidebar.
+    /// </summary>
+    private void InstallThemeToggle(ThemeService themes)
+    {
+        var minimize = this.FindControl<Button>("MinimizeButton");
+
+        if (minimize?.Parent is not Panel captionButtons)
+        {
+            return;
+        }
+
+        captionButtons.Children.Insert(captionButtons.Children.IndexOf(minimize), new ThemeToggleButton(themes));
     }
 
     // TEMPORARY QA hook: opens the mapping settings for one element so the settings surface

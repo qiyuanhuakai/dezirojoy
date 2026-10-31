@@ -1,0 +1,26 @@
+<Button xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DeziroJoy.App.Views.Controls.ThemeToggleButton"
+        Classes="caption"
+        ToolTip.Tip="切换浅色 / 深色主题">
+
+    <!--
+        Sun and moon glyphs, drawn as paths so they need no icon font and stay
+        crisp at the 16px title-bar size. Both are painted with the CaptionGlyphBrush
+        token, so they follow the theme like every other caption mark. Only one is
+        visible at a time; ThemeToggleButton.UpdateGlyph picks which.
+    -->
+    <Grid Width="16" Height="16">
+        <Path x:Name="MoonGlyph"
+              Stretch="Uniform"
+              Fill="{DynamicResource CaptionGlyphBrush}"
+              Data="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        <Path x:Name="SunGlyph"
+              Stretch="Uniform"
+              Fill="{DynamicResource CaptionGlyphBrush}"
+              Stroke="{DynamicResource CaptionGlyphBrush}"
+              StrokeThickness="2"
+              StrokeLineCap="Round"
+              Data="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42" />
+    </Grid>
+</Button>

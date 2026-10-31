@@ -32,12 +32,19 @@ public partial class App : Application
 
             var serviceProvider = services.BuildServiceProvider();
 
-            serviceProvider.GetRequiredService<ThemeService>().ApplyPersisted();
+            var themes = serviceProvider.GetRequiredService<ThemeService>();
+            themes.ApplyPersisted();
 
             var viewModel = serviceProvider.GetRequiredService<MainWindowViewModel>();
             var host = serviceProvider.GetRequiredService<EngineHost>();
 
-            desktop.MainWindow = new MainWindow(viewModel, host);
+            desktop.MainWindow = new MainWindow(viewModel, host, themes);
+
+            // The tray owns hide-on-close, so the engine keeps mapping with no window
+            // open. Constructed exactly once here; disposed when the lifetime exits.
+            var tray = new TrayService(this, desktop, themes);
+            tray.Install(desktop.MainWindow);
+            desktop.Exit += (_, _) => tray.Dispose();
         }
 
         base.OnFrameworkInitializationCompleted();
