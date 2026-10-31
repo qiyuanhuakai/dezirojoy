@@ -14,10 +14,10 @@
         WindowDecorations="None"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaTitleBarHeightHint="44"
-        Background="#101010">
+        Background="{DynamicResource AppBackgroundBrush}">
 
     <Window.Resources>
-        <conv:BoolToBrushConverter x:Key="DotBrush" PressedBrush="{StaticResource ConnectedBrush}" IdleBrush="{StaticResource IdleDotBrush}" />
+        <conv:BoolToBrushConverter x:Key="DotBrush" PressedKey="ConnectedBrush" IdleKey="IdleDotBrush" />
         <conv:BoolToTextConverter x:Key="EngineStateText" TrueText="停止映射" FalseText="启动映射" />
         <conv:BoolToTextConverter x:Key="EnabledText" TrueText="已启用" FalseText="已禁用" />
         <conv:BoolNegationConverter x:Key="Not" />
@@ -25,21 +25,12 @@
         <conv:TargetKindMatchConverter x:Key="KindMatch" />
         <conv:EnumDisplayConverter x:Key="EnumDisplay" />
         <conv:ScrollRateBarConverter x:Key="RateBar" />
-
-        <SolidColorBrush x:Key="AccentBrush">#4CC2FF</SolidColorBrush>
-        <SolidColorBrush x:Key="ConnectedBrush">#3FB950</SolidColorBrush>
-        <SolidColorBrush x:Key="IdleDotBrush">#6E7681</SolidColorBrush>
-        <SolidColorBrush x:Key="CardBrush">#1B1B1B</SolidColorBrush>
-        <SolidColorBrush x:Key="CardBorderBrush">#2B2B2B</SolidColorBrush>
-        <SolidColorBrush x:Key="SubtleBrush">#232323</SolidColorBrush>
-        <SolidColorBrush x:Key="TextPrimaryBrush">#F0F0F0</SolidColorBrush>
-        <SolidColorBrush x:Key="TextSecondaryBrush">#9A9A9A</SolidColorBrush>
     </Window.Resources>
 
     <Window.Styles>
         <Style Selector="Border.card">
-            <Setter Property="Background" Value="{StaticResource CardBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}" />
+            <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="12" />
             <Setter Property="Padding" Value="16" />
@@ -49,36 +40,36 @@
         <Style Selector="TextBlock.cardTitle">
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
         </Style>
 
         <Style Selector="TextBlock.sectionLabel">
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="Margin" Value="0,14,0,6" />
         </Style>
 
         <Style Selector="TextBlock.fieldLabel">
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="Margin" Value="0,0,0,4" />
         </Style>
 
         <Style Selector="TextBlock.readout">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
 
         <Style Selector="TextBlock.hint">
             <Setter Property="FontSize" Value="11" />
-            <Setter Property="Foreground" Value="#7A7A7A" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
 
         <Style Selector="Button.primary">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-            <Setter Property="Foreground" Value="#101010" />
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="16,9" />
@@ -88,13 +79,13 @@
         </Style>
 
         <Style Selector="Button.primary:pointerover">
-            <Setter Property="Background" Value="#6FCFFF" />
+            <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
         </Style>
 
         <Style Selector="Button.ghost">
-            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
-            <Setter Property="Foreground" Value="#DADADA" />
-            <Setter Property="BorderBrush" Value="#333333" />
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="14,8" />
@@ -103,7 +94,7 @@
         </Style>
 
         <Style Selector="Button.ghost:pointerover">
-            <Setter Property="Background" Value="#2C2C2C" />
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
         </Style>
 
         <Style Selector="Button.caption">
@@ -117,17 +108,17 @@
         </Style>
 
         <Style Selector="Button.caption:pointerover">
-            <Setter Property="Background" Value="#2A2A2A" />
+            <Setter Property="Background" Value="{DynamicResource CaptionHoverBrush}" />
         </Style>
 
         <Style Selector="Button.caption.close:pointerover">
-            <Setter Property="Background" Value="#C42B1C" />
+            <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
         </Style>
 
         <Style Selector="ToggleButton.rowToggle">
-            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
-            <Setter Property="Foreground" Value="#B4B4B4" />
-            <Setter Property="BorderBrush" Value="#333333" />
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ToggleForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Padding" Value="12,6" />
@@ -135,14 +126,14 @@
         </Style>
 
         <Style Selector="ToggleButton.rowToggle:checked">
-            <Setter Property="Background" Value="#1E3A48" />
-            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
 
         <Style Selector="ComboBox">
-            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
-            <Setter Property="BorderBrush" Value="#333333" />
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="FontSize" Value="12" />
@@ -158,12 +149,12 @@
         </Style>
 
         <Style Selector="CheckBox">
-            <Setter Property="Foreground" Value="#DADADA" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
             <Setter Property="FontSize" Value="12" />
         </Style>
 
         <Style Selector="Slider">
-            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         </Style>
 
         <Style Selector="TabControl">
@@ -173,15 +164,15 @@
 
     <Grid RowDefinitions="Auto,*">
 
-        <Border Grid.Row="0" Height="44" Background="#161616"
+        <Border Grid.Row="0" Height="44" Background="{DynamicResource TitleBarBrush}"
                 chrome:WindowDecorationProperties.ElementRole="TitleBar"
                 PointerPressed="TitleBarPointerPressed">
             <Grid ColumnDefinitions="Auto,*,Auto">
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                     <Image x:Name="TitleBarIcon" Width="16" Height="16" VerticalAlignment="Center" />
                     <TextBlock Text="DeziroJoy" FontSize="13" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextPrimaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" />
-                    <TextBlock Text="手柄映射工具" FontSize="11" Foreground="#8A8A8A"
+                               Foreground="{DynamicResource TextPrimaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Text="手柄映射工具" FontSize="11" Foreground="{DynamicResource MutedTextBrush}"
                                Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
@@ -189,18 +180,18 @@
                     <Button x:Name="MinimizeButton" Classes="caption"
                             chrome:WindowDecorationProperties.ElementRole="MinimizeButton"
                             Click="MinimizeClick">
-                        <Rectangle Width="10" Height="1" Fill="#D0D0D0" />
+                        <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}" />
                     </Button>
                     <Button x:Name="CloseButton" Classes="caption close"
                             chrome:WindowDecorationProperties.ElementRole="CloseButton"
                             Click="CloseClick">
                         <Grid Width="10" Height="10">
-                            <Rectangle Width="10" Height="1" Fill="#D0D0D0">
+                            <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}">
                                 <Rectangle.RenderTransform>
                                     <RotateTransform Angle="45" />
                                 </Rectangle.RenderTransform>
                             </Rectangle>
-                            <Rectangle Width="10" Height="1" Fill="#D0D0D0">
+                            <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}">
                                 <Rectangle.RenderTransform>
                                     <RotateTransform Angle="-45" />
                                 </Rectangle.RenderTransform>
@@ -223,12 +214,12 @@
                                 <Ellipse Grid.Column="0" Width="10" Height="10" VerticalAlignment="Center"
                                          Fill="{Binding HasController, Converter={StaticResource DotBrush}}" />
                                 <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
-                                           Foreground="{StaticResource TextPrimaryBrush}" FontSize="13"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"
                                            Margin="10,0,8,0" VerticalAlignment="Center" />
-                                <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{StaticResource SubtleBrush}"
+                                <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{DynamicResource SubtleBrush}"
                                         CornerRadius="6" Padding="8,3" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}}"
-                                               FontSize="11" Foreground="#B9B9B9" />
+                                               FontSize="11" Foreground="{DynamicResource BadgeTextBrush}" />
                                 </Border>
                             </Grid>
                         </StackPanel>
@@ -264,7 +255,7 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <TabControl x:Name="MainTabs" Grid.Column="1" Margin="6,8,10,16">
+                <TabControl x:Name="MainTabs" Grid.Column="1" Margin="6,8,10,16">
 
                 <TabItem Header="按键映射">
                     <Grid Margin="14,12,14,0">
@@ -282,9 +273,9 @@
                                             <Grid ColumnDefinitions="*,Auto,Auto,Auto">
                                                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding SourceText}" FontSize="13"
-                                                               Foreground="{StaticResource TextPrimaryBrush}" />
-                                                    <TextBlock Text="{Binding TargetText}" FontSize="11"
-                                                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0" />
+                                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                                     <TextBlock Text="{Binding TargetText}" FontSize="11"
+                                                                Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0" />
                                                 </StackPanel>
                                                 <ToggleButton Grid.Column="1" Classes="rowToggle" Margin="10,0,0,0"
                                                               VerticalAlignment="Center"
@@ -642,12 +633,12 @@
                             <StackPanel Grid.Column="1" Margin="28,0,0,0" VerticalAlignment="Top">
                                 <TextBlock Classes="cardTitle" Text="实时预览" Margin="0,0,0,12" />
 
-                                <Border x:Name="ScrollPreviewHost" Width="200" Height="200" Background="#151515"
-                                        BorderBrush="#2C2C2C" BorderThickness="1" CornerRadius="10">
+                                <Border x:Name="ScrollPreviewHost" Width="200" Height="200" Background="{DynamicResource SunkenBrush}"
+                                        BorderBrush="{DynamicResource PreviewBorderBrush}" BorderThickness="1" CornerRadius="10">
                                     <Grid>
-                                        <Rectangle Width="6" Height="140" RadiusX="3" RadiusY="3" Fill="#242424"
+                                        <Rectangle Width="6" Height="140" RadiusX="3" RadiusY="3" Fill="{DynamicResource TrackBrush}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        <Rectangle x:Name="ScrollRateBar" Width="6" RadiusX="3" RadiusY="3" Fill="{StaticResource AccentBrush}"
+                                        <Rectangle x:Name="ScrollRateBar" Width="6" RadiusX="3" RadiusY="3" Fill="{DynamicResource AccentBrush}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,35">
                                             <Rectangle.Height>
                                                 <MultiBinding Converter="{StaticResource RateBar}">
@@ -683,7 +674,7 @@
                 </TabItem>
             </TabControl>
 
-            <Border Grid.Column="2" Background="#141414" BorderBrush="#232323" BorderThickness="1,0,0,0"
+            <Border Grid.Column="2" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}" BorderThickness="1,0,0,0"
                     Padding="12">
                 <Grid RowDefinitions="Auto,Auto">
                     <TextBlock Grid.Row="0" Classes="cardTitle" Text="手柄状态" Margin="0,0,0,14" />

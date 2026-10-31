@@ -106,8 +106,24 @@ public partial class MainWindow : Window
 
     private void OnPreviewTick(object? sender, EventArgs e)
     {
+        UpdatePreviewLiveness();
+
         ViewModel.MouseSensitivity.Advance(PreviewInterval);
         ViewModel.ScrollSensitivity.Advance(PreviewInterval);
+    }
+
+    /// <summary>
+    /// The scripted preview sweep stands in for live stick input, so it only runs while the
+    /// engine is actually mapping a connected controller. Stopping the engine or losing the
+    /// controller drives both panels to rest instead of letting them sweep until the window
+    /// closes; reconnecting and restarting resumes them.
+    /// </summary>
+    internal void UpdatePreviewLiveness()
+    {
+        var live = ViewModel.Host.IsRunning && ViewModel.HasController;
+
+        ViewModel.MouseSensitivity.IsLive = live;
+        ViewModel.ScrollSensitivity.IsLive = live;
     }
 
     private void OnSyncTick(object? sender, EventArgs e)

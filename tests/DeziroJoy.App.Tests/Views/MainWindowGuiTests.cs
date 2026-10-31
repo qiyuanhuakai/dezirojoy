@@ -6,6 +6,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
@@ -21,6 +22,22 @@ namespace DeziroJoy.App.Tests.Views;
 public sealed class MainWindowGuiTests
 {
     private const string DeviceId = "pad-01";
+
+    private static void UnderTheme(ThemeVariant variant, Action body)
+    {
+        var application = Application.Current!;
+        var original = application.RequestedThemeVariant;
+        application.RequestedThemeVariant = variant;
+
+        try
+        {
+            body();
+        }
+        finally
+        {
+            application.RequestedThemeVariant = original;
+        }
+    }
 
     private static (MainWindow Window, MainWindowViewModel ViewModel, EngineHost Host, FakeGamepadProvider Provider) BuildWindow()
     {
@@ -314,6 +331,7 @@ public sealed class MainWindowGuiTests
 
         Assert.Equal(0d, bar.Height);
 
+        viewModel.ScrollSensitivity.IsLive = true;
         for (var i = 0; i < 60; i++)
         {
             viewModel.ScrollSensitivity.Advance(System.TimeSpan.FromSeconds(1.0 / 60.0));
@@ -322,6 +340,75 @@ public sealed class MainWindowGuiTests
         Assert.True(viewModel.ScrollSensitivity.CurrentRate > 0d);
         Assert.True(bar.Height > 0d);
         Assert.True(bar.Height <= 140d);
+    }
+
+    [AvaloniaFact]
+    public void Preview_Settles_To_Rest_Without_A_Controller()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+
+        Assert.False(viewModel.HasController);
+        Assert.False(viewModel.MouseSensitivity.IsLive);
+        Assert.False(viewModel.ScrollSensitivity.IsLive);
+
+        for (var i = 0; i < 700; i++)
+        {
+            viewModel.MouseSensitivity.Advance(System.TimeSpan.FromMilliseconds(16));
+            viewModel.ScrollSensitivity.Advance(System.TimeSpan.FromMilliseconds(16));
+        }
+
+        Assert.Equal(0d, viewModel.MouseSensitivity.CurrentSpeed);
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, viewModel.MouseSensitivity.PreviewX);
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, viewModel.MouseSensitivity.PreviewY);
+        Assert.Equal(0d, viewModel.ScrollSensitivity.CurrentRate);
+    }
+
+    [AvaloniaFact]
+    public void Preview_Sweeps_Only_While_The_Engine_Runs_With_A_Controller()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Assert.True(viewModel.HasController);
+
+        window.UpdatePreviewLiveness();
+        Assert.False(viewModel.MouseSensitivity.IsLive, "engine is stopped, so the preview must rest");
+
+        viewModel.ToggleEngineCommand.Execute(null);
+        Assert.True(host.IsRunning);
+
+        window.UpdatePreviewLiveness();
+        Assert.True(viewModel.MouseSensitivity.IsLive, "engine running with a controller must sweep");
+        Assert.True(viewModel.ScrollSensitivity.IsLive);
+
+        viewModel.ToggleEngineCommand.Execute(null);
+        Assert.False(host.IsRunning);
+
+        window.UpdatePreviewLiveness();
+        Assert.False(viewModel.MouseSensitivity.IsLive, "stopping the engine must drive the preview to rest");
+        Assert.False(viewModel.ScrollSensitivity.IsLive);
+    }
+
+    [AvaloniaFact]
+    public void Losing_The_Controller_Drives_The_Preview_To_Rest()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        viewModel.ToggleEngineCommand.Execute(null);
+        window.UpdatePreviewLiveness();
+        Assert.True(viewModel.MouseSensitivity.IsLive);
+
+        provider.Remove(DeviceId);
+        host.TickOnce(TimeSpan.FromSeconds(1.0 / 64.0));
+        viewModel.SyncControllers();
+        window.UpdatePreviewLiveness();
+
+        Assert.False(viewModel.HasController);
+        Assert.False(viewModel.MouseSensitivity.IsLive, "losing the controller must drive the preview to rest");
+        Assert.False(viewModel.ScrollSensitivity.IsLive);
     }
 
     [AvaloniaFact]
@@ -365,14 +452,22 @@ public sealed class MainWindowGuiTests
     [AvaloniaFact]
     public void Visualizer_Reflects_A_Pressed_Button()
     {
+        UnderTheme(ThemeVariant.Dark, () => AssertPressedButtonColor(Color.FromRgb(0x4C, 0xC2, 0xFF)));
+        UnderTheme(ThemeVariant.Light, () => AssertPressedButtonColor(Color.FromRgb(0x0A, 0x6F, 0xBF)));
+    }
+
+    private static void AssertPressedButtonColor(Color expected)
+    {
         var (window, viewModel, host, provider) = BuildWindow();
-        var visualizer = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
-        var buttonA = visualizer.FindControl<Ellipse>("ButtonA")!;
+        var buttonA = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!
+            .FindControl<Ellipse>("ButtonA")!;
 
         ConnectPad(provider, GamepadButtonMask.A);
         SampleHelper.Sample(viewModel, host);
 
-        Assert.Equal(Color.FromRgb(0x4C, 0xC2, 0xFF), ColorOf(buttonA.Fill));
+        Assert.Equal(expected, ColorOf(buttonA.Fill));
+
+        window.Close();
     }
 
     [AvaloniaFact]

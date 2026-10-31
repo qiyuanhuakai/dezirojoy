@@ -93,9 +93,23 @@ public partial class ScrollSensitivityViewModel : ObservableObject
         EnableHorizontal = settings.EnableHorizontal;
     }
 
+    /// <summary>
+    /// Whether live stick input is available for the preview to reflect. The scripted sweep
+    /// is a stand-in for that input, so it only runs while this is true; otherwise the panel
+    /// decays to rest instead of sweeping until the window closes.
+    /// </summary>
+    public bool IsLive { get; set; }
+
     public void Advance(TimeSpan delta)
     {
         var dt = (float)delta.TotalSeconds;
+
+        if (!IsLive)
+        {
+            DecayToRest(dt);
+            return;
+        }
+
         _sweepSeconds += dt;
 
         var angle = _sweepSeconds * (MathF.PI * 2f / SweepPeriodSeconds);
@@ -112,6 +126,7 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     public void Reset()
     {
         _sweepSeconds = 0;
+        IsLive = false;
         _processor = new ScrollStickProcessor(new ScrollStickSettings());
         WheelOffset = 0;
         CurrentRate = 0;
@@ -123,6 +138,16 @@ public partial class ScrollSensitivityViewModel : ObservableObject
         ResponseTime = 0.05f;
         InvertY = false;
         EnableHorizontal = true;
+    }
+
+    /// <summary>Drives the real processor with a centered stick so the reported rate decays
+    /// through the engine and snaps to exact zero, holding the accumulated offset. The sweep
+    /// phase is held, so resuming later continues where it paused.</summary>
+    private void DecayToRest(float dt)
+    {
+        _ = _processor.Update(0f, 0f, dt);
+
+        CurrentRate = _processor.CurrentRate;
     }
 
     private void RebuildProcessor() => _processor = new ScrollStickProcessor(BuildSettings());

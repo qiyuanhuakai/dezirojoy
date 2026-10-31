@@ -44,6 +44,7 @@ public class ScrollSensitivityViewModelTests
             Curve = ResponseCurve.Linear,
             CurveStrength = 0f,
             ResponseTime = 0f,
+            IsLive = true,
         };
 
         AdvanceMany(vm, 64);
@@ -54,7 +55,7 @@ public class ScrollSensitivityViewModelTests
     [Fact]
     public void Zero_Rate_Does_Not_Scroll()
     {
-        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 0f };
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 0f, IsLive = true };
 
         AdvanceMany(vm, 30);
 
@@ -64,11 +65,75 @@ public class ScrollSensitivityViewModelTests
     [Fact]
     public void Reset_Clears_The_Offset()
     {
-        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 64f, DeadZone = 0f, Curve = ResponseCurve.Linear, CurveStrength = 0f, ResponseTime = 0f };
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 64f, DeadZone = 0f, Curve = ResponseCurve.Linear, CurveStrength = 0f, ResponseTime = 0f, IsLive = true };
 
         AdvanceMany(vm, 30);
         vm.Reset();
 
         Assert.Equal(0, vm.WheelOffset);
+    }
+
+    [Fact]
+    public void Preview_Settles_To_Rest_When_There_Is_No_Live_Input()
+    {
+        var vm = new ScrollSensitivityViewModel();
+
+        for (var i = 0; i < 700; i++) // > 10 simulated seconds at the 16 ms preview interval
+        {
+            vm.Advance(TimeSpan.FromMilliseconds(16));
+        }
+
+        Assert.Equal(0, vm.CurrentRate);
+    }
+
+    [Fact]
+    public void Rest_Is_Reached_In_A_Finite_Number_Of_Ticks()
+    {
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 64f, IsLive = true };
+
+        AdvanceMany(vm, 120);
+        Assert.True(vm.CurrentRate > 0, "sweep should be producing a rate while live");
+
+        vm.IsLive = false;
+
+        var ticksToRest = 0;
+        while (ticksToRest < 700 && vm.CurrentRate != 0)
+        {
+            vm.Advance(TimeSpan.FromMilliseconds(16));
+            ticksToRest++;
+        }
+
+        Assert.Equal(0, vm.CurrentRate);
+        Assert.True(ticksToRest < 700, $"rest took {ticksToRest} ticks, expected a finite decay");
+    }
+
+    [Fact]
+    public void Rest_Is_Stable_Once_Reached()
+    {
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 64f, IsLive = true };
+        AdvanceMany(vm, 120);
+
+        vm.IsLive = false;
+        AdvanceMany(vm, 700);
+
+        var settledOffset = vm.WheelOffset;
+        AdvanceMany(vm, 700);
+
+        Assert.Equal(settledOffset, vm.WheelOffset);
+        Assert.Equal(0, vm.CurrentRate);
+    }
+
+    [Fact]
+    public void Sweep_Resumes_When_Live_Input_Returns()
+    {
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 64f };
+
+        AdvanceMany(vm, 700);
+        Assert.Equal(0, vm.CurrentRate);
+
+        vm.IsLive = true;
+        AdvanceMany(vm, 60);
+
+        Assert.True(vm.CurrentRate > 0, $"expected the sweep to resume, got {vm.CurrentRate}");
     }
 }

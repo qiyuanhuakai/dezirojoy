@@ -4,6 +4,7 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Headless.XUnit;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Styling;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views.Controls;
 using DeziroJoy.Core.Input;
@@ -17,30 +18,80 @@ public sealed class ControlsGuiTests
     private static Color ColorOf(IBrush? brush)
         => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
 
+    // PadIdleBrush / PadPressedBrush per variant, straight from Themes/Palette.axaml.
+    private static readonly Color DarkIdle = Color.FromRgb(0x3A, 0x3A, 0x3A);
+    private static readonly Color DarkPressed = Color.FromRgb(0x4C, 0xC2, 0xFF);
+    private static readonly Color LightIdle = Color.FromRgb(0xBF, 0xC7, 0xCF);
+    private static readonly Color LightPressed = Color.FromRgb(0x0A, 0x6F, 0xBF);
+
+    private static void UnderTheme(ThemeVariant variant, Action body)
+    {
+        var application = Application.Current!;
+        var original = application.RequestedThemeVariant;
+        application.RequestedThemeVariant = variant;
+
+        try
+        {
+            body();
+        }
+        finally
+        {
+            application.RequestedThemeVariant = original;
+        }
+    }
+
     [AvaloniaFact]
     public void GamepadVisualizer_Pressed_Buttons_Switch_To_The_Accent_Brush()
     {
-        var viewModel = new GamepadVisualizerViewModel();
-        var control = new GamepadVisualizer { DataContext = viewModel };
+        UnderTheme(ThemeVariant.Dark, () =>
+        {
+            var viewModel = new GamepadVisualizerViewModel();
+            var control = new GamepadVisualizer { DataContext = viewModel };
 
-        var buttonA = control.FindControl<Ellipse>("ButtonA")!;
-        var buttonB = control.FindControl<Ellipse>("ButtonB")!;
-        var dpadRight = control.FindControl<Rectangle>("DpadRight")!;
-        var leftBumper = control.FindControl<Rectangle>("LeftBumper")!;
+            var buttonA = control.FindControl<Ellipse>("ButtonA")!;
+            var buttonB = control.FindControl<Ellipse>("ButtonB")!;
+            var dpadRight = control.FindControl<Rectangle>("DpadRight")!;
+            var leftBumper = control.FindControl<Rectangle>("LeftBumper")!;
 
-        Assert.Equal(Color.FromRgb(0x3A, 0x3A, 0x3A), ColorOf(buttonA.Fill));
+            Assert.Equal(DarkIdle, ColorOf(buttonA.Fill));
 
-        viewModel.Update(GamepadState.Create(
-            GamepadButtonMask.A | GamepadButtonMask.B | GamepadButtonMask.DPadRight | GamepadButtonMask.LeftBumper,
-            0f, 0f, 0f, 0f));
+            viewModel.Update(GamepadState.Create(
+                GamepadButtonMask.A | GamepadButtonMask.B | GamepadButtonMask.DPadRight | GamepadButtonMask.LeftBumper,
+                0f, 0f, 0f, 0f));
 
-        Assert.Equal(Color.FromRgb(0x4C, 0xC2, 0xFF), ColorOf(buttonA.Fill));
-        Assert.Equal(Color.FromRgb(0x4C, 0xC2, 0xFF), ColorOf(buttonB.Fill));
-        Assert.Equal(Color.FromRgb(0x4C, 0xC2, 0xFF), ColorOf(dpadRight.Fill));
-        Assert.Equal(Color.FromRgb(0x4C, 0xC2, 0xFF), ColorOf(leftBumper.Fill));
+            Assert.Equal(DarkPressed, ColorOf(buttonA.Fill));
+            Assert.Equal(DarkPressed, ColorOf(buttonB.Fill));
+            Assert.Equal(DarkPressed, ColorOf(dpadRight.Fill));
+            Assert.Equal(DarkPressed, ColorOf(leftBumper.Fill));
 
-        viewModel.Update(GamepadState.Neutral);
-        Assert.Equal(Color.FromRgb(0x3A, 0x3A, 0x3A), ColorOf(buttonA.Fill));
+            viewModel.Update(GamepadState.Neutral);
+            Assert.Equal(DarkIdle, ColorOf(buttonA.Fill));
+        });
+
+        UnderTheme(ThemeVariant.Light, () =>
+        {
+            var viewModel = new GamepadVisualizerViewModel();
+            var control = new GamepadVisualizer { DataContext = viewModel };
+
+            var buttonA = control.FindControl<Ellipse>("ButtonA")!;
+            var buttonB = control.FindControl<Ellipse>("ButtonB")!;
+            var dpadRight = control.FindControl<Rectangle>("DpadRight")!;
+            var leftBumper = control.FindControl<Rectangle>("LeftBumper")!;
+
+            Assert.Equal(LightIdle, ColorOf(buttonA.Fill));
+
+            viewModel.Update(GamepadState.Create(
+                GamepadButtonMask.A | GamepadButtonMask.B | GamepadButtonMask.DPadRight | GamepadButtonMask.LeftBumper,
+                0f, 0f, 0f, 0f));
+
+            Assert.Equal(LightPressed, ColorOf(buttonA.Fill));
+            Assert.Equal(LightPressed, ColorOf(buttonB.Fill));
+            Assert.Equal(LightPressed, ColorOf(dpadRight.Fill));
+            Assert.Equal(LightPressed, ColorOf(leftBumper.Fill));
+
+            viewModel.Update(GamepadState.Neutral);
+            Assert.Equal(LightIdle, ColorOf(buttonA.Fill));
+        });
     }
 
     [AvaloniaFact]
@@ -122,7 +173,7 @@ public sealed class ControlsGuiTests
     [AvaloniaFact]
     public void SensitivityPreview_Dot_Moves_After_Advance()
     {
-        var viewModel = new MouseSensitivityViewModel();
+        var viewModel = new MouseSensitivityViewModel { IsLive = true };
         var control = new SensitivityPreview { DataContext = viewModel };
 
         var dot = control.FindControl<Ellipse>("PreviewDot")!;
@@ -137,6 +188,33 @@ public sealed class ControlsGuiTests
         Assert.NotEqual(100d, Canvas.GetLeft(dot));
         Assert.NotEqual(100d, Canvas.GetTop(dot));
         Assert.True(viewModel.CurrentSpeed > 0d);
+    }
+
+    [AvaloniaFact]
+    public void SensitivityPreview_Dot_Returns_To_Center_At_Rest()
+    {
+        var viewModel = new MouseSensitivityViewModel { IsLive = true };
+        var control = new SensitivityPreview { DataContext = viewModel };
+
+        var dot = control.FindControl<Ellipse>("PreviewDot")!;
+
+        for (var i = 0; i < 40; i++)
+        {
+            viewModel.Advance(System.TimeSpan.FromSeconds(1.0 / 60.0));
+        }
+
+        Assert.NotEqual(100d, Canvas.GetLeft(dot));
+
+        viewModel.IsLive = false;
+
+        for (var i = 0; i < 700; i++)
+        {
+            viewModel.Advance(System.TimeSpan.FromSeconds(1.0 / 60.0));
+        }
+
+        Assert.Equal(100d, Canvas.GetLeft(dot));
+        Assert.Equal(100d, Canvas.GetTop(dot));
+        Assert.Equal(0d, viewModel.CurrentSpeed);
     }
 
     [AvaloniaFact]

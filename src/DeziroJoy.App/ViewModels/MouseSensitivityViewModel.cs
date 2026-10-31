@@ -24,6 +24,8 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     private const float SweepRadius = 0.8f;
 
+    private const double RestGlideSpeed = 400.0;
+
     private MouseStickProcessor _processor = new(new MouseStickSettings());
     private float _sweepSeconds;
 
@@ -109,10 +111,24 @@ public partial class MouseSensitivityViewModel : ObservableObject
         InvertY = settings.InvertY;
     }
 
+    /// <summary>
+    /// Whether live stick input is available for the preview to reflect. The scripted sweep
+    /// is a stand-in for that input, so it only runs while this is true; otherwise the panel
+    /// decays to rest instead of sweeping until the window closes.
+    /// </summary>
+    public bool IsLive { get; set; }
+
     /// <summary>Advances the scripted sweep by one tick and refreshes the readouts.</summary>
     public void Advance(TimeSpan delta)
     {
         var dt = (float)delta.TotalSeconds;
+
+        if (!IsLive)
+        {
+            DecayToRest(dt);
+            return;
+        }
+
         _sweepSeconds += dt;
 
         var angle = _sweepSeconds * (MathF.PI * 2f / SweepPeriodSeconds);
@@ -130,6 +146,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
     public void Reset()
     {
         _sweepSeconds = 0;
+        IsLive = false;
         _processor = new MouseStickProcessor(new MouseStickSettings());
         PreviewX = PreviewCenter;
         PreviewY = PreviewCenter;
@@ -143,6 +160,28 @@ public partial class MouseSensitivityViewModel : ObservableObject
         ResponseTime = 0.08f;
         PrecisionScale = 0.35f;
         InvertY = true;
+    }
+
+    /// <summary>Drives the real processor with a centered stick so the reported speed decays
+    /// through the engine and snaps to exact zero, and glides the dot back to center. The
+    /// sweep phase is held, so resuming later continues where it paused.</summary>
+    private void DecayToRest(float dt)
+    {
+        _ = _processor.Update(0f, 0f, precisionActive: false, dt);
+
+        PreviewX = GlideHome(PreviewX, dt);
+        PreviewY = GlideHome(PreviewY, dt);
+        CurrentSpeed = _processor.CurrentSpeed;
+    }
+
+    private static double GlideHome(double value, float dt)
+    {
+        var offset = value - PreviewCenter;
+        var step = RestGlideSpeed * dt;
+
+        return Math.Abs(offset) <= step
+            ? PreviewCenter
+            : value - (Math.Sign(offset) * step);
     }
 
     private void RebuildProcessor() => _processor = new MouseStickProcessor(BuildSettings());

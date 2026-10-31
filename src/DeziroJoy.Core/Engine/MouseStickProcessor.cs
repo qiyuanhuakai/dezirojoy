@@ -51,6 +51,9 @@ public sealed class MouseStickProcessor
         _velocityX += (targetX - _velocityX) * alpha;
         _velocityY += (targetY - _velocityY) * alpha;
 
+        SnapToRest(ref _velocityX, ref _residualX, targetX);
+        SnapToRest(ref _velocityY, ref _residualY, targetY);
+
         var verticalSign = _settings.InvertY ? -1.0 : 1.0;
         _residualX += _velocityX * dt * _settings.ScaleX;
         _residualY += _velocityY * dt * _settings.ScaleY * verticalSign;
@@ -61,6 +64,21 @@ public sealed class MouseStickProcessor
         _residualY -= moveY;
 
         return new MouseStickDelta(moveX, moveY);
+    }
+
+    /// <summary>
+    /// Once the target is zero and the smoothed speed has decayed below
+    /// <see cref="StickMath.RestEpsilon"/>, the axis is at rest: the smoothed value and any
+    /// pending sub-pixel residual snap to exact zero so a released stick stops emitting
+    /// movement after a finite number of ticks instead of trailing forever.
+    /// </summary>
+    private static void SnapToRest(ref double velocity, ref double residual, double target)
+    {
+        if (target == 0 && Math.Abs(velocity) < StickMath.RestEpsilon)
+        {
+            velocity = 0;
+            residual = 0;
+        }
     }
 
     public void Reset()

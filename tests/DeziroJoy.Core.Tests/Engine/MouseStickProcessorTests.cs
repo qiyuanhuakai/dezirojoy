@@ -154,4 +154,66 @@ public class MouseStickProcessorTests
         Assert.Equal(0, dx);
         Assert.Equal(0, dy);
     }
+
+    [Fact]
+    public void Released_Stick_Reaches_Exact_Zero_In_Finite_Ticks()
+    {
+        var processor = new MouseStickProcessor(Raw(1000f) with { ResponseTime = 0.08f });
+
+        for (var i = 0; i < 20; i++)
+        {
+            processor.Update(1f, 0f, precisionActive: false, 0.016f);
+        }
+
+        for (var i = 0; i < 300; i++)
+        {
+            processor.Update(0f, 0f, precisionActive: false, 0.016f);
+        }
+
+        for (var i = 0; i < 10; i++)
+        {
+            var (dx, dy) = processor.Update(0f, 0f, precisionActive: false, 0.016f);
+
+            Assert.Equal(0, dx);
+            Assert.Equal(0, dy);
+        }
+
+        Assert.Equal(0, processor.CurrentSpeed);
+        Assert.Equal(0, processor.CurrentSpeedX);
+        Assert.Equal(0, processor.CurrentSpeedY);
+    }
+
+    [Fact]
+    public void Sub_Pixel_Residual_Clears_Once_At_Rest()
+    {
+        var processor = new MouseStickProcessor(Raw(512f));
+
+        var first = processor.Update(1f, 0f, precisionActive: false, 1f / 1024f);
+        Assert.Equal(0, first.Dx);
+        Assert.Equal(512, processor.CurrentSpeed);
+
+        for (var i = 0; i < 300; i++)
+        {
+            processor.Update(0f, 0f, precisionActive: false, 1f / 1024f);
+        }
+
+        var after = processor.Update(0f, 0f, precisionActive: false, 1f / 1024f);
+
+        Assert.Equal(0, after.Dx);
+        Assert.Equal(0, after.Dy);
+        Assert.Equal(0, processor.CurrentSpeed);
+    }
+
+    [Fact]
+    public void Snap_To_Zero_Does_Not_Affect_Non_Zero_Targets()
+    {
+        var processor = new MouseStickProcessor(Raw(1000f) with { ResponseTime = 0.08f });
+
+        for (var i = 0; i < 50; i++)
+        {
+            processor.Update(1f, 0f, precisionActive: false, 0.016f);
+        }
+
+        Assert.True(processor.CurrentSpeed > 900, $"expected sustained speed, got {processor.CurrentSpeed}");
+    }
 }

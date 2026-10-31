@@ -103,4 +103,43 @@ public class ScrollStickProcessorTests
         // 64 * (1 - e^(-0.25)) * 0.015625 = 0.222 -> 0 notches on first tick
         Assert.Equal(0, vertical);
     }
+
+    [Fact]
+    public void Released_Stick_Reaches_Exact_Zero_In_Finite_Ticks()
+    {
+        var processor = new ScrollStickProcessor(Raw(64f) with { ResponseTime = 0.05f });
+
+        for (var i = 0; i < 20; i++)
+        {
+            processor.Update(0f, 1f, 1f / 64f);
+        }
+
+        for (var i = 0; i < 300; i++)
+        {
+            processor.Update(0f, 0f, 1f / 64f);
+        }
+
+        for (var i = 0; i < 10; i++)
+        {
+            var (horizontal, vertical) = processor.Update(0f, 0f, 1f / 64f);
+
+            Assert.Equal(0, horizontal);
+            Assert.Equal(0, vertical);
+        }
+
+        Assert.Equal(0, processor.CurrentRate);
+    }
+
+    [Fact]
+    public void Snap_To_Zero_Does_Not_Affect_Non_Zero_Targets()
+    {
+        var processor = new ScrollStickProcessor(Raw(64f) with { ResponseTime = 0.05f });
+
+        for (var i = 0; i < 50; i++)
+        {
+            processor.Update(0f, 1f, 1f / 64f);
+        }
+
+        Assert.True(processor.CurrentRate > 60, $"expected sustained rate, got {processor.CurrentRate}");
+    }
 }

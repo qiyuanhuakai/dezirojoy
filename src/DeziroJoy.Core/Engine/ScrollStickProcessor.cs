@@ -47,6 +47,9 @@ public sealed class ScrollStickProcessor
         _rateX += (targetX - _rateX) * alpha;
         _rateY += (targetY - _rateY) * alpha;
 
+        SnapToRest(ref _rateX, ref _residualX, targetX);
+        SnapToRest(ref _rateY, ref _residualY, targetY);
+
         var verticalSign = _settings.InvertY ? -1.0 : 1.0;
         _residualX += _rateX * dt;
         _residualY += _rateY * dt * verticalSign;
@@ -57,6 +60,21 @@ public sealed class ScrollStickProcessor
         _residualY -= vertical;
 
         return new ScrollStickDelta(horizontal, vertical);
+    }
+
+    /// <summary>
+    /// Once the target is zero and the smoothed rate has decayed below
+    /// <see cref="StickMath.RestEpsilon"/>, the axis is at rest: the smoothed value and any
+    /// pending sub-notch residual snap to exact zero so a released stick stops emitting
+    /// notches after a finite number of ticks instead of trailing forever.
+    /// </summary>
+    private static void SnapToRest(ref double rate, ref double residual, double target)
+    {
+        if (target == 0 && Math.Abs(rate) < StickMath.RestEpsilon)
+        {
+            rate = 0;
+            residual = 0;
+        }
     }
 
     public void Reset()
