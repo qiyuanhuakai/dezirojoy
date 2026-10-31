@@ -23,6 +23,9 @@ public sealed class ScrollStickProcessor
         _settings = settings;
     }
 
+    /// <summary>Current smoothed scroll rate in notches/second (live UI readout).</summary>
+    public double CurrentRate => Math.Sqrt((_rateX * _rateX) + (_rateY * _rateY));
+
     public ScrollStickDelta Update(float stickX, float stickY, float deltaSeconds)
     {
         var dt = MouseStickProcessor.SanitizeDeltaSeconds(deltaSeconds);
