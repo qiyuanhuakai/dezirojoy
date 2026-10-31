@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>DeziroJoy</AssemblyName>
+    <RootNamespace>DeziroJoy.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DeziroJoy.Core\DeziroJoy.Core.csproj" />
+    <ProjectReference Include="..\DeziroJoy.Platform.Windows\DeziroJoy.Platform.Windows.csproj" />
+    <ProjectReference Include="..\DeziroJoy.Platform.Linux\DeziroJoy.Platform.Linux.csproj" />
+  </ItemGroup>
+</Project>

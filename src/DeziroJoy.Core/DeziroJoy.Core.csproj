@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>DeziroJoy.Core</AssemblyName>
+    <RootNamespace>DeziroJoy.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup />
+</Project>

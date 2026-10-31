@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>DeziroJoy.Platform.Windows</AssemblyName>
+    <RootNamespace>DeziroJoy.Platform.Windows</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DeziroJoy.Core\DeziroJoy.Core.csproj" />
+  </ItemGroup>
+</Project>
