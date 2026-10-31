@@ -290,6 +290,97 @@ public partial class MainWindowViewModel : ObservableObject
         ApplyProfile(fresh);
     }
 
+    /// <summary>
+    /// Raised when the user asks to export. The view owns the file dialog (this view model is
+    /// Avalonia-free), so it answers by calling <see cref="ExportTo"/> with the chosen path, or
+    /// with null when the dialog was dismissed.
+    /// </summary>
+    public event EventHandler? ExportPathRequested;
+
+    /// <summary>Import counterpart of <see cref="ExportPathRequested"/>; answered by <see cref="ImportFrom"/>.</summary>
+    public event EventHandler? ImportPathRequested;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTransferMessage))]
+    private string _transferMessage = string.Empty;
+
+    /// <summary>True when <see cref="TransferMessage"/> reports a failure rather than a success.</summary>
+    [ObservableProperty]
+    private bool _isTransferError;
+
+    public bool HasTransferMessage => !string.IsNullOrEmpty(TransferMessage);
+
+    [RelayCommand]
+    private void ExportProfile() => ExportPathRequested?.Invoke(this, EventArgs.Empty);
+
+    [RelayCommand]
+    private void ImportProfile() => ImportPathRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// Writes the active profile to the path the view picked. A null path means the dialog was
+    /// dismissed, which is not an error and says nothing.
+    /// </summary>
+    public void ExportTo(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (ActiveProfile is null)
+        {
+            SetTransferError("导出失败：没有可导出的配置，请先连接手柄。");
+            return;
+        }
+
+        Report(ProfileTransferService.Export(ActiveProfile, path));
+    }
+
+    /// <summary>
+    /// Applies the profile in the file the view picked, replacing the active device's profile.
+    /// The imported profile is rebound to the connected device so it takes effect immediately
+    /// and survives a reconnect; a malformed file leaves the current profile untouched.
+    /// </summary>
+    public void ImportFrom(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (ActiveController is null)
+        {
+            SetTransferError("导入失败：请先连接手柄。");
+            return;
+        }
+
+        var result = ProfileTransferService.Import(path);
+
+        if (!result.Succeeded || result.Profile is null)
+        {
+            SetTransferError(result.Message);
+            return;
+        }
+
+        var imported = result.Profile with { DeviceId = ActiveController.Descriptor.DeviceId };
+
+        ApplyProfile(imported);
+        _profileStore.Save(imported);
+        Report(result);
+    }
+
+    private void Report(ProfileTransferResult result)
+    {
+        TransferMessage = result.Message;
+        IsTransferError = !result.Succeeded;
+    }
+
+    private void SetTransferError(string message)
+    {
+        TransferMessage = message;
+        IsTransferError = true;
+    }
+
     /// <summary>Called from the UI thread for every host sample.</summary>
     public void ApplySample(ControllerSampledEventArgs args)
     {

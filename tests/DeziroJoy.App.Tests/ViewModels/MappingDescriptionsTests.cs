@@ -1,0 +1,196 @@
+using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Mapping;
+using Xunit;
+
+namespace DeziroJoy.App.Tests.ViewModels;
+
+/// <summary>
+/// The sensitivity panels must explain what each option actually changes. These tests pin the
+/// wording to the engine's real math so a description cannot drift into generic filler.
+/// </summary>
+public class MappingDescriptionsTests
+{
+    private static readonly ResponseCurve[] EveryCurve = Enum.GetValues<ResponseCurve>();
+
+    [Fact]
+    public void Every_Mouse_Option_Has_A_Description()
+    {
+        var descriptions = new[]
+        {
+            MappingDescriptions.MouseMaxSpeed(),
+            MappingDescriptions.MouseDeadZone(),
+            MappingDescriptions.MouseCurveStrength(),
+            MappingDescriptions.MouseResponseTime(),
+            MappingDescriptions.MousePrecisionScale(),
+            MappingDescriptions.MouseInvertY(),
+        };
+
+        Assert.All(descriptions, text => Assert.False(string.IsNullOrWhiteSpace(text)));
+        Assert.Equal(descriptions.Length, descriptions.Distinct().Count());
+    }
+
+    [Fact]
+    public void Every_Scroll_Option_Has_A_Description()
+    {
+        var descriptions = new[]
+        {
+            MappingDescriptions.ScrollRate(),
+            MappingDescriptions.ScrollDeadZone(),
+            MappingDescriptions.ScrollResponseTime(),
+            MappingDescriptions.ScrollInvertY(),
+            MappingDescriptions.ScrollEnableHorizontal(),
+        };
+
+        Assert.All(descriptions, text => Assert.False(string.IsNullOrWhiteSpace(text)));
+        Assert.Equal(descriptions.Length, descriptions.Distinct().Count());
+    }
+
+    [Fact]
+    public void Every_Curve_Has_Its_Own_Description()
+    {
+        var descriptions = EveryCurve.Select(MappingDescriptions.MouseCurve).ToArray();
+
+        Assert.All(descriptions, text => Assert.False(string.IsNullOrWhiteSpace(text)));
+        Assert.Equal(EveryCurve.Length, descriptions.Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData(ResponseCurve.Linear, "线性")]
+    [InlineData(ResponseCurve.Precise, "平滑")]
+    [InlineData(ResponseCurve.Aggressive, "二次")]
+    [InlineData(ResponseCurve.Responsive, "平方根")]
+    public void The_Curve_Description_Names_The_Actual_Shape(ResponseCurve curve, string expected)
+    {
+        Assert.Contains(expected, MappingDescriptions.MouseCurve(curve));
+    }
+
+    [Fact]
+    public void Mouse_Speed_Is_Described_In_Physical_Pixels_Per_Second_Decoupled_From_DPI()
+    {
+        var text = MappingDescriptions.MouseMaxSpeed();
+
+        Assert.Contains("像素/秒", text);
+        Assert.Contains("DPI", text);
+        Assert.Contains("分辨率", text);
+    }
+
+    [Fact]
+    public void The_Physical_Unit_Note_States_The_Projects_Key_Differentiator()
+    {
+        var text = MappingDescriptions.PhysicalSpeedUnit();
+
+        Assert.Contains("像素/秒", text);
+        Assert.Contains("DPI", text);
+        Assert.Contains("分辨率", text);
+    }
+
+    [Fact]
+    public void The_Deadzone_Description_Says_What_It_Removes_And_That_Top_Speed_Survives()
+    {
+        var mouse = MappingDescriptions.MouseDeadZone();
+        var scroll = MappingDescriptions.ScrollDeadZone();
+
+        // Radial, not per-axis: the engine clamps the result to unit magnitude.
+        Assert.Contains("圆", mouse);
+        Assert.Contains("圆", scroll);
+
+        // The deadzone discards the inner region and rescales the rest onto full deflection,
+        // so raising it costs fine control but never the maximum speed.
+        Assert.Contains("最高速度", mouse);
+        Assert.Contains("速率", scroll);
+    }
+
+    [Fact]
+    public void The_Response_Time_Description_Names_The_Exponential_Smoothing_Constant()
+    {
+        Assert.Contains("指数", MappingDescriptions.MouseResponseTime());
+        Assert.Contains("指数", MappingDescriptions.ScrollResponseTime());
+        Assert.Contains("秒", MappingDescriptions.MouseResponseTime());
+    }
+
+    [Fact]
+    public void The_Curve_Strength_Description_Explains_The_Blend_With_Linear()
+    {
+        var text = MappingDescriptions.MouseCurveStrength();
+
+        Assert.Contains("线性", text);
+        Assert.Contains("0", text);
+        Assert.Contains("1", text);
+    }
+
+    [Fact]
+    public void The_Precision_Description_Says_It_Is_A_Multiplier_While_The_Button_Is_Held()
+    {
+        var text = MappingDescriptions.MousePrecisionScale();
+
+        Assert.Contains("倍率", text);
+        Assert.Contains("按住", text);
+    }
+
+    [Fact]
+    public void The_Invert_Descriptions_Say_The_Direction_Is_Flipped()
+    {
+        Assert.Contains("取反", MappingDescriptions.MouseInvertY());
+        Assert.Contains("取反", MappingDescriptions.ScrollInvertY());
+    }
+
+    [Fact]
+    public void The_Scroll_Rate_Description_Uses_Wheel_Notches_Per_Second()
+    {
+        var text = MappingDescriptions.ScrollRate();
+
+        Assert.Contains("格/秒", text);
+        Assert.Contains("累积", text);
+    }
+
+    [Fact]
+    public void The_Horizontal_Scroll_Description_Says_What_Unchecking_Costs()
+    {
+        var text = MappingDescriptions.ScrollEnableHorizontal();
+
+        Assert.Contains("水平", text);
+        Assert.Contains("忽略", text);
+    }
+
+    [Fact]
+    public void The_Mouse_Panel_Exposes_Every_Description_To_The_View()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        Assert.Equal(MappingDescriptions.MouseMaxSpeed(), vm.MaxSpeedHint);
+        Assert.Equal(MappingDescriptions.MouseDeadZone(), vm.DeadZoneHint);
+        Assert.Equal(MappingDescriptions.MouseCurveStrength(), vm.CurveStrengthHint);
+        Assert.Equal(MappingDescriptions.MouseResponseTime(), vm.ResponseTimeHint);
+        Assert.Equal(MappingDescriptions.MousePrecisionScale(), vm.PrecisionScaleHint);
+        Assert.Equal(MappingDescriptions.MouseInvertY(), vm.InvertYHint);
+        Assert.Equal(MappingDescriptions.PhysicalSpeedUnit(), vm.PhysicalUnitHint);
+    }
+
+    [Fact]
+    public void The_Scroll_Panel_Exposes_Every_Description_To_The_View()
+    {
+        var vm = new ScrollSensitivityViewModel();
+
+        Assert.Equal(MappingDescriptions.ScrollRate(), vm.RateHint);
+        Assert.Equal(MappingDescriptions.ScrollDeadZone(), vm.DeadZoneHint);
+        Assert.Equal(MappingDescriptions.ScrollResponseTime(), vm.ResponseTimeHint);
+        Assert.Equal(MappingDescriptions.ScrollInvertY(), vm.InvertYHint);
+        Assert.Equal(MappingDescriptions.ScrollEnableHorizontal(), vm.EnableHorizontalHint);
+    }
+
+    [Fact]
+    public void The_Curve_Hint_Follows_The_Selected_Curve()
+    {
+        var mouse = new MouseSensitivityViewModel();
+        var scroll = new ScrollSensitivityViewModel();
+
+        Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Precise), mouse.CurveHint);
+        Assert.Equal(MappingDescriptions.ScrollCurve(ResponseCurve.Precise), scroll.CurveHint);
+
+        mouse.Curve = ResponseCurve.Aggressive;
+        scroll.Curve = ResponseCurve.Responsive;
+
+        Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Aggressive), mouse.CurveHint);
+        Assert.Equal(MappingDescriptions.ScrollCurve(ResponseCurve.Responsive), scroll.CurveHint);
+    }
+}

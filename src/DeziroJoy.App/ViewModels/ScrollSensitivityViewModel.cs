@@ -51,6 +51,18 @@ public partial class ScrollSensitivityViewModel : ObservableObject
 
     public ObservableCollection<CurvePoint> ResponseCurvePoints { get; } = [];
 
+    public string RateHint { get; } = MappingDescriptions.ScrollRate();
+
+    public string DeadZoneHint { get; } = MappingDescriptions.ScrollDeadZone();
+
+    public string CurveHint => MappingDescriptions.ScrollCurve(Curve);
+
+    public string ResponseTimeHint { get; } = MappingDescriptions.ScrollResponseTime();
+
+    public string InvertYHint { get; } = MappingDescriptions.ScrollInvertY();
+
+    public string EnableHorizontalHint { get; } = MappingDescriptions.ScrollEnableHorizontal();
+
     partial void OnMaxTicksPerSecondChanged(float value) => RebuildProcessor();
 
     partial void OnDeadZoneChanged(float value) => RebuildProcessor();
@@ -59,6 +71,7 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     {
         RebuildProcessor();
         RebuildCurvePoints();
+        OnPropertyChanged(nameof(CurveHint));
     }
 
     partial void OnCurveStrengthChanged(float value)

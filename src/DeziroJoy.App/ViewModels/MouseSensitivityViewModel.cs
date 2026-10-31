@@ -69,6 +69,23 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     public ObservableCollection<CurvePoint> ResponseCurvePoints { get; } = [];
 
+    /// <summary>Panel copy for the physical-units differentiator; see <see cref="MappingDescriptions.PhysicalSpeedUnit"/>.</summary>
+    public string PhysicalUnitHint { get; } = MappingDescriptions.PhysicalSpeedUnit();
+
+    public string MaxSpeedHint { get; } = MappingDescriptions.MouseMaxSpeed();
+
+    public string DeadZoneHint { get; } = MappingDescriptions.MouseDeadZone();
+
+    public string CurveHint => MappingDescriptions.MouseCurve(Curve);
+
+    public string CurveStrengthHint { get; } = MappingDescriptions.MouseCurveStrength();
+
+    public string ResponseTimeHint { get; } = MappingDescriptions.MouseResponseTime();
+
+    public string PrecisionScaleHint { get; } = MappingDescriptions.MousePrecisionScale();
+
+    public string InvertYHint { get; } = MappingDescriptions.MouseInvertY();
+
     partial void OnMaxSpeedChanged(float value) => RebuildProcessor();
 
     partial void OnDeadZoneChanged(float value) => RebuildProcessor();
@@ -77,6 +94,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
     {
         RebuildProcessor();
         RebuildCurvePoints();
+        OnPropertyChanged(nameof(CurveHint));
     }
 
     partial void OnCurveStrengthChanged(float value)

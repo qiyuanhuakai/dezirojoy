@@ -124,4 +124,62 @@ public static class MappingDescriptions
         GamepadLayout.DualShock => "DualShock 布局",
         _ => "通用布局",
     };
+
+    /// <summary>
+    /// The project's headline differentiator, stated where the user can see it: speed is a
+    /// physical quantity, so the same number feels the same on every mouse and every display.
+    /// </summary>
+    public static string PhysicalSpeedUnit()
+        => "速度以物理单位「像素/秒 @ 满幅」表示，与鼠标 DPI、显示器分辨率完全解耦：换鼠标、换屏幕，同一数值手感不变。";
+
+    public static string MouseMaxSpeed()
+        => "摇杆推到底（满幅）时的指针速度，单位 像素/秒。这是物理速度而非百分比，因此与鼠标 DPI 和屏幕分辨率无关。";
+
+    public static string MouseDeadZone()
+        => "以摇杆中心为圆心的圆形（径向）死区：幅度不超过设定值的输入被完全丢弃，消除静差漂移；超出部分按比例放大到满幅，所以最高速度不变，只损失中心附近的微调精度。";
+
+    public static string MouseCurve(ResponseCurve curve) => curve switch
+    {
+        ResponseCurve.Linear => "线性：输出 = 输入，1:1 响应。中心最灵敏，但精细瞄准最难。",
+        ResponseCurve.Precise => "精准（平滑曲线 3m²−2m³）：中心附近细腻，中段迅速提速，默认选项。",
+        ResponseCurve.Aggressive => "激进（二次曲线 m²）：中心极细腻，要推得很大才到最高速。",
+        ResponseCurve.Responsive => "灵敏（平方根曲线 √m）：一推就有反应，中心附近较粗。",
+        _ => curve.ToString(),
+    };
+
+    public static string MouseCurveStrength()
+        => "曲线与线性的混合比例：0 = 纯线性（等同「线性」曲线），1 = 完整曲线，大于 1 = 曲线效果加倍、更极端。";
+
+    public static string MouseResponseTime()
+        => "指数平滑时间常数（秒）：速度按 1−e^(−Δt/τ) 逼近目标，τ 越大越平稳但越滞后；0 = 立即响应（原始摇杆）。与帧率无关。";
+
+    public static string MousePrecisionScale()
+        => "按住精准键（默认左摇杆按下）期间的速度倍率：0.35 即降到 35%，用于临时精细瞄准。";
+
+    public static string MouseInvertY()
+        => "垂直位移取反：默认勾选，推摇杆向上 = 光标向上；取消勾选则上下颠倒。";
+
+    public static string ScrollRate()
+        => "摇杆推到底（满幅）时的滚动速率，单位 格/秒（1 格 = 120 个单位）。不足一格的量会累积，慢速推杆也能滚动。";
+
+    public static string ScrollDeadZone()
+        => "以摇杆中心为圆心的圆形（径向）死区：幅度不超过设定值的输入被完全丢弃；超出部分按比例放大到满幅，所以最高滚动速率不变，只损失中心附近的微调精度。";
+
+    public static string ScrollCurve(ResponseCurve curve) => curve switch
+    {
+        ResponseCurve.Linear => "线性：输出 = 输入，1:1 响应。中心最灵敏，但精细滚动最难。",
+        ResponseCurve.Precise => "精准（平滑曲线 3m²−2m³）：中心附近细腻，中段迅速提速，默认选项。",
+        ResponseCurve.Aggressive => "激进（二次曲线 m²）：中心极细腻，要推得很大才到最高速。",
+        ResponseCurve.Responsive => "灵敏（平方根曲线 √m）：一推就有反应，中心附近较粗。",
+        _ => curve.ToString(),
+    };
+
+    public static string ScrollResponseTime()
+        => "指数平滑时间常数（秒）：滚动速率按 1−e^(−Δt/τ) 逼近目标，τ 越大越平稳但越滞后；0 = 立即响应（原始摇杆）。与帧率无关。";
+
+    public static string ScrollInvertY()
+        => "垂直滚动方向取反：默认不勾选，推摇杆向上 = 页面向上滚；勾选后变为向下滚。";
+
+    public static string ScrollEnableHorizontal()
+        => "勾选时摇杆的水平分量产生水平滚动事件；取消则完全忽略水平输入，只保留垂直滚动。";
 }

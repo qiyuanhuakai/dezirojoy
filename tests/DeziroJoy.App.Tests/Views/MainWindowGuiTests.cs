@@ -1,3 +1,4 @@
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Chrome;
@@ -593,4 +594,107 @@ public sealed class MainWindowGuiTests
 
         Assert.True(visualizer.FindControl<TextBlock>("DisconnectedLabel")!.IsVisible);
     }
+
+    [AvaloniaFact]
+    public void The_Profile_Card_Offers_Export_And_Import_Next_To_Save_And_Reset()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+
+        var save = window.FindControl<Button>("SaveProfileButton")!;
+        var reset = window.FindControl<Button>("ResetToDefaultButton")!;
+        var export = window.FindControl<Button>("ExportProfileButton")!;
+        var import = window.FindControl<Button>("ImportProfileButton")!;
+
+        Assert.Equal("保存配置", save.Content);
+        Assert.Equal("恢复默认", reset.Content);
+        Assert.Equal("导出配置", export.Content);
+        Assert.Equal("导入配置", import.Content);
+
+        Assert.Same(viewModel.SaveProfileCommand, save.Command);
+        Assert.Same(viewModel.ResetToDefaultCommand, reset.Command);
+        Assert.Same(viewModel.ExportProfileCommand, export.Command);
+        Assert.Same(viewModel.ImportProfileCommand, import.Command);
+    }
+
+    [AvaloniaFact]
+    public void The_Mouse_Sensitivity_Panel_Explains_Every_Option()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+
+        var hints = new (string Name, string Expected)[]
+        {
+            ("PhysicalUnitHint", viewModel.MouseSensitivity.PhysicalUnitHint),
+            ("MaxSpeedHint", viewModel.MouseSensitivity.MaxSpeedHint),
+            ("DeadZoneHint", viewModel.MouseSensitivity.DeadZoneHint),
+            ("CurveHint", viewModel.MouseSensitivity.CurveHint),
+            ("CurveStrengthHint", viewModel.MouseSensitivity.CurveStrengthHint),
+            ("ResponseTimeHint", viewModel.MouseSensitivity.ResponseTimeHint),
+            ("PrecisionScaleHint", viewModel.MouseSensitivity.PrecisionScaleHint),
+            ("InvertYHint", viewModel.MouseSensitivity.InvertYHint),
+        };
+
+        foreach (var (name, expected) in hints)
+        {
+            var hint = window.FindControl<TextBlock>(name);
+            Assert.NotNull(hint);
+            Assert.False(string.IsNullOrWhiteSpace(hint!.Text), $"{name} must carry text");
+            Assert.Equal(expected, hint.Text);
+        }
+    }
+
+    [AvaloniaFact]
+    public void The_Scroll_Sensitivity_Panel_Explains_Every_Option()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+
+        var hints = new (string Name, string Expected)[]
+        {
+            ("ScrollRateHint", viewModel.ScrollSensitivity.RateHint),
+            ("ScrollDeadzoneHint", viewModel.ScrollSensitivity.DeadZoneHint),
+            ("ScrollCurveHint", viewModel.ScrollSensitivity.CurveHint),
+            ("ScrollResponseTimeHint", viewModel.ScrollSensitivity.ResponseTimeHint),
+            ("ScrollInvertYHint", viewModel.ScrollSensitivity.InvertYHint),
+            ("ScrollEnableHorizontalHint", viewModel.ScrollSensitivity.EnableHorizontalHint),
+        };
+
+        foreach (var (name, expected) in hints)
+        {
+            var hint = window.FindControl<TextBlock>(name);
+            Assert.NotNull(hint);
+            Assert.False(string.IsNullOrWhiteSpace(hint!.Text), $"{name} must carry text");
+            Assert.Equal(expected, hint.Text);
+        }
+    }
+
+    [AvaloniaFact]
+    public void The_Curve_Hint_Tracks_The_Selected_Curve_In_The_Panel()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var hint = window.FindControl<TextBlock>("CurveHint")!;
+
+        Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Precise), hint.Text);
+
+        viewModel.MouseSensitivity.Curve = ResponseCurve.Responsive;
+        window.UpdateLayout();
+
+        Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Responsive), hint.Text);
+    }
+
+    [AvaloniaFact]
+    public void The_View_Answers_Both_Picker_Requests_So_The_Buttons_Reach_A_Dialog()
+    {
+        var (_, viewModel, _, _) = BuildWindow();
+
+        // The view model is Avalonia-free, so the only thing that turns a button press into a
+        // file dialog is this subscription. It lives in MainWindow.axaml's Loaded handler, and
+        // losing it fails silently: the buttons stay enabled and nothing happens. Reflection is
+        // the only way to observe a field-like event's subscriber list from outside the class.
+        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.ExportPathRequested)));
+        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.ImportPathRequested)));
+    }
+
+    private static Delegate? SubscriberOf(MainWindowViewModel viewModel, string eventName)
+        => (Delegate?)typeof(MainWindowViewModel)
+            .GetField(eventName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            ?.GetValue(viewModel);
 }

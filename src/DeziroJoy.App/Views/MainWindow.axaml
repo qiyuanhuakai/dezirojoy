@@ -10,11 +10,12 @@
         Title="DeziroJoy"
         Width="1320" Height="880"
         MinWidth="1180" MinHeight="780"
-        WindowStartupLocation="CenterScreen"
-        WindowDecorations="None"
-        ExtendClientAreaToDecorationsHint="True"
-        ExtendClientAreaTitleBarHeightHint="44"
-        Background="{DynamicResource AppBackgroundBrush}">
+         WindowStartupLocation="CenterScreen"
+         WindowDecorations="None"
+         ExtendClientAreaToDecorationsHint="True"
+         ExtendClientAreaTitleBarHeightHint="44"
+         Opened="OnWindowOpened"
+         Background="{DynamicResource AppBackgroundBrush}">
 
     <Window.Resources>
         <conv:BoolToBrushConverter x:Key="DotBrush" PressedKey="ConnectedBrush" IdleKey="IdleDotBrush" />
@@ -25,6 +26,7 @@
         <conv:TargetKindMatchConverter x:Key="KindMatch" />
         <conv:EnumDisplayConverter x:Key="EnumDisplay" />
         <conv:ScrollRateBarConverter x:Key="RateBar" />
+        <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
     </Window.Resources>
 
     <Window.Styles>
@@ -243,12 +245,22 @@
                     <Border Classes="card">
                         <StackPanel>
                             <TextBlock Classes="cardTitle" Text="配置文件" />
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button Classes="ghost" Content="保存配置" Command="{Binding SaveProfileCommand}" />
-                                <Button Classes="ghost" Content="恢复默认" Margin="8,0,0,0" Command="{Binding ResetToDefaultCommand}" />
-                            </StackPanel>
-                            <TextBlock Classes="hint" Margin="0,10,0,0"
-                                       Text="配置按设备保存，重连后自动恢复。" />
+                            <WrapPanel Margin="0,12,0,0">
+                                <Button x:Name="SaveProfileButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="保存配置" Command="{Binding SaveProfileCommand}" />
+                                <Button x:Name="ResetToDefaultButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="恢复默认" Command="{Binding ResetToDefaultCommand}" />
+                                <Button x:Name="ExportProfileButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导出配置" Command="{Binding ExportProfileCommand}" />
+                                <Button x:Name="ImportProfileButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导入配置" Command="{Binding ImportProfileCommand}" />
+                            </WrapPanel>
+                            <TextBlock Classes="hint" Margin="0,2,0,0"
+                                       Text="配置按设备保存，重连后自动恢复。导入/导出为单个 JSON 文件，可在不同电脑间搬运。" />
+                            <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       IsVisible="{Binding HasTransferMessage}"
+                                       Foreground="{Binding IsTransferError, Converter={StaticResource TransferMessageBrush}}"
+                                       Text="{Binding TransferMessage}" />
                         </StackPanel>
                     </Border>
 
@@ -462,9 +474,11 @@
                             </Grid.ColumnDefinitions>
 
                             <StackPanel Grid.Column="0">
-                                <TextBlock Classes="cardTitle" Text="摇杆 → 鼠标" Margin="0,0,0,14" />
+                                <TextBlock Classes="cardTitle" Text="摇杆 → 鼠标" Margin="0,0,0,10" />
+                                <TextBlock x:Name="PhysicalUnitHint" Classes="hint" Margin="0,0,0,16"
+                                           Text="{Binding MouseSensitivity.PhysicalUnitHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -476,8 +490,10 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding MouseSensitivity.MaxSpeed, StringFormat='{}{0:F0} px/s'}" />
                                 </Grid>
+                                <TextBlock x:Name="MaxSpeedHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding MouseSensitivity.MaxSpeedHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -489,8 +505,10 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding MouseSensitivity.DeadZone, StringFormat='{}{0:F2}'}" />
                                 </Grid>
+                                <TextBlock x:Name="DeadZoneHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding MouseSensitivity.DeadZoneHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -501,8 +519,10 @@
                                               ItemsSource="{x:Static views:EnumOptions.Curves}"
                                               SelectedItem="{Binding MouseSensitivity.Curve, Mode=TwoWay}" />
                                 </Grid>
+                                <TextBlock x:Name="CurveHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding MouseSensitivity.CurveHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -514,6 +534,8 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding MouseSensitivity.CurveStrength, StringFormat='{}{0:F2}'}" />
                                 </Grid>
+                                <TextBlock x:Name="CurveStrengthHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding MouseSensitivity.CurveStrengthHint}" />
 
                                 <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
@@ -527,10 +549,10 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding MouseSensitivity.ResponseTime, StringFormat='{}{0:F2} s'}" />
                                 </Grid>
-                                <TextBlock Classes="hint" Margin="150,0,0,14"
-                                           Text="0 = 即时响应，越大越平稳" />
+                                <TextBlock x:Name="ResponseTimeHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding MouseSensitivity.ResponseTimeHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -542,8 +564,12 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding MouseSensitivity.PrecisionScale, StringFormat='{}{0:F2}'}" />
                                 </Grid>
+                                <TextBlock x:Name="PrecisionScaleHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding MouseSensitivity.PrecisionScaleHint}" />
 
                                 <CheckBox x:Name="InvertYBox" Content="垂直反转" IsChecked="{Binding MouseSensitivity.InvertY, Mode=TwoWay}" />
+                                <TextBlock x:Name="InvertYHint" Classes="hint" Margin="0,4,0,0"
+                                           Text="{Binding MouseSensitivity.InvertYHint}" />
 
                                 <Button Classes="primary" Content="应用" HorizontalAlignment="Left" Margin="0,18,0,0"
                                         Command="{Binding ApplyMouseSensitivityCommand}" />
@@ -590,7 +616,7 @@
                             <StackPanel Grid.Column="0">
                                 <TextBlock Classes="cardTitle" Text="摇杆 → 滚轮" Margin="0,0,0,14" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -602,8 +628,10 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding ScrollSensitivity.MaxTicksPerSecond, StringFormat='{}{0:F0} 格/s'}" />
                                 </Grid>
+                                <TextBlock x:Name="ScrollRateHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding ScrollSensitivity.RateHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -615,8 +643,10 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding ScrollSensitivity.DeadZone, StringFormat='{}{0:F2}'}" />
                                 </Grid>
+                                <TextBlock x:Name="ScrollDeadzoneHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding ScrollSensitivity.DeadZoneHint}" />
 
-                                <Grid Margin="0,0,0,14">
+                                <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="150" />
                                         <ColumnDefinition Width="*" />
@@ -627,6 +657,8 @@
                                               ItemsSource="{x:Static views:EnumOptions.Curves}"
                                               SelectedItem="{Binding ScrollSensitivity.Curve, Mode=TwoWay}" />
                                 </Grid>
+                                <TextBlock x:Name="ScrollCurveHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding ScrollSensitivity.CurveHint}" />
 
                                 <Grid Margin="0,0,0,4">
                                     <Grid.ColumnDefinitions>
@@ -640,13 +672,17 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding ScrollSensitivity.ResponseTime, StringFormat='{}{0:F2} s'}" />
                                 </Grid>
-                                <TextBlock Classes="hint" Margin="150,0,0,14"
-                                           Text="0 = 即时响应，越大越平稳" />
+                                <TextBlock x:Name="ScrollResponseTimeHint" Classes="hint" Margin="150,0,0,14"
+                                           Text="{Binding ScrollSensitivity.ResponseTimeHint}" />
 
                                 <CheckBox x:Name="EnableHorizontalBox" Content="启用水平滚动"
                                           IsChecked="{Binding ScrollSensitivity.EnableHorizontal, Mode=TwoWay}" />
+                                <TextBlock x:Name="ScrollEnableHorizontalHint" Classes="hint" Margin="0,4,0,0"
+                                           Text="{Binding ScrollSensitivity.EnableHorizontalHint}" />
                                 <CheckBox x:Name="ScrollInvertYBox" Content="垂直反转" Margin="0,8,0,0"
                                           IsChecked="{Binding ScrollSensitivity.InvertY, Mode=TwoWay}" />
+                                <TextBlock x:Name="ScrollInvertYHint" Classes="hint" Margin="0,4,0,0"
+                                           Text="{Binding ScrollSensitivity.InvertYHint}" />
 
                                 <Button Classes="primary" Content="应用" HorizontalAlignment="Left" Margin="0,18,0,0"
                                         Command="{Binding ApplyScrollSensitivityCommand}" />
