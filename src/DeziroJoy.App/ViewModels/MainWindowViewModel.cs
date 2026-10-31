@@ -64,6 +64,24 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private bool _hasController;
 
+    [ObservableProperty]
+    private bool _isEngineRunning;
+
+    [RelayCommand]
+    private void ToggleEngine()
+    {
+        if (IsEngineRunning)
+        {
+            _host.Stop();
+            IsEngineRunning = false;
+        }
+        else
+        {
+            _host.Start(TimeSpan.FromMilliseconds(2));
+            IsEngineRunning = true;
+        }
+    }
+
     [RelayCommand]
     private void ToggleMapping()
     {

@@ -170,6 +170,22 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public void Toggle_Engine_Starts_And_Stops_The_Host_Loop()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        vm.ToggleEngineCommand.Execute(null);
+        Assert.True(host.IsRunning);
+        Assert.True(vm.IsEngineRunning);
+
+        vm.ToggleEngineCommand.Execute(null);
+        Assert.False(host.IsRunning);
+        Assert.False(vm.IsEngineRunning);
+    }
+
+    [Fact]
     public void Losing_The_Controller_Clears_The_Active_Profile()
     {
         var (vm, host, provider, _) = CreateHost();
