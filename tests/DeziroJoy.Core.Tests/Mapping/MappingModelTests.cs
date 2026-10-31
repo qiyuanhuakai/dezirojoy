@@ -127,6 +127,50 @@ public class MappingModelTests
     }
 
     [Fact]
+    public void Extra_Button_Mapping_Roundtrips_With_Its_Raw_Code()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "pedal",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Extra, 305),
+                    Target = new KeyPressTarget(GamepadKey.F13),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.Contains("\"Button\": \"Extra\"", json);
+        Assert.Contains("\"Code\": 305", json);
+
+        var back = ProfileSerializer.Deserialize(json);
+        var binding = Assert.IsType<ButtonBinding>(back.Mappings[0].Source);
+
+        Assert.Equal(GamepadButton.Extra, binding.Button);
+        Assert.Equal(305, binding.Code);
+        Assert.Equal(json, ProfileSerializer.Serialize(back));
+    }
+
+    [Fact]
+    public void Standard_Button_Json_Stays_Free_Of_The_Raw_Code_Field()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "plain",
+            Mappings = [new MappingEntry { Source = new ButtonBinding(GamepadButton.A), Target = new KeyPressTarget(GamepadKey.Escape) }],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.DoesNotContain("\"Code\"", json);
+        Assert.Equal(new ButtonBinding(GamepadButton.A), Assert.IsType<ButtonBinding>(ProfileSerializer.Deserialize(json).Mappings[0].Source));
+    }
+
+    [Fact]
     public void Deserialize_Rejects_Unknown_Target_Discriminator()
     {
         const string json = """

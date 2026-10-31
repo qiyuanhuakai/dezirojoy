@@ -39,10 +39,17 @@ public class GamepadInputModelTests
         Assert.False(state.IsPressed(GamepadButton.B));
     }
 
+    /// <summary>
+    /// The 16 Xbox-style buttons. <see cref="GamepadButton.Extra"/> is deliberately excluded:
+    /// it carries a raw platform code instead of a mask bit.
+    /// </summary>
+    private static GamepadButton[] StandardButtons
+        => Enum.GetValues<GamepadButton>().Where(b => b != GamepadButton.Extra).ToArray();
+
     [Fact]
     public void Every_Button_Maps_To_A_Unique_Mask_Bit()
     {
-        var buttons = Enum.GetValues<GamepadButton>();
+        var buttons = StandardButtons;
         var masks = buttons.Select(b => b.ToMask()).ToArray();
 
         Assert.All(masks, mask => Assert.NotEqual(GamepadButtonMask.None, mask));
@@ -52,15 +59,14 @@ public class GamepadInputModelTests
     [Fact]
     public void Mask_Add_Remove_And_Has_Roundtrip_For_Every_Button()
     {
-        var all = Enum.GetValues<GamepadButton>()
-            .Aggregate(GamepadButtonMask.None, (acc, button) => acc.Add(button));
+        var all = StandardButtons.Aggregate(GamepadButtonMask.None, (acc, button) => acc.Add(button));
 
-        foreach (var button in Enum.GetValues<GamepadButton>())
+        foreach (var button in StandardButtons)
         {
             Assert.True(all.Has(button), $"{button} should be present in the full mask");
         }
 
-        Assert.Equal(Enum.GetValues<GamepadButton>().Length, BitOperations.PopCount((uint)all));
+        Assert.Equal(StandardButtons.Length, BitOperations.PopCount((uint)all));
 
         var withoutA = all.Remove(GamepadButton.A);
         Assert.False(withoutA.Has(GamepadButton.A));
@@ -72,6 +78,22 @@ public class GamepadInputModelTests
     {
         var empty = GamepadButtonMask.None;
 
-        Assert.All(Enum.GetValues<GamepadButton>(), button => Assert.False(empty.Has(button)));
+        Assert.All(StandardButtons, button => Assert.False(empty.Has(button)));
+    }
+
+    [Fact]
+    public void Extra_Button_Has_No_Mask_Bit_And_Refuses_To_Invent_One()
+    {
+        // A raw evdev code can be far larger than the 32-bit mask, so an extra button is
+        // matched through IGamepadState.ExtraButtons instead of a bit.
+        Assert.Throws<ArgumentOutOfRangeException>(() => GamepadButton.Extra.ToMask());
+    }
+
+    [Fact]
+    public void States_Report_No_Extra_Buttons_Unless_The_Platform_Supplies_Them()
+    {
+        IGamepadState state = GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0);
+
+        Assert.Empty(state.ExtraButtons);
     }
 }

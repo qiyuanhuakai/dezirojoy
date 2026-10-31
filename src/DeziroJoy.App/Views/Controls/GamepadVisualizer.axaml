@@ -10,58 +10,115 @@
         <conv:BoolNegationConverter x:Key="Not" />
     </UserControl.Resources>
 
-    <Grid Width="320" Height="220">
+    <!--
+        The model is the editor, not a status panel: every mappable element carries the
+        padHit class so it gets the hand cursor and the hover ring, and each one routes its
+        PointerPressed to the code-behind, which turns the element into an InputBinding and
+        raises ElementClicked. Live gamepad input still drives the pressed fill, so the two
+        ways of pointing at an element agree.
+
+        Rounded bars (triggers, bumpers, dpad arms) are Borders rather than Rectangles:
+        Avalonia does not hit-test a Rectangle that has RadiusX/RadiusY set, so a rounded
+        Rectangle would draw correctly but never receive a click.
+    -->
+    <UserControl.Styles>
+        <Style Selector="Shape.padHit">
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Shape.padHit:pointerover">
+            <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="StrokeThickness" Value="1.5" />
+        </Style>
+        <Style Selector="Border.padHit">
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Border.padHit:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+    </UserControl.Styles>
+
+    <Grid Width="320" Height="244">
         <Canvas x:Name="PadCanvas" Opacity="{Binding IsConnected, Converter={StaticResource ConnectedOpacity}}">
 
             <Rectangle x:Name="PadBody" Canvas.Left="8" Canvas.Top="34" Width="304" Height="164"
                        RadiusX="46" RadiusY="46" Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource ControlBorderBrush}" StrokeThickness="1" />
 
-            <Rectangle x:Name="LeftTrigger" Canvas.Left="44" Canvas.Top="6" Width="54" Height="12"
-                       RadiusX="6" RadiusY="6" Fill="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}" />
-            <Rectangle x:Name="RightTrigger" Canvas.Left="222" Canvas.Top="6" Width="54" Height="12"
-                       RadiusX="6" RadiusY="6" Fill="{Binding IsRightTriggerPressed, Converter={StaticResource PadBrush}}" />
-            <Rectangle x:Name="LeftBumper" Canvas.Left="38" Canvas.Top="20" Width="66" Height="14"
-                       RadiusX="7" RadiusY="7" Fill="{Binding IsLeftBumperPressed, Converter={StaticResource PadBrush}}" />
-            <Rectangle x:Name="RightBumper" Canvas.Left="216" Canvas.Top="20" Width="66" Height="14"
-                       RadiusX="7" RadiusY="7" Fill="{Binding IsRightBumperPressed, Converter={StaticResource PadBrush}}" />
+             <Border x:Name="LeftTrigger" Classes="padHit" Canvas.Left="44" Canvas.Top="6" Width="54" Height="12"
+                     CornerRadius="6" Background="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}"
+                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                     ToolTip.Tip="左扳机 LT" PointerPressed="OnElementPressed" Tag="Button:LeftTrigger" />
+             <Border x:Name="RightTrigger" Classes="padHit" Canvas.Left="222" Canvas.Top="6" Width="54" Height="12"
+                     CornerRadius="6" Background="{Binding IsRightTriggerPressed, Converter={StaticResource PadBrush}}"
+                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                     ToolTip.Tip="右扳机 RT" PointerPressed="OnElementPressed" Tag="Button:RightTrigger" />
+             <Border x:Name="LeftBumper" Classes="padHit" Canvas.Left="38" Canvas.Top="20" Width="66" Height="14"
+                     CornerRadius="7" Background="{Binding IsLeftBumperPressed, Converter={StaticResource PadBrush}}"
+                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                     ToolTip.Tip="左肩键 LB" PointerPressed="OnElementPressed" Tag="Button:LeftBumper" />
+             <Border x:Name="RightBumper" Classes="padHit" Canvas.Left="216" Canvas.Top="20" Width="66" Height="14"
+                     CornerRadius="7" Background="{Binding IsRightBumperPressed, Converter={StaticResource PadBrush}}"
+                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                     ToolTip.Tip="右肩键 RB" PointerPressed="OnElementPressed" Tag="Button:RightBumper" />
 
-            <Ellipse x:Name="LeftStickPad" Canvas.Left="48" Canvas.Top="80" Width="52" Height="52"
-                     Fill="{DynamicResource StickPadBrush}" Stroke="{DynamicResource StickPadStrokeBrush}" StrokeThickness="1" />
+            <Ellipse x:Name="LeftStickPad" Classes="padHit" Canvas.Left="48" Canvas.Top="80" Width="52" Height="52"
+                     Fill="{DynamicResource StickPadBrush}" Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Stick:Left" ToolTip.Tip="左摇杆" />
             <Ellipse x:Name="LeftStickRing" Canvas.Left="59" Canvas.Top="91" Width="30" Height="30"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" />
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
             <Ellipse x:Name="LeftStickThumb" Canvas.Left="63" Canvas.Top="95" Width="22" Height="22"
-                     Fill="{DynamicResource StickThumbBrush}" />
-            <Ellipse x:Name="LeftStickClick" Canvas.Left="67" Canvas.Top="133" Width="14" Height="14"
-                     Fill="{Binding IsLeftStickPressed, Converter={StaticResource PadBrush}}" />
+                     Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
+            <Ellipse x:Name="LeftStickClick" Classes="padHit" Canvas.Left="67" Canvas.Top="133" Width="14" Height="14"
+                     Fill="{Binding IsLeftStickPressed, Converter={StaticResource PadBrush}}"
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Button:LeftStick" ToolTip.Tip="左摇杆按下" />
 
-            <Ellipse x:Name="RightStickPad" Canvas.Left="220" Canvas.Top="116" Width="52" Height="52"
-                     Fill="{DynamicResource StickPadBrush}" Stroke="{DynamicResource StickPadStrokeBrush}" StrokeThickness="1" />
+            <Ellipse x:Name="RightStickPad" Classes="padHit" Canvas.Left="220" Canvas.Top="116" Width="52" Height="52"
+                     Fill="{DynamicResource StickPadBrush}" Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Stick:Right" ToolTip.Tip="右摇杆" />
             <Ellipse x:Name="RightStickRing" Canvas.Left="231" Canvas.Top="127" Width="30" Height="30"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" />
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
             <Ellipse x:Name="RightStickThumb" Canvas.Left="235" Canvas.Top="131" Width="22" Height="22"
-                     Fill="{DynamicResource StickThumbBrush}" />
-            <Ellipse x:Name="RightStickClick" Canvas.Left="239" Canvas.Top="169" Width="14" Height="14"
-                     Fill="{Binding IsRightStickPressed, Converter={StaticResource PadBrush}}" />
+                     Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
+            <Ellipse x:Name="RightStickClick" Classes="padHit" Canvas.Left="239" Canvas.Top="169" Width="14" Height="14"
+                     Fill="{Binding IsRightStickPressed, Converter={StaticResource PadBrush}}"
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Button:RightStick" ToolTip.Tip="右摇杆按下" />
 
-            <Rectangle x:Name="DpadUp" Canvas.Left="122" Canvas.Top="126" Width="12" Height="24" RadiusX="2" RadiusY="2"
-                       Fill="{Binding IsDPadUpPressed, Converter={StaticResource PadBrush}}" />
-            <Rectangle x:Name="DpadDown" Canvas.Left="122" Canvas.Top="150" Width="12" Height="24" RadiusX="2" RadiusY="2"
-                       Fill="{Binding IsDPadDownPressed, Converter={StaticResource PadBrush}}" />
-            <Rectangle x:Name="DpadLeft" Canvas.Left="104" Canvas.Top="144" Width="24" Height="12" RadiusX="2" RadiusY="2"
-                       Fill="{Binding IsDPadLeftPressed, Converter={StaticResource PadBrush}}" />
-            <Rectangle x:Name="DpadRight" Canvas.Left="128" Canvas.Top="144" Width="24" Height="12" RadiusX="2" RadiusY="2"
-                       Fill="{Binding IsDPadRightPressed, Converter={StaticResource PadBrush}}" />
+            <Border x:Name="DpadUp" Classes="padHit" Canvas.Left="122" Canvas.Top="126" Width="12" Height="24"
+                    CornerRadius="2" Background="{Binding IsDPadUpPressed, Converter={StaticResource PadBrush}}"
+                    BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                    PointerPressed="OnElementPressed" Tag="Button:DPadUp" ToolTip.Tip="十字键 上" />
+            <Border x:Name="DpadDown" Classes="padHit" Canvas.Left="122" Canvas.Top="150" Width="12" Height="24"
+                    CornerRadius="2" Background="{Binding IsDPadDownPressed, Converter={StaticResource PadBrush}}"
+                    BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                    PointerPressed="OnElementPressed" Tag="Button:DPadDown" ToolTip.Tip="十字键 下" />
+            <Border x:Name="DpadLeft" Classes="padHit" Canvas.Left="104" Canvas.Top="144" Width="24" Height="12"
+                    CornerRadius="2" Background="{Binding IsDPadLeftPressed, Converter={StaticResource PadBrush}}"
+                    BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                    PointerPressed="OnElementPressed" Tag="Button:DPadLeft" ToolTip.Tip="十字键 左" />
+            <Border x:Name="DpadRight" Classes="padHit" Canvas.Left="128" Canvas.Top="144" Width="24" Height="12"
+                    CornerRadius="2" Background="{Binding IsDPadRightPressed, Converter={StaticResource PadBrush}}"
+                    BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                    PointerPressed="OnElementPressed" Tag="Button:DPadRight" ToolTip.Tip="十字键 右" />
             <Rectangle x:Name="DpadCenter" Canvas.Left="122" Canvas.Top="144" Width="12" Height="12" RadiusX="2" RadiusY="2"
-                       Fill="{DynamicResource DpadCenterBrush}" />
+                       Fill="{DynamicResource DpadCenterBrush}" IsHitTestVisible="False" />
 
-            <Ellipse x:Name="ButtonY" Canvas.Left="198" Canvas.Top="56" Width="22" Height="22"
-                     Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}" />
-            <Ellipse x:Name="ButtonX" Canvas.Left="174" Canvas.Top="80" Width="22" Height="22"
-                     Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}" />
-            <Ellipse x:Name="ButtonB" Canvas.Left="222" Canvas.Top="80" Width="22" Height="22"
-                     Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}" />
-            <Ellipse x:Name="ButtonA" Canvas.Left="198" Canvas.Top="104" Width="22" Height="22"
-                     Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}" />
+            <Ellipse x:Name="ButtonY" Classes="padHit" Canvas.Left="198" Canvas.Top="56" Width="22" Height="22"
+                     Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}"
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Button:Y" />
+            <Ellipse x:Name="ButtonX" Classes="padHit" Canvas.Left="174" Canvas.Top="80" Width="22" Height="22"
+                     Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}"
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Button:X" />
+            <Ellipse x:Name="ButtonB" Classes="padHit" Canvas.Left="222" Canvas.Top="80" Width="22" Height="22"
+                     Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}"
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Button:B" />
+            <Ellipse x:Name="ButtonA" Classes="padHit" Canvas.Left="198" Canvas.Top="104" Width="22" Height="22"
+                     Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}"
+                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                     PointerPressed="OnElementPressed" Tag="Button:A" />
 
             <TextBlock Canvas.Left="198" Canvas.Top="56" Width="22" Height="22" LineHeight="22" Text="Y" FontSize="10"
                        Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
@@ -72,16 +129,43 @@
             <TextBlock Canvas.Left="198" Canvas.Top="104" Width="22" Height="22" LineHeight="22" Text="A" FontSize="10"
                        Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
 
-            <Ellipse x:Name="BackButton" Canvas.Left="138" Canvas.Top="64" Width="14" Height="14"
-                     Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}" />
-            <Ellipse x:Name="GuideButton" Canvas.Left="157" Canvas.Top="64" Width="14" Height="14"
-                     Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}" />
-            <Ellipse x:Name="StartButton" Canvas.Left="176" Canvas.Top="64" Width="14" Height="14"
-                     Fill="{Binding IsStartPressed, Converter={StaticResource PadBrush}}" />
+             <Ellipse x:Name="BackButton" Classes="padHit" Canvas.Left="138" Canvas.Top="64" Width="14" Height="14"
+                      Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
+                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                      ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back" />
+             <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="157" Canvas.Top="64" Width="14" Height="14"
+                      Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}"
+                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                      ToolTip.Tip="主页键 Guide" PointerPressed="OnElementPressed" Tag="Button:Guide" />
+             <Ellipse x:Name="StartButton" Classes="padHit" Canvas.Left="176" Canvas.Top="64" Width="14" Height="14"
+                      Fill="{Binding IsStartPressed, Converter={StaticResource PadBrush}}"
+                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                      ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start" />
+
+            <!-- Unmapped evdev codes, drawn as pills under the pad body. -->
+            <ItemsControl x:Name="ExtraButtonsHost" Canvas.Left="8" Canvas.Top="202" Width="304"
+                          ItemsSource="{Binding ExtraButtonCodes}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="4" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Classes="padHit" Tag="{Binding}" Background="{DynamicResource SubtleBrush}"
+                                BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+                                CornerRadius="4" Padding="6,1" Height="16"
+                                PointerPressed="OnExtraButtonPressed">
+                            <TextBlock Text="{Binding StringFormat='按键 {0}'}" FontSize="9"
+                                       Foreground="{DynamicResource ControlForegroundBrush}" />
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </Canvas>
 
         <TextBlock x:Name="DisconnectedLabel" Text="未连接" IsVisible="{Binding IsConnected, Converter={StaticResource Not}}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                   FontSize="15" Foreground="{DynamicResource TextSecondaryBrush}" />
+                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,6"
+                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" IsHitTestVisible="False" />
     </Grid>
 </UserControl>

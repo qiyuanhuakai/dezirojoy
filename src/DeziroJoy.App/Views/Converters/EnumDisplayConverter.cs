@@ -34,6 +34,12 @@ public sealed class EnumDisplayConverter : IValueConverter
                 MappingTargetKind.WheelScroll => "滚轮滚动",
                 _ => kind.ToString(),
             },
+            MappingSourceKind source => source switch
+            {
+                MappingSourceKind.Button => "按键",
+                MappingSourceKind.Stick => "摇杆",
+                _ => source.ToString(),
+            },
             ResponseCurve curve => curve switch
             {
                 ResponseCurve.Linear => "线性",

@@ -122,6 +122,61 @@ public class EvdevGamepadStateTrackerTests
     }
 
     [Fact]
+    public void Unmapped_Button_Code_Is_Surfaced_As_An_Extra_Button()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x149, 1));
+
+        Assert.Contains(0x149, tracker.Snapshot().ExtraButtons);
+        Assert.Equal(GamepadButtonMask.None, tracker.Snapshot().PressedButtons);
+    }
+
+    [Fact]
+    public void Releasing_An_Extra_Button_Clears_It()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x149, 1));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x149, 0));
+
+        Assert.Empty(tracker.Snapshot().ExtraButtons);
+    }
+
+    [Fact]
+    public void Several_Extra_Buttons_Are_Tracked_Independently()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x149, 1));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x14a, 1));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x149, 0));
+
+        Assert.Equal([0x14a], tracker.Snapshot().ExtraButtons);
+    }
+
+    [Fact]
+    public void Keyboard_Key_Codes_Are_Not_Treated_As_Extra_Buttons()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x01, 1));
+
+        Assert.Empty(tracker.Snapshot().ExtraButtons);
+    }
+
+    [Fact]
+    public void Reset_Clears_Extra_Buttons_Too()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x149, 1));
+        tracker.Reset();
+
+        Assert.Empty(tracker.Snapshot().ExtraButtons);
+    }
+
+    [Fact]
     public void Reset_Clears_Everything()
     {
         var tracker = CreateTracker();

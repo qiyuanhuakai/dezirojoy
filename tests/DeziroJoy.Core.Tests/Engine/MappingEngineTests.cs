@@ -165,4 +165,71 @@ public class MappingEngineTests
 
         Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(commands));
     }
+
+    [Fact]
+    public void Extra_Button_Press_And_Release_Emit_Down_Then_Up()
+    {
+        var engine = new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Extra, 305),
+                Target = new KeyPressTarget(GamepadKey.F13),
+            }));
+
+        var press = engine.Tick(new ExtraButtonState(305), 0.016f);
+        var hold = engine.Tick(new ExtraButtonState(305), 0.016f);
+        var release = engine.Tick(GamepadState.Neutral, 0.016f);
+
+        Assert.Equal(new KeyDownCommand(GamepadKey.F13, KeyModifiers.None), Assert.Single(press));
+        Assert.Empty(hold);
+        Assert.Equal(new KeyUpCommand(GamepadKey.F13, KeyModifiers.None), Assert.Single(release));
+    }
+
+    [Fact]
+    public void Extra_Buttons_Are_Matched_By_Raw_Code_Not_By_Position()
+    {
+        var engine = new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Extra, 305),
+                Target = new KeyPressTarget(GamepadKey.F13),
+            }));
+
+        var other = engine.Tick(new ExtraButtonState(306), 0.016f);
+
+        Assert.Empty(other);
+    }
+
+    [Fact]
+    public void Reset_Clears_Extra_Button_Edge_State()
+    {
+        var engine = new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Extra, 305),
+                Target = new KeyPressTarget(GamepadKey.F13),
+            }));
+
+        engine.Tick(new ExtraButtonState(305), 0.016f);
+        engine.Reset();
+
+        var commands = engine.Tick(new ExtraButtonState(305), 0.016f);
+
+        Assert.Equal(new KeyDownCommand(GamepadKey.F13, KeyModifiers.None), Assert.Single(commands));
+    }
+
+    private sealed record ExtraButtonState(params int[] Codes) : IGamepadState
+    {
+        public GamepadButtonMask PressedButtons => GamepadButtonMask.None;
+
+        public float LeftStickX => 0f;
+
+        public float LeftStickY => 0f;
+
+        public float RightStickX => 0f;
+
+        public float RightStickY => 0f;
+
+        public IReadOnlyList<int> ExtraButtons => Codes;
+    }
 }

@@ -260,12 +260,25 @@
                 <TabItem Header="按键映射">
                     <Grid Margin="14,12,14,0">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="*" MinHeight="180" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" MinHeight="180" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <ScrollViewer Grid.Row="0">
+                        <!-- The model is the editor: it leads the tab, and every element on it
+                             opens the mapping settings for that element. -->
+                        <Border Grid.Row="0" Classes="card" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Classes="cardTitle" Text="手柄模型" />
+                                <TextBlock Classes="hint" Margin="0,4,0,0"
+                                           Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
+                                <Viewbox Stretch="Uniform" MaxHeight="300" MaxWidth="460" HorizontalAlignment="Center" Margin="0,10,0,0">
+                                    <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}" />
+                                </Viewbox>
+                            </StackPanel>
+                        </Border>
+
+                        <ScrollViewer Grid.Row="1">
                             <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:MappingRowViewModel">
@@ -292,46 +305,35 @@
                             </ItemsControl>
                         </ScrollViewer>
 
-                        <ScrollViewer Grid.Row="1" MaxHeight="440">
+                        <!-- Inline companion to the model: it sits under the model rather than
+                             over it, so the element being edited stays visible while its target
+                             is chosen. Esc cancels, Enter confirms. -->
+                        <ScrollViewer Grid.Row="2" MaxHeight="460" VerticalScrollBarVisibility="Auto">
                             <Border x:Name="EditorPanel" Classes="card" IsVisible="{Binding IsEditing}">
                                 <StackPanel>
-                                    <TextBlock Classes="cardTitle" Text="编辑映射" />
-
-                                    <TextBlock Classes="sectionLabel" Text="触发来源" />
-                                    <WrapPanel>
-                                        <StackPanel Width="190" Margin="0,0,12,0">
-                                            <TextBlock Classes="fieldLabel" Text="按键" />
-                                            <ComboBox x:Name="SourceButtonCombo" Classes="enumCombo"
-                                                      ItemsSource="{x:Static views:EnumOptions.Buttons}"
-                                                      SelectedItem="{Binding Editor.SelectedButton, Mode=TwoWay}" />
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                            <TextBlock Classes="cardTitle" Text="编辑映射" />
+                                            <TextBlock Text="{Binding Editor.SourceDescription}" FontSize="13"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
+                                            <TextBlock Text="{Binding Editor.TargetDescription}" FontSize="12"
+                                                       Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
                                         </StackPanel>
-                                        <StackPanel Width="190" Margin="0,0,12,0">
-                                            <TextBlock Classes="fieldLabel" Text="摇杆" />
-                                            <ComboBox x:Name="SourceStickCombo" Classes="enumCombo"
-                                                      ItemsSource="{x:Static views:EnumOptions.Sticks}"
-                                                      SelectedItem="{Binding Editor.SelectedStick, Mode=TwoWay}" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button x:Name="CommitButton" Classes="primary" Content="确定 (Enter)"
+                                                    Command="{Binding CommitEditorCommand}" />
+                                            <Button x:Name="CancelButton" Classes="ghost" Content="取消 (Esc)"
+                                                    Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
                                         </StackPanel>
-                                        <StackPanel VerticalAlignment="Bottom">
-                                            <TextBlock Classes="fieldLabel" Text="来源类型" />
-                                            <CheckBox x:Name="SourceIsStickToggle" Content="使用摇杆"
-                                                      IsChecked="{Binding Editor.SourceIsStick, Mode=TwoWay}" />
-                                        </StackPanel>
-                                    </WrapPanel>
+                                    </Grid>
 
                                     <TextBlock Classes="sectionLabel" Text="目标动作" />
                                     <WrapPanel>
                                         <StackPanel Width="190" Margin="0,0,12,0">
                                             <TextBlock Classes="fieldLabel" Text="类型" />
                                             <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
-                                                      ItemsSource="{x:Static views:EnumOptions.TargetKinds}"
+                                                      ItemsSource="{Binding Editor.AvailableTargetKinds}"
                                                       SelectedItem="{Binding Editor.TargetKind, Mode=TwoWay}" />
-                                        </StackPanel>
-                                        <StackPanel x:Name="KeyTargetRow" Width="190" Margin="0,0,12,0"
-                                                    IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}">
-                                            <TextBlock Classes="fieldLabel" Text="按键" />
-                                            <ComboBox x:Name="TargetKeyCombo" Classes="enumCombo"
-                                                      ItemsSource="{x:Static views:EnumOptions.Keys}"
-                                                      SelectedItem="{Binding Editor.SelectedKey, Mode=TwoWay}" />
                                         </StackPanel>
                                         <StackPanel x:Name="MouseTargetRow" Width="190"
                                                     IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
@@ -340,7 +342,35 @@
                                                       ItemsSource="{x:Static views:EnumOptions.MouseButtons}"
                                                       SelectedItem="{Binding Editor.SelectedMouseButton, Mode=TwoWay}" />
                                         </StackPanel>
+                                        <StackPanel VerticalAlignment="Bottom" IsVisible="{Binding Editor.ShowButtonPicker}">
+                                            <TextBlock Classes="fieldLabel" Text="键盘直接输入" />
+                                            <Button x:Name="CaptureKeyButton" Classes="ghost"
+                                                    Content="{Binding Editor.CaptureKeyLabel}"
+                                                    Command="{Binding Editor.ToggleCaptureKeyCommand}" />
+                                        </StackPanel>
                                     </WrapPanel>
+                                    <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding Editor.IsCapturingKey}"
+                                               Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
+
+                                    <TextBlock Classes="sectionLabel" Text="或从列表选择"
+                                                IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}" />
+                                    <ListBox x:Name="TargetKeyList" MaxHeight="180"
+                                             IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
+                                             ItemsSource="{Binding Editor.KeyOptions}"
+                                             SelectedItem="{Binding Editor.SelectedKeyOption, Mode=TwoWay}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:KeyPickerItem">
+                                                <Panel>
+                                                    <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                                               Margin="0,6,0,2" IsVisible="{Binding IsHeader}" />
+                                                    <TextBlock Text="{Binding Label}" FontSize="12"
+                                                               Foreground="{DynamicResource ControlForegroundBrush}"
+                                                               IsVisible="{Binding IsHeader, Converter={StaticResource Not}}" />
+                                                </Panel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
 
                                     <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
                                                 IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
@@ -417,17 +447,9 @@
                                                        Text="{Binding Editor.ScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
                                         </Grid>
                                     </StackPanel>
-
-                                    <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
-                                        <Button x:Name="CommitButton" Classes="primary" Content="确定" Command="{Binding CommitEditorCommand}" />
-                                        <Button x:Name="CancelButton" Classes="ghost" Content="取消" Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
-                                    </StackPanel>
                                 </StackPanel>
                             </Border>
                         </ScrollViewer>
-
-                        <Button Grid.Row="2" x:Name="AddMappingButton" Classes="primary" Content="添加映射"
-                                HorizontalAlignment="Left" Command="{Binding AddMappingCommand}" />
                     </Grid>
                 </TabItem>
 
@@ -674,16 +696,126 @@
                 </TabItem>
             </TabControl>
 
+            <!-- Feedback column: always visible, never coupled to the tab. The interactive
+                 model lives in the mapping tab, so this column carries the live readout that
+                 used to sit under it. -->
             <Border Grid.Column="2" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}" BorderThickness="1,0,0,0"
                     Padding="12">
-                <Grid RowDefinitions="Auto,Auto">
+                <Grid RowDefinitions="Auto,*">
                     <TextBlock Grid.Row="0" Classes="cardTitle" Text="手柄状态" Margin="0,0,0,14" />
-                    <StackPanel Grid.Row="1">
-                        <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}"
-                                                    HorizontalAlignment="Center" />
-                        <TextBlock Classes="hint" Text="按下按键查看实时状态"
-                                   HorizontalAlignment="Center" Margin="0,16,0,0" />
-                    </StackPanel>
+                    <ScrollViewer Grid.Row="1">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,10" ColumnDefinitions="Auto,*,Auto">
+                                <Ellipse Grid.Column="0" Width="10" Height="10" VerticalAlignment="Center"
+                                         Fill="{Binding HasController, Converter={StaticResource DotBrush}}" />
+                                <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"
+                                           Margin="10,0,8,0" VerticalAlignment="Center" />
+                                <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{DynamicResource SubtleBrush}"
+                                        CornerRadius="6" Padding="8,3" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}}"
+                                               FontSize="11" Foreground="{DynamicResource BadgeTextBrush}" />
+                                </Border>
+                            </Grid>
+
+                            <TextBlock Classes="sectionLabel" Text="摇杆" Margin="0,4,0,6" />
+                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="左 X/Y" Width="52" Margin="0" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                           Text="{Binding Visualizer.LeftStickX, StringFormat='{}{0:F2}'}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="左 Y" Width="52" Margin="0" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                           Text="{Binding Visualizer.LeftStickY, StringFormat='{}{0:F2}'}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="右 X" Width="52" Margin="0" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                           Text="{Binding Visualizer.RightStickX, StringFormat='{}{0:F2}'}" />
+                            </Grid>
+                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="右 Y" Width="52" Margin="0" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                           Text="{Binding Visualizer.RightStickY, StringFormat='{}{0:F2}'}" />
+                            </Grid>
+
+                            <TextBlock Classes="sectionLabel" Text="按下的按键" Margin="0,10,0,6" />
+                            <WrapPanel>
+                                <Border IsVisible="{Binding Visualizer.IsAPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="A" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsBPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="B" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsXPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="X" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsYPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="Y" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsLeftBumperPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="LB" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsRightBumperPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="RB" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsLeftTriggerPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="LT" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsRightTriggerPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="RT" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsDPadUpPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="↑" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsDPadDownPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="↓" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsDPadLeftPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="←" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsDPadRightPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="→" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsLeftStickPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="左摇杆" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsRightStickPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="右摇杆" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsBackPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="Back" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsStartPressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="Start" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                                <Border IsVisible="{Binding Visualizer.IsGuidePressed}" Background="{DynamicResource AccentSurfaceBrush}"
+                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                    <TextBlock Text="Guide" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                            </WrapPanel>
+
+                            <TextBlock Classes="hint" Margin="0,14,0,0"
+                                       Text="在“按键映射”标签页中点击手柄模型上的任意元素，即可编辑它的映射。" />
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>
@@ -709,6 +841,10 @@
                     Width="8" Height="8" HorizontalAlignment="Left" VerticalAlignment="Bottom" Background="Transparent" />
             <Border x:Name="ResizeBottomRight" chrome:WindowDecorationProperties.ElementRole="ResizeSE"
                     Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="Transparent" />
+
+            <!-- Zero-size wiring control: feeds live gamepad/keyboard input to the mapping
+                 editor. It measures to nothing and takes no hit-testing. -->
+            <views:EditorInputCapture Width="0" Height="0" IsHitTestVisible="False" />
         </Grid>
     </Grid>
 </Window>

@@ -33,10 +33,26 @@ public class XInputStateMapperTests
             RightTrigger = 255,
         });
 
-        foreach (var button in Enum.GetValues<GamepadButton>())
+        foreach (var button in Enum.GetValues<GamepadButton>().Where(b => b != GamepadButton.Extra))
         {
             Assert.True(state.IsPressed(button), $"{button} is not mapped from XInput");
         }
+    }
+
+    [Fact]
+    public void XInput_Cannot_Report_Extra_Buttons()
+    {
+        // XInput's wButtons bitmask is a fixed 14-button set with no raw-code channel, so
+        // unmapped inputs are a Linux/evdev-only escape hatch. The Windows provider must
+        // report an empty set rather than invent a code.
+        var state = XInputStateMapper.ToGamepadState(new XInputGamepad
+        {
+            Buttons = AllButtons,
+            LeftTrigger = 255,
+            RightTrigger = 255,
+        });
+
+        Assert.Empty(state.ExtraButtons);
     }
 
     [Fact]

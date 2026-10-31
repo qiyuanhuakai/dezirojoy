@@ -8,6 +8,7 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views.Controls;
 
 namespace DeziroJoy.App;
 
@@ -40,6 +41,21 @@ public partial class MainWindow : Window
         LoadWindowIcon();
         ConfigureResizeGrips();
         Wire(host ?? viewModel.Host);
+        OpenQaElementForScreenshot();
+    }
+
+    // TEMPORARY QA hook: opens the mapping settings for one element so the settings surface
+    // can be screenshotted without a pointer. Remove once the QA shots are captured.
+    private void OpenQaElementForScreenshot()
+    {
+        if (Environment.GetEnvironmentVariable("DEZIROJOY_QA_OPEN") is not "1")
+        {
+            return;
+        }
+
+        Opened += (_, _) => OnGamepadElementClicked(
+            this,
+            new GamepadElementClickedEventArgs(new DeziroJoy.Core.Mapping.ButtonBinding(DeziroJoy.Core.Input.GamepadButton.A)));
     }
 
     private void ConfigureResizeGrips()
@@ -96,12 +112,67 @@ public partial class MainWindow : Window
 
         host.Sampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplySample(args));
 
+        if (this.FindControl<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
+        {
+            visualizer.ElementClicked += OnGamepadElementClicked;
+        }
+
+        // Esc/Enter are the confirm/cancel pair for the mapping settings. They are handled on
+        // the window rather than on a button so they work no matter which element of the
+        // settings surface has focus, and so a gamepad-only user never needs the mouse.
+        AddHandler(KeyDownEvent, OnSettingsKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
+
         Closed += (_, _) =>
         {
             _previewTimer.Stop();
             _syncTimer.Stop();
             host.Stop();
         };
+    }
+
+    /// <summary>
+    /// Opens the mapping settings for the element that was clicked on the model. An element
+    /// that already has a mapping loads that mapping, so confirming replaces it instead of
+    /// adding a second entry for the same source.
+    /// </summary>
+    private void OnGamepadElementClicked(object? sender, GamepadElementClickedEventArgs e)
+    {
+        var viewModel = ViewModel;
+        var existing = viewModel.ActiveProfile?.Mappings.FirstOrDefault(m => m.Source == e.Source);
+
+        if (existing is not null)
+        {
+            var row = viewModel.Mappings.FirstOrDefault(r => r.Entry == existing);
+            if (row is not null)
+            {
+                viewModel.EditMappingCommand.Execute(row);
+                return;
+            }
+        }
+
+        viewModel.AddMappingCommand.Execute(null);
+        viewModel.Editor.LoadSource(e.Source);
+    }
+
+    private void OnSettingsKeyDown(object? sender, KeyEventArgs e)
+    {
+        var viewModel = ViewModel;
+        if (!viewModel.IsEditing)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case Key.Escape:
+                e.Handled = true;
+                viewModel.CancelEditorCommand.Execute(null);
+                break;
+            case Key.Enter when !viewModel.Editor.IsCapturingKey:
+                e.Handled = true;
+                viewModel.CommitEditorCommand.Execute(null);
+                break;
+        }
     }
 
     private void OnPreviewTick(object? sender, EventArgs e)

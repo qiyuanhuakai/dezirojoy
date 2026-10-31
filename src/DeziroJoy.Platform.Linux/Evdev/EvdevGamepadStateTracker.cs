@@ -4,16 +4,19 @@ namespace DeziroJoy.Platform.Linux.Evdev;
 
 /// <summary>
 /// Accumulates evdev events into a normalized <see cref="GamepadState"/>. Axis ranges come
-/// from EVIOCGABS at device open time so unusual pad calibrations normalize correctly.
+/// from EVIOCGABS at device open time so unusual pad calibrations normalize correctly. Button
+/// codes with no logical position are kept as raw codes so they stay mappable.
 /// </summary>
 public sealed class EvdevGamepadStateTracker
 {
     private readonly IReadOnlyDictionary<ushort, EvdevAxisRange> _axisRanges;
+    private readonly SortedSet<int> _extraButtons = [];
     private GamepadButtonMask _buttons;
     private float _leftStickX;
     private float _leftStickY;
     private float _rightStickX;
     private float _rightStickY;
+    private IReadOnlyList<int>? _extraButtonsSnapshot;
 
     public EvdevGamepadStateTracker(IReadOnlyDictionary<ushort, EvdevAxisRange>? axisRanges = null)
     {
@@ -44,7 +47,14 @@ public sealed class EvdevGamepadStateTracker
         }
     }
 
-    public GamepadState Snapshot() => GamepadState.Create(_buttons, _leftStickX, _leftStickY, _rightStickX, _rightStickY);
+    public GamepadState Snapshot()
+        => GamepadState.Create(
+            _buttons,
+            _leftStickX,
+            _leftStickY,
+            _rightStickX,
+            _rightStickY,
+            _extraButtonsSnapshot ??= [.. _extraButtons]);
 
     public void Reset()
     {
@@ -53,6 +63,8 @@ public sealed class EvdevGamepadStateTracker
         _leftStickY = 0;
         _rightStickX = 0;
         _rightStickY = 0;
+        _extraButtons.Clear();
+        _extraButtonsSnapshot = null;
     }
 
     private void ApplyKey(ushort code, bool pressed)
@@ -60,6 +72,7 @@ public sealed class EvdevGamepadStateTracker
         var button = EvdevButtonMap.ToButton(code);
         if (button is null)
         {
+            ApplyExtraKey(code, pressed);
             return;
         }
 
@@ -72,6 +85,23 @@ public sealed class EvdevGamepadStateTracker
             _buttons = _buttons.Remove(button.Value);
         }
     }
+
+    private void ApplyExtraKey(ushort code, bool pressed)
+    {
+        if (!IsButtonCode(code))
+        {
+            return;
+        }
+
+        var changed = pressed ? _extraButtons.Add(code) : _extraButtons.Remove(code);
+        if (changed)
+        {
+            _extraButtonsSnapshot = null;
+        }
+    }
+
+    private static bool IsButtonCode(ushort code)
+        => code is >= EvdevCodes.BtnFirst and <= EvdevCodes.BtnLast;
 
     private void ApplyAbsolute(ushort code, int value)
     {

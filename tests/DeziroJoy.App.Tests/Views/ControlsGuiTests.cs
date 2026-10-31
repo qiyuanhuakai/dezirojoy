@@ -50,8 +50,8 @@ public sealed class ControlsGuiTests
 
             var buttonA = control.FindControl<Ellipse>("ButtonA")!;
             var buttonB = control.FindControl<Ellipse>("ButtonB")!;
-            var dpadRight = control.FindControl<Rectangle>("DpadRight")!;
-            var leftBumper = control.FindControl<Rectangle>("LeftBumper")!;
+            var dpadRight = control.FindControl<Border>("DpadRight")!;
+            var leftBumper = control.FindControl<Border>("LeftBumper")!;
 
             Assert.Equal(DarkIdle, ColorOf(buttonA.Fill));
 
@@ -61,8 +61,8 @@ public sealed class ControlsGuiTests
 
             Assert.Equal(DarkPressed, ColorOf(buttonA.Fill));
             Assert.Equal(DarkPressed, ColorOf(buttonB.Fill));
-            Assert.Equal(DarkPressed, ColorOf(dpadRight.Fill));
-            Assert.Equal(DarkPressed, ColorOf(leftBumper.Fill));
+            Assert.Equal(DarkPressed, ColorOf(dpadRight.Background));
+            Assert.Equal(DarkPressed, ColorOf(leftBumper.Background));
 
             viewModel.Update(GamepadState.Neutral);
             Assert.Equal(DarkIdle, ColorOf(buttonA.Fill));
@@ -75,8 +75,8 @@ public sealed class ControlsGuiTests
 
             var buttonA = control.FindControl<Ellipse>("ButtonA")!;
             var buttonB = control.FindControl<Ellipse>("ButtonB")!;
-            var dpadRight = control.FindControl<Rectangle>("DpadRight")!;
-            var leftBumper = control.FindControl<Rectangle>("LeftBumper")!;
+            var dpadRight = control.FindControl<Border>("DpadRight")!;
+            var leftBumper = control.FindControl<Border>("LeftBumper")!;
 
             Assert.Equal(LightIdle, ColorOf(buttonA.Fill));
 
@@ -86,8 +86,8 @@ public sealed class ControlsGuiTests
 
             Assert.Equal(LightPressed, ColorOf(buttonA.Fill));
             Assert.Equal(LightPressed, ColorOf(buttonB.Fill));
-            Assert.Equal(LightPressed, ColorOf(dpadRight.Fill));
-            Assert.Equal(LightPressed, ColorOf(leftBumper.Fill));
+            Assert.Equal(LightPressed, ColorOf(dpadRight.Background));
+            Assert.Equal(LightPressed, ColorOf(leftBumper.Background));
 
             viewModel.Update(GamepadState.Neutral);
             Assert.Equal(LightIdle, ColorOf(buttonA.Fill));

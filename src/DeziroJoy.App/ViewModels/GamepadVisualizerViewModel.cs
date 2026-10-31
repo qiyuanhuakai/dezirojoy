@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DeziroJoy.Core.Input;
 
@@ -80,6 +81,12 @@ public partial class GamepadVisualizerViewModel : ObservableObject
     [ObservableProperty]
     private double _rightMagnitude;
 
+    /// <summary>
+    /// Raw platform codes of unmapped buttons the device has reported. They are drawn on the
+    /// model as "按键 N" pills so they are as clickable as any fixed element.
+    /// </summary>
+    public ObservableCollection<int> ExtraButtonCodes { get; } = [];
+
     public void Update(IGamepadState state)
     {
         var buttons = state.PressedButtons;
@@ -102,12 +109,31 @@ public partial class GamepadVisualizerViewModel : ObservableObject
         IsDPadLeftPressed = buttons.Has(GamepadButton.DPadLeft);
         IsDPadRightPressed = buttons.Has(GamepadButton.DPadRight);
 
+        foreach (var code in state.ExtraButtons)
+        {
+            RegisterExtraButton(code);
+        }
+
         LeftStickX = state.LeftStickX;
         LeftStickY = state.LeftStickY;
         RightStickX = state.RightStickX;
         RightStickY = state.RightStickY;
         LeftMagnitude = Math.Sqrt((state.LeftStickX * state.LeftStickX) + (state.LeftStickY * state.LeftStickY));
         RightMagnitude = Math.Sqrt((state.RightStickX * state.RightStickX) + (state.RightStickY * state.RightStickY));
+    }
+
+    /// <summary>
+    /// Adds a raw platform code to the model's extension row. Codes describe the connected
+    /// device rather than one mapping, so they survive <see cref="SetConnected"/>.
+    /// </summary>
+    public void RegisterExtraButton(int code)
+    {
+        if (code <= 0 || ExtraButtonCodes.Contains(code))
+        {
+            return;
+        }
+
+        ExtraButtonCodes.Add(code);
     }
 
     public void SetConnected(bool connected)

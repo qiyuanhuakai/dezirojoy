@@ -62,4 +62,10 @@ public static class EvdevCodes
     public const ushort BtnSide = 0x113;
 
     public const ushort BtnExtra = 0x114;
+
+    /// <summary>First BTN_* code (BTN_MISC). Codes below this are KEY_* keyboard keys.</summary>
+    public const ushort BtnFirst = 0x100;
+
+    /// <summary>Last BTN_* code (BTN_MAX).</summary>
+    public const ushort BtnLast = 0x2FF;
 }

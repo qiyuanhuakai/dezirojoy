@@ -4,8 +4,14 @@ namespace DeziroJoy.Core.Input;
 /// Immutable, allocation-free gamepad snapshot. Construct via <see cref="Create"/> to get
 /// axis clamping; the record struct primary constructor is kept for deconstruction/with-expressions.
 /// </summary>
+/// <remarks>
+/// <see cref="ExtraButtons"/> stays null unless a platform actually reports raw codes, so the
+/// common path allocates nothing.
+/// </remarks>
 public readonly record struct GamepadState : IGamepadState
 {
+    private readonly IReadOnlyList<int>? _extraButtons;
+
     public GamepadState(
         GamepadButtonMask pressedButtons,
         float leftStickX,
@@ -30,6 +36,16 @@ public readonly record struct GamepadState : IGamepadState
 
     public float RightStickY { get; }
 
+    /// <summary>
+    /// Raw platform button codes with no logical <see cref="GamepadButton"/> position. Empty
+    /// unless the platform reported some; see <see cref="IGamepadState.ExtraButtons"/>.
+    /// </summary>
+    public IReadOnlyList<int> ExtraButtons
+    {
+        get => _extraButtons ?? Array.Empty<int>();
+        init => _extraButtons = value;
+    }
+
     public static GamepadState Neutral => default;
 
     /// <summary>Creates a state with stick axes clamped to [-1, 1] and NaN sanitized to 0.</summary>
@@ -38,8 +54,12 @@ public readonly record struct GamepadState : IGamepadState
         float leftStickX,
         float leftStickY,
         float rightStickX,
-        float rightStickY)
-        => new(pressedButtons, Sanitize(leftStickX), Sanitize(leftStickY), Sanitize(rightStickX), Sanitize(rightStickY));
+        float rightStickY,
+        IReadOnlyList<int>? extraButtons = null)
+        => new(pressedButtons, Sanitize(leftStickX), Sanitize(leftStickY), Sanitize(rightStickX), Sanitize(rightStickY))
+        {
+            ExtraButtons = extraButtons ?? Array.Empty<int>(),
+        };
 
     public bool IsPressed(GamepadButton button) => PressedButtons.Has(button);
 

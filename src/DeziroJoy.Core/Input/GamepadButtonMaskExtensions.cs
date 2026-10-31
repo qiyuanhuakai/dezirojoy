@@ -3,6 +3,10 @@ namespace DeziroJoy.Core.Input;
 public static class GamepadButtonMaskExtensions
 {
     /// <summary>Converts a single button to its bit.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <see cref="GamepadButton.Extra"/> has no bit: a raw code can exceed the mask's width,
+    /// so extra buttons are matched through <see cref="IGamepadState.ExtraButtons"/>.
+    /// </exception>
     public static GamepadButtonMask ToMask(this GamepadButton button) => button switch
     {
         GamepadButton.A => GamepadButtonMask.A,

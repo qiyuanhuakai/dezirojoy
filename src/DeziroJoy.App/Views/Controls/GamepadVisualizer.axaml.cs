@@ -1,8 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
+using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
 
 namespace DeziroJoy.App.Views.Controls;
 
@@ -28,6 +31,13 @@ public partial class GamepadVisualizer : UserControl
     {
         AvaloniaXamlLoader.Load(this);
     }
+
+    /// <summary>
+    /// Raised when a mappable element on the model is clicked. The argument is the source the
+    /// element stands for, so the window can open the mapping settings for exactly that
+    /// element without the control knowing anything about the editor.
+    /// </summary>
+    public event EventHandler<GamepadElementClickedEventArgs>? ElementClicked;
 
     protected override void OnDataContextChanged(EventArgs e)
     {
@@ -89,4 +99,60 @@ public partial class GamepadVisualizer : UserControl
         Canvas.SetTop(thumb, baseY + (clampedY * StickTravel));
         thumb.Opacity = 0.55 + (0.45 * Math.Clamp(magnitude, 0.0, 1.0));
     }
+
+    private void OnElementPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control { Tag: string tag } element)
+        {
+            return;
+        }
+
+        var source = ParseSource(tag);
+        if (source is null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        ElementClicked?.Invoke(this, new GamepadElementClickedEventArgs(source));
+    }
+
+    private void OnExtraButtonPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control element || element.Tag is not int code || code <= 0)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        ElementClicked?.Invoke(this, new GamepadElementClickedEventArgs(new ButtonBinding(GamepadButton.Extra, code)));
+    }
+
+    private static InputBinding? ParseSource(string tag)
+    {
+        var parts = tag.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2)
+        {
+            return null;
+        }
+
+        return parts[0] switch
+        {
+            "Button" => Enum.TryParse<GamepadButton>(parts[1], out var button)
+                ? new ButtonBinding(button)
+                : null,
+            "Stick" => Enum.TryParse<GamepadStick>(parts[1], out var stick)
+                ? new StickBinding(stick)
+                : null,
+            _ => null,
+        };
+    }
+}
+
+/// <summary>The source a clicked model element stands for.</summary>
+public sealed class GamepadElementClickedEventArgs : EventArgs
+{
+    public GamepadElementClickedEventArgs(InputBinding source) => Source = source;
+
+    public InputBinding Source { get; }
 }

@@ -16,4 +16,11 @@ public interface IGamepadState
     float RightStickX { get; }
 
     float RightStickY { get; }
+
+    /// <summary>
+    /// Raw platform button codes that carry no <see cref="GamepadButton"/> position (a pedal,
+    /// a macro button, ...). Empty on platforms that cannot report them - XInput's fixed
+    /// 14-button bitmask has no raw-code channel, so only the Linux evdev layer fills this in.
+    /// </summary>
+    IReadOnlyList<int> ExtraButtons => Array.Empty<int>();
 }

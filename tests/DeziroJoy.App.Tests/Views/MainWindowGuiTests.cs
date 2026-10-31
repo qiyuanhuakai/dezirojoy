@@ -70,6 +70,9 @@ public sealed class MainWindowGuiTests
         Dispatcher.UIThread.RunJobs();
     }
 
+    private static Control ModelElement(Window window, string name)
+        => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
+
     [AvaloniaFact]
     public void Window_Opens_With_Title_And_All_Three_Zones()
     {
@@ -84,10 +87,17 @@ public sealed class MainWindowGuiTests
         Assert.NotNull(window.FindControl<CheckBox>("PauseMappingCheckBox"));
         Assert.NotNull(window.FindControl<TabControl>("MainTabs"));
         Assert.NotNull(window.FindControl<ItemsControl>("MappingsList"));
-        Assert.NotNull(window.FindControl<Button>("AddMappingButton"));
         Assert.NotNull(window.FindControl<GamepadVisualizer>("GamepadVisualizer"));
         Assert.NotNull(window.FindControl<Button>("MinimizeButton"));
         Assert.NotNull(window.FindControl<Button>("CloseButton"));
+
+        // The model is the only entry point to mapping configuration, so the old
+        // form-with-source-pickers controls must be gone.
+        Assert.Null(window.FindControl<Button>("AddMappingButton"));
+        Assert.Null(window.FindControl<ComboBox>("SourceKindCombo"));
+        Assert.Null(window.FindControl<ComboBox>("SourceButtonCombo"));
+        Assert.Null(window.FindControl<ComboBox>("SourceStickCombo"));
+        Assert.Null(window.FindControl<Button>("CaptureSourceButton"));
     }
 
     [AvaloniaFact]
@@ -230,7 +240,7 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void AddMapping_Shows_Editor_And_Commit_Grows_The_List()
+    public void Clicking_An_Element_Shows_The_Settings_And_Commit_Grows_The_List()
     {
         var (window, viewModel, host, provider) = BuildWindow();
         var list = window.FindControl<ItemsControl>("MappingsList")!;
@@ -240,17 +250,16 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Assert.Equal(10, list.ItemCount);
 
-        Click(window.FindControl<Button>("AddMappingButton")!, window);
+        Click(ModelElement(window, "LeftBumper"), window);
         Assert.True(viewModel.IsEditing);
         Assert.True(editorPanel.IsVisible);
 
-        var sourceButton = window.FindControl<ComboBox>("SourceButtonCombo")!;
         var targetKind = window.FindControl<ComboBox>("TargetKindCombo")!;
-        var targetKey = window.FindControl<ComboBox>("TargetKeyCombo")!;
+        var targetKey = window.FindControl<ListBox>("TargetKeyList")!;
 
-        sourceButton.SelectedItem = GamepadButton.LeftBumper;
         targetKind.SelectedItem = MappingTargetKind.KeyPress;
-        targetKey.SelectedItem = GamepadKey.Space;
+        targetKey.SelectedItem = viewModel.Editor.KeyOptions.First(
+            option => !option.IsHeader && option.Key == GamepadKey.Space);
 
         Assert.Equal(GamepadButton.LeftBumper, viewModel.Editor.SelectedButton);
         Assert.Equal(MappingTargetKind.KeyPress, viewModel.Editor.TargetKind);
@@ -264,7 +273,7 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void CancelButton_Hides_The_Editor_Without_Changing_The_List()
+    public void CancelButton_Hides_The_Settings_Without_Changing_The_List()
     {
         var (window, viewModel, host, provider) = BuildWindow();
         var list = window.FindControl<ItemsControl>("MappingsList")!;
@@ -272,7 +281,7 @@ public sealed class MainWindowGuiTests
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
 
-        Click(window.FindControl<Button>("AddMappingButton")!, window);
+        Click(ModelElement(window, "LeftBumper"), window);
         Assert.True(viewModel.IsEditing);
 
         Click(window.FindControl<Button>("CancelButton")!, window);
@@ -412,41 +421,147 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void Editor_Sub_Controls_Follow_TargetKind()
+    public void Settings_Sub_Controls_Follow_TargetKind()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
-        Click(window.FindControl<Button>("AddMappingButton")!, window);
+        Click(ModelElement(window, "LeftBumper"), window);
 
-        var keyRow = window.FindControl<StackPanel>("KeyTargetRow")!;
+        var keyList = window.FindControl<ListBox>("TargetKeyList")!;
         var mouseRow = window.FindControl<StackPanel>("MouseTargetRow")!;
         var modifierRow = window.FindControl<StackPanel>("ModifierRow")!;
         var mouseMoveRow = window.FindControl<StackPanel>("MouseMoveRow")!;
         var wheelRow = window.FindControl<StackPanel>("WheelRow")!;
+        var targetKind = window.FindControl<ComboBox>("TargetKindCombo")!;
 
-        Assert.True(keyRow.IsVisible);
+        Assert.True(keyList.IsVisible);
         Assert.False(mouseRow.IsVisible);
         Assert.False(modifierRow.IsVisible);
         Assert.False(mouseMoveRow.IsVisible);
         Assert.False(wheelRow.IsVisible);
 
-        window.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.KeyCombo;
-        Assert.True(keyRow.IsVisible);
+        targetKind.SelectedItem = MappingTargetKind.KeyCombo;
+        Assert.True(keyList.IsVisible);
         Assert.True(modifierRow.IsVisible);
 
-        window.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.MouseButton;
-        Assert.False(keyRow.IsVisible);
+        targetKind.SelectedItem = MappingTargetKind.MouseButton;
+        Assert.False(keyList.IsVisible);
         Assert.True(mouseRow.IsVisible);
 
-        window.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.MouseMove;
+        // A stick source only offers the two targets the engine honors for a stick, and the
+        // source comes from the clicked element rather than a picker.
+        Click(ModelElement(window, "LeftStickPad"), window);
+        Assert.True(viewModel.Editor.SourceIsStick);
+
+        targetKind.SelectedItem = MappingTargetKind.MouseMove;
         Assert.True(mouseMoveRow.IsVisible);
         Assert.False(wheelRow.IsVisible);
 
-        window.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.WheelScroll;
+        targetKind.SelectedItem = MappingTargetKind.WheelScroll;
         Assert.True(wheelRow.IsVisible);
         Assert.False(mouseMoveRow.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void Settings_Have_No_Source_Picker_The_Clicked_Element_Decides_It()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        // Clicking a button element arms a button source; clicking a stick arms a stick
+        // source. Neither goes through a picker, because the model element encodes it.
+        Click(ModelElement(window, "ButtonA"), window);
+        Assert.False(viewModel.Editor.SourceIsStick);
+        Assert.Equal(GamepadButton.A, viewModel.Editor.SelectedButton);
+
+        window.KeyPress(Key.Escape, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Escape, null);
+
+        Click(ModelElement(window, "RightStickPad"), window);
+        Assert.True(viewModel.Editor.SourceIsStick);
+        Assert.Equal(GamepadStick.Right, viewModel.Editor.SelectedStick);
+    }
+
+    [AvaloniaFact]
+    public void Key_Picker_Groups_Keys_By_Category()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        var list = window.FindControl<ListBox>("TargetKeyList")!;
+        var items = list.Items.OfType<KeyPickerItem>().ToArray();
+
+        Assert.Equal(
+            ["面部按键", "肩键与扳机", "摇杆", "十字键", "系统键", "扩展按键"],
+            items.Where(item => item.IsHeader).Select(item => item.Label));
+        Assert.Equal(Enum.GetValues<GamepadKey>().Length, items.Count(item => !item.IsHeader));
+    }
+
+    [AvaloniaFact]
+    public void Capture_Button_Toggles_Capture_Mode_And_Its_Label()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        var capture = window.FindControl<Button>("CaptureKeyButton")!;
+
+        Assert.False(viewModel.Editor.IsCapturingKey);
+        Assert.Equal("捕获键盘", capture.Content);
+
+        Click(capture, window);
+
+        Assert.True(viewModel.Editor.IsCapturingKey);
+        Assert.Equal("停止捕获", capture.Content);
+    }
+
+    [AvaloniaFact]
+    public void Keyboard_Capture_Fills_The_Target_From_Live_Keys()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Assert.True(viewModel.Editor.IsCapturingKey);
+
+        window.KeyPress(Key.C, Avalonia.Input.RawInputModifiers.Control, Avalonia.Input.PhysicalKey.C, null);
+        window.KeyRelease(Key.C, Avalonia.Input.RawInputModifiers.Control, Avalonia.Input.PhysicalKey.C, null);
+
+        Assert.False(viewModel.Editor.IsCapturingKey, "releasing every key must commit the capture");
+        Assert.Equal(MappingTargetKind.KeyCombo, viewModel.Editor.TargetKind);
+        Assert.Equal(GamepadKey.C, viewModel.Editor.SelectedKey);
+        Assert.True(viewModel.Editor.ModifierCtrl);
+    }
+
+    [AvaloniaFact]
+    public void Keyboard_Capture_Handles_A_Lone_Key()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+
+        window.KeyPress(Key.Space, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Space, null);
+        window.KeyRelease(Key.Space, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Space, null);
+
+        Assert.False(viewModel.Editor.IsCapturingKey);
+        Assert.Equal(MappingTargetKind.KeyPress, viewModel.Editor.TargetKind);
+        Assert.Equal(GamepadKey.Space, viewModel.Editor.SelectedKey);
+        Assert.Equal(DeziroJoy.Core.Mapping.KeyModifiers.None, viewModel.Editor.Modifiers);
     }
 
     [AvaloniaFact]

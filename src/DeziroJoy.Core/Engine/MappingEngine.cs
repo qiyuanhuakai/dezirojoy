@@ -13,6 +13,7 @@ public sealed class MappingEngine
     private readonly GamepadProfile _profile;
     private readonly Dictionary<Guid, MouseStickProcessor> _mouseProcessors = [];
     private readonly Dictionary<Guid, ScrollStickProcessor> _scrollProcessors = [];
+    private readonly SortedSet<int> _previousExtraButtons = [];
     private GamepadButtonMask _previousButtons;
 
     public MappingEngine(GamepadProfile profile)
@@ -57,6 +58,10 @@ public sealed class MappingEngine
 
             switch (mapping.Source)
             {
+                case ButtonBinding button when button.Button == GamepadButton.Extra:
+                    UpdateExtraButton(mapping, button.Code, current, commands);
+                    break;
+
                 case ButtonBinding button:
                     var mask = button.Button.ToMask();
                     if ((pressEdges & mask) != 0)
@@ -77,6 +82,7 @@ public sealed class MappingEngine
         }
 
         _previousButtons = pressed;
+        RefreshPreviousExtraButtons(current);
         return commands;
     }
 
@@ -84,6 +90,7 @@ public sealed class MappingEngine
     public void Reset()
     {
         _previousButtons = GamepadButtonMask.None;
+        _previousExtraButtons.Clear();
         foreach (var processor in _mouseProcessors.Values)
         {
             processor.Reset();
@@ -92,6 +99,38 @@ public sealed class MappingEngine
         foreach (var processor in _scrollProcessors.Values)
         {
             processor.Reset();
+        }
+    }
+
+    /// <summary>
+    /// Edge detection for a raw-code button. The code is compared by value, so two different
+    /// unmapped inputs never collide the way two buttons sharing a mask bit would.
+    /// </summary>
+    private void UpdateExtraButton(
+        MappingEntry mapping,
+        int code,
+        IGamepadState current,
+        List<InputCommand> commands)
+    {
+        var pressed = current.ExtraButtons.Contains(code);
+        var wasPressed = _previousExtraButtons.Contains(code);
+
+        if (pressed && !wasPressed)
+        {
+            ExecuteTarget(mapping.Target, commands);
+        }
+        else if (!pressed && wasPressed)
+        {
+            ReleaseTarget(mapping.Target, commands);
+        }
+    }
+
+    private void RefreshPreviousExtraButtons(IGamepadState current)
+    {
+        _previousExtraButtons.Clear();
+        foreach (var code in current.ExtraButtons)
+        {
+            _previousExtraButtons.Add(code);
         }
     }
 
