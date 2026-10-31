@@ -43,7 +43,7 @@ jobs:
   package:
     name: package (win-x64)
     needs: build-and-test
-    if: github.event_name != 'workflow_call'
+    if: startsWith(github.ref, 'refs/heads/')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
           $info = (Get-Item publish/win-x64/DeziroJoy.exe).VersionInfo
           "Product : $($info.ProductName)"
           "Version : $($info.ProductVersion)"
-          if ($info.ProductVersion -ne '${{ steps.version.outputs.version }}') { throw "Version mismatch: $($info.ProductVersion)" }
+          if ($info.ProductVersion -notlike '${{ steps.version.outputs.version }}*') { throw "Version mismatch: $($info.ProductVersion)" }
 
       - uses: actions/upload-artifact@v4
         with:

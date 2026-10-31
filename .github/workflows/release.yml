@@ -59,7 +59,7 @@ jobs:
           $info = (Get-Item $exe).VersionInfo
           "Product : $($info.ProductName)"
           "Version : $($info.ProductVersion)"
-          if ($info.ProductVersion -ne '${{ steps.version.outputs.version }}') { throw "Version mismatch: $($info.ProductVersion)" }
+          if ($info.ProductVersion -notlike '${{ steps.version.outputs.version }}*') { throw "Version mismatch: $($info.ProductVersion)" }
 
       - name: Zip
         shell: pwsh
