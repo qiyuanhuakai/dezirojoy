@@ -1,4 +1,3 @@
-using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -21,56 +20,40 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _syncTimer = new() { Interval = SyncInterval };
 
     public MainWindow()
+        : this(CreateRuntime())
     {
-        var store = new FileProfileStore();
-        var host = new EngineHost(new NoGamepadProvider(), new NullOutputSink(), store);
+    }
 
-        AvaloniaXamlLoader.Load(this);
-        DataContext = new MainWindowViewModel(host, store);
-        Wire(host);
+    public MainWindow((MainWindowViewModel ViewModel, EngineHost Host) runtime)
+        : this(runtime.ViewModel, runtime.Host)
+    {
     }
 
     public MainWindow(MainWindowViewModel viewModel, EngineHost? host = null)
     {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
         AvaloniaXamlLoader.Load(this);
         DataContext = viewModel;
-        Wire(host ?? HostOf(viewModel));
-    }
-
-    // The view model owns the host without exposing it; this keeps live sampling working
-    // for callers that only have the view model.
-    private static EngineHost? HostOf(MainWindowViewModel viewModel)
-    {
-        foreach (var field in viewModel.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic))
-        {
-            if (field.GetValue(viewModel) is EngineHost host)
-            {
-                return host;
-            }
-        }
-
-        return null;
+        Wire(host ?? viewModel.Host);
     }
 
     private MainWindowViewModel ViewModel => (MainWindowViewModel)DataContext!;
 
-    private void Wire(EngineHost? host)
+    private void Wire(EngineHost host)
     {
         _previewTimer.Tick += OnPreviewTick;
         _syncTimer.Tick += OnSyncTick;
         _previewTimer.Start();
         _syncTimer.Start();
 
-        if (host is not null)
-        {
-            host.Sampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplySample(args));
-        }
+        host.Sampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplySample(args));
 
         Closed += (_, _) =>
         {
             _previewTimer.Stop();
             _syncTimer.Stop();
-            host?.Stop();
+            host.Stop();
         };
     }
 
@@ -99,4 +82,18 @@ public partial class MainWindow : Window
 
     private void CloseClick(object? sender, RoutedEventArgs e)
         => Close();
+
+    private static (MainWindowViewModel ViewModel, EngineHost Host) CreateRuntime()
+    {
+        var store = new FileProfileStore();
+        var provider = PlatformFactory.TryCreateProvider(out var gamepadProvider)
+            ? gamepadProvider
+            : new NoGamepadProvider();
+        var sink = PlatformFactory.TryCreateSink(out var outputSink, out _)
+            ? outputSink
+            : new NullOutputSink();
+        var host = new EngineHost(provider, sink, store);
+
+        return (new MainWindowViewModel(host, store), host);
+    }
 }

@@ -37,6 +37,8 @@ public partial class MainWindowViewModel : ObservableObject
 
     public MappingEditorViewModel Editor { get; }
 
+    public EngineHost Host => _host;
+
     public MouseSensitivityViewModel MouseSensitivity { get; }
 
     public ScrollSensitivityViewModel ScrollSensitivity { get; }
