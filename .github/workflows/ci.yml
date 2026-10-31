@@ -5,9 +5,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
+    name: build & test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -34,3 +39,44 @@ jobs:
 
       - name: Test
         run: dotnet test --no-build -c Release
+
+  package:
+    name: package (win-x64)
+    needs: build-and-test
+    if: github.event_name != 'workflow_call'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: echo "version=$(dotnet msbuild src/DeziroJoy.App -getProperty:Version)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish self-contained build
+        run: >
+          dotnet publish src/DeziroJoy.App
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:Version=${{ steps.version.outputs.version }}
+          -o publish/win-x64
+
+      - name: Smoke check the published binary
+        shell: pwsh
+        run: |
+          if (-not (Test-Path publish/win-x64/DeziroJoy.exe)) { throw "DeziroJoy.exe missing from publish output" }
+          $info = (Get-Item publish/win-x64/DeziroJoy.exe).VersionInfo
+          "Product : $($info.ProductName)"
+          "Version : $($info.ProductVersion)"
+          if ($info.ProductVersion -ne '${{ steps.version.outputs.version }}') { throw "Version mismatch: $($info.ProductVersion)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeziroJoy-${{ steps.version.outputs.version }}-win-x64
+          path: publish/win-x64/
+          if-no-files-found: error

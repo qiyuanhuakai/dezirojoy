@@ -1,0 +1,170 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without the leading v (e.g. 0.0.1-alpha.1-preview)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: publish ${{ matrix.rid }}
+    needs: test
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish self-contained build
+        run: >
+          dotnet publish src/DeziroJoy.App
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:Version=${{ steps.version.outputs.version }}
+          -o publish/${{ matrix.rid }}
+
+      - name: Smoke check the published binary
+        shell: pwsh
+        run: |
+          $exe = "publish/${{ matrix.rid }}/DeziroJoy.exe"
+          if (-not (Test-Path $exe)) { throw "DeziroJoy.exe missing from publish output" }
+          $info = (Get-Item $exe).VersionInfo
+          "Product : $($info.ProductName)"
+          "Version : $($info.ProductVersion)"
+          if ($info.ProductVersion -ne '${{ steps.version.outputs.version }}') { throw "Version mismatch: $($info.ProductVersion)" }
+
+      - name: Zip
+        shell: pwsh
+        run: >
+          Compress-Archive
+          -Path publish/${{ matrix.rid }}/*
+          -DestinationPath DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip
+          -CompressionLevel Optimal
+
+      - name: Checksum
+        shell: bash
+        run: sha256sum "DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip" > "DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.rid }}
+          path: |
+            DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip
+            DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: create GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version and tag
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Build release notes
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          cat > body.md <<'NOTES'
+          ## DeziroJoy vVERSION (alpha preview)
+
+          首个公开预览版。功能已完整实现，但尚未在真实手柄上做过充分验证，
+          欢迎按 [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
+
+          ### 本版包含
+
+          - 手柄 → 鼠标 / 键盘映射：单键、组合键（Ctrl+C 等）、鼠标按键
+          - 摇杆 → 鼠标移动 / 滚轮滚动
+          - 内置默认配置（自动识别 Xbox / DualShock / 通用布局）：左摇杆滚轮、
+            右摇杆鼠标、十字键方向键、B → Enter、A → Esc、X → Ctrl+C、Y → Ctrl+V
+          - 现代化鼠标速度控制：物理单位 px/s（与 DPI / 分辨率解耦）、径向死区、
+            4 种响应曲线、指数平滑、亚像素累积、精准模式（按住左摇杆临时降速）、
+            面板内实时校准预览
+          - 按设备持久化配置；深色界面 + 实时手柄可视化器
+
+          ### 下载
+
+          | 文件 | 说明 |
+          | --- | --- |
+          | `DeziroJoy-vVERSION-win-x64.zip` | 自包含，解压即用（无需安装 .NET），Intel / AMD 64 位 |
+          | `DeziroJoy-vVERSION-win-arm64.zip` | 同上，ARM64（如骁龙笔记本） |
+          | `*.sha256` | SHA256 校验和 |
+
+          ### 已知限制
+
+          - 仅支持 XInput 兼容手柄
+          - 配置按 XInput 槽位保存，两个手柄互换插槽时配置随槽位而非硬件走
+          - Linux 支持为实验性（evdev + uinput），本发布仅提供 Windows 构建
+
+          ### 质量门禁
+
+          221 个自动化测试全绿（含 headless GUI 测试），Windows 与 Ubuntu 双平台 CI 通过。
+          人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
+
+          ### 本版提交
+
+          NOTES
+          sed -i "s/vVERSION/$VERSION/g" body.md
+          echo '```' >> body.md
+          if git describe --tags --abbrev=0 HEAD^ 2>/dev/null; then
+            git log --oneline "$(git describe --tags --abbrev=0 HEAD^)..HEAD" >> body.md
+          else
+            git log --oneline >> body.md
+          fi
+          echo '```' >> body.md
+          cat body.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "DeziroJoy ${{ steps.version.outputs.tag }}" \
+            --notes-file body.md \
+            --prerelease \
+            artifacts/*/*.zip artifacts/*/*.sha256
