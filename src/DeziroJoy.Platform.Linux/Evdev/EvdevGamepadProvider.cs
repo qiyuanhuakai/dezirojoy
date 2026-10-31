@@ -233,20 +233,10 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             {
                 for (var i = 0; i < events; i++)
                 {
-                    device.Tracker.Apply(ParseEvent(buffer, i));
+                    device.Tracker.Apply(EvdevEventReader.Read(buffer, i));
                 }
             }
         }
-    }
-
-    private static EvdevEvent ParseEvent(ReadOnlySpan<byte> buffer, int index)
-    {
-        var offset = index * EvdevNative.EventSize;
-
-        return new EvdevEvent(
-            BinaryPrimitives.ReadUInt16LittleEndian(buffer[(offset + 16)..]),
-            BinaryPrimitives.ReadUInt16LittleEndian(buffer[(offset + 18)..]),
-            BinaryPrimitives.ReadInt32LittleEndian(buffer[(offset + 20)..]));
     }
 
     private void Remove(Device device)
