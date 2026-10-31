@@ -11,7 +11,7 @@ public partial class ProbeWindow : Window
         AvaloniaXamlLoader.Load(this);
     }
 
-    public ProbeWindow(MouseSensitivityViewModel vm)
+    public ProbeWindow(MainWindowViewModel vm)
         : this()
     {
         DataContext = vm;

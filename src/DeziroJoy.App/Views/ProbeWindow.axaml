@@ -1,8 +1,17 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+        xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
         x:Class="DeziroJoy.App.Views.ProbeWindow"
-        x:DataType="vm:MouseSensitivityViewModel"
+        x:DataType="vm:MainWindowViewModel"
         Title="Probe">
-    <Slider x:Name="ProbeSlider" Minimum="100" Maximum="6000" Value="{Binding MaxSpeed, Mode=TwoWay}" />
+    <Window.Resources>
+        <conv:LayoutToTextConverter x:Key="LayoutText" />
+    </Window.Resources>
+    <StackPanel>
+        <Slider x:Name="ProbeSlider" Minimum="100" Maximum="6000" Value="{Binding MouseSensitivity.MaxSpeed, Mode=TwoWay}" />
+        <Button x:Name="ProbeButton" Content="{Binding IsEngineRunning}" Command="{Binding ToggleEngineCommand}" />
+        <CheckBox x:Name="ProbeCheck" IsChecked="{Binding IsMappingEnabled, Converter={StaticResource Not}, Mode=TwoWay}" />
+        <TextBlock x:Name="ProbeLayout" Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}, TargetNullValue='无'}" />
+    </StackPanel>
 </Window>
