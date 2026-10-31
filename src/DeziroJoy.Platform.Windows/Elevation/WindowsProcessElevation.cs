@@ -54,7 +54,13 @@ public static class WindowsProcessElevation
     /// Starts a second, elevated copy of this executable. Returns false when the user
     /// declines the UAC prompt or the shell refuses the relaunch.
     /// </summary>
-    public static bool RelaunchElevated()
+    public static bool RelaunchElevated() => RelaunchElevated(arguments: null);
+
+    /// <summary>
+    /// Like <see cref="RelaunchElevated()"/>, but the elevated copy carries
+    /// <paramref name="arguments"/> so it performs the privileged step itself.
+    /// </summary>
+    public static bool RelaunchElevated(string? arguments)
     {
         var executable = Environment.ProcessPath;
         if (string.IsNullOrEmpty(executable))
@@ -68,6 +74,7 @@ public static class WindowsProcessElevation
             {
                 Verb = RunasVerb,
                 UseShellExecute = true,
+                Arguments = arguments ?? string.Empty,
             });
 
             return process is not null;
