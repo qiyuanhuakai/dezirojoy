@@ -24,16 +24,16 @@ internal static partial class UInputNative
 
     public const uint UiDevDestroy = 0x5502;
 
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport("libc.so.6", EntryPoint = "open", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int Open(string path, int flags);
 
-    [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc.so.6", EntryPoint = "close", SetLastError = true)]
     public static partial int Close(int fd);
 
-    [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc.so.6", EntryPoint = "ioctl", SetLastError = true)]
     public static unsafe partial int Ioctl(int fd, uint request, void* arg);
 
-    [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc.so.6", EntryPoint = "write", SetLastError = true)]
     public static unsafe partial nint Write(int fd, void* buffer, nuint count);
 }
 

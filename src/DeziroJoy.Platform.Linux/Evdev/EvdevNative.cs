@@ -18,16 +18,16 @@ internal static partial class EvdevNative
 
     public const uint EvIocGBitAbs = 0x80084523;
 
-    [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    [LibraryImport("libc.so.6", EntryPoint = "open", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int Open(string path, int flags);
 
-    [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc.so.6", EntryPoint = "close", SetLastError = true)]
     public static partial int Close(int fd);
 
-    [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc.so.6", EntryPoint = "read", SetLastError = true)]
     public static unsafe partial nint Read(int fd, void* buffer, nuint count);
 
-    [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc.so.6", EntryPoint = "ioctl", SetLastError = true)]
     public static unsafe partial int Ioctl(int fd, uint request, void* arg);
 }
 

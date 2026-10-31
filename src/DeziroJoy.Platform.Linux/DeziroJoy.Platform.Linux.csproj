@@ -5,6 +5,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="DeziroJoy.Platform.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\DeziroJoy.Core\DeziroJoy.Core.csproj" />
   </ItemGroup>
 </Project>
