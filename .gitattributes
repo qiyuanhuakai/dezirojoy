@@ -1,0 +1,27 @@
+# Normalize line endings to LF in the repository; check out native on Windows.
+* text=auto eol=lf
+
+# Binary assets must never be mangled by line-ending conversion.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.icns binary
+
+# C# / XAML / project files: explicit LF to keep diffs clean across machines.
+*.cs text eol=lf
+*.axaml text eol=lf
+*.xaml text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.targets text eol=lf
+*.slnx text eol=lf
+*.sln text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+
+# Generated / build output
+bin/ text eol=lf
+obj/ text eol=lf
