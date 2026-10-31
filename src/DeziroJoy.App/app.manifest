@@ -1,6 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="DeziroJoy.app"/>
+  <!--
+    asInvoker is the safe default: an ordinary launch never raises a UAC prompt, so the
+    app stays usable for everyday mapping.
+
+    Elevation is requested per action, never from here. SendInput is subject to UIPI and
+    can only inject into processes at an equal or lower integrity level, so injecting into
+    an elevated target requires an elevated caller - but putting requireAdministrator in
+    this manifest would prompt on every launch and break normal use. Instead the user
+    relaunches elevated on demand through the shell "runas" verb
+    (WindowsProcessElevation.RelaunchElevated), and the daemon is registered once as a
+    logon scheduled task with /rl HIGHEST.
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>

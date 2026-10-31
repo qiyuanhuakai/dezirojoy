@@ -19,16 +19,23 @@ public partial class MainWindowViewModel : ObservableObject
 
     private readonly IProfileStore _profileStore;
 
+    private readonly IElevationService _elevationService;
+
     private MappingEntry? _editingEntry;
 
-    public MainWindowViewModel(EngineHost host, IProfileStore profileStore)
+    public MainWindowViewModel(EngineHost host, IProfileStore profileStore, IElevationService? elevationService = null)
     {
         _host = host;
         _profileStore = profileStore;
+        _elevationService = elevationService ?? new ElevationService();
         Editor = new MappingEditorViewModel();
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
         Visualizer = new GamepadVisualizerViewModel();
+
+        // Fixed for the lifetime of the process: elevation is decided at launch.
+        IsElevationSupported = _elevationService.IsSupported;
+        IsElevated = _elevationService.IsElevated;
     }
 
     public ObservableCollection<ControllerRuntime> Controllers { get; } = [];
@@ -68,6 +75,59 @@ public partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isEngineRunning;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ElevationStatusText))]
+    [NotifyPropertyChangedFor(nameof(CanRelaunchElevated))]
+    private bool _isElevationSupported;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ElevationStatusText))]
+    [NotifyPropertyChangedFor(nameof(CanRelaunchElevated))]
+    private bool _isElevated;
+
+    /// <summary>
+    /// True when a relaunch would actually change anything: the platform cares about
+    /// integrity levels and this process is not elevated yet.
+    /// </summary>
+    public bool CanRelaunchElevated => IsElevationSupported && !IsElevated;
+
+    /// <summary>
+    /// Why elevated targets are or are not reachable. SendInput is subject to UIPI and
+    /// fails silently when blocked, so this is the only place the user can tell
+    /// "UIPI blocked me" from "it worked".
+    /// </summary>
+    public string ElevationStatusText => IsElevationSupported
+        ? IsElevated
+            ? "已以管理员身份运行：可向管理员权限的应用注入输入"
+            : "未提权：无法向以管理员身份运行的应用注入输入（UIPI 会静默拦截）"
+        : "当前平台不受 UIPI 限制，无需提权";
+
+    /// <summary>
+    /// Raised after a successful elevated relaunch so the view can shut this instance down
+    /// and let the elevated copy take over.
+    /// </summary>
+    public event EventHandler? ElevationRelaunchRequested;
+
+    partial void OnIsElevationSupportedChanged(bool value) => RelaunchElevatedCommand.NotifyCanExecuteChanged();
+
+    partial void OnIsElevatedChanged(bool value) => RelaunchElevatedCommand.NotifyCanExecuteChanged();
+
+    /// <summary>
+    /// Relaunches the app elevated through the shell "runas" verb (one UAC prompt). The
+    /// manifest stays at asInvoker, so this is the only thing that ever elevates.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanRelaunchElevated))]
+    private void RelaunchElevated()
+    {
+        if (!_elevationService.RelaunchElevated())
+        {
+            // The UAC prompt was declined; keep running unelevated.
+            return;
+        }
+
+        ElevationRelaunchRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     [RelayCommand]
     private void ToggleEngine()

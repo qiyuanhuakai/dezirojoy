@@ -18,21 +18,17 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var store = new FileProfileStore();
-            var provider = PlatformFactory.TryCreateProvider(out var gamepadProvider)
-                ? gamepadProvider
-                : new NoGamepadProvider();
-            var sink = PlatformFactory.TryCreateSink(out var outputSink, out _)
-                ? outputSink
-                : new NullOutputSink();
+            // Same wiring the headless daemon uses; only the lifetime around it differs.
+            var composition = new EngineComposition();
 
             var services = new ServiceCollection();
-            services.AddSingleton(provider);
-            services.AddSingleton(sink);
-            services.AddSingleton<IProfileStore>(store);
-            services.AddSingleton<EngineHost>();
+            services.AddSingleton(composition.Provider);
+            services.AddSingleton(composition.Sink);
+            services.AddSingleton<IProfileStore>(composition.ProfileStore);
+            services.AddSingleton(composition.Host);
             services.AddSingleton<MainWindowViewModel>();
             services.AddSingleton<ThemeService>();
+            services.AddSingleton<IElevationService, ElevationService>();
 
             var serviceProvider = services.BuildServiceProvider();
 
