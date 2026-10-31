@@ -181,6 +181,28 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void Refresh_Presence_Tracks_Devices_Without_Ticking_Or_Sampling()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        var sampled = 0;
+        host.Sampled += (_, _) => sampled++;
+
+        host.RefreshPresence();
+
+        Assert.Single(host.Controllers);
+        Assert.Empty(sink.Calls);
+        Assert.Equal(0, sampled);
+
+        provider.Remove("xinput:0");
+        host.RefreshPresence();
+
+        Assert.Empty(host.Controllers);
+    }
+
+    [Fact]
     public void Reload_Swaps_In_An_Edited_Profile_Immediately()
     {
         var (host, provider, sink) = CreateHost();

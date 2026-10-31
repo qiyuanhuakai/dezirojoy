@@ -98,6 +98,33 @@ public sealed class EngineHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Reconciles the runtime table with the provider's connected-device list without
+    /// ticking any engine or raising <see cref="Sampled"/>. Lets the UI reflect gamepad
+    /// presence while the mapping loop is stopped; <see cref="EnsureRuntime"/> stays the
+    /// single place a profile is loaded, so a later <see cref="Start"/> reuses the runtime
+    /// instead of reloading the profile.
+    /// </summary>
+    public void RefreshPresence()
+    {
+        var connected = _provider.GetConnected();
+        var present = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var descriptor in connected)
+        {
+            present.Add(descriptor.DeviceId);
+            EnsureRuntime(descriptor);
+        }
+
+        lock (_sync)
+        {
+            foreach (var deviceId in _runtimes.Keys.Where(id => !present.Contains(id)).ToList())
+            {
+                Remove(deviceId);
+            }
+        }
+    }
+
     public void SetMappingEnabled(bool enabled)
     {
         if (IsMappingEnabled == enabled)

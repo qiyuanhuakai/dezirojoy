@@ -82,6 +82,8 @@ public partial class MainWindowViewModel : ObservableObject
             _host.Start(TimeSpan.FromMilliseconds(2));
             IsEngineRunning = true;
         }
+
+        RefreshStatus();
     }
 
     [RelayCommand]
@@ -245,6 +247,14 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>Called from the UI thread when controllers connect or disconnect.</summary>
     public void SyncControllers()
     {
+        // Presence must be reflected even while the mapping loop is stopped. While the
+        // loop runs, TickOnce already refreshes the runtime table every tick, so asking
+        // the provider again here would only duplicate that scan.
+        if (!_host.IsRunning)
+        {
+            _host.RefreshPresence();
+        }
+
         var controllers = _host.Controllers;
 
         Controllers.Clear();
@@ -265,7 +275,7 @@ public partial class MainWindowViewModel : ObservableObject
             }
 
             HasController = false;
-            StatusMessage = "未检测到手柄，请连接手柄";
+            RefreshStatus();
             Visualizer.SetConnected(false);
             return;
         }
@@ -274,6 +284,21 @@ public partial class MainWindowViewModel : ObservableObject
         {
             Activate(controllers[0]);
         }
+
+        Visualizer.SetConnected(true);
+    }
+
+    private void RefreshStatus()
+    {
+        if (ActiveController is null)
+        {
+            StatusMessage = "未检测到手柄，请连接手柄";
+            return;
+        }
+
+        StatusMessage = IsEngineRunning
+            ? $"{ActiveController.Descriptor.Name} · {MappingDescriptions.Layout(ActiveController.Descriptor.Layout)}"
+            : $"{ActiveController.Descriptor.Name} · 映射未启动";
     }
 
     private void Activate(ControllerRuntime runtime)
@@ -281,7 +306,7 @@ public partial class MainWindowViewModel : ObservableObject
         ActiveController = runtime;
         ActiveProfile = runtime.Profile;
         HasController = true;
-        StatusMessage = $"{runtime.Descriptor.Name} · {MappingDescriptions.Layout(runtime.Descriptor.Layout)}";
+        RefreshStatus();
 
         foreach (var mapping in ActiveProfile.Mappings)
         {

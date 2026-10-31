@@ -201,4 +201,131 @@ public class MainWindowViewModelTests
         Assert.False(vm.HasController);
         Assert.Null(vm.ActiveProfile);
     }
+
+    [Fact]
+    public void Sync_Reports_A_Connected_Gamepad_While_The_Engine_Is_Stopped()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        vm.SyncControllers();
+
+        Assert.True(vm.HasController);
+        Assert.NotNull(vm.ActiveController);
+        Assert.True(vm.Visualizer.IsConnected);
+    }
+
+    [Fact]
+    public void Sync_Reports_A_Disconnect_While_The_Engine_Is_Stopped()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        // Establish the connected state through the engine tick path first.
+        SampleHelper.Sample(vm, host);
+        Assert.True(vm.HasController);
+
+        provider.Remove("xinput:0");
+        vm.SyncControllers();
+
+        Assert.False(vm.HasController);
+        Assert.Null(vm.ActiveController);
+        Assert.False(vm.Visualizer.IsConnected);
+    }
+
+    [Fact]
+    public void Stopped_With_No_Gamepad_Reports_Disconnected()
+    {
+        var (vm, host, provider, _) = CreateHost();
+
+        vm.SyncControllers();
+
+        Assert.False(vm.IsEngineRunning);
+        Assert.False(vm.HasController);
+        Assert.False(vm.Visualizer.IsConnected);
+        Assert.Equal("未检测到手柄，请连接手柄", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void Stopped_With_Gamepad_Reports_Connected_With_Mapping_Off()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        vm.SyncControllers();
+
+        Assert.False(vm.IsEngineRunning);
+        Assert.True(vm.HasController);
+        Assert.True(vm.Visualizer.IsConnected);
+        Assert.Contains("Xbox", vm.StatusMessage);
+        Assert.Contains("映射未启动", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void Running_With_Gamepad_Reports_Live_Connected_State()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+
+        vm.ToggleEngineCommand.Execute(null);
+        SampleHelper.Sample(vm, host);
+
+        Assert.True(vm.IsEngineRunning);
+        Assert.True(vm.HasController);
+        Assert.True(vm.Visualizer.IsConnected);
+        Assert.True(vm.Visualizer.IsAPressed);
+        Assert.Contains("Xbox", vm.StatusMessage);
+        Assert.DoesNotContain("映射未启动", vm.StatusMessage);
+
+        vm.ToggleEngineCommand.Execute(null);
+    }
+
+    [Fact]
+    public void Running_With_Gamepad_Lost_Reports_Disconnected()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        vm.ToggleEngineCommand.Execute(null);
+        SampleHelper.Sample(vm, host);
+        Assert.True(vm.HasController);
+
+        provider.Remove("xinput:0");
+        host.TickOnce(TimeSpan.FromSeconds(1.0 / 64.0));
+        vm.SyncControllers();
+
+        Assert.True(vm.IsEngineRunning);
+        Assert.False(vm.HasController);
+        Assert.False(vm.Visualizer.IsConnected);
+        Assert.Equal("未检测到手柄，请连接手柄", vm.StatusMessage);
+
+        vm.ToggleEngineCommand.Execute(null);
+    }
+
+    [Fact]
+    public void Starting_The_Engine_Keeps_The_Already_Detected_Gamepad()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        vm.SyncControllers();
+        var detected = vm.ActiveController;
+        Assert.True(vm.HasController);
+
+        vm.ToggleEngineCommand.Execute(null);
+        vm.SyncControllers();
+
+        Assert.Same(detected, vm.ActiveController);
+        Assert.Single(vm.Controllers);
+        Assert.True(vm.Visualizer.IsConnected);
+        Assert.DoesNotContain("映射未启动", vm.StatusMessage);
+
+        vm.ToggleEngineCommand.Execute(null);
+    }
 }
