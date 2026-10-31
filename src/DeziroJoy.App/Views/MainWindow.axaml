@@ -1,10 +1,695 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+        xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
+        xmlns:controls="clr-namespace:DeziroJoy.App.Views.Controls"
+        xmlns:views="clr-namespace:DeziroJoy.App.Views"
         x:Class="DeziroJoy.App.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
         Title="DeziroJoy"
-        Width="1200"
-        Height="800">
-    <TextBlock Text="DeziroJoy scaffold"
-               HorizontalAlignment="Center"
-               VerticalAlignment="Center" />
+        Width="1320" Height="880"
+        MinWidth="1180" MinHeight="780"
+        WindowStartupLocation="CenterScreen"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaTitleBarHeightHint="44"
+        Background="#101010">
+
+    <Window.Resources>
+        <conv:BoolToBrushConverter x:Key="DotBrush" PressedBrush="{StaticResource ConnectedBrush}" IdleBrush="{StaticResource IdleDotBrush}" />
+        <conv:BoolToTextConverter x:Key="EngineStateText" TrueText="停止映射" FalseText="启动映射" />
+        <conv:BoolToTextConverter x:Key="EnabledText" TrueText="已启用" FalseText="已禁用" />
+        <conv:BoolNegationConverter x:Key="Not" />
+        <conv:LayoutToTextConverter x:Key="LayoutText" />
+        <conv:TargetKindMatchConverter x:Key="KindMatch" />
+        <conv:EnumDisplayConverter x:Key="EnumDisplay" />
+        <conv:ScrollRateBarConverter x:Key="RateBar" />
+
+        <SolidColorBrush x:Key="AccentBrush">#4CC2FF</SolidColorBrush>
+        <SolidColorBrush x:Key="ConnectedBrush">#3FB950</SolidColorBrush>
+        <SolidColorBrush x:Key="IdleDotBrush">#6E7681</SolidColorBrush>
+        <SolidColorBrush x:Key="CardBrush">#1B1B1B</SolidColorBrush>
+        <SolidColorBrush x:Key="CardBorderBrush">#2B2B2B</SolidColorBrush>
+        <SolidColorBrush x:Key="SubtleBrush">#232323</SolidColorBrush>
+        <SolidColorBrush x:Key="TextPrimaryBrush">#F0F0F0</SolidColorBrush>
+        <SolidColorBrush x:Key="TextSecondaryBrush">#9A9A9A</SolidColorBrush>
+    </Window.Resources>
+
+    <Window.Styles>
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="{StaticResource CardBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <Style Selector="TextBlock.cardTitle">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+        </Style>
+
+        <Style Selector="TextBlock.sectionLabel">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,14,0,6" />
+        </Style>
+
+        <Style Selector="TextBlock.fieldLabel">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style Selector="TextBlock.readout">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#7A7A7A" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="#101010" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16,9" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Button.primary:pointerover">
+            <Setter Property="Background" Value="#6FCFFF" />
+        </Style>
+
+        <Style Selector="Button.ghost">
+            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="#DADADA" />
+            <Setter Property="BorderBrush" Value="#333333" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Button.ghost:pointerover">
+            <Setter Property="Background" Value="#2C2C2C" />
+        </Style>
+
+        <Style Selector="Button.caption">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Button.caption:pointerover">
+            <Setter Property="Background" Value="#2A2A2A" />
+        </Style>
+
+        <Style Selector="Button.caption.close:pointerover">
+            <Setter Property="Background" Value="#C42B1C" />
+        </Style>
+
+        <Style Selector="ToggleButton.rowToggle">
+            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="#B4B4B4" />
+            <Setter Property="BorderBrush" Value="#333333" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+
+        <Style Selector="ToggleButton.rowToggle:checked">
+            <Setter Property="Background" Value="#1E3A48" />
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="ComboBox">
+            <Setter Property="Background" Value="{StaticResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="#333333" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="10,7" />
+        </Style>
+
+        <Style Selector="ComboBox.enumCombo">
+            <Setter Property="ItemTemplate">
+                <DataTemplate>
+                    <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                </DataTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="CheckBox">
+            <Setter Property="Foreground" Value="#DADADA" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style Selector="Slider">
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="TabControl">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+    </Window.Styles>
+
+    <Grid RowDefinitions="Auto,*">
+
+        <Border Grid.Row="0" Height="44" Background="#161616" PointerPressed="TitleBarPointerPressed">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                    <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="DeziroJoy" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Text="手柄映射工具" FontSize="11" Foreground="#8A8A8A"
+                               Margin="10,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
+                    <Button x:Name="MinimizeButton" Classes="caption" Click="MinimizeClick">
+                        <Rectangle Width="10" Height="1" Fill="#D0D0D0" />
+                    </Button>
+                    <Button x:Name="MaximizeButton" Classes="caption" Click="MaximizeClick">
+                        <Rectangle Width="9" Height="9" Stroke="#D0D0D0" StrokeThickness="1" />
+                    </Button>
+                    <Button x:Name="CloseButton" Classes="caption close" Click="CloseClick">
+                        <Grid Width="10" Height="10">
+                            <Rectangle Width="10" Height="1" Fill="#D0D0D0">
+                                <Rectangle.RenderTransform>
+                                    <RotateTransform Angle="45" />
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                            <Rectangle Width="10" Height="1" Fill="#D0D0D0">
+                                <Rectangle.RenderTransform>
+                                    <RotateTransform Angle="-45" />
+                                </Rectangle.RenderTransform>
+                            </Rectangle>
+                        </Grid>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" ColumnDefinitions="290,*,350">
+
+            <ScrollViewer x:Name="LeftPanel" Grid.Column="0" Padding="16,16,14,16">
+                <StackPanel>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="连接" />
+                            <Grid Margin="0,12,0,0" ColumnDefinitions="Auto,*,Auto">
+                                <Ellipse Grid.Column="0" Width="10" Height="10" VerticalAlignment="Center"
+                                         Fill="{Binding HasController, Converter={StaticResource DotBrush}}" />
+                                <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
+                                           Foreground="{StaticResource TextPrimaryBrush}" FontSize="13"
+                                           Margin="10,0,8,0" VerticalAlignment="Center" />
+                                <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{StaticResource SubtleBrush}"
+                                        CornerRadius="6" Padding="8,3" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}}"
+                                               FontSize="11" Foreground="#B9B9B9" />
+                                </Border>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="引擎" />
+                            <Button x:Name="StartStopButton" Classes="primary" HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center" Margin="0,12,0,0"
+                                    Content="{Binding IsEngineRunning, Converter={StaticResource EngineStateText}}"
+                                    Command="{Binding ToggleEngineCommand}" />
+                            <CheckBox x:Name="PauseMappingCheckBox" Content="暂停映射" Margin="0,14,0,0"
+                                      IsChecked="{Binding IsMappingEnabled, Converter={StaticResource Not}, Mode=TwoWay}"
+                                      Command="{Binding ToggleMappingCommand}" />
+                            <TextBlock Classes="hint" Margin="0,8,0,0"
+                                       Text="暂停后仍可编辑配置，恢复后立即生效。" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="配置文件" />
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Classes="ghost" Content="保存配置" Command="{Binding SaveProfileCommand}" />
+                                <Button Classes="ghost" Content="恢复默认" Margin="8,0,0,0" Command="{Binding ResetToDefaultCommand}" />
+                            </StackPanel>
+                            <TextBlock Classes="hint" Margin="0,10,0,0"
+                                       Text="配置按设备保存，重连后自动恢复。" />
+                        </StackPanel>
+                    </Border>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <TabControl x:Name="MainTabs" Grid.Column="1" Margin="6,8,10,16">
+
+                <TabItem Header="按键映射">
+                    <Grid Margin="14,12,14,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" MinHeight="180" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <ScrollViewer Grid.Row="0">
+                            <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:MappingRowViewModel">
+                                        <Border Classes="card" Padding="14,10" Margin="0,0,0,8">
+                                            <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding SourceText}" FontSize="13"
+                                                               Foreground="{StaticResource TextPrimaryBrush}" />
+                                                    <TextBlock Text="{Binding TargetText}" FontSize="11"
+                                                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,2,0,0" />
+                                                </StackPanel>
+                                                <ToggleButton Grid.Column="1" Classes="rowToggle" Margin="10,0,0,0"
+                                                              VerticalAlignment="Center"
+                                                              Content="{Binding IsEnabled, Converter={StaticResource EnabledText}}"
+                                                              IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                                <Button Grid.Column="2" Classes="ghost" Content="编辑" Margin="8,0,0,0"
+                                                        Command="{Binding EditCommand}" />
+                                                <Button Grid.Column="3" Classes="ghost" Content="删除" Margin="8,0,0,0"
+                                                        Command="{Binding DeleteCommand}" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <ScrollViewer Grid.Row="1" MaxHeight="440">
+                            <Border x:Name="EditorPanel" Classes="card" IsVisible="{Binding IsEditing}">
+                                <StackPanel>
+                                    <TextBlock Classes="cardTitle" Text="编辑映射" />
+
+                                    <TextBlock Classes="sectionLabel" Text="触发来源" />
+                                    <WrapPanel>
+                                        <StackPanel Width="190" Margin="0,0,12,0">
+                                            <TextBlock Classes="fieldLabel" Text="按键" />
+                                            <ComboBox x:Name="SourceButtonCombo" Classes="enumCombo"
+                                                      ItemsSource="{x:Static views:EnumOptions.Buttons}"
+                                                      SelectedItem="{Binding Editor.SelectedButton, Mode=TwoWay}" />
+                                        </StackPanel>
+                                        <StackPanel Width="190" Margin="0,0,12,0">
+                                            <TextBlock Classes="fieldLabel" Text="摇杆" />
+                                            <ComboBox x:Name="SourceStickCombo" Classes="enumCombo"
+                                                      ItemsSource="{x:Static views:EnumOptions.Sticks}"
+                                                      SelectedItem="{Binding Editor.SelectedStick, Mode=TwoWay}" />
+                                        </StackPanel>
+                                        <StackPanel VerticalAlignment="Bottom">
+                                            <TextBlock Classes="fieldLabel" Text="来源类型" />
+                                            <CheckBox x:Name="SourceIsStickToggle" Content="使用摇杆"
+                                                      IsChecked="{Binding Editor.SourceIsStick, Mode=TwoWay}" />
+                                        </StackPanel>
+                                    </WrapPanel>
+
+                                    <TextBlock Classes="sectionLabel" Text="目标动作" />
+                                    <WrapPanel>
+                                        <StackPanel Width="190" Margin="0,0,12,0">
+                                            <TextBlock Classes="fieldLabel" Text="类型" />
+                                            <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
+                                                      ItemsSource="{x:Static views:EnumOptions.TargetKinds}"
+                                                      SelectedItem="{Binding Editor.TargetKind, Mode=TwoWay}" />
+                                        </StackPanel>
+                                        <StackPanel x:Name="KeyTargetRow" Width="190" Margin="0,0,12,0"
+                                                    IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}">
+                                            <TextBlock Classes="fieldLabel" Text="按键" />
+                                            <ComboBox x:Name="TargetKeyCombo" Classes="enumCombo"
+                                                      ItemsSource="{x:Static views:EnumOptions.Keys}"
+                                                      SelectedItem="{Binding Editor.SelectedKey, Mode=TwoWay}" />
+                                        </StackPanel>
+                                        <StackPanel x:Name="MouseTargetRow" Width="190"
+                                                    IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
+                                            <TextBlock Classes="fieldLabel" Text="鼠标按键" />
+                                            <ComboBox x:Name="MouseButtonCombo" Classes="enumCombo"
+                                                      ItemsSource="{x:Static views:EnumOptions.MouseButtons}"
+                                                      SelectedItem="{Binding Editor.SelectedMouseButton, Mode=TwoWay}" />
+                                        </StackPanel>
+                                    </WrapPanel>
+
+                                    <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
+                                                IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
+                                        <CheckBox x:Name="ModifierCtrlBox" Content="Ctrl" IsChecked="{Binding Editor.ModifierCtrl, Mode=TwoWay}" />
+                                        <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierShift, Mode=TwoWay}" />
+                                        <CheckBox x:Name="ModifierAltBox" Content="Alt" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierAlt, Mode=TwoWay}" />
+                                        <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierWin, Mode=TwoWay}" />
+                                    </StackPanel>
+
+                                    <StackPanel x:Name="MouseMoveRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
+                                        <TextBlock Classes="sectionLabel" Text="鼠标移动参数" />
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="90" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度 (px/s)" VerticalAlignment="Center" Margin="0" />
+                                            <Slider Grid.Column="1" x:Name="EditorMouseMaxSpeedBox" Minimum="100" Maximum="6000" TickFrequency="50"
+                                                    Value="{Binding Editor.MouseSettings.MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                       Text="{Binding Editor.MouseSettings.MaxSpeed, StringFormat='{}{0:F0}'}" />
+                                        </Grid>
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="90" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                                            <Slider Grid.Column="1" x:Name="EditorMouseDeadZoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                                    Value="{Binding Editor.MouseSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                       Text="{Binding Editor.MouseSettings.DeadZone, StringFormat='{}{0:F2}'}" />
+                                        </Grid>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="90" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间 (s)" VerticalAlignment="Center" Margin="0" />
+                                            <Slider Grid.Column="1" x:Name="EditorMouseResponseTimeBox" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                                                    Value="{Binding Editor.MouseSettings.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                       Text="{Binding Editor.MouseSettings.ResponseTime, StringFormat='{}{0:F2}'}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel x:Name="WheelRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
+                                        <TextBlock Classes="sectionLabel" Text="滚轮参数" />
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="90" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率 (格/s)" VerticalAlignment="Center" Margin="0" />
+                                            <Slider Grid.Column="1" x:Name="EditorScrollRateBox" Minimum="1" Maximum="40" TickFrequency="1"
+                                                    Value="{Binding Editor.ScrollSettings.MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                       Text="{Binding Editor.ScrollSettings.MaxTicksPerSecond, StringFormat='{}{0:F0}'}" />
+                                        </Grid>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="90" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                                            <Slider Grid.Column="1" x:Name="EditorScrollDeadzoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                                    Value="{Binding Editor.ScrollSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                       Text="{Binding Editor.ScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                                        <Button x:Name="CommitButton" Classes="primary" Content="确定" Command="{Binding CommitEditorCommand}" />
+                                        <Button x:Name="CancelButton" Classes="ghost" Content="取消" Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </ScrollViewer>
+
+                        <Button Grid.Row="2" x:Name="AddMappingButton" Classes="primary" Content="添加映射"
+                                HorizontalAlignment="Left" Command="{Binding AddMappingCommand}" />
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="鼠标灵敏度">
+                    <ScrollViewer>
+                        <Grid Margin="20,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" MaxWidth="520" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="cardTitle" Text="摇杆 → 鼠标" Margin="0,0,0,14" />
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="MaxSpeedSlider" Minimum="100" Maximum="6000" TickFrequency="50"
+                                            Value="{Binding MouseSensitivity.MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.MaxSpeed, StringFormat='{}{0:F0} px/s'}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="DeadZoneSlider" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                            Value="{Binding MouseSensitivity.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.DeadZone, StringFormat='{}{0:F2}'}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="响应曲线" VerticalAlignment="Center" Margin="0" />
+                                    <ComboBox Grid.Column="1" x:Name="CurveComboBox" Classes="enumCombo" HorizontalAlignment="Stretch"
+                                              ItemsSource="{x:Static views:EnumOptions.Curves}"
+                                              SelectedItem="{Binding MouseSensitivity.Curve, Mode=TwoWay}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="曲线强度" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="CurveStrengthSlider" Minimum="0" Maximum="2" TickFrequency="0.1"
+                                            Value="{Binding MouseSensitivity.CurveStrength, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.CurveStrength, StringFormat='{}{0:F2}'}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="ResponseTimeSlider" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                                            Value="{Binding MouseSensitivity.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.ResponseTime, StringFormat='{}{0:F2} s'}" />
+                                </Grid>
+                                <TextBlock Classes="hint" Margin="150,0,0,14"
+                                           Text="0 = 即时响应，越大越平稳" />
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准模式倍率" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="PrecisionScaleSlider" Minimum="0.05" Maximum="1" TickFrequency="0.05"
+                                            Value="{Binding MouseSensitivity.PrecisionScale, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.PrecisionScale, StringFormat='{}{0:F2}'}" />
+                                </Grid>
+
+                                <CheckBox x:Name="InvertYBox" Content="垂直反转" IsChecked="{Binding MouseSensitivity.InvertY, Mode=TwoWay}" />
+
+                                <Button Classes="primary" Content="应用" HorizontalAlignment="Left" Margin="0,18,0,0"
+                                        Command="{Binding ApplyMouseSensitivityCommand}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Margin="28,0,0,0" VerticalAlignment="Top">
+                                <TextBlock Classes="cardTitle" Text="实时预览" Margin="0,0,0,12" />
+                                <controls:SensitivityPreview x:Name="MousePreviewHost" DataContext="{Binding MouseSensitivity}" />
+
+                                <Grid Margin="0,16,0,0" Width="200">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="当前速度" Margin="0" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.CurrentSpeed, StringFormat='{}{0:F0} px/s'}" />
+                                </Grid>
+                                <Grid Margin="0,6,0,0" Width="200">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="累计位移" Margin="0" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                               Text="{Binding MouseSensitivity.TravelDistance, StringFormat='{}{0:F0} px'}" />
+                                </Grid>
+
+                                <TextBlock Classes="cardTitle" Text="响应曲线" Margin="0,22,0,12" />
+                                <controls:ResponseCurveGraph x:Name="CurveGraphHost" DataContext="{Binding MouseSensitivity}" />
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem Header="滚轮灵敏度">
+                    <ScrollViewer>
+                        <Grid Margin="20,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" MaxWidth="520" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Classes="cardTitle" Text="摇杆 → 滚轮" Margin="0,0,0,14" />
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="ScrollRateSlider" Minimum="1" Maximum="40" TickFrequency="1"
+                                            Value="{Binding ScrollSensitivity.MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding ScrollSensitivity.MaxTicksPerSecond, StringFormat='{}{0:F0} 格/s'}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="ScrollDeadzoneSlider" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                            Value="{Binding ScrollSensitivity.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding ScrollSensitivity.DeadZone, StringFormat='{}{0:F2}'}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="响应曲线" VerticalAlignment="Center" Margin="0" />
+                                    <ComboBox Grid.Column="1" x:Name="ScrollCurveCombo" Classes="enumCombo" HorizontalAlignment="Stretch"
+                                              ItemsSource="{x:Static views:EnumOptions.Curves}"
+                                              SelectedItem="{Binding ScrollSensitivity.Curve, Mode=TwoWay}" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="90" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间" VerticalAlignment="Center" Margin="0" />
+                                    <Slider Grid.Column="1" x:Name="ScrollResponseTimeSlider" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                                            Value="{Binding ScrollSensitivity.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Text="{Binding ScrollSensitivity.ResponseTime, StringFormat='{}{0:F2} s'}" />
+                                </Grid>
+                                <TextBlock Classes="hint" Margin="150,0,0,14"
+                                           Text="0 = 即时响应，越大越平稳" />
+
+                                <CheckBox x:Name="EnableHorizontalBox" Content="启用水平滚动"
+                                          IsChecked="{Binding ScrollSensitivity.EnableHorizontal, Mode=TwoWay}" />
+                                <CheckBox x:Name="ScrollInvertYBox" Content="垂直反转" Margin="0,8,0,0"
+                                          IsChecked="{Binding ScrollSensitivity.InvertY, Mode=TwoWay}" />
+
+                                <Button Classes="primary" Content="应用" HorizontalAlignment="Left" Margin="0,18,0,0"
+                                        Command="{Binding ApplyScrollSensitivityCommand}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Margin="28,0,0,0" VerticalAlignment="Top">
+                                <TextBlock Classes="cardTitle" Text="实时预览" Margin="0,0,0,12" />
+
+                                <Border x:Name="ScrollPreviewHost" Width="200" Height="200" Background="#151515"
+                                        BorderBrush="#2C2C2C" BorderThickness="1" CornerRadius="10">
+                                    <Grid>
+                                        <Rectangle Width="6" Height="140" RadiusX="3" RadiusY="3" Fill="#242424"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        <Rectangle x:Name="ScrollRateBar" Width="6" RadiusX="3" RadiusY="3" Fill="{StaticResource AccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,35">
+                                            <Rectangle.Height>
+                                                <MultiBinding Converter="{StaticResource RateBar}">
+                                                    <Binding Path="ScrollSensitivity.CurrentRate" />
+                                                    <Binding Path="ScrollSensitivity.MaxTicksPerSecond" />
+                                                </MultiBinding>
+                                            </Rectangle.Height>
+                                        </Rectangle>
+                                    </Grid>
+                                </Border>
+
+                                <Grid Margin="0,16,0,0" Width="200">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚轮偏移" Margin="0" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                               Text="{Binding ScrollSensitivity.WheelOffset, StringFormat='{}{0:F1}'}" />
+                                </Grid>
+                                <Grid Margin="0,6,0,0" Width="200">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="当前速率" Margin="0" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                               Text="{Binding ScrollSensitivity.CurrentRate, StringFormat='{}{0:F1} 格/s'}" />
+                                </Grid>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+
+            <Border Grid.Column="2" Background="#141414" BorderBrush="#232323" BorderThickness="1,0,0,0"
+                    Padding="12">
+                <Grid RowDefinitions="Auto,Auto">
+                    <TextBlock Grid.Row="0" Classes="cardTitle" Text="手柄状态" Margin="0,0,0,14" />
+                    <StackPanel Grid.Row="1">
+                        <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}"
+                                                    HorizontalAlignment="Center" />
+                        <TextBlock Classes="hint" Text="按下按键查看实时状态"
+                                   HorizontalAlignment="Center" Margin="0,16,0,0" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
 </Window>

@@ -1,0 +1,83 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
+             x:Class="DeziroJoy.App.Views.Controls.GamepadVisualizer"
+             x:DataType="vm:GamepadVisualizerViewModel">
+    <UserControl.Resources>
+        <conv:BoolToBrushConverter x:Key="PadBrush" />
+        <conv:BoolToDoubleConverter x:Key="ConnectedOpacity" TrueValue="1" FalseValue="0.4" />
+        <conv:BoolNegationConverter x:Key="Not" />
+    </UserControl.Resources>
+
+    <Grid Width="320" Height="220">
+        <Canvas x:Name="PadCanvas" Opacity="{Binding IsConnected, Converter={StaticResource ConnectedOpacity}}">
+
+            <Rectangle x:Name="PadBody" Canvas.Left="8" Canvas.Top="34" Width="304" Height="164"
+                       RadiusX="46" RadiusY="46" Fill="#1F1F1F" Stroke="#333333" StrokeThickness="1" />
+
+            <Rectangle x:Name="LeftTrigger" Canvas.Left="44" Canvas.Top="6" Width="54" Height="12"
+                       RadiusX="6" RadiusY="6" Fill="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="RightTrigger" Canvas.Left="222" Canvas.Top="6" Width="54" Height="12"
+                       RadiusX="6" RadiusY="6" Fill="{Binding IsRightTriggerPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="LeftBumper" Canvas.Left="38" Canvas.Top="20" Width="66" Height="14"
+                       RadiusX="7" RadiusY="7" Fill="{Binding IsLeftBumperPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="RightBumper" Canvas.Left="216" Canvas.Top="20" Width="66" Height="14"
+                       RadiusX="7" RadiusY="7" Fill="{Binding IsRightBumperPressed, Converter={StaticResource PadBrush}}" />
+
+            <Ellipse x:Name="LeftStickPad" Canvas.Left="48" Canvas.Top="80" Width="52" Height="52"
+                     Fill="#262626" Stroke="#3A3A3A" StrokeThickness="1" />
+            <Ellipse x:Name="LeftStickRing" Canvas.Left="59" Canvas.Top="91" Width="30" Height="30"
+                     Stroke="#4A4A4A" StrokeThickness="1" StrokeDashArray="2,2" />
+            <Ellipse x:Name="LeftStickThumb" Canvas.Left="63" Canvas.Top="95" Width="22" Height="22"
+                     Fill="#D8D8D8" />
+            <Ellipse x:Name="LeftStickClick" Canvas.Left="67" Canvas.Top="133" Width="14" Height="14"
+                     Fill="{Binding IsLeftStickPressed, Converter={StaticResource PadBrush}}" />
+
+            <Ellipse x:Name="RightStickPad" Canvas.Left="220" Canvas.Top="116" Width="52" Height="52"
+                     Fill="#262626" Stroke="#3A3A3A" StrokeThickness="1" />
+            <Ellipse x:Name="RightStickRing" Canvas.Left="231" Canvas.Top="127" Width="30" Height="30"
+                     Stroke="#4A4A4A" StrokeThickness="1" StrokeDashArray="2,2" />
+            <Ellipse x:Name="RightStickThumb" Canvas.Left="235" Canvas.Top="131" Width="22" Height="22"
+                     Fill="#D8D8D8" />
+            <Ellipse x:Name="RightStickClick" Canvas.Left="239" Canvas.Top="169" Width="14" Height="14"
+                     Fill="{Binding IsRightStickPressed, Converter={StaticResource PadBrush}}" />
+
+            <Rectangle x:Name="DpadUp" Canvas.Left="122" Canvas.Top="126" Width="12" Height="24" RadiusX="2" RadiusY="2"
+                       Fill="{Binding IsDPadUpPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="DpadDown" Canvas.Left="122" Canvas.Top="150" Width="12" Height="24" RadiusX="2" RadiusY="2"
+                       Fill="{Binding IsDPadDownPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="DpadLeft" Canvas.Left="104" Canvas.Top="144" Width="24" Height="12" RadiusX="2" RadiusY="2"
+                       Fill="{Binding IsDPadLeftPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="DpadRight" Canvas.Left="128" Canvas.Top="144" Width="24" Height="12" RadiusX="2" RadiusY="2"
+                       Fill="{Binding IsDPadRightPressed, Converter={StaticResource PadBrush}}" />
+            <Rectangle x:Name="DpadCenter" Canvas.Left="122" Canvas.Top="144" Width="12" Height="12" RadiusX="2" RadiusY="2"
+                       Fill="#2E2E2E" />
+
+            <Ellipse x:Name="ButtonY" Canvas.Left="198" Canvas.Top="56" Width="22" Height="22"
+                     Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}" />
+            <Ellipse x:Name="ButtonX" Canvas.Left="174" Canvas.Top="80" Width="22" Height="22"
+                     Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}" />
+            <Ellipse x:Name="ButtonB" Canvas.Left="222" Canvas.Top="80" Width="22" Height="22"
+                     Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}" />
+            <Ellipse x:Name="ButtonA" Canvas.Left="198" Canvas.Top="104" Width="22" Height="22"
+                     Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}" />
+
+            <TextBlock Canvas.Left="203" Canvas.Top="59" Text="Y" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="179" Canvas.Top="83" Text="X" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="228" Canvas.Top="83" Text="B" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
+            <TextBlock Canvas.Left="204" Canvas.Top="107" Text="A" FontSize="10" Foreground="#CFCFCF" IsHitTestVisible="False" />
+
+            <Ellipse x:Name="BackButton" Canvas.Left="138" Canvas.Top="64" Width="14" Height="14"
+                     Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}" />
+            <Ellipse x:Name="GuideButton" Canvas.Left="157" Canvas.Top="64" Width="14" Height="14"
+                     Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}" />
+            <Ellipse x:Name="StartButton" Canvas.Left="176" Canvas.Top="64" Width="14" Height="14"
+                     Fill="{Binding IsStartPressed, Converter={StaticResource PadBrush}}" />
+        </Canvas>
+
+        <TextBlock x:Name="DisconnectedLabel" Text="未连接" IsVisible="{Binding IsConnected, Converter={StaticResource Not}}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   FontSize="15" Foreground="#9A9A9A" />
+    </Grid>
+</UserControl>

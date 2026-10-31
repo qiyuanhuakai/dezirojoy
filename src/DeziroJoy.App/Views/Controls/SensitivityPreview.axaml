@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             x:Class="DeziroJoy.App.Views.Controls.SensitivityPreview"
+             x:DataType="vm:MouseSensitivityViewModel">
+    <Grid Width="200" Height="200">
+        <Border Background="#151515" BorderBrush="#2C2C2C" BorderThickness="1" CornerRadius="10" />
+
+        <Canvas>
+            <Rectangle Canvas.Left="99" Canvas.Top="0" Width="2" Height="200" Fill="#242424" />
+            <Rectangle Canvas.Left="0" Canvas.Top="99" Width="200" Height="2" Fill="#242424" />
+            <Ellipse Canvas.Left="83" Canvas.Top="83" Width="34" Height="34"
+                     Stroke="#242424" StrokeThickness="1" StrokeDashArray="2,2" />
+
+            <Ellipse x:Name="PreviewDot" Width="10" Height="10" Fill="#4CC2FF"
+                     Canvas.Left="{Binding PreviewX}" Canvas.Top="{Binding PreviewY}">
+                <Ellipse.RenderTransform>
+                    <TranslateTransform X="-5" Y="-5" />
+                </Ellipse.RenderTransform>
+            </Ellipse>
+        </Canvas>
+
+        <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,10"
+                Background="#DD151515" CornerRadius="6" Padding="8,3">
+            <TextBlock Text="{Binding CurrentSpeed, StringFormat='{}{0:F0} px/s'}"
+                       FontSize="12" Foreground="#D6D6D6" />
+        </Border>
+    </Grid>
+</UserControl>
