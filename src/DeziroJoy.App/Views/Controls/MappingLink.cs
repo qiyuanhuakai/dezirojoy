@@ -211,34 +211,21 @@ public sealed class MappingLink : Control
             return null;
         }
 
+        // The editor card is a fixed frame outside the scroll region, so while it is open the
+        // line always has a valid endpoint and never has to be dropped for scrolling.
         var element = Find<GamepadVisualizer>("GamepadVisualizer")?.ElementFor(source);
         var layer = Find<Canvas>("ConnectorLayer");
         var editor = Find<Border>("EditorPanel");
-        var scroll = Find<ScrollViewer>("MappingEditorScroll");
 
-        if (element is null || layer is null || editor is not { IsVisible: true } || scroll is null)
+        if (element is null || layer is null || editor is not { IsVisible: true })
         {
             return null;
         }
 
         var start = element.TranslatePoint(new Point(element.Bounds.Width / 2, element.Bounds.Height / 2), layer);
         var end = editor.TranslatePoint(new Point(editor.Bounds.Width / 2, 0), layer);
-        var scrollTop = scroll.TranslatePoint(new Point(0, 0), layer);
 
-        if (start is null || end is null || scrollTop is null)
-        {
-            return null;
-        }
-
-        // The editor lives in the scroll region; once it scrolls out of the viewport the line
-        // would point off-screen, so it is dropped until the editor is back in view. The test
-        // is overlap with the viewport, not a strict top-edge comparison: the content presenter
-        // insets the editor by a couple of pixels even at scroll offset zero.
-        var viewportTop = scrollTop.Value.Y;
-        var viewportBottom = viewportTop + scroll.Bounds.Height;
-        var editorBottom = end.Value.Y + editor.Bounds.Height;
-
-        if (editorBottom <= viewportTop || end.Value.Y >= viewportBottom)
+        if (start is null || end is null)
         {
             return null;
         }

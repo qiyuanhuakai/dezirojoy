@@ -48,6 +48,10 @@ public sealed class GamepadModelEditorTests
     private static void Click(Control target, Window window)
     {
         window.UpdateLayout();
+        // The editor card's body scrolls, so a control below the fold must be scrolled into
+        // view first - what a user does before clicking it.
+        target.BringIntoView();
+        window.UpdateLayout();
         var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
         window.MouseDown(point, Avalonia.Input.MouseButton.Left);
         window.MouseUp(point, Avalonia.Input.MouseButton.Left);
@@ -309,7 +313,14 @@ public sealed class GamepadModelEditorTests
     [AvaloniaFact]
     public void The_Model_Is_The_Primary_Surface_Of_The_Mapping_Tab()
     {
-        var (window, _, _, _) = BuildWindow();
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        // The editor row collapses to zero while nothing is being edited, so the comparison is
+        // only meaningful with the settings open.
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
 
         var model = Model(window);
         var panel = window.FindControl<Border>("EditorPanel")!;

@@ -64,6 +64,10 @@ public sealed class MainWindowGuiTests
     private static void Click(Control target, Window window)
     {
         window.UpdateLayout();
+        // The editor card's body scrolls, so a control below the fold must be scrolled into
+        // view first - what a user does before clicking it.
+        target.BringIntoView();
+        window.UpdateLayout();
         var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
         window.MouseDown(point, Avalonia.Input.MouseButton.Left);
         window.MouseUp(point, Avalonia.Input.MouseButton.Left);
@@ -110,7 +114,7 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void The_Mapping_Editor_Pins_The_Model_Above_One_Shared_Scroll_Region()
+    public void The_Editor_Card_Is_A_Fixed_Frame_That_Only_Scrolls_Its_Own_Content()
     {
         var (window, _, _, _) = BuildWindow();
         window.UpdateLayout();
@@ -120,13 +124,14 @@ public sealed class MainWindowGuiTests
         var mappings = window.FindControl<ItemsControl>("MappingsList")!;
         var editor = window.FindControl<Border>("EditorPanel")!;
 
-        // The mapping table and the inline editor share one scroll region, so nothing falls
-        // past the clipped tab content at the window's minimum height.
-        Assert.True(IsDescendantOf(mappings, scroll), "the mapping table must live in the shared scroll region");
-        Assert.True(IsDescendantOf(editor, scroll), "the inline editor must live in the shared scroll region");
+        // The mapping table lives in the scroll region, so nothing falls past the clipped tab
+        // content at the window's minimum height. The editor card must NOT: only its inner
+        // content scrolls, so the card's frame - and the connector line's endpoint - stays put.
+        Assert.True(IsDescendantOf(mappings, scroll), "the mapping table must live in the scroll region");
+        Assert.False(IsDescendantOf(editor, scroll), "the editor card must stay outside the scroll region");
 
         // The model is the spatial reference for what is being edited, so it is pinned above
-        // the scroll region rather than scrolling away with the table.
+        // everything rather than scrolling away.
         Assert.False(IsDescendantOf(model, scroll), "the gamepad model must stay pinned above the scroll region");
 
         var modelBottom = model.TranslatePoint(new Point(0, model.Bounds.Height), scroll);

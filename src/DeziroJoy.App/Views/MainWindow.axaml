@@ -27,6 +27,7 @@
         <conv:EnumDisplayConverter x:Key="EnumDisplay" />
         <conv:ScrollRateBarConverter x:Key="RateBar" />
         <conv:RowSelectedConverter x:Key="RowSelected" />
+        <conv:BoolToRowHeightConverter x:Key="EditorRowHeight" />
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
 
         <!-- One source row. Shared by the left and the right column of the mapping surface so
@@ -323,7 +324,8 @@
                     <Grid Margin="14,12,14,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
+                            <RowDefinition Height="{Binding IsEditing, Converter={StaticResource EditorRowHeight}}" />
+                            <RowDefinition Height="*" MinHeight="120" />
                         </Grid.RowDefinitions>
 
                         <!-- The model is the editor: it leads the tab, and every element on it
@@ -341,35 +343,34 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- One scroll region for the whole editor surface below the model: the
-                             mapping table and the inline editor share it. A single scroller (no
-                             nested ScrollViewers) keeps every control reachable at the window's
-                             minimum height, where the old Auto-row layout let the editor fall
-                             past the clipped tab content. -->
-                        <ScrollViewer Grid.Row="1" x:Name="MappingEditorScroll">
-                            <StackPanel>
+                        <!-- The editor card is a FIXED frame, not a child of the scroll region:
+                             only its body scrolls, so the card's border, background and rounded
+                             corners stay put and the connector line's endpoint does not drift.
+                             The header is pinned so 确定/取消 never scroll out of reach, which
+                             matters most at the window's minimum height where the body has to
+                             scroll. Its row collapses to zero when no mapping is open, handing
+                             the whole height back to the source list. -->
+                        <Border Grid.Row="1" x:Name="EditorPanel" Classes="card" Margin="0,0,0,12"
+                                IsVisible="{Binding IsEditing}" ClipToBounds="True">
+                            <Grid RowDefinitions="Auto,*">
+                                <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Classes="cardTitle" Text="编辑映射" />
+                                        <TextBlock Text="{Binding Editor.SourceDescription}" FontSize="13"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
+                                        <TextBlock Text="{Binding Editor.TargetDescription}" FontSize="12"
+                                                   Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button x:Name="CommitButton" Classes="primary" Content="确定 (Enter)"
+                                                Command="{Binding CommitEditorCommand}" />
+                                        <Button x:Name="CancelButton" Classes="ghost" Content="取消 (Esc)"
+                                                Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
+                                    </StackPanel>
+                                </Grid>
 
-                                <!-- Inline companion to the model: it sits under the model rather
-                                     than over it, so the element being edited stays visible while
-                                     its target is chosen. Esc cancels, Enter confirms. -->
-                                <Border x:Name="EditorPanel" Classes="card" IsVisible="{Binding IsEditing}">
+                                <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel>
-                                   <Grid ColumnDefinitions="*,Auto">
-                                       <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                           <TextBlock Classes="cardTitle" Text="编辑映射" />
-                                           <TextBlock Text="{Binding Editor.SourceDescription}" FontSize="13"
-                                                      Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
-                                           <TextBlock Text="{Binding Editor.TargetDescription}" FontSize="12"
-                                                      Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
-                                       </StackPanel>
-                                       <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                           <Button x:Name="CommitButton" Classes="primary" Content="确定 (Enter)"
-                                                   Command="{Binding CommitEditorCommand}" />
-                                           <Button x:Name="CancelButton" Classes="ghost" Content="取消 (Esc)"
-                                                   Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
-                                       </StackPanel>
-                                   </Grid>
-
                                    <TextBlock Classes="sectionLabel" Text="目标动作" />
                                    <WrapPanel>
                                        <StackPanel Width="190" Margin="0,0,12,0">
@@ -537,11 +538,18 @@
                                                    Value="{Binding Editor.LongPressRepeatInterval, Mode=TwoWay}" VerticalAlignment="Center" />
                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                       Text="{Binding Editor.LongPressRepeatInterval, StringFormat='{}{0:F2}'}" />
-                                         </Grid>
-                                    </StackPanel>
+                                           </Grid>
+                                      </StackPanel>
                                 </StackPanel>
-                                 </Border>
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
 
+                        <!-- One scroll region for the source list below the editor card. The card
+                             is NOT a child of this region (see above), so scrolling here moves
+                             the rows only and leaves the editor frame - and the connector line's
+                             endpoint - exactly where they were. -->
+                        <ScrollViewer Grid.Row="2" x:Name="MappingEditorScroll">
                                 <!-- Source rows, split into a left and a right column by the physical
                                      side of the gamepad. Clicking a row selects it and opens its
                                      configuration; the selected row is marked on both sides. -->
@@ -555,7 +563,6 @@
                                         <StaticResource ResourceKey="MappingRowTemplate" />
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                            </StackPanel>
                         </ScrollViewer>
 
                         <!-- Connector layer. Drawn last so it sits in front of the cards and the
