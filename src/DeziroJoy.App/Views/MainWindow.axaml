@@ -30,6 +30,17 @@
         <conv:BoolToRowHeightConverter x:Key="EditorRowHeight" />
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
 
+        <!-- Motion targets for the mapping surface. Each drives one animated property, so the
+             animation lives in a DoubleTransition on the target and these only say where the
+             property has to end up:
+               EditorLift  the model rises while the editor is open, clearing the card below
+               EditorSlide the editor card settles up into its slot as it appears
+               EditorFade  the editor card's opacity, 0 at rest and 1 while open -->
+        <conv:BoolToDoubleConverter x:Key="EditorLift" TrueValue="-44" FalseValue="0" />
+        <conv:BoolToDoubleConverter x:Key="EditorSlide" TrueValue="0" FalseValue="14" />
+        <conv:BoolToDoubleConverter x:Key="EditorFade" TrueValue="1" FalseValue="0" />
+        <conv:BoolToDoubleConverter x:Key="RowTintFade" TrueValue="1" FalseValue="0" />
+
         <!-- One source row. Shared by the left and the right column of the mapping surface so
              both sides render identically. The selected row carries a full-bleed tint behind
              its content as well as the accent bar: a 3px bar alone reads as a sliver among a
@@ -39,7 +50,17 @@
             <controls:MappingRowBorder Classes="card" Padding="0" Margin="0,0,0,6">
                 <Grid>
                     <Border CornerRadius="{DynamicResource CornerRadiusXl}"
-                            Background="{DynamicResource RowSelectedBrush}">
+                            Background="{DynamicResource RowSelectedBrush}"
+                            Opacity="{Binding IsVisible, RelativeSource={RelativeSource Self}, Converter={StaticResource RowTintFade}}">
+                        <!-- The tint fades in rather than snapping on. Its opacity follows its own
+                             visibility, so the fade rides the selection MultiBinding below without
+                             a second copy of it: visibility is what removes the tint from an
+                             unselected row entirely, and opacity is what makes it arrive. -->
+                        <Border.Transitions>
+                            <Transitions>
+                                <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationFast}" />
+                            </Transitions>
+                        </Border.Transitions>
                         <Border.IsVisible>
                             <MultiBinding Converter="{StaticResource RowSelected}">
                                 <Binding />
@@ -252,9 +273,20 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1" ColumnDefinitions="290,*,350">
+        <!-- Three zones with a splitter between each: the sidebars are user-resizable, and
+             each column carries a MinWidth so neither can be dragged to nothing. The
+             splitter clamps its drag against the COLUMN's MinWidth, which is why the floor is
+             declared there as well as on the control. -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" MinWidth="210" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="*" MinWidth="400" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="300" MinWidth="280" />
+            </Grid.ColumnDefinitions>
 
-            <ScrollViewer x:Name="LeftPanel" Grid.Column="0" Padding="16,16,14,16">
+            <ScrollViewer x:Name="LeftPanel" Grid.Column="0" MinWidth="210" Padding="16,16,14,16">
                 <StackPanel>
 
                     <Border Classes="card">
@@ -329,40 +361,67 @@
                 </StackPanel>
             </ScrollViewer>
 
-                <TabControl x:Name="MainTabs" Grid.Column="1" Margin="6,8,10,16">
+            <GridSplitter x:Name="LeftSplitter" Grid.Column="1" ResizeDirection="Columns"
+                          Background="{DynamicResource SubtleBrush}" />
+
+            <TabControl x:Name="MainTabs" Grid.Column="2" Margin="6,8,10,16">
 
                 <TabItem Header="按键映射">
                     <Grid Margin="14,12,14,0">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
+                            <!-- The model stage is a fixed-height row: opening the editor below
+                                 must not re-lay the model out, or it would jump before the lift
+                                 animation even starts. The only motion is the animated lift. -->
+                            <RowDefinition Height="480" />
                             <RowDefinition Height="{Binding IsEditing, Converter={StaticResource EditorRowHeight}}" />
-                            <RowDefinition Height="*" MinHeight="120" />
                         </Grid.RowDefinitions>
 
-                        <!-- The model is the editor: it leads the tab, and every element on it
-                             opens the mapping settings for that element. It is pinned above the
-                             scroll region so it stays the spatial reference while a mapping is
-                             edited, instead of scrolling away with the table. -->
-                        <Border Grid.Row="0" Classes="card" Margin="0,0,0,12" ClipToBounds="True">
-                            <StackPanel>
-                                <TextBlock Classes="cardTitle" Text="手柄模型" />
-                                <TextBlock Classes="hint" Margin="0,4,0,0"
-                                           Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
-                                <Viewbox Stretch="Uniform" MaxHeight="300" MaxWidth="460" HorizontalAlignment="Center" Margin="0,10,0,0">
-                                    <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}" />
-                                </Viewbox>
-                            </StackPanel>
-                        </Border>
+                        <!-- The model stage. No card wraps the model: it is the surface itself,
+                             enlarged and centred by default. While a mapping is being edited it
+                             lifts, clearing room for the card that slides in below it. -->
+                        <StackPanel Grid.Row="0" MaxWidth="620" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
+                            <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
+                                       Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
+                            <Viewbox Stretch="Uniform" MaxHeight="380" MaxWidth="620" HorizontalAlignment="Center" Margin="0,12,0,0">
+                                <Viewbox.RenderTransform>
+                                    <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
+                                        <TranslateTransform.Transitions>
+                                            <Transitions>
+                                                <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="CubicEaseOut" />
+                                            </Transitions>
+                                        </TranslateTransform.Transitions>
+                                    </TranslateTransform>
+                                </Viewbox.RenderTransform>
+                                <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}" />
+                            </Viewbox>
+                        </StackPanel>
 
-                        <!-- The editor card is a FIXED frame, not a child of the scroll region:
+                        <!-- The editor card is a FIXED frame, not a child of a scroll region:
                              only its body scrolls, so the card's border, background and rounded
                              corners stay put and the connector line's endpoint does not drift.
                              The header is pinned so 确定/取消 never scroll out of reach, which
                              matters most at the window's minimum height where the body has to
                              scroll. Its row collapses to zero when no mapping is open, handing
-                             the whole height back to the source list. -->
+                             the whole height back to the model stage. The card slides up and
+                             fades in as it appears, and the model lifts out of its way. -->
                         <Border Grid.Row="1" x:Name="EditorPanel" Classes="card" Margin="0,0,0,12"
-                                IsVisible="{Binding IsEditing}" ClipToBounds="True">
+                                IsVisible="{Binding IsEditing}" ClipToBounds="True"
+                                Opacity="{Binding IsEditing, Converter={StaticResource EditorFade}}">
+                            <Border.RenderTransform>
+                                <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorSlide}}">
+                                    <TranslateTransform.Transitions>
+                                        <Transitions>
+                                            <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationBase}" Easing="CubicEaseOut" />
+                                        </Transitions>
+                                    </TranslateTransform.Transitions>
+                                </TranslateTransform>
+                            </Border.RenderTransform>
+                            <Border.Transitions>
+                                <Transitions>
+                                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationBase}" Easing="CubicEaseOut" />
+                                </Transitions>
+                            </Border.Transitions>
                             <Grid RowDefinitions="Auto,*">
                                 <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -384,13 +443,13 @@
                                 <StackPanel>
                                    <TextBlock Classes="sectionLabel" Text="目标动作" />
                                    <WrapPanel>
-                                       <StackPanel Width="190" Margin="0,0,12,0">
+                                       <StackPanel Width="230" Margin="0,0,12,0">
                                            <TextBlock Classes="fieldLabel" Text="类型" />
                                            <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
                                                      ItemsSource="{Binding Editor.AvailableTargetKinds}"
                                                      SelectedItem="{Binding Editor.TargetKind, Mode=TwoWay}" />
                                        </StackPanel>
-                                       <StackPanel x:Name="MouseTargetRow" Width="190"
+                                       <StackPanel x:Name="MouseTargetRow" Width="230"
                                                    IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
                                            <TextBlock Classes="fieldLabel" Text="鼠标按键" />
                                            <ComboBox x:Name="MouseButtonCombo" Classes="enumCombo"
@@ -595,26 +654,6 @@
                             </Grid>
                         </Border>
 
-                        <!-- One scroll region for the source list below the editor card. The card
-                             is NOT a child of this region (see above), so scrolling here moves
-                             the rows only and leaves the editor frame - and the connector line's
-                             endpoint - exactly where they were. -->
-                        <ScrollViewer Grid.Row="2" x:Name="MappingEditorScroll">
-                                <!-- Source rows, split into a left and a right column by the physical
-                                     side of the gamepad. Clicking a row selects it and opens its
-                                     configuration; the selected row is marked on both sides. -->
-                                <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <controls:MappingColumnsPanel />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <StaticResource ResourceKey="MappingRowTemplate" />
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                        </ScrollViewer>
-
                         <!-- Connector layer. Drawn last so it sits in front of the cards and the
                              line stays visible where it crosses them; non-interactive, so it never
                              steals a click. MappingLink draws it from the selected model element to
@@ -632,7 +671,7 @@
                     <ScrollViewer>
                         <Grid Margin="20,16">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" MaxWidth="520" />
+                                <ColumnDefinition Width="*" MaxWidth="640" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
@@ -772,7 +811,7 @@
                     <ScrollViewer>
                         <Grid Margin="20,16">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" MaxWidth="520" />
+                                <ColumnDefinition Width="*" MaxWidth="640" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
@@ -895,125 +934,33 @@
                 </TabItem>
             </TabControl>
 
-            <!-- Feedback column: always visible, never coupled to the tab. The interactive
-                 model lives in the mapping tab, so this column carries the live readout that
-                 used to sit under it. -->
-            <Border Grid.Column="2" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}" BorderThickness="1,0,0,0"
-                    Padding="12">
+            <GridSplitter x:Name="RightSplitter" Grid.Column="3" ResizeDirection="Columns"
+                          Background="{DynamicResource SubtleBrush}" />
+
+            <!-- Configuration column: always visible, never coupled to the tab. It carries the
+                 per-button mapping list that used to sit at the bottom of the mapping tab, so
+                 the centre column is the model's stage alone. Clicking a row opens that
+                 mapping's settings in the mapping tab. -->
+            <Border Grid.Column="4" x:Name="RightPanel" MinWidth="280"
+                    Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}"
+                    BorderThickness="1,0,0,0" Padding="12">
                 <Grid RowDefinitions="Auto,*">
-                    <TextBlock Grid.Row="0" Classes="cardTitle" Text="手柄状态" Margin="0,0,0,14" />
-                    <ScrollViewer Grid.Row="1">
-                        <StackPanel>
-                            <Grid Margin="0,0,0,10" ColumnDefinitions="Auto,*,Auto">
-                                <Ellipse Grid.Column="0" Width="10" Height="10" VerticalAlignment="Center"
-                                         Fill="{Binding HasController, Converter={StaticResource DotBrush}}" />
-                                <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
-                                           Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"
-                                           Margin="10,0,8,0" VerticalAlignment="Center" />
-                                <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{DynamicResource SubtleBrush}"
-                                        CornerRadius="{DynamicResource CornerRadiusMd}" Padding="8,3" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}}"
-                                               FontSize="11" Foreground="{DynamicResource BadgeTextBrush}" />
-                                </Border>
-                            </Grid>
-
-                            <TextBlock Classes="sectionLabel" Text="摇杆" Margin="0,4,0,6" />
-                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
-                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="左 X/Y" Width="52" Margin="0" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
-                                           Text="{Binding Visualizer.LeftStickX, StringFormat='{}{0:F2}'}" />
-                            </Grid>
-                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
-                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="左 Y" Width="52" Margin="0" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
-                                           Text="{Binding Visualizer.LeftStickY, StringFormat='{}{0:F2}'}" />
-                            </Grid>
-                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
-                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="右 X" Width="52" Margin="0" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
-                                           Text="{Binding Visualizer.RightStickX, StringFormat='{}{0:F2}'}" />
-                            </Grid>
-                            <Grid Margin="0,0,0,6" ColumnDefinitions="Auto,*">
-                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="右 Y" Width="52" Margin="0" VerticalAlignment="Center" />
-                                <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
-                                           Text="{Binding Visualizer.RightStickY, StringFormat='{}{0:F2}'}" />
-                            </Grid>
-
-                            <TextBlock Classes="sectionLabel" Text="按下的按键" Margin="0,10,0,6" />
-                            <WrapPanel>
-                                <Border IsVisible="{Binding Visualizer.IsAPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="A" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsBPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="B" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsXPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="X" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsYPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="Y" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsLeftBumperPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="LB" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsRightBumperPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="RB" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsLeftTriggerPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="LT" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsRightTriggerPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="RT" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsDPadUpPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="↑" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsDPadDownPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="↓" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsDPadLeftPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="←" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsDPadRightPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="→" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsLeftStickPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="左摇杆" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsRightStickPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="右摇杆" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsBackPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="Back" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsStartPressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="Start" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                                <Border IsVisible="{Binding Visualizer.IsGuidePressed}" Background="{DynamicResource AccentSurfaceBrush}"
-                                        CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
-                                    <TextBlock Text="Guide" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
-                                </Border>
-                            </WrapPanel>
-
-                            <TextBlock Classes="hint" Margin="0,14,0,0"
-                                       Text="在“按键映射”标签页中点击手柄模型上的任意元素，即可编辑它的映射。" />
-                        </StackPanel>
+                    <StackPanel Grid.Row="0">
+                        <TextBlock Classes="cardTitle" Text="按键配置" />
+                        <TextBlock Classes="hint" Margin="0,4,0,0"
+                                   Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
+                        <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <StaticResource ResourceKey="MappingRowTemplate" />
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </ScrollViewer>
                 </Grid>
             </Border>

@@ -114,29 +114,63 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void The_Editor_Card_Is_A_Fixed_Frame_That_Only_Scrolls_Its_Own_Content()
+    public void The_Mapping_List_Lives_In_The_Right_Column_And_The_Editor_Stays_A_Fixed_Frame()
     {
         var (window, _, _, _) = BuildWindow();
         window.UpdateLayout();
 
-        var scroll = window.FindControl<ScrollViewer>("MappingEditorScroll")!;
-        var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
-        var mappings = window.FindControl<ItemsControl>("MappingsList")!;
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var rightPanel = window.FindControl<Border>("RightPanel")!;
+        var tabs = window.FindControl<TabControl>("MainTabs")!;
         var editor = window.FindControl<Border>("EditorPanel")!;
+        var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
 
-        // The mapping table lives in the scroll region, so nothing falls past the clipped tab
-        // content at the window's minimum height. The editor card must NOT: only its inner
-        // content scrolls, so the card's frame - and the connector line's endpoint - stays put.
-        Assert.True(IsDescendantOf(mappings, scroll), "the mapping table must live in the scroll region");
-        Assert.False(IsDescendantOf(editor, scroll), "the editor card must stay outside the scroll region");
+        // The per-button configuration list moved out of the centre column into the right
+        // sidebar, so the centre column is the model's stage and nothing else.
+        Assert.True(IsDescendantOf(list, rightPanel), "the mapping list must live in the right column");
+        Assert.False(IsDescendantOf(list, tabs), "the mapping list must leave the centre column");
 
-        // The model is the spatial reference for what is being edited, so it is pinned above
-        // everything rather than scrolling away.
-        Assert.False(IsDescendantOf(model, scroll), "the gamepad model must stay pinned above the scroll region");
+        // The model and its editor stay together in the centre column: the connector line
+        // links the selected element to the editor card, so the two cannot be split apart.
+        Assert.True(IsDescendantOf(model, tabs), "the model stays in the centre column");
+        Assert.True(IsDescendantOf(editor, tabs), "the editor card stays in the centre column");
 
-        var modelBottom = model.TranslatePoint(new Point(0, model.Bounds.Height), scroll);
-        Assert.NotNull(modelBottom);
-        Assert.True(modelBottom!.Value.Y <= 0, $"the model must sit entirely above the scroll region, bottom at {modelBottom.Value.Y}");
+        // The right column sits to the right of the centre column.
+        Assert.True(rightPanel.Bounds.X >= tabs.Bounds.Right,
+            $"the right column starts at {rightPanel.Bounds.X} but the centre column ends at {tabs.Bounds.Right}");
+
+        // The old status panel is gone: it was called useless and the list took its place.
+        Assert.DoesNotContain(window.GetVisualDescendants().OfType<TextBlock>(),
+            text => text.Text == "手柄状态");
+    }
+
+    [AvaloniaFact]
+    public void Both_Sidebars_Are_User_Resizable_With_Floor_Widths()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var leftSplitter = window.FindControl<GridSplitter>("LeftSplitter")!;
+        var rightSplitter = window.FindControl<GridSplitter>("RightSplitter")!;
+
+        Assert.Equal(GridResizeDirection.Columns, leftSplitter.ResizeDirection);
+        Assert.Equal(GridResizeDirection.Columns, rightSplitter.ResizeDirection);
+
+        var left = window.FindControl<ScrollViewer>("LeftPanel")!;
+        var right = window.FindControl<Border>("RightPanel")!;
+
+        // Neither sidebar can be dragged to nothing.
+        Assert.True(left.MinWidth >= 200, $"the left sidebar floor is {left.MinWidth}");
+        Assert.True(right.MinWidth >= 260, $"the right sidebar floor is {right.MinWidth}");
+
+        // A GridSplitter clamps its drag against the COLUMN's MinWidth, not the control's,
+        // so the floor has to be declared on the column definitions as well.
+        var shell = (Grid)leftSplitter.Parent!;
+        Assert.Equal(5, shell.ColumnDefinitions.Count);
+        Assert.True(shell.ColumnDefinitions[0].MinWidth >= 200,
+            $"the left column floor is {shell.ColumnDefinitions[0].MinWidth}");
+        Assert.True(shell.ColumnDefinitions[4].MinWidth >= 260,
+            $"the right column floor is {shell.ColumnDefinitions[4].MinWidth}");
     }
 
     private static bool IsDescendantOf(Visual control, Visual ancestor)

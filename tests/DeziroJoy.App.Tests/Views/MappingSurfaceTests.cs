@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
@@ -242,6 +243,55 @@ public sealed class MappingSurfaceTests
         var connector = window.FindControl<Canvas>("ConnectorLayer");
         Assert.NotNull(connector);
         Assert.Contains(connector!.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>(), path => path.Data is not null);
+    }
+
+    [AvaloniaFact]
+    public void Selecting_A_Row_Fades_Its_Tint_In()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var row = viewModel.Mappings.First(r => r.Entry.Source == new ButtonBinding(GamepadButton.B));
+        viewModel.SelectedMapping = row;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // Held across the selection changes below: an unselected row's tint is removed from the
+        // tree, so it can only be found while its row is the selected one.
+        var tint = TintOf(window, row);
+
+        var fade = Assert.Single(
+            tint.Transitions!.OfType<DoubleTransition>(),
+            candidate => candidate.Property == Visual.OpacityProperty);
+        Assert.InRange(fade.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+
+        // The tint's opacity follows its own visibility, so the fade target is 1 while the row
+        // is selected and 0 while it is not. Headless runs no clock, so the transition is
+        // detached to read the target the binding drives it to.
+        tint.Transitions = null;
+
+        viewModel.SelectedMapping = viewModel.Mappings.First(
+            other => other.Entry.Source != new ButtonBinding(GamepadButton.B));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(0d, tint.Opacity);
+
+        viewModel.SelectedMapping = row;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(1d, tint.Opacity);
+    }
+
+    private static Border TintOf(Window window, MappingRowViewModel row)
+    {
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var selectedRow = list.GetVisualDescendants().OfType<MappingRowBorder>().Single(r => r.DataContext == row);
+
+        return selectedRow.GetVisualDescendants().OfType<Border>()
+            .First(b => b.IsVisible && b.Background is ISolidColorBrush solid
+                && solid.Color == Token(selectedRow.ActualThemeVariant, "RowSelectedBrush"));
     }
 
     // ---- Slider: value readout on the thumb --------------------------------

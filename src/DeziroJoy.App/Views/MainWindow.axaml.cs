@@ -158,9 +158,11 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// When the inline editor opens it lives at the bottom of the shared scroll region, below
-    /// the mapping table, so it is scrolled into view. The model stays pinned above the region,
-    /// so the element being edited remains the visible spatial reference.
+    /// When the inline editor opens it appears below the model in the mapping tab, so it is
+    /// scrolled into view. The mapping list now lives in the always-visible right column, so a
+    /// row clicked while another tab is selected would open the editor in a hidden tab - the
+    /// mapping tab is selected to bring it into view. The model stays pinned above the card, so
+    /// the element being edited remains the visible spatial reference.
     /// </summary>
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -174,6 +176,11 @@ public partial class MainWindow : Window
             if (this.FindControl<Border>("EditorPanel") is { IsVisible: true } panel)
             {
                 panel.BringIntoView();
+            }
+
+            if (this.FindControl<TabControl>("MainTabs") is { } tabs)
+            {
+                tabs.SelectedIndex = 0;
             }
         });
     }

@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
@@ -340,7 +341,115 @@ public sealed class GamepadModelEditorTests
         var panelOrigin = panel.TranslatePoint(new Point(0, 0), window)!;
 
         Assert.True(modelOrigin.Value.Y < panelOrigin.Value.Y, "the model must lead the tab");
-        Assert.True(model.Bounds.Width > 300, "the model must be presented at a usable size");
+
+        // The model must be ENLARGED. The visualizer is a fixed 320x244 grid that the Viewbox
+        // scales, so its own Bounds never change with the scale - the Viewbox's Bounds are the
+        // rendered size and the only honest measure of how big the model actually is.
+        var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+        Assert.True(viewbox.Bounds.Width > 420,
+            $"the model must be enlarged, the Viewbox renders it {viewbox.Bounds.Width} wide");
+        Assert.True(viewbox.Bounds.Height > 320,
+            $"the model must be enlarged, the Viewbox renders it {viewbox.Bounds.Height} tall");
+    }
+
+    [AvaloniaFact]
+    public void The_Model_Is_Not_Wrapped_In_A_Card()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var model = Model(window);
+
+        // The model is the surface itself, not a card's content: a card border and title
+        // around it would frame it as one more panel in a wall of panels.
+        Assert.DoesNotContain(model.GetVisualAncestors().OfType<Border>(),
+            border => border.Classes.Contains("card"));
+    }
+
+    [AvaloniaFact]
+    public void The_Model_Is_Centred_In_The_Centre_Column()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var model = Model(window);
+        var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+
+        // The stage grid is the mapping tab's content; its horizontal centre is the centre
+        // column's centre, because its margins are symmetric.
+        var stage = viewbox.GetVisualAncestors().OfType<Grid>().First();
+        var modelCentre = viewbox.TranslatePoint(new Point(viewbox.Bounds.Width / 2, 0), window)!.Value.X;
+        var stageCentre = stage.TranslatePoint(new Point(stage.Bounds.Width / 2, 0), window)!.Value.X;
+
+        Assert.Equal(stageCentre, modelCentre, 1.0);
+    }
+
+    [AvaloniaFact]
+    public void Opening_The_Editor_Lifts_The_Model_With_An_Animated_Transform()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+        var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+        var lift = Assert.IsType<TranslateTransform>(viewbox.RenderTransform);
+
+        // The lift is animated, not an instant property flip.
+        var transition = Assert.Single(
+            lift.Transitions!.OfType<DoubleTransition>(),
+            candidate => candidate.Property == TranslateTransform.YProperty);
+        Assert.InRange(transition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+
+        Assert.Equal(0d, lift.Y);
+
+        // Headless runs no clock, so a transitioned property never leaves its start value
+        // here. Detaching the transition lets the bound value apply directly, which makes the
+        // animation's TARGET observable without depending on a ticking clock.
+        lift.Transitions = null;
+
+        Click(model.FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+        Assert.True(lift.Y < 0d, $"the model must lift while the editor is open, Y was {lift.Y}");
+
+        window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+        Assert.False(viewModel.IsEditing);
+        Assert.Equal(0d, lift.Y);
+    }
+
+    [AvaloniaFact]
+    public void The_Editor_Card_Slides_Up_And_Fades_In_When_It_Opens()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var editor = window.FindControl<Border>("EditorPanel")!;
+        var slide = Assert.IsType<TranslateTransform>(editor.RenderTransform);
+
+        var slideTransition = Assert.Single(
+            slide.Transitions!.OfType<DoubleTransition>(),
+            candidate => candidate.Property == TranslateTransform.YProperty);
+        Assert.InRange(slideTransition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+
+        var fade = Assert.Single(
+            editor.Transitions!.OfType<DoubleTransition>(),
+            candidate => candidate.Property == Visual.OpacityProperty);
+        Assert.InRange(fade.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+
+        // At rest the card is transparent and parked below its slot.
+        Assert.Equal(0d, editor.Opacity);
+
+        editor.Transitions = null;
+        slide.Transitions = null;
+
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        Assert.Equal(1d, editor.Opacity);
+        Assert.Equal(0d, slide.Y);
     }
 
     [AvaloniaFact]

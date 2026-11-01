@@ -44,6 +44,20 @@
     <CornerRadius x:Key="CornerRadiusXl">12</CornerRadius>
 
     <!--
+        Motion scale. Theme-independent, so it lives here at the root for the same reason the
+        corner-radius scale does: a duration is a property of the interaction, not of the
+        variant. Three steps, all inside the 150-300ms band that reads as responsive rather
+        than sluggish:
+          Fast (150ms) selection feedback: the mapping row's tint
+          Base (220ms) surface appearance: the editor card's slide and fade
+          Slow (280ms) the larger move: the model lifting out of the editor's way
+        Consume with {DynamicResource MotionDuration...} on a DoubleTransition's Duration.
+    -->
+    <x:TimeSpan x:Key="MotionDurationFast">0:0:0.15</x:TimeSpan>
+    <x:TimeSpan x:Key="MotionDurationBase">0:0:0.22</x:TimeSpan>
+    <x:TimeSpan x:Key="MotionDurationSlow">0:0:0.28</x:TimeSpan>
+
+    <!--
         Slider geometry. Theme-independent, so it lives here at app scope where the slider
         ControlTheme (Themes/Slider.axaml) can reach it with {DynamicResource}. The track
         height is consumed by the inner TrackBackground border of the RepeatButton template,
