@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Avalonia.LogicalTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -75,6 +76,15 @@ public sealed class GamepadModelEditorTests
 
     private static Control Element(GamepadVisualizer model, string name)
         => model.FindControl<Control>(name)!;
+
+    // The mapping editor is a UserControl now, so its controls live in the panel's own
+    // name scope: reach them through the panel instance rather than through the window's
+    // scope. The logical tree is walked because it holds every tab's content whether or
+    // not that tab is the selected one; the selected tab's panel is reachable by two
+    // logical paths (its TabItem and the TabControl's content host), so the first match
+    // is the one instance.
+    private static MappingEditorPanel EditorPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
 
     [AvaloniaFact]
     public void Clicking_A_Button_Element_Opens_The_Mapping_Settings_For_That_Element()
@@ -181,8 +191,8 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        var capture = window.FindControl<Button>("CaptureKeyButton")!;
-        var list = window.FindControl<ListBox>("TargetKeyList")!;
+        var capture = EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!;
+        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
 
         Assert.True(capture.IsVisible, "the keyboard-capture affordance must be visible");
         Assert.True(list.IsVisible, "the categorized list must be visible at the same time");
@@ -201,7 +211,7 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!, window);
         Assert.True(viewModel.Editor.IsCapturingKey);
 
         window.KeyPress(Key.C, RawInputModifiers.Control, PhysicalKey.C, null);
@@ -222,7 +232,7 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!, window);
 
         window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
         window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
@@ -580,9 +590,9 @@ public sealed class GamepadModelEditorTests
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
         Assert.True(viewModel.IsEditing);
 
-        var click = window.FindControl<RadioButton>("GestureClickTab")!;
-        var doubleClick = window.FindControl<RadioButton>("GestureDoubleClickTab")!;
-        var longPress = window.FindControl<RadioButton>("GestureLongPressTab")!;
+        var click = EditorPanelOf(window).FindControl<RadioButton>("GestureClickTab")!;
+        var doubleClick = EditorPanelOf(window).FindControl<RadioButton>("GestureDoubleClickTab")!;
+        var longPress = EditorPanelOf(window).FindControl<RadioButton>("GestureLongPressTab")!;
 
         Assert.True(click.IsVisible);
         Assert.True(doubleClick.IsVisible);
@@ -592,24 +602,24 @@ public sealed class GamepadModelEditorTests
         Assert.False(longPress.IsChecked);
 
         // The click branch leads; the switcher - not a buried extra - reaches the other two.
-        Assert.True(window.FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
-        Assert.False(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
+        Assert.False(EditorPanelOf(window).FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
 
         Click(doubleClick, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(GestureKind.DoubleClick, viewModel.Editor.SelectedGestureKind);
-        Assert.True(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
-        Assert.False(window.FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
+        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+        Assert.False(EditorPanelOf(window).FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
 
         Click(longPress, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(GestureKind.LongPress, viewModel.Editor.SelectedGestureKind);
-        Assert.True(window.FindControl<StackPanel>("GestureLongPressBranch")!.IsVisible);
-        Assert.False(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("GestureLongPressBranch")!.IsVisible);
+        Assert.False(EditorPanelOf(window).FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
     }
 
     [AvaloniaFact]
@@ -621,16 +631,16 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        var doubleClickCombo = window.FindControl<ComboBox>("GestureDoubleClickActionCombo")!;
+        var doubleClickCombo = EditorPanelOf(window).FindControl<ComboBox>("GestureDoubleClickActionCombo")!;
         Assert.Contains(
             doubleClickCombo.Items!.OfType<GestureActionOption>(),
             option => option.Target is NoneTarget);
 
-        Click(window.FindControl<RadioButton>("GestureLongPressTab")!, window);
+        Click(EditorPanelOf(window).FindControl<RadioButton>("GestureLongPressTab")!, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var longPressCombo = window.FindControl<ComboBox>("GestureLongPressActionCombo")!;
+        var longPressCombo = EditorPanelOf(window).FindControl<ComboBox>("GestureLongPressActionCombo")!;
         Assert.True(longPressCombo.IsVisible);
         Assert.Contains(
             longPressCombo.Items!.OfType<GestureActionOption>(),
@@ -686,9 +696,9 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        var longPressTab = window.FindControl<RadioButton>("GestureLongPressTab")!;
-        var repeatBox = window.FindControl<CheckBox>("GestureClickRepeatBox")!;
-        var hint = window.FindControl<TextBlock>("GestureRepeatHint")!;
+        var longPressTab = EditorPanelOf(window).FindControl<RadioButton>("GestureLongPressTab")!;
+        var repeatBox = EditorPanelOf(window).FindControl<CheckBox>("GestureClickRepeatBox")!;
+        var hint = EditorPanelOf(window).FindControl<TextBlock>("GestureRepeatHint")!;
 
         Assert.True(longPressTab.IsEnabled);
         Assert.False(hint.IsVisible);
@@ -717,7 +727,7 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        Click(window.FindControl<CheckBox>("GestureClickNoneBox")!, window);
+        Click(EditorPanelOf(window).FindControl<CheckBox>("GestureClickNoneBox")!, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 

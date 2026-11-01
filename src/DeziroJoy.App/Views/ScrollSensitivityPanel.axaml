@@ -1,0 +1,148 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
+             xmlns:views="clr-namespace:DeziroJoy.App.Views"
+             x:Class="DeziroJoy.App.Views.ScrollSensitivityPanel"
+             x:DataType="vm:ScrollSensitivityViewModel">
+
+    <!--
+        The 滚轮灵敏度 tab's content: the stick-to-wheel calibration sliders on the left and
+        the live preview (rate bar, wheel-offset and current-rate readouts) on the right. The
+        panel is a view over one ScrollSensitivityViewModel - the host binds it as
+        DataContext="{Binding ScrollSensitivity}" - so every path here is relative to that view
+        model.
+
+        The 应用 button writes the settings into the active profile, which is the window's
+        orchestration, so its command reaches the window's view model through the Window
+        ancestor.
+    -->
+
+    <UserControl.Resources>
+        <conv:ScrollRateBarConverter x:Key="RateBar" />
+    </UserControl.Resources>
+
+    <ScrollViewer>
+        <Grid Margin="20,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MaxWidth="640" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <TextBlock Classes="cardTitle" Text="摇杆 → 滚轮" Margin="0,0,0,14" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="ScrollRateSlider" Minimum="1" Maximum="40" TickFrequency="1"
+                            Value="{Binding MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding MaxTicksPerSecond, StringFormat='{}{0:F0} 格/s'}" />
+                </Grid>
+                <TextBlock x:Name="ScrollRateHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding RateHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="ScrollDeadzoneSlider" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                            Value="{Binding DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding DeadZone, StringFormat='{}{0:F2}'}" />
+                </Grid>
+                <TextBlock x:Name="ScrollDeadzoneHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding DeadZoneHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="响应曲线" VerticalAlignment="Center" Margin="0" />
+                    <ComboBox Grid.Column="1" x:Name="ScrollCurveCombo" Classes="enumCombo" HorizontalAlignment="Stretch"
+                              ItemsSource="{x:Static views:EnumOptions.Curves}"
+                              SelectedItem="{Binding Curve, Mode=TwoWay}" />
+                </Grid>
+                <TextBlock x:Name="ScrollCurveHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding CurveHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="ScrollResponseTimeSlider" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                            Value="{Binding ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding ResponseTime, StringFormat='{}{0:F2} s'}" />
+                </Grid>
+                <TextBlock x:Name="ScrollResponseTimeHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding ResponseTimeHint}" />
+
+                <CheckBox x:Name="EnableHorizontalBox" Content="启用水平滚动"
+                          IsChecked="{Binding EnableHorizontal, Mode=TwoWay}" />
+                <TextBlock x:Name="ScrollEnableHorizontalHint" Classes="hint" Margin="0,4,0,0"
+                           Text="{Binding EnableHorizontalHint}" />
+                <CheckBox x:Name="ScrollInvertYBox" Content="垂直反转" Margin="0,8,0,0"
+                          IsChecked="{Binding InvertY, Mode=TwoWay}" />
+                <TextBlock x:Name="ScrollInvertYHint" Classes="hint" Margin="0,4,0,0"
+                           Text="{Binding InvertYHint}" />
+
+                <Button Classes="primary" Content="应用" HorizontalAlignment="Left" Margin="0,18,0,0"
+                        Command="{ReflectionBinding DataContext.ApplyScrollSensitivityCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Margin="28,0,0,0" VerticalAlignment="Top">
+                <TextBlock Classes="cardTitle" Text="实时预览" Margin="0,0,0,12" />
+
+                <Border x:Name="ScrollPreviewHost" Width="200" Height="200" Background="{DynamicResource SunkenBrush}"
+                        BorderBrush="{DynamicResource PreviewBorderBrush}" BorderThickness="1" CornerRadius="10">
+                    <Grid>
+                        <Rectangle Width="6" Height="140" RadiusX="3" RadiusY="3" Fill="{DynamicResource TrackBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Rectangle x:Name="ScrollRateBar" Width="6" RadiusX="3" RadiusY="3" Fill="{DynamicResource AccentBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,35">
+                            <Rectangle.Height>
+                                <MultiBinding Converter="{StaticResource RateBar}">
+                                    <Binding Path="CurrentRate" />
+                                    <Binding Path="MaxTicksPerSecond" />
+                                </MultiBinding>
+                            </Rectangle.Height>
+                        </Rectangle>
+                    </Grid>
+                </Border>
+
+                <Grid Margin="0,16,0,0" Width="200">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚轮偏移" Margin="0" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                               Text="{Binding WheelOffset, StringFormat='{}{0:F1}'}" />
+                </Grid>
+                <Grid Margin="0,6,0,0" Width="200">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="当前速率" Margin="0" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                               Text="{Binding CurrentRate, StringFormat='{}{0:F1} 格/s'}" />
+                </Grid>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

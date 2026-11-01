@@ -7,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Avalonia.LogicalTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -91,6 +92,15 @@ public sealed class SettingsPanelGuiTests : IDisposable
 
     private static SettingsPanel PanelOf(Window window)
         => window.GetVisualDescendants().OfType<SettingsPanel>().Single();
+
+    // The mapping editor is a UserControl now, so its controls live in the panel's own
+    // name scope: reach them through the panel instance rather than through the window's
+    // scope. The logical tree is walked because it holds every tab's content whether or
+    // not that tab is the selected one; the selected tab's panel is reachable by two
+    // logical paths (its TabItem and the TabControl's content host), so the first match
+    // is the one instance.
+    private static MappingEditorPanel EditorPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
 
     private static Control ModelElement(Window window, string name)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
@@ -286,7 +296,7 @@ public sealed class SettingsPanelGuiTests : IDisposable
         var scroll = viewModel.ScrollSensitivity;
 
         Click(ModelElement(window, "ButtonA"), window);
-        var targetKind = window.FindControl<ComboBox>("TargetKindCombo")!;
+        var targetKind = EditorPanelOf(window).FindControl<ComboBox>("TargetKindCombo")!;
         targetKind.SelectedItem = MappingTargetKind.KeyPress;
         var selected = viewModel.SelectedMapping;
 

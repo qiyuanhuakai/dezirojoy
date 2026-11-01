@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Avalonia.LogicalTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -61,6 +62,18 @@ public sealed class MappingSurfaceTests
 
     private static Control ModelElement(Window window, string name)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
+
+    // The mapping editor and the two sensitivity panels are UserControls now, so their
+    // controls live in the panels' own name scopes: reach them through the panel instance
+    // rather than through the window's scope. The logical tree is walked because it holds
+    // every tab's content whether or not that tab is the selected one; the selected tab's
+    // panel is reachable by two logical paths (its TabItem and the TabControl's content
+    // host), so the first match is the one instance.
+    private static MappingEditorPanel EditorPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
+
+    private static MouseSensitivityPanel MouseSensitivityPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<MouseSensitivityPanel>().First();
 
     private static Color ColorOf(IBrush? brush)
         => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
@@ -386,8 +399,9 @@ public sealed class MappingSurfaceTests
     {
         var (window, viewModel, _, _) = BuildWindow();
 
-        var combo = window.FindControl<ComboBox>("PrecisionButtonCombo")!;
-        var hint = window.FindControl<TextBlock>("PrecisionButtonHint")!;
+        var mousePanel = MouseSensitivityPanelOf(window);
+        var combo = mousePanel.FindControl<ComboBox>("PrecisionButtonCombo")!;
+        var hint = mousePanel.FindControl<TextBlock>("PrecisionButtonHint")!;
 
         // The selector offers exactly the buttons the engine can read a precision state
         // from, starts on the key the settings carry, and reuses the panel's own copy.
@@ -421,7 +435,7 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var list = window.FindControl<ListBox>("TargetKeyList")!;
+        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
 
         // The list virtualizes and opens scrolled to the current selection, so only a
         // handful of rows around it are realized. Scrolling back to the top realizes the
@@ -478,7 +492,7 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var list = window.FindControl<ListBox>("TargetKeyList")!;
+        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 

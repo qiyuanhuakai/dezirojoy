@@ -12,6 +12,7 @@ using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Avalonia.LogicalTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -80,6 +81,21 @@ public sealed class MainWindowGuiTests
     private static Control ModelElement(Window window, string name)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
 
+    // The mapping editor and the two sensitivity panels are UserControls now, so their
+    // controls live in the panels' own name scopes: reach them through the panel instance
+    // rather than through the window's scope. The logical tree is walked because it holds
+    // every tab's content whether or not that tab is the selected one; the selected tab's
+    // panel is reachable by two logical paths (its TabItem and the TabControl's content
+    // host), so the first match is the one instance.
+    private static MappingEditorPanel EditorPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
+
+    private static MouseSensitivityPanel MouseSensitivityPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<MouseSensitivityPanel>().First();
+
+    private static ScrollSensitivityPanel ScrollSensitivityPanelOf(Window window)
+        => window.GetLogicalDescendants().OfType<ScrollSensitivityPanel>().First();
+
     [AvaloniaFact]
     public void Window_Opens_With_Title_And_All_Three_Zones()
     {
@@ -105,6 +121,16 @@ public sealed class MainWindowGuiTests
         Assert.Null(window.FindControl<ComboBox>("SourceButtonCombo"));
         Assert.Null(window.FindControl<ComboBox>("SourceStickCombo"));
         Assert.Null(window.FindControl<Button>("CaptureSourceButton"));
+    }
+
+    [AvaloniaFact]
+    public void The_Extracted_Panels_Are_Bound_To_Their_Own_View_Models()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+
+        Assert.Same(viewModel.Editor, EditorPanelOf(window).DataContext);
+        Assert.Same(viewModel.MouseSensitivity, MouseSensitivityPanelOf(window).DataContext);
+        Assert.Same(viewModel.ScrollSensitivity, ScrollSensitivityPanelOf(window).DataContext);
     }
 
     [AvaloniaFact]
@@ -394,8 +420,8 @@ public sealed class MainWindowGuiTests
         Assert.True(viewModel.IsEditing);
         Assert.True(editorPanel.IsVisible);
 
-        var targetKind = window.FindControl<ComboBox>("TargetKindCombo")!;
-        var targetKey = window.FindControl<ListBox>("TargetKeyList")!;
+        var targetKind = EditorPanelOf(window).FindControl<ComboBox>("TargetKindCombo")!;
+        var targetKey = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
 
         targetKind.SelectedItem = MappingTargetKind.KeyPress;
         targetKey.SelectedItem = viewModel.Editor.KeyOptions.First(
@@ -405,7 +431,7 @@ public sealed class MainWindowGuiTests
         Assert.Equal(MappingTargetKind.KeyPress, viewModel.Editor.TargetKind);
         Assert.Equal(GamepadKey.Space, viewModel.Editor.SelectedKey);
 
-        Click(window.FindControl<Button>("CommitButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
 
         Assert.False(viewModel.IsEditing);
         Assert.False(editorPanel.IsVisible);
@@ -417,8 +443,8 @@ public sealed class MainWindowGuiTests
     {
         var (window, _, _, _) = BuildWindow();
 
-        Assert.Equal("确定", window.FindControl<Button>("CommitButton")!.Content);
-        Assert.Equal("取消", window.FindControl<Button>("CancelButton")!.Content);
+        Assert.Equal("确定", EditorPanelOf(window).FindControl<Button>("CommitButton")!.Content);
+        Assert.Equal("取消", EditorPanelOf(window).FindControl<Button>("CancelButton")!.Content);
     }
 
     [AvaloniaFact]
@@ -433,7 +459,7 @@ public sealed class MainWindowGuiTests
         Click(ModelElement(window, "LeftBumper"), window);
         Assert.True(viewModel.IsEditing);
 
-        Click(window.FindControl<Button>("CancelButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CancelButton")!, window);
         Assert.False(viewModel.IsEditing);
         Assert.Equal(10, list.ItemCount);
     }
@@ -442,7 +468,7 @@ public sealed class MainWindowGuiTests
     public void MaxSpeedSlider_Updates_MouseSensitivity()
     {
         var (window, viewModel, _, _) = BuildWindow();
-        var slider = window.FindControl<Slider>("MaxSpeedSlider")!;
+        var slider = MouseSensitivityPanelOf(window).FindControl<Slider>("MaxSpeedSlider")!;
 
         Assert.Equal(1600d, slider.Value);
 
@@ -457,7 +483,7 @@ public sealed class MainWindowGuiTests
     public void CurveComboBox_Updates_MouseSensitivity_Curve()
     {
         var (window, viewModel, _, _) = BuildWindow();
-        var combo = window.FindControl<ComboBox>("CurveComboBox")!;
+        var combo = MouseSensitivityPanelOf(window).FindControl<ComboBox>("CurveComboBox")!;
 
         Assert.Equal(ResponseCurve.Precise, combo.SelectedItem);
 
@@ -470,10 +496,11 @@ public sealed class MainWindowGuiTests
     {
         var (window, viewModel, _, _) = BuildWindow();
 
-        window.FindControl<Slider>("ScrollRateSlider")!.Value = 24;
-        window.FindControl<Slider>("ScrollDeadzoneSlider")!.Value = 0.3;
-        window.FindControl<ComboBox>("ScrollCurveCombo")!.SelectedItem = ResponseCurve.Aggressive;
-        window.FindControl<CheckBox>("EnableHorizontalBox")!.IsChecked = false;
+        var scroll = ScrollSensitivityPanelOf(window);
+        scroll.FindControl<Slider>("ScrollRateSlider")!.Value = 24;
+        scroll.FindControl<Slider>("ScrollDeadzoneSlider")!.Value = 0.3;
+        scroll.FindControl<ComboBox>("ScrollCurveCombo")!.SelectedItem = ResponseCurve.Aggressive;
+        scroll.FindControl<CheckBox>("EnableHorizontalBox")!.IsChecked = false;
 
         Assert.Equal(24f, viewModel.ScrollSensitivity.MaxTicksPerSecond);
         Assert.Equal(0.3f, viewModel.ScrollSensitivity.DeadZone);
@@ -485,7 +512,7 @@ public sealed class MainWindowGuiTests
     public void ScrollPreview_Bar_Grows_With_The_Live_Rate()
     {
         var (window, viewModel, _, _) = BuildWindow();
-        var bar = window.FindControl<Rectangle>("ScrollRateBar")!;
+        var bar = ScrollSensitivityPanelOf(window).FindControl<Rectangle>("ScrollRateBar")!;
 
         Assert.Equal(0d, bar.Height);
 
@@ -582,12 +609,13 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "LeftBumper"), window);
 
-        var keyList = window.FindControl<ListBox>("TargetKeyList")!;
-        var mouseRow = window.FindControl<StackPanel>("MouseTargetRow")!;
-        var modifierRow = window.FindControl<StackPanel>("ModifierRow")!;
-        var mouseMoveRow = window.FindControl<StackPanel>("MouseMoveRow")!;
-        var wheelRow = window.FindControl<StackPanel>("WheelRow")!;
-        var targetKind = window.FindControl<ComboBox>("TargetKindCombo")!;
+        var editor = EditorPanelOf(window);
+        var keyList = editor.FindControl<ListBox>("TargetKeyList")!;
+        var mouseRow = editor.FindControl<StackPanel>("MouseTargetRow")!;
+        var modifierRow = editor.FindControl<StackPanel>("ModifierRow")!;
+        var mouseMoveRow = editor.FindControl<StackPanel>("MouseMoveRow")!;
+        var wheelRow = editor.FindControl<StackPanel>("WheelRow")!;
+        var targetKind = editor.FindControl<ComboBox>("TargetKindCombo")!;
 
         Assert.True(keyList.IsVisible);
         Assert.False(mouseRow.IsVisible);
@@ -647,7 +675,7 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var list = window.FindControl<ListBox>("TargetKeyList")!;
+        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
         var items = list.Items.OfType<KeyPickerItem>().ToArray();
 
         Assert.Equal(
@@ -665,7 +693,7 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var capture = window.FindControl<Button>("CaptureKeyButton")!;
+        var capture = EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!;
 
         Assert.False(viewModel.Editor.IsCapturingKey);
         Assert.Equal("捕获键盘", capture.Content);
@@ -684,7 +712,7 @@ public sealed class MainWindowGuiTests
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
-        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!, window);
         Assert.True(viewModel.Editor.IsCapturingKey);
 
         window.KeyPress(Key.Escape, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Escape, null);
@@ -706,7 +734,7 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!, window);
         Assert.True(viewModel.Editor.IsCapturingKey);
 
         window.KeyPress(Key.C, Avalonia.Input.RawInputModifiers.Control, Avalonia.Input.PhysicalKey.C, null);
@@ -727,7 +755,7 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Click(EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!, window);
 
         window.KeyPress(Key.Space, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Space, null);
         window.KeyRelease(Key.Space, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Space, null);
@@ -846,9 +874,11 @@ public sealed class MainWindowGuiTests
             ("InvertYHint", viewModel.MouseSensitivity.InvertYHint),
         };
 
+        var mousePanel = MouseSensitivityPanelOf(window);
+
         foreach (var (name, expected) in hints)
         {
-            var hint = window.FindControl<TextBlock>(name);
+            var hint = mousePanel.FindControl<TextBlock>(name);
             Assert.NotNull(hint);
             Assert.False(string.IsNullOrWhiteSpace(hint!.Text), $"{name} must carry text");
             Assert.Equal(expected, hint.Text);
@@ -870,9 +900,11 @@ public sealed class MainWindowGuiTests
             ("ScrollEnableHorizontalHint", viewModel.ScrollSensitivity.EnableHorizontalHint),
         };
 
+        var scrollPanel = ScrollSensitivityPanelOf(window);
+
         foreach (var (name, expected) in hints)
         {
-            var hint = window.FindControl<TextBlock>(name);
+            var hint = scrollPanel.FindControl<TextBlock>(name);
             Assert.NotNull(hint);
             Assert.False(string.IsNullOrWhiteSpace(hint!.Text), $"{name} must carry text");
             Assert.Equal(expected, hint.Text);
@@ -883,7 +915,7 @@ public sealed class MainWindowGuiTests
     public void The_Curve_Hint_Tracks_The_Selected_Curve_In_The_Panel()
     {
         var (window, viewModel, _, _) = BuildWindow();
-        var hint = window.FindControl<TextBlock>("CurveHint")!;
+        var hint = MouseSensitivityPanelOf(window).FindControl<TextBlock>("CurveHint")!;
 
         Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Precise), hint.Text);
 

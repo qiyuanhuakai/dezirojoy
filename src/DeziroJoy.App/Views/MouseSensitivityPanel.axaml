@@ -1,0 +1,172 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:controls="clr-namespace:DeziroJoy.App.Views.Controls"
+             xmlns:views="clr-namespace:DeziroJoy.App.Views"
+             x:Class="DeziroJoy.App.Views.MouseSensitivityPanel"
+             x:DataType="vm:MouseSensitivityViewModel">
+
+    <!--
+        The 鼠标灵敏度 tab's content: the stick-to-mouse calibration sliders on the left and
+        the live preview (dot sweep, speed/travel readouts, response-curve graph) on the right.
+        The panel is a view over one MouseSensitivityViewModel - the host binds it as
+        DataContext="{Binding MouseSensitivity}" - so every path here is relative to that view
+        model, and the preview controls inherit it rather than rebinding it.
+
+        The 应用 button writes the settings into the active profile, which is the window's
+        orchestration, so its command reaches the window's view model through the Window
+        ancestor.
+    -->
+
+    <ScrollViewer>
+        <Grid Margin="20,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MaxWidth="640" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <TextBlock Classes="cardTitle" Text="摇杆 → 鼠标" Margin="0,0,0,10" />
+                <TextBlock x:Name="PhysicalUnitHint" Classes="hint" Margin="0,0,0,16"
+                           Text="{Binding PhysicalUnitHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="MaxSpeedSlider" Minimum="100" Maximum="6000" TickFrequency="50"
+                            Value="{Binding MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding MaxSpeed, StringFormat='{}{0:F0} px/s'}" />
+                </Grid>
+                <TextBlock x:Name="MaxSpeedHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding MaxSpeedHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="DeadZoneSlider" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                            Value="{Binding DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding DeadZone, StringFormat='{}{0:F2}'}" />
+                </Grid>
+                <TextBlock x:Name="DeadZoneHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding DeadZoneHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="响应曲线" VerticalAlignment="Center" Margin="0" />
+                    <ComboBox Grid.Column="1" x:Name="CurveComboBox" Classes="enumCombo" HorizontalAlignment="Stretch"
+                              ItemsSource="{x:Static views:EnumOptions.Curves}"
+                              SelectedItem="{Binding Curve, Mode=TwoWay}" />
+                </Grid>
+                <TextBlock x:Name="CurveHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding CurveHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="曲线强度" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="CurveStrengthSlider" Minimum="0" Maximum="2" TickFrequency="0.1"
+                            Value="{Binding CurveStrength, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding CurveStrength, StringFormat='{}{0:F2}'}" />
+                </Grid>
+                <TextBlock x:Name="CurveStrengthHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding CurveStrengthHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="ResponseTimeSlider" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                            Value="{Binding ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding ResponseTime, StringFormat='{}{0:F2} s'}" />
+                </Grid>
+                <TextBlock x:Name="ResponseTimeHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding ResponseTimeHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准模式倍率" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="PrecisionScaleSlider" Minimum="0.05" Maximum="1" TickFrequency="0.05"
+                            Value="{Binding PrecisionScale, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding PrecisionScale, StringFormat='{}{0:F2}'}" />
+                </Grid>
+                <TextBlock x:Name="PrecisionScaleHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding PrecisionScaleHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准按键" VerticalAlignment="Center" Margin="0" />
+                    <ComboBox Grid.Column="1" x:Name="PrecisionButtonCombo" Classes="enumCombo" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding PrecisionButtonOptions}"
+                              SelectedItem="{Binding SelectedPrecisionButton, Mode=TwoWay}" />
+                </Grid>
+                <TextBlock x:Name="PrecisionButtonHint" Classes="hint" Margin="150,0,0,14"
+                           Text="{Binding PrecisionButtonHint}" />
+
+                <CheckBox x:Name="InvertYBox" Content="垂直反转" IsChecked="{Binding InvertY, Mode=TwoWay}" />
+                <TextBlock x:Name="InvertYHint" Classes="hint" Margin="0,4,0,0"
+                           Text="{Binding InvertYHint}" />
+
+                <Button Classes="primary" Content="应用" HorizontalAlignment="Left" Margin="0,18,0,0"
+                        Command="{ReflectionBinding DataContext.ApplyMouseSensitivityCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Margin="28,0,0,0" VerticalAlignment="Top">
+                <TextBlock Classes="cardTitle" Text="实时预览" Margin="0,0,0,12" />
+                <controls:SensitivityPreview x:Name="MousePreviewHost" />
+
+                <Grid Margin="0,16,0,0" Width="200">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="当前速度" Margin="0" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                               Text="{Binding CurrentSpeed, StringFormat='{}{0:F0} px/s'}" />
+                </Grid>
+                <Grid Margin="0,6,0,0" Width="200">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="累计位移" Margin="0" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                               Text="{Binding TravelDistance, StringFormat='{}{0:F0} px'}" />
+                </Grid>
+
+                <TextBlock Classes="cardTitle" Text="响应曲线" Margin="0,22,0,12" />
+                <controls:ResponseCurveGraph x:Name="CurveGraphHost" />
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</UserControl>
