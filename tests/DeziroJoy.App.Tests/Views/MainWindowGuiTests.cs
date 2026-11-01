@@ -479,7 +479,11 @@ public sealed class MainWindowGuiTests
         Assert.True(viewModel.MouseSensitivity.IsLive);
 
         provider.Remove(DeviceId);
-        host.TickOnce(TimeSpan.FromSeconds(1.0 / 64.0));
+        for (var i = 0; i < EngineHost.DeviceAbsenceGraceTicks + 1; i++)
+        {
+            host.TickOnce(TimeSpan.FromSeconds(1.0 / 64.0));
+        }
+
         viewModel.SyncControllers();
         window.UpdatePreviewLiveness();
 

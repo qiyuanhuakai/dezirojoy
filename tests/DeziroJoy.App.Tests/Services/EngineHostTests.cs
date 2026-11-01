@@ -175,9 +175,53 @@ public class EngineHostTests
         Assert.Single(host.Controllers);
 
         provider.Remove("xinput:0");
-        host.TickOnce(Tick);
+
+        for (var i = 0; i < EngineHost.DeviceAbsenceGraceTicks + 1; i++)
+        {
+            host.TickOnce(Tick);
+        }
 
         Assert.Empty(host.Controllers);
+    }
+
+    [Fact]
+    public void A_Transiently_Missing_Device_Keeps_Its_Runtime_And_Its_Held_Keys()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+
+        // One XInputGetState failure on a Bluetooth pad drops the device from the connected
+        // list for a tick. Removing it then would ReleaseAll and lift the held Enter, closing
+        // the Alt+Tab switcher so the next tick reopens it at MRU position 1.
+        provider.Remove("xinput:0");
+        host.TickOnce(Tick);
+
+        Assert.Single(host.Controllers);
+        Assert.Contains("down:Enter", sink.Calls);
+        Assert.DoesNotContain("up:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void A_Device_Missing_For_Longer_Than_The_Grace_Period_Is_Removed_And_Releases_Its_Keys()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        provider.Remove("xinput:0");
+
+        for (var i = 0; i < EngineHost.DeviceAbsenceGraceTicks + 1; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Empty(host.Controllers);
+        Assert.Contains("up:Enter", sink.Calls);
     }
 
     [Fact]

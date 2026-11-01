@@ -29,6 +29,7 @@ public sealed class EngineHost : IDisposable
     private readonly IOutputSink _sink;
     private readonly IProfileStore _profileStore;
     private readonly Dictionary<string, ControllerRuntime> _runtimes = [];
+    private readonly Dictionary<string, int> _absenceTicks = [];
     private readonly Lock _sync = new();
     private readonly string _injectionMutexName;
     private Thread? _thread;
@@ -125,10 +126,7 @@ public sealed class EngineHost : IDisposable
 
         lock (_sync)
         {
-            foreach (var deviceId in _runtimes.Keys.Where(id => !present.Contains(id)).ToList())
-            {
-                Remove(deviceId);
-            }
+            ReconcileAbsence(present, DeviceAbsenceGraceTicks);
         }
     }
 
@@ -152,10 +150,7 @@ public sealed class EngineHost : IDisposable
 
         lock (_sync)
         {
-            foreach (var deviceId in _runtimes.Keys.Where(id => !present.Contains(id)).ToList())
-            {
-                Remove(deviceId);
-            }
+            ReconcileAbsence(present, graceTicks: 0);
         }
     }
 
@@ -241,10 +236,7 @@ public sealed class EngineHost : IDisposable
 
         lock (_sync)
         {
-            foreach (var deviceId in _runtimes.Keys.Where(id => !present.Contains(id)).ToList())
-            {
-                Remove(deviceId);
-            }
+            ReconcileAbsence(present, graceTicks: 0);
         }
     }
 
@@ -445,6 +437,46 @@ public sealed class EngineHost : IDisposable
             _runtimes[descriptor.DeviceId] = runtime;
 
             return runtime;
+        }
+    }
+
+    /// <summary>
+    /// Consecutive ticks a device may be missing from the connected list while the engine runs
+    /// before its runtime is torn down. XInputGetState fails transiently on a Bluetooth pad, and
+    /// removing the runtime then calls <see cref="CommandDispatcher.ReleaseAll"/> - lifting a
+    /// held Alt closes the Alt+Tab switcher, so the tick that brings the device back reopens it
+    /// at MRU position 1. Five ticks at 2 ms is 10 ms.
+    /// <para>
+    /// The UI's presence paths pass zero instead: they run at 300 ms, where five ticks would be
+    /// a 1.5 s delay before a genuinely unplugged pad reported as gone, and with the engine
+    /// stopped nothing is held for ReleaseAll to lift.
+    /// </para>
+    /// </summary>
+    public const int DeviceAbsenceGraceTicks = 5;
+
+    /// <summary>
+    /// Drops runtimes whose device has been absent past <paramref name="graceTicks"/>, and
+    /// clears the absence count of any device that is back. Callers hold <c>_sync</c>.
+    /// </summary>
+    private void ReconcileAbsence(HashSet<string> present, int graceTicks)
+    {
+        foreach (var deviceId in _runtimes.Keys.Where(id => !present.Contains(id)).ToList())
+        {
+            var missed = _absenceTicks.GetValueOrDefault(deviceId) + 1;
+            _absenceTicks[deviceId] = missed;
+
+            if (missed <= graceTicks)
+            {
+                continue;
+            }
+
+            _absenceTicks.Remove(deviceId);
+            Remove(deviceId);
+        }
+
+        foreach (var deviceId in _absenceTicks.Keys.Where(present.Contains).ToList())
+        {
+            _absenceTicks.Remove(deviceId);
         }
     }
 
