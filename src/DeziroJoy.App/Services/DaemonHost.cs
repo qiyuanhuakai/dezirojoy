@@ -102,19 +102,47 @@ public static class DaemonHost
     }
 
     /// <summary>Renders the shutdown line printed once the engine has been stopped.</summary>
-    public static string BuildShutdownSummary(EngineComposition composition)
+    /// <param name="injectionLog">
+    /// The diagnostic buffer, when the composition has one. UIPI drops blocked input without an
+    /// error, so this is the only evidence a failed mapping leaves behind.
+    /// </param>
+    public static string BuildShutdownSummary(EngineComposition composition, InjectionLog? injectionLog = null)
     {
         ArgumentNullException.ThrowIfNull(composition);
 
+        var injectionNote = injectionLog is null
+            ? "injected: unavailable"
+            : BuildInjectionNote(injectionLog);
+
         return $"[DeziroJoy] engine stopped · devices at shutdown: {composition.Host.Controllers.Count} · " +
-            "daemon exited cleanly";
+            $"daemon exited cleanly · {injectionNote}";
+    }
+
+    /// <summary>
+    /// Counts what the log recorded. A blocked event is one SendInput refused, which on Windows
+    /// means UIPI dropped input aimed at an elevated target - reported separately because it
+    /// arrives with no error anywhere else.
+    /// </summary>
+    private static string BuildInjectionNote(InjectionLog log)
+    {
+        var total = log.Count;
+        if (total == 0)
+        {
+            return "injected: 0 events";
+        }
+
+        var blocked = log.Snapshot(total).Count(record => !record.Success);
+
+        return blocked == 0
+            ? $"injected: {total} events"
+            : $"injected: {total} events · {blocked} blocked";
     }
 
     /// <summary>Stops the mapping loop, which also releases every key the dispatcher holds.</summary>
     private static void Shutdown(EngineComposition composition)
     {
         composition.Host.Stop();
-        Console.WriteLine(BuildShutdownSummary(composition));
+        Console.WriteLine(BuildShutdownSummary(composition, composition.InjectionLog));
     }
 
     private static string DescribeElevation(EngineComposition composition)
