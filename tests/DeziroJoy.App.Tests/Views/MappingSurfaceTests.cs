@@ -363,4 +363,139 @@ public sealed class MappingSurfaceTests
         var primary = window.FindControl<Button>("StartStopButton")!;
         Assert.Equal((CornerRadius)buttonToken!, primary.CornerRadius);
     }
+
+    // ---- Precision key selector --------------------------------------------
+
+    [AvaloniaFact]
+    public void The_Precision_Key_Selector_Changes_The_Setting_It_Produces()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+
+        var combo = window.FindControl<ComboBox>("PrecisionButtonCombo")!;
+        var hint = window.FindControl<TextBlock>("PrecisionButtonHint")!;
+
+        // The selector offers exactly the buttons the engine can read a precision state
+        // from, starts on the key the settings carry, and reuses the panel's own copy.
+        Assert.Same(viewModel.MouseSensitivity.PrecisionButtonOptions, combo.ItemsSource);
+        Assert.Equal(GamepadButton.LeftStick, combo.SelectedItem);
+        Assert.Equal(viewModel.MouseSensitivity.PrecisionButtonHint, hint.Text);
+
+        combo.SelectedItem = GamepadButton.RightBumper;
+
+        Assert.Equal(GamepadButton.RightBumper, viewModel.MouseSensitivity.SelectedPrecisionButton);
+        Assert.Equal(GamepadButton.RightBumper, viewModel.MouseSensitivity.BuildSettings().PrecisionButton);
+
+        // And back the other way: a profile loaded into the panel must show up in the
+        // selector, or the user cannot see which key a saved mapping actually uses.
+        viewModel.MouseSensitivity.LoadFrom(
+            new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(GamepadButton.LeftTrigger, combo.SelectedItem);
+    }
+
+    // ---- Key picker: headers are sections, options are key caps -------------
+
+    [AvaloniaFact]
+    public void Key_Picker_Headers_Are_Sections_Not_Rows()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        var list = window.FindControl<ListBox>("TargetKeyList")!;
+
+        // The list virtualizes and opens scrolled to the current selection, so only a
+        // handful of rows around it are realized. Scrolling back to the top realizes the
+        // first category header together with its unselected options.
+        list.ScrollIntoView(0);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var rows = list.GetVisualDescendants().OfType<ListBoxItem>().ToList();
+        Assert.NotEmpty(rows);
+
+        var headerRow = rows.First(r => r.DataContext is KeyPickerItem { IsHeader: true });
+        var optionRow = rows.First(r => r.DataContext is KeyPickerItem { IsHeader: false } && !r.IsSelected);
+
+        // Each row carries both chromes in its template with one switched off, so the
+        // labels are picked by class rather than by tree order.
+        var headerLabel = headerRow.GetVisualDescendants().OfType<TextBlock>()
+            .First(t => t.Classes.Contains("pickerHeaderLabel"));
+        var optionLabel = optionRow.GetVisualDescendants().OfType<TextBlock>()
+            .First(t => t.Classes.Contains("keyCapLabel"));
+
+        // A header must not read as just another row: it is smaller, muted and set apart
+        // by its own band, while an option is a full-size label on a key cap.
+        Assert.True(
+            headerLabel.FontSize < optionLabel.FontSize,
+            $"header {headerLabel.FontSize}pt must be smaller than option {optionLabel.FontSize}pt");
+        Assert.Equal(Token(headerRow.ActualThemeVariant, "HintTextBrush"), ColorOf(headerLabel.Foreground));
+        Assert.Equal(Token(optionRow.ActualThemeVariant, "ControlForegroundBrush"), ColorOf(optionLabel.Foreground));
+
+        // The two chromes never swap: a header shows a band, an option shows a cap.
+        var headerBand = headerRow.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("pickerHeader"));
+        var optionCap = optionRow.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("keyCap"));
+
+        Assert.NotNull(headerBand);
+        Assert.NotNull(optionCap);
+        Assert.Null(headerRow.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("keyCap")));
+        Assert.Null(optionRow.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("pickerHeader")));
+
+        // An option row is a comfortable hit target: a full-width cap, tall enough to click.
+        Assert.True(optionRow.Bounds.Height >= 30, $"option row is only {optionRow.Bounds.Height}px tall");
+        Assert.Equal(optionRow.Bounds.Width, optionCap!.Bounds.Width);
+    }
+
+    [AvaloniaFact]
+    public void The_Selected_Key_Cap_Is_Marked_Unmistakably()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        var list = window.FindControl<ListBox>("TargetKeyList")!;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The list virtualizes and opens scrolled to the current selection, so the realized
+        // rows are the handful around it - enough to read both states of the same row.
+        var rows = list.GetVisualDescendants().OfType<ListBoxItem>().ToList();
+        var resting = rows
+            .Select(row => (Row: row, Option: row.DataContext as KeyPickerItem))
+            .First(pair => pair.Option is { IsHeader: false } && !pair.Row.IsSelected);
+
+        var restingCap = resting.Row.GetVisualDescendants().OfType<Border>()
+            .First(b => b.Classes.Contains("keyCap"));
+
+        // At rest the cap wears the subtle tone and the ordinary label colour.
+        Assert.Equal(Token(resting.Row.ActualThemeVariant, "SubtleBrush"), ColorOf(restingCap.Background));
+        Assert.Equal(Token(resting.Row.ActualThemeVariant, "ControlForegroundBrush"),
+            ColorOf(restingCap.GetVisualDescendants().OfType<TextBlock>().First().Foreground));
+
+        // Selecting it must mark the cap unmistakably: accent surface, accent label.
+        viewModel.Editor.SelectedKeyOption = resting.Option;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var selectedRow = list.GetVisualDescendants().OfType<ListBoxItem>()
+            .First(r => r.DataContext is KeyPickerItem selected && selected == resting.Option);
+        Assert.True(selectedRow.IsSelected);
+
+        var cap = selectedRow.GetVisualDescendants().OfType<Border>()
+            .First(b => b.Classes.Contains("keyCap"));
+        var label = cap.GetVisualDescendants().OfType<TextBlock>().First();
+
+        Assert.Equal(Token(selectedRow.ActualThemeVariant, "AccentSurfaceBrush"), ColorOf(cap.Background));
+        Assert.Equal(Token(selectedRow.ActualThemeVariant, "AccentBrush"), ColorOf(label.Foreground));
+    }
 }

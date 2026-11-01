@@ -548,6 +548,24 @@ public class MappingEditorViewModelTests
     }
 
     [Fact]
+    public void Every_Button_Option_Stays_Selectable_Including_The_Raw_Code_Pills()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.RegisterExtraButton(305);
+
+        // The picker's presentation was redesigned; the data model was not. Every option the
+        // old flat list offered - the raw-code 按键 N pills included - must still select.
+        foreach (var option in editor.ButtonOptions.Where(o => !o.IsHeader).ToArray())
+        {
+            editor.SelectedButtonOption = option;
+
+            Assert.Equal(option.Button, editor.SelectedButton);
+            Assert.Equal(option.Code, editor.SelectedExtraCode);
+            Assert.Equal(option, editor.SelectedButtonOption);
+        }
+    }
+
+    [Fact]
     public void Extra_Buttons_Appear_In_The_Extension_Group()
     {
         var editor = new MappingEditorViewModel();
@@ -794,6 +812,22 @@ public class MappingEditorViewModelTests
         Assert.Equal(GamepadKey.F13, editor.SelectedKey);
         Assert.Equal(option, editor.SelectedKeyOption);
         Assert.Equal(MappingTargetKind.KeyPress, editor.TargetKind);
+    }
+
+    [Fact]
+    public void Every_Key_Option_Stays_Selectable()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // The picker's presentation was redesigned; the data model was not. Every key the
+        // old flat list offered must still select, headers excluded.
+        foreach (var option in editor.KeyOptions.Where(o => !o.IsHeader).ToArray())
+        {
+            editor.SelectedKeyOption = option;
+
+            Assert.Equal(option.Key, editor.SelectedKey);
+            Assert.Equal(option, editor.SelectedKeyOption);
+        }
     }
 
     [Fact]

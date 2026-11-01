@@ -82,6 +82,54 @@ public class MouseSensitivityViewModelTests
     }
 
     [Fact]
+    public void Selecting_A_Precision_Button_Changes_What_BuildSettings_Produces()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        vm.SelectedPrecisionButton = GamepadButton.RightBumper;
+
+        Assert.Equal(GamepadButton.RightBumper, vm.BuildSettings().PrecisionButton);
+    }
+
+    [Fact]
+    public void LoadFrom_Restores_The_Selected_Precision_Button()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        vm.LoadFrom(new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
+
+        Assert.Equal(GamepadButton.LeftTrigger, vm.SelectedPrecisionButton);
+    }
+
+    [Fact]
+    public void Reset_Restores_The_Default_Selected_Precision_Button()
+    {
+        var vm = new MouseSensitivityViewModel { SelectedPrecisionButton = GamepadButton.RightBumper };
+
+        vm.Reset();
+
+        Assert.Equal(GamepadButton.LeftStick, vm.SelectedPrecisionButton);
+    }
+
+    [Fact]
+    public void The_Selected_Precision_Button_Notifies_In_Both_Directions()
+    {
+        var vm = new MouseSensitivityViewModel();
+        var notified = new List<string>();
+        vm.PropertyChanged += (_, e) => notified.Add(e.PropertyName!);
+
+        vm.SelectedPrecisionButton = GamepadButton.RightBumper;
+
+        Assert.Contains(nameof(MouseSensitivityViewModel.SelectedPrecisionButton), notified);
+
+        notified.Clear();
+        vm.PrecisionButton = GamepadButton.LeftTrigger;
+
+        Assert.Contains(nameof(MouseSensitivityViewModel.SelectedPrecisionButton), notified);
+        Assert.Equal(GamepadButton.LeftTrigger, vm.SelectedPrecisionButton);
+    }
+
+    [Fact]
     public void Preview_Stays_Put_When_MaxSpeed_Is_Zero()
     {
         var vm = new MouseSensitivityViewModel { MaxSpeed = 0f, IsLive = true };

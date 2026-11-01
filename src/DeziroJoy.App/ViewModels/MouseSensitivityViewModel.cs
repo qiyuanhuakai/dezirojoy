@@ -64,6 +64,18 @@ public partial class MouseSensitivityViewModel : ObservableObject
     [ObservableProperty]
     private GamepadButton _precisionButton = GamepadButton.LeftStick;
 
+    /// <summary>
+    /// The precision key as the selector shows it. An alias over <see cref="PrecisionButton"/>:
+    /// the settings round-trip stays in one place, and the picker binds a selection-shaped
+    /// name. Assigning it changes what <see cref="BuildSettings"/> produces, and a load or
+    /// reset moves the selection with it.
+    /// </summary>
+    public GamepadButton SelectedPrecisionButton
+    {
+        get => PrecisionButton;
+        set => PrecisionButton = value;
+    }
+
     [ObservableProperty]
     private double _previewX = PreviewCenter;
 
@@ -126,6 +138,9 @@ public partial class MouseSensitivityViewModel : ObservableObject
     partial void OnResponseTimeChanged(float value) => ApplySettings();
 
     partial void OnInvertYChanged(bool value) => ApplySettings();
+
+    partial void OnPrecisionButtonChanged(GamepadButton value)
+        => OnPropertyChanged(nameof(SelectedPrecisionButton));
 
     public MouseStickSettings BuildSettings() => new()
     {

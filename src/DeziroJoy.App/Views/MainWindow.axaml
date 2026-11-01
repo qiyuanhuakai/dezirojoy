@@ -231,6 +231,60 @@
         <Style Selector="TabControl">
             <Setter Property="Background" Value="Transparent" />
         </Style>
+
+        <!-- The categorized picker. One flat item list, but a header is a recessed band
+             with an accent tick and a letterspaced muted label - never just another row -
+             and an option is a key cap: a keyboard key is a different kind of thing from a
+             gamepad button, so the list reads as keys instead of a wall of same-weight
+             rows. The band covers its row completely, so a header never takes the hover or
+             selected treatment an option row takes. -->
+        <Style Selector="ListBox.pickerList">
+            <Setter Property="Background" Value="{DynamicResource SunkenBrush}" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+        </Style>
+
+        <Style Selector="ListBox.pickerList ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <Style Selector="Border.pickerHeader">
+            <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusSm}" />
+        </Style>
+
+        <Style Selector="TextBlock.pickerHeaderLabel">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="LetterSpacing" Value="1.5" />
+        </Style>
+
+        <Style Selector="Border.keyCap">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+        </Style>
+
+        <Style Selector="TextBlock.keyCapLabel">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+        </Style>
+
+        <Style Selector="ListBox.pickerList ListBoxItem:pointerover Border.keyCap">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="ListBox.pickerList ListBoxItem:selected Border.keyCap">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+        </Style>
+
+        <Style Selector="ListBox.pickerList ListBoxItem:selected TextBlock.keyCapLabel">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </Window.Styles>
 
     <Grid RowDefinitions="Auto,*">
@@ -468,19 +522,25 @@
 
                                    <TextBlock Classes="sectionLabel" Text="或从列表选择"
                                               IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}" />
-                                   <ListBox x:Name="TargetKeyList" MaxHeight="180"
+                                   <ListBox x:Name="TargetKeyList" Classes="pickerList" MaxHeight="240"
                                             IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
                                             ItemsSource="{Binding Editor.KeyOptions}"
                                             SelectedItem="{Binding Editor.SelectedKeyOption, Mode=TwoWay}">
                                        <ListBox.ItemTemplate>
                                            <DataTemplate x:DataType="vm:KeyPickerItem">
                                                <Panel>
-                                                   <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
-                                                              Foreground="{DynamicResource TextSecondaryBrush}"
-                                                              Margin="0,6,0,2" IsVisible="{Binding IsHeader}" />
-                                                   <TextBlock Text="{Binding Label}" FontSize="12"
-                                                              Foreground="{DynamicResource ControlForegroundBrush}"
-                                                              IsVisible="{Binding IsHeader, Converter={StaticResource Not}}" />
+                                                   <Border Classes="pickerHeader" IsVisible="{Binding IsHeader}" Padding="12,12,12,5">
+                                                       <Grid ColumnDefinitions="Auto,*">
+                                                           <Border Grid.Column="0" Width="3" Height="9" VerticalAlignment="Center"
+                                                                   CornerRadius="{DynamicResource CornerRadiusSm}"
+                                                                   Background="{DynamicResource AccentBrush}" />
+                                                           <TextBlock Grid.Column="1" Classes="pickerHeaderLabel" Text="{Binding Label}" Margin="8,0,0,0" />
+                                                       </Grid>
+                                                   </Border>
+                                                   <Border Classes="keyCap" IsVisible="{Binding IsHeader, Converter={StaticResource Not}}"
+                                                           Padding="12,7" MinHeight="30">
+                                                       <TextBlock Classes="keyCapLabel" Text="{Binding Label}" VerticalAlignment="Center" />
+                                                   </Border>
                                                </Panel>
                                            </DataTemplate>
                                        </ListBox.ItemTemplate>
@@ -766,8 +826,22 @@
                                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                                Text="{Binding MouseSensitivity.PrecisionScale, StringFormat='{}{0:F2}'}" />
                                 </Grid>
-                                <TextBlock x:Name="PrecisionScaleHint" Classes="hint" Margin="150,0,0,14"
-                                           Text="{Binding MouseSensitivity.PrecisionScaleHint}" />
+                                 <TextBlock x:Name="PrecisionScaleHint" Classes="hint" Margin="150,0,0,14"
+                                            Text="{Binding MouseSensitivity.PrecisionScaleHint}" />
+
+                                 <Grid Margin="0,0,0,4">
+                                     <Grid.ColumnDefinitions>
+                                         <ColumnDefinition Width="150" />
+                                         <ColumnDefinition Width="*" />
+                                         <ColumnDefinition Width="90" />
+                                     </Grid.ColumnDefinitions>
+                                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准按键" VerticalAlignment="Center" Margin="0" />
+                                     <ComboBox Grid.Column="1" x:Name="PrecisionButtonCombo" Classes="enumCombo" HorizontalAlignment="Stretch"
+                                               ItemsSource="{Binding MouseSensitivity.PrecisionButtonOptions}"
+                                               SelectedItem="{Binding MouseSensitivity.SelectedPrecisionButton, Mode=TwoWay}" />
+                                 </Grid>
+                                 <TextBlock x:Name="PrecisionButtonHint" Classes="hint" Margin="150,0,0,14"
+                                            Text="{Binding MouseSensitivity.PrecisionButtonHint}" />
 
                                 <CheckBox x:Name="InvertYBox" Content="垂直反转" IsChecked="{Binding MouseSensitivity.InvertY, Mode=TwoWay}" />
                                 <TextBlock x:Name="InvertYHint" Classes="hint" Margin="0,4,0,0"
