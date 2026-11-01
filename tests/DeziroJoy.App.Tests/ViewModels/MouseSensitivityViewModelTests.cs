@@ -1,4 +1,5 @@
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using Xunit;
 
@@ -37,6 +38,47 @@ public class MouseSensitivityViewModelTests
         Assert.Equal(0.12f, settings.ResponseTime);
         Assert.Equal(0.5f, settings.PrecisionScale);
         Assert.False(settings.InvertY);
+    }
+
+    [Fact]
+    public void BuildSettings_Carries_The_Precision_Button()
+    {
+        var vm = new MouseSensitivityViewModel { PrecisionButton = GamepadButton.RightBumper };
+
+        Assert.Equal(GamepadButton.RightBumper, vm.BuildSettings().PrecisionButton);
+    }
+
+    [Fact]
+    public void LoadFrom_Restores_The_Precision_Button()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        vm.LoadFrom(new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
+
+        Assert.Equal(GamepadButton.LeftTrigger, vm.PrecisionButton);
+    }
+
+    [Fact]
+    public void Reset_Restores_The_Default_Precision_Button()
+    {
+        var vm = new MouseSensitivityViewModel { PrecisionButton = GamepadButton.RightBumper };
+
+        vm.Reset();
+
+        Assert.Equal(GamepadButton.LeftStick, vm.PrecisionButton);
+    }
+
+    [Fact]
+    public void The_Precision_Picker_Offers_Every_Button_That_Has_A_Mask_Bit()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        // GamepadButton.Extra has no mask bit and ToMask() throws for it, so offering it would
+        // build a settings object the engine cannot read the precision state from.
+        Assert.DoesNotContain(GamepadButton.Extra, vm.PrecisionButtonOptions);
+        Assert.Equal(
+            Enum.GetValues<GamepadButton>().Where(button => button != GamepadButton.Extra).OrderBy(button => button),
+            vm.PrecisionButtonOptions.OrderBy(button => button));
     }
 
     [Fact]
@@ -220,5 +262,39 @@ public class MouseSensitivityViewModelTests
         AdvanceMany(continuous, 1);
 
         Assert.Equal(continuous.CurrentSpeed, resumed.CurrentSpeed);
+    }
+
+    [Fact]
+    public void Changing_A_Setting_Keeps_The_Smoothing_State_So_Speed_Does_Not_Reset()
+    {
+        // Dragging a slider fires a settings change on every tick. The processor must keep
+        // its smoothed velocity across that change, or CurrentSpeed craters back toward zero
+        // for a tick and the preview stutters ("不停重置").
+        var vm = new MouseSensitivityViewModel { MaxSpeed = 2000f, ResponseTime = 0.15f, IsLive = true };
+        AdvanceMany(vm, 100);
+        var speedBefore = vm.CurrentSpeed;
+        Assert.True(speedBefore > 500, $"sweep should have built up speed, got {speedBefore}");
+
+        vm.MaxSpeed = 2100f;
+        AdvanceMany(vm, 1);
+
+        Assert.True(vm.CurrentSpeed > speedBefore * 0.5,
+            $"changing a setting reset the smoothing state: {vm.CurrentSpeed} vs {speedBefore}");
+    }
+
+    [Fact]
+    public void Settling_To_Rest_Zeroes_Cumulative_Displacement()
+    {
+        var vm = new MouseSensitivityViewModel { MaxSpeed = 4000f, IsLive = true };
+        AdvanceMany(vm, 120);
+        Assert.True(vm.TravelDistance > 0, "sweep should accumulate displacement while live");
+
+        vm.IsLive = false;
+        AdvanceMany(vm, 700);
+
+        Assert.Equal(0, vm.CurrentSpeed);
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewX);
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewY);
+        Assert.Equal(0, vm.TravelDistance);
     }
 }

@@ -170,6 +170,27 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public void Applying_Sensitivity_Keeps_A_Custom_Precision_Button()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // The panel loads the mapping's settings, the user changes only the speed, and applies.
+        // The precision key is not touched, so it must survive the round-trip untouched.
+        vm.MouseSensitivity.LoadFrom(new MouseStickSettings { PrecisionButton = GamepadButton.RightBumper });
+        vm.MouseSensitivity.MaxSpeed = 3000f;
+        vm.ApplyMouseSensitivityCommand.Execute(null);
+
+        var target = Assert.IsType<MouseMoveTarget>(
+            vm.ActiveProfile!.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Right }).Target);
+
+        Assert.Equal(3000f, target.Settings.MaxSpeed);
+        Assert.Equal(GamepadButton.RightBumper, target.Settings.PrecisionButton);
+    }
+
+    [Fact]
     public void Toggle_Engine_Starts_And_Stops_The_Host_Loop()
     {
         var (vm, host, provider, _) = CreateHost();
@@ -271,7 +292,7 @@ public class MainWindowViewModelTests
         provider.Add("xinput:0", "Xbox Wireless Controller");
         provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
 
-        vm.ToggleEngineCommand.Execute(null);
+        SampleHelper.StartEngineManually(vm, host);
         SampleHelper.Sample(vm, host);
 
         Assert.True(vm.IsEngineRunning);
@@ -291,7 +312,7 @@ public class MainWindowViewModelTests
         provider.Add("xinput:0", "Xbox Wireless Controller");
         provider.SetState("xinput:0", GamepadState.Neutral);
 
-        vm.ToggleEngineCommand.Execute(null);
+        SampleHelper.StartEngineManually(vm, host);
         SampleHelper.Sample(vm, host);
         Assert.True(vm.HasController);
 
@@ -327,5 +348,57 @@ public class MainWindowViewModelTests
         Assert.DoesNotContain("映射未启动", vm.StatusMessage);
 
         vm.ToggleEngineCommand.Execute(null);
+    }
+
+    [Fact]
+    public void Reset_To_Default_Reloads_The_Sensitivity_Panels_From_The_New_Profile()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.MouseSensitivity.MaxSpeed = 5000f;
+        vm.ApplyMouseSensitivityCommand.Execute(null);
+        Assert.Equal(5000f, vm.MouseSensitivity.MaxSpeed);
+
+        vm.ResetToDefaultCommand.Execute(null);
+
+        var mouseTarget = Assert.IsType<MouseMoveTarget>(
+            vm.ActiveProfile!.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Right }).Target);
+        Assert.Equal(mouseTarget.Settings.MaxSpeed, vm.MouseSensitivity.MaxSpeed);
+        Assert.NotEqual(5000f, vm.MouseSensitivity.MaxSpeed);
+    }
+
+    [Fact]
+    public void Import_From_Reloads_The_Sensitivity_Panels_From_The_Imported_Profile()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-import-{Guid.NewGuid():N}.json");
+        var base_ = vm.ActiveProfile!;
+        var imported = base_ with
+        {
+            Mappings = base_.Mappings
+                .Select(m => m is { Source: StickBinding { Stick: GamepadStick.Right }, Target: MouseMoveTarget mouse }
+                    ? m with { Target = new MouseMoveTarget(mouse.Settings with { MaxSpeed = 1234f }) }
+                    : m)
+                .ToList(),
+        };
+        File.WriteAllText(path, ProfileSerializer.Serialize(imported));
+
+        try
+        {
+            vm.ImportFrom(path);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        Assert.Equal(1234f, vm.MouseSensitivity.MaxSpeed);
     }
 }

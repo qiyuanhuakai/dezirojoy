@@ -45,6 +45,9 @@ public sealed class ThemeService
     /// <summary>The variant currently applied to <see cref="Application.Current"/>.</summary>
     public ThemeVariant Current { get; private set; } = ThemeVariant.Dark;
 
+    /// <summary>Raised whenever the applied variant changes, so every entry point can resync.</summary>
+    public event Action<ThemeVariant>? Changed;
+
     public bool IsLight => Current == ThemeVariant.Light;
 
     /// <summary>
@@ -107,6 +110,8 @@ public sealed class ThemeService
         {
             application.RequestedThemeVariant = variant;
         }
+
+        Changed?.Invoke(variant);
     }
 
     /// <summary>Loads the persisted preference and applies it.</summary>

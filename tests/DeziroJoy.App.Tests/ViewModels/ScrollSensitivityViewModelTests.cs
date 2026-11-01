@@ -136,4 +136,19 @@ public class ScrollSensitivityViewModelTests
 
         Assert.True(vm.CurrentRate > 0, $"expected the sweep to resume, got {vm.CurrentRate}");
     }
+
+    [Fact]
+    public void Changing_A_Setting_Keeps_The_Smoothing_State_So_Rate_Does_Not_Reset()
+    {
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 40f, ResponseTime = 0.15f, IsLive = true };
+        AdvanceMany(vm, 100);
+        var rateBefore = vm.CurrentRate;
+        Assert.True(rateBefore > 5, $"sweep should have built up rate, got {rateBefore}");
+
+        vm.MaxTicksPerSecond = 42f;
+        AdvanceMany(vm, 1);
+
+        Assert.True(vm.CurrentRate > rateBefore * 0.5,
+            $"changing a setting reset the smoothing state: {vm.CurrentRate} vs {rateBefore}");
+    }
 }

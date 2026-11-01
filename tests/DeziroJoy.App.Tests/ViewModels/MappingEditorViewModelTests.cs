@@ -181,33 +181,175 @@ public class MappingEditorViewModelTests
     }
 
     [Fact]
-    public void A_Button_Source_Only_Offers_Targets_The_Engine_Honors()
+    public void A_Button_Source_Offers_Every_Target_Kind()
     {
         var editor = new MappingEditorViewModel();
 
         Assert.Equal(
-            [MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton],
+            [
+                MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
+                MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll,
+            ],
             editor.AvailableTargetKinds);
     }
 
     [Fact]
-    public void A_Stick_Source_Only_Offers_Targets_The_Engine_Honors()
+    public void A_Stick_Source_Offers_Every_Target_Kind()
     {
         var editor = new MappingEditorViewModel();
 
         editor.SourceKind = MappingSourceKind.Stick;
 
-        Assert.Equal([MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll], editor.AvailableTargetKinds);
+        Assert.Equal(
+            [
+                MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
+                MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll,
+            ],
+            editor.AvailableTargetKinds);
     }
 
     [Fact]
-    public void Switching_To_A_Stick_Source_Moves_The_Target_To_A_Stick_Action()
+    public void Switching_Source_Kind_Keeps_The_Chosen_Target_Kind()
     {
         var editor = new MappingEditorViewModel { TargetKind = MappingTargetKind.KeyCombo };
 
         editor.SourceKind = MappingSourceKind.Stick;
 
-        Assert.Equal(MappingTargetKind.MouseMove, editor.TargetKind);
+        Assert.Equal(MappingTargetKind.KeyCombo, editor.TargetKind);
+        Assert.True(editor.ShowDirectionPicker, "a stick driving a key needs a direction");
+    }
+
+    [Fact]
+    public void A_Stick_Bound_To_A_Digital_Target_Needs_A_Direction()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SourceKind = MappingSourceKind.Stick,
+            TargetKind = MappingTargetKind.KeyPress,
+        };
+
+        Assert.True(editor.ShowDirectionPicker);
+
+        editor.SelectedDirection = InputDirection.Up;
+
+        Assert.Equal(InputDirection.Up, Assert.IsType<StickBinding>(editor.BuildSource()).Direction);
+    }
+
+    [Fact]
+    public void A_Button_Bound_To_A_Continuous_Target_Needs_A_Direction()
+    {
+        var editor = new MappingEditorViewModel { TargetKind = MappingTargetKind.MouseMove };
+
+        Assert.True(editor.ShowDirectionPicker);
+
+        editor.SelectedDirection = InputDirection.Right;
+
+        Assert.Equal(InputDirection.Right, Assert.IsType<ButtonBinding>(editor.BuildSource()).Direction);
+    }
+
+    [Fact]
+    public void The_Native_Combinations_Need_No_Direction()
+    {
+        var stickToMouse = new MappingEditorViewModel
+        {
+            SourceKind = MappingSourceKind.Stick,
+            TargetKind = MappingTargetKind.MouseMove,
+        };
+        var buttonToKey = new MappingEditorViewModel { TargetKind = MappingTargetKind.KeyPress };
+
+        Assert.False(stickToMouse.ShowDirectionPicker);
+        Assert.False(buttonToKey.ShowDirectionPicker);
+        Assert.Null(Assert.IsType<StickBinding>(stickToMouse.BuildSource()).Direction);
+        Assert.Null(Assert.IsType<ButtonBinding>(buttonToKey.BuildSource()).Direction);
+    }
+
+    [Fact]
+    public void LoadFrom_Restores_A_Stick_Direction()
+    {
+        var entry = new MappingEntry
+        {
+            Source = new StickBinding(GamepadStick.Left) { Direction = InputDirection.Up },
+            Target = new KeyPressTarget(GamepadKey.W),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        Assert.Equal(InputDirection.Up, editor.SelectedDirection);
+        Assert.Equal(entry.Source, editor.BuildSource());
+    }
+
+    [Fact]
+    public void LoadFrom_Restores_The_Gesture_Settings()
+    {
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = 0.25f,
+                    LongPressThreshold = 0.4f,
+                    LongPressRepeatInterval = 0.1f,
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        Assert.Equal(0.25f, editor.DoubleClickWindow);
+        Assert.Equal(0.4f, editor.LongPressThreshold);
+        Assert.Equal(0.1f, editor.LongPressRepeatInterval);
+        Assert.True(editor.HasAnyGesture);
+        Assert.Equal(entry.Source, editor.BuildSource());
+    }
+
+    [Fact]
+    public void BuildEntry_Omits_The_Gesture_When_Nothing_Is_Configured()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        Assert.False(editor.HasAnyGesture);
+        Assert.Null(Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture);
+    }
+
+    [Fact]
+    public void Changing_The_Gesture_Settings_Writes_Them_Back_On_Commit()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SelectedButton = GamepadButton.B,
+            TargetKind = MappingTargetKind.KeyPress,
+        };
+
+        editor.DoubleClickWindow = 0.3f;
+        editor.LongPressThreshold = 0.5f;
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(0.3f, gesture.DoubleClickWindow);
+        Assert.Equal(0.5f, gesture.LongPressThreshold);
+    }
+
+    [Fact]
+    public void Reset_Clears_The_Gesture_Settings()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            DoubleClickWindow = 0.3f,
+            LongPressThreshold = 0.5f,
+            LongPressRepeatInterval = 0.1f,
+        };
+
+        editor.Reset();
+
+        Assert.Equal(0f, editor.DoubleClickWindow);
+        Assert.Equal(0f, editor.LongPressThreshold);
+        Assert.Equal(0f, editor.LongPressRepeatInterval);
+        Assert.False(editor.HasAnyGesture);
     }
 
     [Fact]

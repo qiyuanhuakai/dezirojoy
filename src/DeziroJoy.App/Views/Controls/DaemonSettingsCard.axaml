@@ -1,0 +1,39 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             x:Class="DeziroJoy.App.Views.Controls.DaemonSettingsCard"
+             x:DataType="vm:DaemonSettingsViewModel">
+    <Border Classes="card">
+        <StackPanel>
+            <TextBlock Classes="cardTitle" Text="后台服务" />
+            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                       Text="常驻服务是一个无界面的后台进程，登录时自动运行手柄映射，无需打开主窗口。" />
+
+            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="{Binding DaemonStateText}" />
+            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding ElevationText}" />
+
+            <WrapPanel Margin="0,12,0,0">
+                <Button Classes="ghost" Margin="0,0,8,8" Content="安装常驻"
+                        IsEnabled="{Binding IsSupported}" Command="{Binding InstallDaemonCommand}" />
+                <Button Classes="ghost" Margin="0,0,8,8" Content="卸载常驻"
+                        IsEnabled="{Binding IsSupported}" Command="{Binding UninstallDaemonCommand}" />
+                <Button Classes="ghost" Margin="0,0,8,8" Content="刷新"
+                        IsEnabled="{Binding IsSupported}" Command="{Binding RefreshCommand}" />
+            </WrapPanel>
+
+            <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0">
+                <StackPanel>
+                    <CheckBox Content="登录时自启动" IsEnabled="{Binding IsSupported}"
+                              IsChecked="{Binding AutostartEnabled, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Text="登录时自启动使用 Windows 计划任务的“登录时”触发器，而非开机启动：服务或登录前进程运行在会话 0（Session 0），受会话隔离限制无法向用户桌面注入输入，因此必须在用户登录之后运行。它启动的是带窗口的主程序（方便你改配置），不是后台映射；要让映射无人值守地跑，请用上面的“常驻服务”。安装 / 卸载需要管理员权限。" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                       IsVisible="{Binding HasStatusMessage}"
+                       Foreground="{DynamicResource AccentBrush}"
+                       Text="{Binding StatusMessage}" />
+        </StackPanel>
+    </Border>
+</UserControl>

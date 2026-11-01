@@ -76,4 +76,32 @@ public class GamepadVisualizerViewModelTests
         Assert.False(vm.IsConnected);
         Assert.False(vm.IsAPressed);
     }
+
+    [Fact]
+    public void ButtonCount_Text_Reports_The_Count_The_Device_Declared()
+    {
+        var vm = new GamepadVisualizerViewModel();
+
+        vm.SetDevice(new GamepadDescriptor("pad-1", "Controller"));
+
+        Assert.Null(vm.ButtonCount);
+        Assert.Equal("按键数未知", vm.ButtonCountText);
+
+        vm.SetDevice(new GamepadDescriptor("pad-1", "Controller") { ButtonCount = 17 });
+
+        Assert.Equal(17, vm.ButtonCount);
+        Assert.Equal("检测到 17 个按键", vm.ButtonCountText);
+    }
+
+    [Fact]
+    public void Disconnect_Drops_The_Stale_Button_Count()
+    {
+        var vm = new GamepadVisualizerViewModel();
+        vm.SetDevice(new GamepadDescriptor("pad-1", "Controller") { ButtonCount = 17 });
+
+        vm.SetConnected(false);
+
+        Assert.Null(vm.ButtonCount);
+        Assert.Equal("按键数未知", vm.ButtonCountText);
+    }
 }

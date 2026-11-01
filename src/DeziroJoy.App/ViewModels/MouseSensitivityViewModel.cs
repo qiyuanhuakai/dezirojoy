@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DeziroJoy.Core.Engine;
+using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 
 namespace DeziroJoy.App.ViewModels;
@@ -55,6 +56,14 @@ public partial class MouseSensitivityViewModel : ObservableObject
     [ObservableProperty]
     private bool _invertY = true;
 
+    /// <summary>
+    /// Button that temporarily slows the stick for fine aiming. Per-mapping and profile-stored,
+    /// so the panel has to carry it both ways: dropping it here silently reset every custom
+    /// precision key back to the default whenever sensitivity settings were applied.
+    /// </summary>
+    [ObservableProperty]
+    private GamepadButton _precisionButton = GamepadButton.LeftStick;
+
     [ObservableProperty]
     private double _previewX = PreviewCenter;
 
@@ -86,26 +95,37 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     public string InvertYHint { get; } = MappingDescriptions.MouseInvertY();
 
-    partial void OnMaxSpeedChanged(float value) => RebuildProcessor();
+    public string PrecisionButtonHint { get; } =
+        "按住时临时降速的按键，默认左摇杆按下。每个映射独立保存，改这里只影响当前编辑的映射。";
 
-    partial void OnDeadZoneChanged(float value) => RebuildProcessor();
+    /// <summary>
+    /// Every button the precision key can be bound to. <see cref="GamepadButton.Extra"/> is
+    /// absent on purpose: it has no mask bit and <c>ToMask()</c> throws for it, so the engine
+    /// could never read its pressed state.
+    /// </summary>
+    public IReadOnlyList<GamepadButton> PrecisionButtonOptions { get; } =
+        Enum.GetValues<GamepadButton>().Where(button => button != GamepadButton.Extra).ToArray();
+
+    partial void OnMaxSpeedChanged(float value) => ApplySettings();
+
+    partial void OnDeadZoneChanged(float value) => ApplySettings();
 
     partial void OnCurveChanged(ResponseCurve value)
     {
-        RebuildProcessor();
+        ApplySettings();
         RebuildCurvePoints();
         OnPropertyChanged(nameof(CurveHint));
     }
 
     partial void OnCurveStrengthChanged(float value)
     {
-        RebuildProcessor();
+        ApplySettings();
         RebuildCurvePoints();
     }
 
-    partial void OnResponseTimeChanged(float value) => RebuildProcessor();
+    partial void OnResponseTimeChanged(float value) => ApplySettings();
 
-    partial void OnInvertYChanged(bool value) => RebuildProcessor();
+    partial void OnInvertYChanged(bool value) => ApplySettings();
 
     public MouseStickSettings BuildSettings() => new()
     {
@@ -115,6 +135,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
         CurveStrength = CurveStrength,
         ResponseTime = ResponseTime,
         PrecisionScale = PrecisionScale,
+        PrecisionButton = PrecisionButton,
         InvertY = InvertY,
     };
 
@@ -126,6 +147,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
         CurveStrength = settings.CurveStrength;
         ResponseTime = settings.ResponseTime;
         PrecisionScale = settings.PrecisionScale;
+        PrecisionButton = settings.PrecisionButton;
         InvertY = settings.InvertY;
     }
 
@@ -177,6 +199,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
         CurveStrength = 1f;
         ResponseTime = 0.08f;
         PrecisionScale = 0.35f;
+        PrecisionButton = GamepadButton.LeftStick;
         InvertY = true;
     }
 
@@ -190,6 +213,13 @@ public partial class MouseSensitivityViewModel : ObservableObject
         PreviewX = GlideHome(PreviewX, dt);
         PreviewY = GlideHome(PreviewY, dt);
         CurrentSpeed = _processor.CurrentSpeed;
+
+        // Once fully at rest the cumulative displacement reads zero, so "settled" always
+        // means dot centered, 0 px/s and 0 px of accumulated travel.
+        if (PreviewX == PreviewCenter && PreviewY == PreviewCenter && CurrentSpeed == 0)
+        {
+            TravelDistance = 0;
+        }
     }
 
     private static double GlideHome(double value, float dt)
@@ -202,7 +232,10 @@ public partial class MouseSensitivityViewModel : ObservableObject
             : value - (Math.Sign(offset) * step);
     }
 
-    private void RebuildProcessor() => _processor = new MouseStickProcessor(BuildSettings());
+    private void ApplySettings()
+    {
+        _processor.UpdateSettings(BuildSettings());
+    }
 
     private void RebuildCurvePoints()
     {

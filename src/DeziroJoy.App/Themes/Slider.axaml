@@ -1,0 +1,168 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="using:System">
+
+    <!--
+        DeziroJoy slider. Replaces the default Fluent look with a deliberate one:
+
+          * The filled portion is the accent (Slider.Foreground), the unfilled portion is a
+            delineated track (Slider.Background). Track.ArrangeOverride sizes
+            PART_DecreaseButton to remainingTrackLength * offset / range, so the fill is
+            driven by the value, not by a width binding.
+          * The track height comes from the inner Border Name="TrackBackground" inside the
+            RepeatButton template (SliderTrackThemeHeight), NOT from Track.Height.
+          * The thumb is reached structurally through Track's Thumb content and targeted by
+            type (/template/ Thumb); it carries a visible hover and pressed state.
+          * A value readout rides on the thumb (a child of the thumb, so it follows it) and
+            appears while the thumb is hovered or dragged - Thumb raises :pressed for the
+            duration of a drag.
+
+        Geometry keys (SliderHorizontalHeight, SliderTrackThemeHeight, ...) live in
+        Themes/Palette.axaml at app scope so {DynamicResource} resolves them here. This
+        dictionary is merged into Application.Resources after the Fluent theme, so its
+        {x:Type Slider} ControlTheme wins the theme lookup. Both orientations are themed so
+        a vertical slider never falls back to a bare template; the app uses horizontal only.
+    -->
+
+    <!-- One segment of the track. The visible bar is the inner TrackBackground border; its
+         cross-axis size is the track height, its main-axis size is set by Track. -->
+    <ControlTheme x:Key="DeziroJoySliderHorizontalRepeatButton" TargetType="RepeatButton">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="TrackBackground"
+                        Background="{TemplateBinding Background}"
+                        CornerRadius="{DynamicResource SliderTrackCornerRadius}"
+                        Height="{DynamicResource SliderTrackThemeHeight}"
+                        VerticalAlignment="Center" />
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <ControlTheme x:Key="DeziroJoySliderVerticalRepeatButton" TargetType="RepeatButton">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Name="TrackBackground"
+                        Background="{TemplateBinding Background}"
+                        CornerRadius="{DynamicResource SliderTrackCornerRadius}"
+                        Width="{DynamicResource SliderTrackThemeHeight}"
+                        HorizontalAlignment="Center" />
+            </ControlTemplate>
+        </Setter>
+    </ControlTheme>
+
+    <!-- The thumb: a white puck with an accent ring, a hover ring, a pressed fill, and the
+         value readout that follows it. The thumb's DataContext is the slider Value, so the
+         readout binds straight to it (x:DataType types the compiled binder). -->
+    <ControlTheme x:Key="DeziroJoySliderThumbTheme" TargetType="Thumb">
+        <Setter Property="Width" Value="{DynamicResource SliderHorizontalThumbWidth}" />
+        <Setter Property="Height" Value="{DynamicResource SliderHorizontalThumbHeight}" />
+        <Setter Property="Background" Value="{DynamicResource SliderThumbBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderThickness" Value="2" />
+        <Setter Property="Template">
+            <ControlTemplate x:DataType="sys:Double">
+                <Grid>
+                    <!-- Value readout. A child of the thumb, so it tracks the thumb. -->
+                    <Border x:Name="ValueBubble"
+                            HorizontalAlignment="Center" VerticalAlignment="Top"
+                            Margin="0,-30,0,0" Padding="7,3"
+                            CornerRadius="{DynamicResource CornerRadiusSm}"
+                            Background="{DynamicResource AccentBrush}"
+                            IsVisible="False">
+                        <TextBlock Text="{Binding StringFormat='{}{0:0.##}'}"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentForegroundBrush}" />
+                    </Border>
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource SliderThumbCornerRadius}" />
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+        </Style>
+        <Style Selector="^:pointerover /template/ Border#ValueBubble">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+        <Style Selector="^:pressed">
+            <Setter Property="Background" Value="{DynamicResource AccentPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource SliderThumbBrush}" />
+        </Style>
+        <Style Selector="^:pressed /template/ Border#ValueBubble">
+            <Setter Property="IsVisible" Value="True" />
+        </Style>
+    </ControlTheme>
+
+    <ControlTheme x:Key="DeziroJoySliderTheme" TargetType="Slider">
+        <Setter Property="Background" Value="{DynamicResource SliderTrackBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+
+        <Style Selector="^:horizontal">
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Grid MinHeight="{DynamicResource SliderHorizontalHeight}">
+                        <Track Name="PART_Track"
+                               Minimum="{TemplateBinding Minimum}"
+                               Maximum="{TemplateBinding Maximum}"
+                               Value="{TemplateBinding Value, Mode=TwoWay}"
+                               IsDirectionReversed="{TemplateBinding IsDirectionReversed}"
+                               Orientation="Horizontal">
+                            <Track.DecreaseButton>
+                                <RepeatButton Name="PART_DecreaseButton"
+                                              Theme="{StaticResource DeziroJoySliderHorizontalRepeatButton}"
+                                              Background="{TemplateBinding Foreground}"
+                                              Focusable="False" />
+                            </Track.DecreaseButton>
+                            <Track.IncreaseButton>
+                                <RepeatButton Name="PART_IncreaseButton"
+                                              Theme="{StaticResource DeziroJoySliderHorizontalRepeatButton}"
+                                              Background="{TemplateBinding Background}"
+                                              Focusable="False" />
+                            </Track.IncreaseButton>
+                            <Track.Thumb>
+                                <Thumb Name="thumb" Margin="0" Padding="0"
+                                       Theme="{StaticResource DeziroJoySliderThumbTheme}"
+                                       DataContext="{TemplateBinding Value}" />
+                            </Track.Thumb>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="^:vertical">
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Grid MinWidth="{DynamicResource SliderVerticalWidth}">
+                        <Track Name="PART_Track"
+                               Minimum="{TemplateBinding Minimum}"
+                               Maximum="{TemplateBinding Maximum}"
+                               Value="{TemplateBinding Value, Mode=TwoWay}"
+                               IsDirectionReversed="{TemplateBinding IsDirectionReversed}"
+                               Orientation="Vertical">
+                            <Track.DecreaseButton>
+                                <RepeatButton Name="PART_DecreaseButton"
+                                              Theme="{StaticResource DeziroJoySliderVerticalRepeatButton}"
+                                              Background="{TemplateBinding Foreground}"
+                                              Focusable="False" />
+                            </Track.DecreaseButton>
+                            <Track.IncreaseButton>
+                                <RepeatButton Name="PART_IncreaseButton"
+                                              Theme="{StaticResource DeziroJoySliderVerticalRepeatButton}"
+                                              Background="{TemplateBinding Background}"
+                                              Focusable="False" />
+                            </Track.IncreaseButton>
+                            <Track.Thumb>
+                                <Thumb Name="SliderThumb" Margin="0" Padding="0"
+                                       Theme="{StaticResource DeziroJoySliderThumbTheme}"
+                                       DataContext="{TemplateBinding Value}" />
+                            </Track.Thumb>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+    </ControlTheme>
+</ResourceDictionary>

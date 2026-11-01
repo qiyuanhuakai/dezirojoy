@@ -13,9 +13,10 @@ namespace DeziroJoy.App.ViewModels;
 /// <remarks>
 /// <para>
 /// The source type is chosen first and only the matching picker is offered, so the editor
-/// cannot present a stick picker next to a button picker. The target list is narrowed the
-/// same way: a stick source only offers the two targets the engine honors for a stick, and
-/// a button source only the three it honors for a button.
+/// cannot present a stick picker next to a button picker. Every target kind is offered for
+/// both source kinds: the engine honors all ten combinations, and the two that need extra
+/// information - a stick driving a digital target, a button driving a continuous one - ask
+/// for a <see cref="InputDirection"/> through <see cref="ShowDirectionPicker"/>.
 /// </para>
 /// <para>
 /// Live capture is driven from the view (see <c>EditorCapture</c>): gamepad samples arrive
@@ -26,16 +27,25 @@ namespace DeziroJoy.App.ViewModels;
 /// </remarks>
 public partial class MappingEditorViewModel : ObservableObject
 {
-    private static readonly MappingTargetKind[] ButtonTargetKinds =
-        [MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton];
-
-    private static readonly MappingTargetKind[] StickTargetKinds =
-        [MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll];
+    /// <summary>
+    /// Every target kind, for both source kinds. The engine honors all ten source x target
+    /// combinations, so narrowing the list per source would only hide mappings that work.
+    /// </summary>
+    private static readonly MappingTargetKind[] AllTargetKinds =
+    [
+        MappingTargetKind.KeyPress,
+        MappingTargetKind.KeyCombo,
+        MappingTargetKind.MouseButton,
+        MappingTargetKind.MouseMove,
+        MappingTargetKind.WheelScroll,
+    ];
 
     private readonly SortedSet<int> _extraButtonCodes = [];
     private readonly SortedSet<int> _previousCaptureExtra = [];
     private ButtonPickerItem? _selectedButtonOption;
     private KeyPickerItem? _selectedKeyOption;
+    private DirectionPickerItem? _selectedDirectionOption;
+    private InputDirection? _loadedDirection;
     private GamepadButtonMask _previousCaptureButtons;
 
     public MappingEditorViewModel()
@@ -60,7 +70,25 @@ public partial class MappingEditorViewModel : ObservableObject
     private MappingTargetKind _targetKind = MappingTargetKind.KeyPress;
 
     [ObservableProperty]
-    private IReadOnlyList<MappingTargetKind> _availableTargetKinds = ButtonTargetKinds;
+    private IReadOnlyList<MappingTargetKind> _availableTargetKinds = AllTargetKinds;
+
+    /// <summary>
+    /// Direction for the two cross combinations. Ignored elsewhere, where a direction is
+    /// meaningless: a stick driving mouse move / wheel consumes both axes, and a button
+    /// driving a key / combo / mouse button has no axis to deflect.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedDirectionOption))]
+    private InputDirection _selectedDirection = InputDirection.Up;
+
+    [ObservableProperty]
+    private float _doubleClickWindow;
+
+    [ObservableProperty]
+    private float _longPressThreshold;
+
+    [ObservableProperty]
+    private float _longPressRepeatInterval;
 
     [ObservableProperty]
     private GamepadKey _selectedKey = GamepadKey.Enter;
@@ -108,6 +136,48 @@ public partial class MappingEditorViewModel : ObservableObject
     public bool ShowButtonPicker => !SourceIsStick;
 
     public bool ShowStickPicker => SourceIsStick;
+
+    /// <summary>Rows for the direction picker.</summary>
+    public IReadOnlyList<DirectionPickerItem> DirectionOptions { get; } = DirectionCategories.All;
+
+    /// <summary>
+    /// True when the current source x target pair cannot work without a direction, so the
+    /// picker has to be shown. A stick is an axis, so driving a digital target from it needs
+    /// to know which deflection presses; a button is binary, so driving a continuous target
+    /// from it needs to know which way it deflects.
+    /// </summary>
+    public bool NeedsDirection => SourceIsStick
+        ? TargetKind is MappingTargetKind.KeyPress or MappingTargetKind.KeyCombo or MappingTargetKind.MouseButton
+        : TargetKind is MappingTargetKind.MouseMove or MappingTargetKind.WheelScroll;
+
+    public bool ShowDirectionPicker => NeedsDirection;
+
+    /// <summary>The selected direction picker row, kept in step with <see cref="SelectedDirection"/>.</summary>
+    public DirectionPickerItem? SelectedDirectionOption
+    {
+        get => _selectedDirectionOption;
+        set
+        {
+            if (value is null || EqualityComparer<DirectionPickerItem?>.Default.Equals(value, _selectedDirectionOption))
+            {
+                return;
+            }
+
+            _selectedDirectionOption = value;
+            SelectedDirection = value.Direction;
+            OnPropertyChanged(nameof(SelectedDirectionOption));
+        }
+    }
+
+    public bool HasDoubleClick => DoubleClickWindow > 0f;
+
+    public bool HasLongPress => LongPressThreshold > 0f;
+
+    /// <summary>
+    /// True when any gesture is configured, i.e. when the engine must introduce a wait before
+    /// the single action can fire. False keeps the zero-latency single-click path.
+    /// </summary>
+    public bool HasAnyGesture => HasDoubleClick || HasLongPress;
 
     public string CaptureButtonLabel => IsCapturingButton ? "停止捕获" : "捕获按键";
 
@@ -215,7 +285,29 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     public InputBinding BuildSource()
-        => SourceIsStick ? new StickBinding(SelectedStick) : new ButtonBinding(SelectedButton, SelectedExtraCode);
+    {
+        // A direction is required for the two cross combinations; elsewhere the value the
+        // profile carried is preserved so a round-trip never silently drops one.
+        var direction = NeedsDirection ? SelectedDirection : _loadedDirection;
+
+        return SourceIsStick
+            ? new StickBinding(SelectedStick) { Direction = direction }
+            : new ButtonBinding(SelectedButton, SelectedExtraCode) { Direction = direction, Gesture = BuildGesture() };
+    }
+
+    /// <summary>
+    /// The gesture for the button being edited, or null when nothing is enabled. Null - rather
+    /// than an all-zero <see cref="ButtonGesture"/> - is what keeps the press edge firing with
+    /// no added latency and keeps ordinary profiles free of gesture JSON.
+    /// </summary>
+    public ButtonGesture? BuildGesture() => HasAnyGesture
+        ? new ButtonGesture
+        {
+            DoubleClickWindow = DoubleClickWindow,
+            LongPressThreshold = LongPressThreshold,
+            LongPressRepeatInterval = LongPressRepeatInterval,
+        }
+        : null;
 
     public MappingTarget BuildTarget() => TargetKind switch
     {
@@ -246,10 +338,17 @@ public partial class MappingEditorViewModel : ObservableObject
 
                 SelectedButton = button.Button;
                 SelectedExtraCode = button.Code;
+                _loadedDirection = button.Direction;
+                SelectedDirection = button.Direction ?? InputDirection.Up;
+                DoubleClickWindow = button.Gesture?.DoubleClickWindow ?? 0f;
+                LongPressThreshold = button.Gesture?.LongPressThreshold ?? 0f;
+                LongPressRepeatInterval = button.Gesture?.LongPressRepeatInterval ?? 0f;
                 break;
             case StickBinding stick:
                 SourceIsStick = true;
                 SelectedStick = stick.Stick;
+                _loadedDirection = stick.Direction;
+                SelectedDirection = stick.Direction ?? InputDirection.Up;
                 break;
         }
 
@@ -288,12 +387,17 @@ public partial class MappingEditorViewModel : ObservableObject
         IsCapturingKey = false;
         _previousCaptureButtons = GamepadButtonMask.None;
         _previousCaptureExtra.Clear();
+        _loadedDirection = null;
         SourceIsStick = false;
         SelectedButton = GamepadButton.A;
         SelectedExtraCode = 0;
         SelectedStick = GamepadStick.Right;
         TargetKind = MappingTargetKind.KeyPress;
         SelectedKey = GamepadKey.Enter;
+        SelectedDirection = InputDirection.Up;
+        DoubleClickWindow = 0f;
+        LongPressThreshold = 0f;
+        LongPressRepeatInterval = 0f;
         ModifierCtrl = false;
         ModifierShift = false;
         ModifierAlt = false;
@@ -326,6 +430,10 @@ public partial class MappingEditorViewModel : ObservableObject
             case StickBinding stick:
                 SourceIsStick = true;
                 SelectedStick = stick.Stick;
+
+                // A freshly armed stick starts on the target a stick is normally used for;
+                // every other kind stays reachable through the target picker.
+                TargetKind = MappingTargetKind.MouseMove;
                 break;
         }
     }
@@ -347,14 +455,17 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>
     /// Feeds one engine sample into button capture. Only a press edge selects a button, so a
     /// button held down before capture was armed is ignored; samples are also tracked while
-    /// capture is disarmed so arming it never fires on an already-held button.
+    /// capture is disarmed so arming it never fires on an already-held button. Returns true
+    /// when this sample was consumed as the mapping's new source, so the caller knows the
+    /// press must not also drive navigation.
     /// </summary>
-    public void CaptureGamepadSample(IGamepadState state)
+    public bool CaptureGamepadSample(IGamepadState state)
     {
         ArgumentNullException.ThrowIfNull(state);
 
         var pressed = state.PressedButtons;
         var edges = pressed & ~_previousCaptureButtons;
+        var consumed = false;
 
         if (IsCapturingButton)
         {
@@ -363,6 +474,7 @@ public partial class MappingEditorViewModel : ObservableObject
             {
                 SelectButton(edge.Value, 0);
                 IsCapturingButton = false;
+                consumed = true;
             }
             else
             {
@@ -372,6 +484,7 @@ public partial class MappingEditorViewModel : ObservableObject
                     {
                         SelectButton(GamepadButton.Extra, code);
                         IsCapturingButton = false;
+                        consumed = true;
                         break;
                     }
                 }
@@ -384,6 +497,8 @@ public partial class MappingEditorViewModel : ObservableObject
         {
             _previousCaptureExtra.Add(code);
         }
+
+        return consumed;
     }
 
     /// <summary>
@@ -431,14 +546,12 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowButtonPicker));
         OnPropertyChanged(nameof(ShowStickPicker));
         OnPropertyChanged(nameof(SourceDescription));
+        OnPropertyChanged(nameof(NeedsDirection));
+        OnPropertyChanged(nameof(ShowDirectionPicker));
 
-        var kinds = value ? StickTargetKinds : ButtonTargetKinds;
-        AvailableTargetKinds = kinds;
-
-        if (!kinds.Contains(TargetKind))
-        {
-            TargetKind = kinds[0];
-        }
+        // Every kind is valid for both source kinds, so the list never has to be narrowed and
+        // the chosen target survives a source switch. Only the direction picker comes and goes.
+        AvailableTargetKinds = AllTargetKinds;
     }
 
     partial void OnSelectedButtonChanged(GamepadButton value)
@@ -464,6 +577,8 @@ public partial class MappingEditorViewModel : ObservableObject
     partial void OnTargetKindChanged(MappingTargetKind value)
     {
         OnPropertyChanged(nameof(TargetDescription));
+        OnPropertyChanged(nameof(NeedsDirection));
+        OnPropertyChanged(nameof(ShowDirectionPicker));
 
         // A combo is the only shape that reads the modifier flags, so leaving it must clear
         // them; otherwise a stale Ctrl would resurface the next time a combo is chosen.
@@ -474,6 +589,18 @@ public partial class MappingEditorViewModel : ObservableObject
             ModifierAlt = false;
             ModifierWin = false;
         }
+    }
+
+    partial void OnDoubleClickWindowChanged(float value)
+    {
+        OnPropertyChanged(nameof(HasDoubleClick));
+        OnPropertyChanged(nameof(HasAnyGesture));
+    }
+
+    partial void OnLongPressThresholdChanged(float value)
+    {
+        OnPropertyChanged(nameof(HasLongPress));
+        OnPropertyChanged(nameof(HasAnyGesture));
     }
 
     partial void OnSelectedKeyChanged(GamepadKey value)

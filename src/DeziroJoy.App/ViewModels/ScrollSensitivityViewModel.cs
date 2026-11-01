@@ -63,26 +63,26 @@ public partial class ScrollSensitivityViewModel : ObservableObject
 
     public string EnableHorizontalHint { get; } = MappingDescriptions.ScrollEnableHorizontal();
 
-    partial void OnMaxTicksPerSecondChanged(float value) => RebuildProcessor();
+    partial void OnMaxTicksPerSecondChanged(float value) => ApplySettings();
 
-    partial void OnDeadZoneChanged(float value) => RebuildProcessor();
+    partial void OnDeadZoneChanged(float value) => ApplySettings();
 
     partial void OnCurveChanged(ResponseCurve value)
     {
-        RebuildProcessor();
+        ApplySettings();
         RebuildCurvePoints();
         OnPropertyChanged(nameof(CurveHint));
     }
 
     partial void OnCurveStrengthChanged(float value)
     {
-        RebuildProcessor();
+        ApplySettings();
         RebuildCurvePoints();
     }
 
-    partial void OnResponseTimeChanged(float value) => RebuildProcessor();
+    partial void OnResponseTimeChanged(float value) => ApplySettings();
 
-    partial void OnEnableHorizontalChanged(bool value) => RebuildProcessor();
+    partial void OnEnableHorizontalChanged(bool value) => ApplySettings();
 
     public ScrollStickSettings BuildSettings() => new()
     {
@@ -163,7 +163,10 @@ public partial class ScrollSensitivityViewModel : ObservableObject
         CurrentRate = _processor.CurrentRate;
     }
 
-    private void RebuildProcessor() => _processor = new ScrollStickProcessor(BuildSettings());
+    private void ApplySettings()
+    {
+        _processor.UpdateSettings(BuildSettings());
+    }
 
     private void RebuildCurvePoints()
     {

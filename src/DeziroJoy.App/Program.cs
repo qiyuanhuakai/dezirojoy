@@ -27,6 +27,16 @@ internal static class Program
             return UninstallDaemon();
         }
 
+        if (HasFlag(args, "--install-autostart"))
+        {
+            return InstallAutostart();
+        }
+
+        if (HasFlag(args, "--uninstall-autostart"))
+        {
+            return UninstallAutostart();
+        }
+
         // Kept behind its own type so the JIT never has to resolve an Avalonia type while
         // compiling Main: the daemon path then loads no Avalonia assembly at all.
         return DesktopLauncher.Launch(args);
@@ -94,6 +104,59 @@ internal static class Program
         return removed ? 0 : 1;
     }
 
+    private static int InstallAutostart()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("--install-autostart 仅支持 Windows（依赖 schtasks 计划任务）。");
+            return 2;
+        }
+
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(executable) || IsDotNetHost(executable))
+        {
+            Console.Error.WriteLine("请直接运行构建产物 DeziroJoy.exe --install-autostart，不要通过 dotnet run。");
+            return 2;
+        }
+
+        // schtasks /Create needs an administrator token even without /RL HIGHEST, so an
+        // unelevated caller is handed to a UAC-elevated copy of itself.
+        if (!WindowsProcessElevation.IsElevated)
+        {
+            return RelaunchElevatedFor("--install-autostart");
+        }
+
+        var installed = AutostartInstaller.Install(executable);
+
+        Console.WriteLine(installed
+            ? $"已注册登录自启动计划任务 \"{AutostartInstaller.TaskName}\"（登录时触发器）：{executable}"
+            : $"注册计划任务 \"{AutostartInstaller.TaskName}\" 失败，请检查上面的 schtasks 输出。");
+
+        return installed ? 0 : 1;
+    }
+
+    private static int UninstallAutostart()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("--uninstall-autostart 仅支持 Windows（依赖 schtasks 计划任务）。");
+            return 2;
+        }
+
+        if (!WindowsProcessElevation.IsElevated)
+        {
+            return RelaunchElevatedFor("--uninstall-autostart");
+        }
+
+        var removed = AutostartInstaller.Uninstall();
+
+        Console.WriteLine(removed
+            ? $"已移除计划任务 \"{AutostartInstaller.TaskName}\"."
+            : $"移除计划任务 \"{AutostartInstaller.TaskName}\" 失败（可能本来就不存在）。");
+
+        return removed ? 0 : 1;
+    }
+
     private static int RelaunchElevatedFor(string flag)
     {
         Console.WriteLine($"需要管理员权限才能{Describe(flag)}，正在请求提权…");
@@ -108,8 +171,13 @@ internal static class Program
         return 1;
     }
 
-    private static string Describe(string flag)
-        => flag == "--uninstall-daemon" ? "移除计划任务" : "注册计划任务";
+    private static string Describe(string flag) => flag switch
+    {
+        "--uninstall-daemon" => "移除计划任务",
+        "--install-autostart" => "启用登录自启动",
+        "--uninstall-autostart" => "关闭登录自启动",
+        _ => "注册计划任务",
+    };
 
     private static bool IsDotNetHost(string executable)
         => string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase);

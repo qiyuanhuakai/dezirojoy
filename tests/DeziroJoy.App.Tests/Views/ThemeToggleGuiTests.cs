@@ -113,6 +113,48 @@ public sealed class ThemeToggleGuiTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void The_Sidebar_Appearance_Radios_Switch_The_Whole_App()
+    {
+        var (window, themes) = BuildWindow();
+        themes.Apply(ThemeVariant.Dark);
+
+        var radios = window.GetVisualDescendants().OfType<RadioButton>()
+            .Where(radio => radio.Content is "浅色" or "深色")
+            .ToList();
+        var light = radios.Single(radio => (string?)radio.Content == "浅色");
+        var dark = radios.Single(radio => (string?)radio.Content == "深色");
+
+        Assert.Equal(2, radios.Count);
+        Assert.True(dark.IsChecked, "dark is the persisted default");
+        Assert.False(light.IsChecked);
+
+        Click(light, window);
+        Assert.Equal(ThemeVariant.Light, _application.RequestedThemeVariant);
+        Assert.True(light.IsChecked);
+        Assert.False(dark.IsChecked);
+
+        Click(dark, window);
+        Assert.Equal(ThemeVariant.Dark, _application.RequestedThemeVariant);
+        Assert.True(dark.IsChecked);
+        Assert.False(light.IsChecked);
+    }
+
+    [AvaloniaFact]
+    public void The_Title_Bar_Toggle_Updates_The_Sidebar_Selection()
+    {
+        var (window, themes) = BuildWindow();
+        themes.Apply(ThemeVariant.Dark);
+
+        var light = window.GetVisualDescendants().OfType<RadioButton>().Single(radio => (string?)radio.Content == "浅色");
+        Assert.False(light.IsChecked);
+
+        Click(ToggleOf(window), window);
+
+        Assert.Equal(ThemeVariant.Light, _application.RequestedThemeVariant);
+        Assert.True(light.IsChecked, "the sidebar radio must follow the title-bar toggle");
+    }
+
+    [AvaloniaFact]
     public void The_Toggle_Glyph_Follows_The_Current_Theme()
     {
         var (window, _) = BuildWindow();

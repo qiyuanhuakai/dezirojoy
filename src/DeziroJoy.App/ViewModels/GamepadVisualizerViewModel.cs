@@ -82,6 +82,18 @@ public partial class GamepadVisualizerViewModel : ObservableObject
     private double _rightMagnitude;
 
     /// <summary>
+    /// Number of buttons the connected device declares, or null when it does not say. XInput's
+    /// 14-button set is fixed and closed so Windows always reports null; evdev fills it in from
+    /// EVIOCGBIT(EV_KEY). The UI shows "unknown" rather than guessing.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ButtonCountText))]
+    private int? _buttonCount;
+
+    /// <summary>What the 手柄状态 card shows next to the device name.</summary>
+    public string ButtonCountText => ButtonCount is { } count ? $"检测到 {count} 个按键" : "按键数未知";
+
+    /// <summary>
     /// Raw platform codes of unmapped buttons the device has reported. They are drawn on the
     /// model as "按键 N" pills so they are as clickable as any fixed element.
     /// </summary>
@@ -136,6 +148,13 @@ public partial class GamepadVisualizerViewModel : ObservableObject
         ExtraButtonCodes.Add(code);
     }
 
+    /// <summary>
+    /// Points the model at the connected device so the pad's real button count can be shown.
+    /// A null descriptor means no device, which reports the count as unknown.
+    /// </summary>
+    public void SetDevice(GamepadDescriptor? descriptor)
+        => ButtonCount = descriptor?.ButtonCount;
+
     public void SetConnected(bool connected)
     {
         IsConnected = connected;
@@ -145,6 +164,8 @@ public partial class GamepadVisualizerViewModel : ObservableObject
             return;
         }
 
+        // The count describes a device, so it cannot outlive the connection.
+        ButtonCount = null;
         Update(GamepadState.Neutral);
     }
 }

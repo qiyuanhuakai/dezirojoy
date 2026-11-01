@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views.Controls;
+using System.ComponentModel;
 
 namespace DeziroJoy.App;
 
@@ -16,11 +17,20 @@ public partial class MainWindow : Window
 {
     private static readonly TimeSpan PreviewInterval = TimeSpan.FromMilliseconds(16);
 
+    // A busy UI thread delays the tick; the sweep follows real elapsed time so it stays in
+    // sync, but a multi-second stall (modal dialog, blocking I/O) is clamped to one generous
+    // frame so the dot does not teleport across the pad when the thread finally frees up.
+    private static readonly TimeSpan MaxPreviewDelta = TimeSpan.FromMilliseconds(100);
+
     private static readonly TimeSpan SyncInterval = TimeSpan.FromMilliseconds(300);
 
     private readonly DispatcherTimer _previewTimer = new() { Interval = PreviewInterval };
 
     private readonly DispatcherTimer _syncTimer = new() { Interval = SyncInterval };
+
+    private readonly System.Diagnostics.Stopwatch _previewClock = new();
+
+    private TimeSpan _lastPreviewTime;
 
     public MainWindow()
         : this(CreateRuntime())
@@ -40,9 +50,13 @@ public partial class MainWindow : Window
         DataContext = viewModel;
         LoadWindowIcon();
         ConfigureResizeGrips();
-        InstallThemeToggle(themes ?? new ThemeService());
+
+        // One ThemeService is shared by the sidebar appearance panel and the title-bar
+        // crescent, so the two entry points always agree on the current variant.
+        var themeService = themes ?? new ThemeService();
+        viewModel.Appearance.Attach(themeService);
+        InstallThemeToggle(themeService);
         Wire(host ?? viewModel.Host);
-        OpenQaElementForScreenshot();
     }
 
     /// <summary>
@@ -61,20 +75,6 @@ public partial class MainWindow : Window
         }
 
         captionButtons.Children.Insert(captionButtons.Children.IndexOf(minimize), new ThemeToggleButton(themes));
-    }
-
-    // TEMPORARY QA hook: opens the mapping settings for one element so the settings surface
-    // can be screenshotted without a pointer. Remove once the QA shots are captured.
-    private void OpenQaElementForScreenshot()
-    {
-        if (Environment.GetEnvironmentVariable("DEZIROJOY_QA_OPEN") is not "1")
-        {
-            return;
-        }
-
-        Opened += (_, _) => OnGamepadElementClicked(
-            this,
-            new GamepadElementClickedEventArgs(new DeziroJoy.Core.Mapping.ButtonBinding(DeziroJoy.Core.Input.GamepadButton.A)));
     }
 
     private void ConfigureResizeGrips()
@@ -126,10 +126,18 @@ public partial class MainWindow : Window
     {
         _previewTimer.Tick += OnPreviewTick;
         _syncTimer.Tick += OnSyncTick;
+        _previewClock.Start();
+        _lastPreviewTime = _previewClock.Elapsed;
         _previewTimer.Start();
         _syncTimer.Start();
 
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
+
         host.Sampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplySample(args));
+
+        // The engine-stopped counterpart: the host polls without ticking or injecting, so
+        // highlighting and pad-driven navigation keep working while the mapping loop is off.
+        host.PresenceSampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplyPresenceSample(args));
 
         if (this.FindControl<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
         {
@@ -150,28 +158,32 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Opens the mapping settings for the element that was clicked on the model. An element
-    /// that already has a mapping loads that mapping, so confirming replaces it instead of
-    /// adding a second entry for the same source.
+    /// When the inline editor opens it lives at the bottom of the shared scroll region, below
+    /// the mapping table, so it is scrolled into view. The model stays pinned above the region,
+    /// so the element being edited remains the visible spatial reference.
     /// </summary>
-    private void OnGamepadElementClicked(object? sender, GamepadElementClickedEventArgs e)
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        var viewModel = ViewModel;
-        var existing = viewModel.ActiveProfile?.Mappings.FirstOrDefault(m => m.Source == e.Source);
-
-        if (existing is not null)
+        if (e.PropertyName != nameof(MainWindowViewModel.IsEditing) || !ViewModel.IsEditing)
         {
-            var row = viewModel.Mappings.FirstOrDefault(r => r.Entry == existing);
-            if (row is not null)
-            {
-                viewModel.EditMappingCommand.Execute(row);
-                return;
-            }
+            return;
         }
 
-        viewModel.AddMappingCommand.Execute(null);
-        viewModel.Editor.LoadSource(e.Source);
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (this.FindControl<Border>("EditorPanel") is { IsVisible: true } panel)
+            {
+                panel.BringIntoView();
+            }
+        });
     }
+
+    /// <summary>
+    /// Opens the mapping settings for the element that was clicked on the model. The view model
+    /// owns the flow so a physical press on the same element takes exactly this path.
+    /// </summary>
+    private void OnGamepadElementClicked(object? sender, GamepadElementClickedEventArgs e)
+        => ViewModel.OpenEditorForSource(e.Source);
 
     private void OnSettingsKeyDown(object? sender, KeyEventArgs e)
     {
@@ -196,10 +208,27 @@ public partial class MainWindow : Window
 
     private void OnPreviewTick(object? sender, EventArgs e)
     {
+        var now = _previewClock.Elapsed;
+        var delta = now - _lastPreviewTime;
+        _lastPreviewTime = now;
+
+        if (delta < TimeSpan.Zero || delta > MaxPreviewDelta)
+        {
+            delta = PreviewInterval;
+        }
+
         UpdatePreviewLiveness();
 
-        ViewModel.MouseSensitivity.Advance(PreviewInterval);
-        ViewModel.ScrollSensitivity.Advance(PreviewInterval);
+        ViewModel.MouseSensitivity.Advance(delta);
+        ViewModel.ScrollSensitivity.Advance(delta);
+
+        // With the mapping loop stopped nothing polls the pad, so live highlighting and
+        // pad-driven navigation would freeze. Presence sampling is the stopped-state
+        // counterpart of the engine's Sampled event: it polls without ticking or injecting.
+        if (!ViewModel.Host.IsRunning)
+        {
+            ViewModel.Host.SamplePresence();
+        }
     }
 
     /// <summary>

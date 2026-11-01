@@ -203,6 +203,30 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void StartManual_Enters_The_Running_State_Without_A_Background_Loop()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.StartManual();
+
+        Assert.True(host.IsRunning);
+
+        var sampled = 0;
+        host.Sampled += (_, _) => sampled++;
+
+        host.TickOnce(Tick);
+
+        Assert.Equal(1, sampled);
+        Assert.Contains("down:Enter", sink.Calls);
+
+        host.Stop();
+
+        Assert.False(host.IsRunning);
+    }
+
+    [Fact]
     public void Reload_Swaps_In_An_Edited_Profile_Immediately()
     {
         var (host, provider, sink) = CreateHost();
@@ -250,6 +274,72 @@ public class EngineHostTests
 
         Assert.NotNull(sampled);
         Assert.True(sampled.State.PressedButtons.Has(GamepadButton.B));
+    }
+
+    [Fact]
+    public void SamplePresence_Raises_PresenceSampled_Without_Ticking_Or_Injecting()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        var sampled = 0;
+        var presence = 0;
+        host.Sampled += (_, _) => sampled++;
+        host.PresenceSampled += (_, _) => presence++;
+
+        host.SamplePresence();
+
+        Assert.Single(host.Controllers);
+        Assert.Empty(sink.Calls);
+        Assert.Equal(0, sampled);
+        Assert.Equal(1, presence);
+
+        provider.Remove("xinput:0");
+        host.SamplePresence();
+
+        Assert.Empty(host.Controllers);
+    }
+
+    [Fact]
+    public void Suspending_Injection_Stops_Dispatch_But_Keeps_Sampling()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+
+        host.SetInjectionSuspended(true);
+        Assert.True(host.IsInjectionSuspended);
+        Assert.True(sink.Calls.Contains("up:Enter"), "suspending must release whatever is held");
+
+        sink.Calls.Clear();
+        var sampled = 0;
+        host.Sampled += (_, _) => sampled++;
+        host.TickOnce(Tick);
+
+        Assert.Empty(sink.Calls);
+        Assert.Equal(1, sampled);
+    }
+
+    [Fact]
+    public void Resuming_Injection_After_Suspend_Fires_Again()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        host.SetInjectionSuspended(true);
+        host.SetInjectionSuspended(false);
+        Assert.False(host.IsInjectionSuspended);
+
+        sink.Calls.Clear();
+        host.TickOnce(Tick);
+
+        Assert.Contains("down:Enter", sink.Calls);
     }
 
     private sealed class InMemoryProfileStore : IProfileStore

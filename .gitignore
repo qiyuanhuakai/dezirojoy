@@ -486,3 +486,6 @@ $RECYCLE.BIN/
 
 # Agent tool scratch state
 .cortexkit/
+
+# QA 截图是过程证据，不入库
+.qa-screenshots/

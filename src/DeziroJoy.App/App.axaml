@@ -3,12 +3,21 @@
              x:Class="DeziroJoy.App.App">
     <Application.Styles>
         <FluentTheme />
+        <!-- Point every Slider at the custom ControlTheme. A ControlTheme merged into
+             Resources does not win the theme lookup against FluentTheme's own (Styles take
+             precedence), so the theme is assigned explicitly here. -->
+        <Style Selector="Slider">
+            <Setter Property="Theme" Value="{DynamicResource DeziroJoySliderTheme}" />
+        </Style>
     </Application.Styles>
 
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <MergeResourceInclude Source="/Themes/Palette.axaml" />
+                <!-- Restyled slider: merged after the palette so its {x:Type Slider}
+                     ControlTheme wins the theme lookup over the built-in Fluent one. -->
+                <MergeResourceInclude Source="/Themes/Slider.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

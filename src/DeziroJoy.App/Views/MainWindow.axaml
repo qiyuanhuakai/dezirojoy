@@ -26,7 +26,44 @@
         <conv:TargetKindMatchConverter x:Key="KindMatch" />
         <conv:EnumDisplayConverter x:Key="EnumDisplay" />
         <conv:ScrollRateBarConverter x:Key="RateBar" />
+        <conv:RowSelectedConverter x:Key="RowSelected" />
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
+
+        <!-- One source row. Shared by the left and the right column of the mapping surface so
+             both sides render identically; the accent bar marks the selected row. -->
+        <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
+            <controls:MappingRowBorder Classes="card" Padding="0" Margin="0,0,0,8">
+                <Grid>
+                    <Border Width="3" Margin="0,8,0,8" CornerRadius="{DynamicResource CornerRadiusSm}"
+                            HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                            Background="{DynamicResource AccentBrush}">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{StaticResource RowSelected}">
+                                <Binding />
+                                <Binding Path="DataContext.(vm:MainWindowViewModel).SelectedMapping"
+                                         RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
+                            </MultiBinding>
+                        </Border.IsVisible>
+                    </Border>
+                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="12,8,12,8">
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding SourceText}" FontSize="12"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="{Binding TargetText}" FontSize="10"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,1,0,0" />
+                        </StackPanel>
+                        <ToggleButton Grid.Column="1" Classes="rowToggle" Margin="8,0,0,0"
+                                      VerticalAlignment="Center" FontSize="10" Padding="8,4"
+                                      Content="{Binding IsEnabled, Converter={StaticResource EnabledText}}"
+                                      IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                        <Button Grid.Column="2" Classes="ghost" Content="编辑" Margin="6,0,0,0"
+                                FontSize="10" Padding="8,4" Command="{Binding EditCommand}" />
+                        <Button Grid.Column="3" Classes="ghost" Content="删除" Margin="6,0,0,0"
+                                FontSize="10" Padding="8,4" Command="{Binding DeleteCommand}" />
+                    </Grid>
+                </Grid>
+            </controls:MappingRowBorder>
+        </DataTemplate>
     </Window.Resources>
 
     <Window.Styles>
@@ -34,7 +71,7 @@
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusXl}" />
             <Setter Property="Padding" Value="16" />
             <Setter Property="Margin" Value="0,0,0,12" />
         </Style>
@@ -73,7 +110,7 @@
             <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusLg}" />
             <Setter Property="Padding" Value="16,9" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -89,7 +126,7 @@
             <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusLg}" />
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
@@ -104,7 +141,7 @@
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Width" Value="44" />
             <Setter Property="Height" Value="32" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
@@ -122,7 +159,7 @@
             <Setter Property="Foreground" Value="{DynamicResource ToggleForegroundBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
             <Setter Property="Padding" Value="12,6" />
             <Setter Property="FontSize" Value="11" />
         </Style>
@@ -137,7 +174,7 @@
             <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Padding" Value="10,7" />
         </Style>
@@ -155,9 +192,8 @@
             <Setter Property="FontSize" Value="12" />
         </Style>
 
-        <Style Selector="Slider">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-        </Style>
+        <!-- The slider's own ControlTheme (Themes/Slider.axaml) sets Foreground to the accent
+             and Background to the delineated track, so no per-window override is needed. -->
 
         <Style Selector="TabControl">
             <Setter Property="Background" Value="Transparent" />
@@ -219,7 +255,7 @@
                                            Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"
                                            Margin="10,0,8,0" VerticalAlignment="Center" />
                                 <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{DynamicResource SubtleBrush}"
-                                        CornerRadius="6" Padding="8,3" VerticalAlignment="Center">
+                                        CornerRadius="{DynamicResource CornerRadiusMd}" Padding="8,3" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}}"
                                                FontSize="11" Foreground="{DynamicResource BadgeTextBrush}" />
                                 </Border>
@@ -264,6 +300,20 @@
                         </StackPanel>
                     </Border>
 
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="外观" />
+                            <TextBlock Classes="hint" Margin="0,4,0,0"
+                                       Text="切换浅色 / 深色主题；标题栏右侧的月牙 / 太阳图标是同一功能的快捷方式。" />
+                            <StackPanel Margin="0,12,0,0">
+                                <RadioButton Content="浅色" IsChecked="{Binding Appearance.IsLight, Mode=TwoWay}" />
+                                <RadioButton Content="深色" IsChecked="{Binding Appearance.IsLight, Converter={StaticResource Not}, Mode=TwoWay}" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <controls:DaemonSettingsCard DataContext="{Binding DaemonSettings}" />
+
                 </StackPanel>
             </ScrollViewer>
 
@@ -273,13 +323,14 @@
                     <Grid Margin="14,12,14,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" MinHeight="180" />
-                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
 
                         <!-- The model is the editor: it leads the tab, and every element on it
-                             opens the mapping settings for that element. -->
-                        <Border Grid.Row="0" Classes="card" Margin="0,0,0,12">
+                             opens the mapping settings for that element. It is pinned above the
+                             scroll region so it stays the spatial reference while a mapping is
+                             edited, instead of scrolling away with the table. -->
+                        <Border Grid.Row="0" Classes="card" Margin="0,0,0,12" ClipToBounds="True">
                             <StackPanel>
                                 <TextBlock Classes="cardTitle" Text="手柄模型" />
                                 <TextBlock Classes="hint" Margin="0,4,0,0"
@@ -290,178 +341,233 @@
                             </StackPanel>
                         </Border>
 
-                        <ScrollViewer Grid.Row="1">
-                            <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:MappingRowViewModel">
-                                        <Border Classes="card" Padding="14,10" Margin="0,0,0,8">
-                                            <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-                                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding SourceText}" FontSize="13"
-                                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                                     <TextBlock Text="{Binding TargetText}" FontSize="11"
-                                                                Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,2,0,0" />
-                                                </StackPanel>
-                                                <ToggleButton Grid.Column="1" Classes="rowToggle" Margin="10,0,0,0"
-                                                              VerticalAlignment="Center"
-                                                              Content="{Binding IsEnabled, Converter={StaticResource EnabledText}}"
-                                                              IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
-                                                <Button Grid.Column="2" Classes="ghost" Content="编辑" Margin="8,0,0,0"
-                                                        Command="{Binding EditCommand}" />
-                                                <Button Grid.Column="3" Classes="ghost" Content="删除" Margin="8,0,0,0"
-                                                        Command="{Binding DeleteCommand}" />
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <!-- One scroll region for the whole editor surface below the model: the
+                             mapping table and the inline editor share it. A single scroller (no
+                             nested ScrollViewers) keeps every control reachable at the window's
+                             minimum height, where the old Auto-row layout let the editor fall
+                             past the clipped tab content. -->
+                        <ScrollViewer Grid.Row="1" x:Name="MappingEditorScroll">
+                            <StackPanel>
 
-                        <!-- Inline companion to the model: it sits under the model rather than
-                             over it, so the element being edited stays visible while its target
-                             is chosen. Esc cancels, Enter confirms. -->
-                        <ScrollViewer Grid.Row="2" MaxHeight="460" VerticalScrollBarVisibility="Auto">
-                            <Border x:Name="EditorPanel" Classes="card" IsVisible="{Binding IsEditing}">
+                                <!-- Inline companion to the model: it sits under the model rather
+                                     than over it, so the element being edited stays visible while
+                                     its target is chosen. Esc cancels, Enter confirms. -->
+                                <Border x:Name="EditorPanel" Classes="card" IsVisible="{Binding IsEditing}">
                                 <StackPanel>
-                                    <Grid ColumnDefinitions="*,Auto">
-                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                            <TextBlock Classes="cardTitle" Text="编辑映射" />
-                                            <TextBlock Text="{Binding Editor.SourceDescription}" FontSize="13"
-                                                       Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
-                                            <TextBlock Text="{Binding Editor.TargetDescription}" FontSize="12"
-                                                       Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Button x:Name="CommitButton" Classes="primary" Content="确定 (Enter)"
-                                                    Command="{Binding CommitEditorCommand}" />
-                                            <Button x:Name="CancelButton" Classes="ghost" Content="取消 (Esc)"
-                                                    Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
-                                        </StackPanel>
-                                    </Grid>
+                                   <Grid ColumnDefinitions="*,Auto">
+                                       <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                           <TextBlock Classes="cardTitle" Text="编辑映射" />
+                                           <TextBlock Text="{Binding Editor.SourceDescription}" FontSize="13"
+                                                      Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
+                                           <TextBlock Text="{Binding Editor.TargetDescription}" FontSize="12"
+                                                      Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
+                                       </StackPanel>
+                                       <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                           <Button x:Name="CommitButton" Classes="primary" Content="确定 (Enter)"
+                                                   Command="{Binding CommitEditorCommand}" />
+                                           <Button x:Name="CancelButton" Classes="ghost" Content="取消 (Esc)"
+                                                   Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
+                                       </StackPanel>
+                                   </Grid>
 
-                                    <TextBlock Classes="sectionLabel" Text="目标动作" />
-                                    <WrapPanel>
-                                        <StackPanel Width="190" Margin="0,0,12,0">
-                                            <TextBlock Classes="fieldLabel" Text="类型" />
-                                            <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
-                                                      ItemsSource="{Binding Editor.AvailableTargetKinds}"
-                                                      SelectedItem="{Binding Editor.TargetKind, Mode=TwoWay}" />
-                                        </StackPanel>
-                                        <StackPanel x:Name="MouseTargetRow" Width="190"
-                                                    IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
-                                            <TextBlock Classes="fieldLabel" Text="鼠标按键" />
-                                            <ComboBox x:Name="MouseButtonCombo" Classes="enumCombo"
-                                                      ItemsSource="{x:Static views:EnumOptions.MouseButtons}"
-                                                      SelectedItem="{Binding Editor.SelectedMouseButton, Mode=TwoWay}" />
-                                        </StackPanel>
-                                        <StackPanel VerticalAlignment="Bottom" IsVisible="{Binding Editor.ShowButtonPicker}">
-                                            <TextBlock Classes="fieldLabel" Text="键盘直接输入" />
-                                            <Button x:Name="CaptureKeyButton" Classes="ghost"
-                                                    Content="{Binding Editor.CaptureKeyLabel}"
-                                                    Command="{Binding Editor.ToggleCaptureKeyCommand}" />
-                                        </StackPanel>
-                                    </WrapPanel>
-                                    <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding Editor.IsCapturingKey}"
-                                               Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
+                                   <TextBlock Classes="sectionLabel" Text="目标动作" />
+                                   <WrapPanel>
+                                       <StackPanel Width="190" Margin="0,0,12,0">
+                                           <TextBlock Classes="fieldLabel" Text="类型" />
+                                           <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
+                                                     ItemsSource="{Binding Editor.AvailableTargetKinds}"
+                                                     SelectedItem="{Binding Editor.TargetKind, Mode=TwoWay}" />
+                                       </StackPanel>
+                                       <StackPanel x:Name="MouseTargetRow" Width="190"
+                                                   IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
+                                           <TextBlock Classes="fieldLabel" Text="鼠标按键" />
+                                           <ComboBox x:Name="MouseButtonCombo" Classes="enumCombo"
+                                                     ItemsSource="{x:Static views:EnumOptions.MouseButtons}"
+                                                     SelectedItem="{Binding Editor.SelectedMouseButton, Mode=TwoWay}" />
+                                       </StackPanel>
+                                       <StackPanel VerticalAlignment="Bottom" IsVisible="{Binding Editor.ShowButtonPicker}">
+                                           <TextBlock Classes="fieldLabel" Text="键盘直接输入" />
+                                           <Button x:Name="CaptureKeyButton" Classes="ghost"
+                                                   Content="{Binding Editor.CaptureKeyLabel}"
+                                                   Command="{Binding Editor.ToggleCaptureKeyCommand}" />
+                                       </StackPanel>
+                                   </WrapPanel>
+                                   <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding Editor.IsCapturingKey}"
+                                              Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
 
-                                    <TextBlock Classes="sectionLabel" Text="或从列表选择"
-                                                IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}" />
-                                    <ListBox x:Name="TargetKeyList" MaxHeight="180"
-                                             IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
-                                             ItemsSource="{Binding Editor.KeyOptions}"
-                                             SelectedItem="{Binding Editor.SelectedKeyOption, Mode=TwoWay}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:KeyPickerItem">
-                                                <Panel>
-                                                    <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
-                                                               Foreground="{DynamicResource TextSecondaryBrush}"
-                                                               Margin="0,6,0,2" IsVisible="{Binding IsHeader}" />
-                                                    <TextBlock Text="{Binding Label}" FontSize="12"
-                                                               Foreground="{DynamicResource ControlForegroundBrush}"
-                                                               IsVisible="{Binding IsHeader, Converter={StaticResource Not}}" />
-                                                </Panel>
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                    </ListBox>
+                                   <TextBlock Classes="sectionLabel" Text="或从列表选择"
+                                              IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}" />
+                                   <ListBox x:Name="TargetKeyList" MaxHeight="180"
+                                            IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
+                                            ItemsSource="{Binding Editor.KeyOptions}"
+                                            SelectedItem="{Binding Editor.SelectedKeyOption, Mode=TwoWay}">
+                                       <ListBox.ItemTemplate>
+                                           <DataTemplate x:DataType="vm:KeyPickerItem">
+                                               <Panel>
+                                                   <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                              Foreground="{DynamicResource TextSecondaryBrush}"
+                                                              Margin="0,6,0,2" IsVisible="{Binding IsHeader}" />
+                                                   <TextBlock Text="{Binding Label}" FontSize="12"
+                                                              Foreground="{DynamicResource ControlForegroundBrush}"
+                                                              IsVisible="{Binding IsHeader, Converter={StaticResource Not}}" />
+                                               </Panel>
+                                           </DataTemplate>
+                                       </ListBox.ItemTemplate>
+                                   </ListBox>
 
-                                    <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
-                                                IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
-                                        <CheckBox x:Name="ModifierCtrlBox" Content="Ctrl" IsChecked="{Binding Editor.ModifierCtrl, Mode=TwoWay}" />
-                                        <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierShift, Mode=TwoWay}" />
-                                        <CheckBox x:Name="ModifierAltBox" Content="Alt" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierAlt, Mode=TwoWay}" />
-                                        <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierWin, Mode=TwoWay}" />
-                                    </StackPanel>
+                                   <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
+                                               IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
+                                       <CheckBox x:Name="ModifierCtrlBox" Content="Ctrl" IsChecked="{Binding Editor.ModifierCtrl, Mode=TwoWay}" />
+                                       <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierShift, Mode=TwoWay}" />
+                                       <CheckBox x:Name="ModifierAltBox" Content="Alt" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierAlt, Mode=TwoWay}" />
+                                       <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierWin, Mode=TwoWay}" />
+                                   </StackPanel>
 
-                                    <StackPanel x:Name="MouseMoveRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
-                                        <TextBlock Classes="sectionLabel" Text="鼠标移动参数" />
-                                        <Grid Margin="0,0,0,10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="90" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度 (px/s)" VerticalAlignment="Center" Margin="0" />
-                                            <Slider Grid.Column="1" x:Name="EditorMouseMaxSpeedBox" Minimum="100" Maximum="6000" TickFrequency="50"
-                                                    Value="{Binding Editor.MouseSettings.MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
-                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                       Text="{Binding Editor.MouseSettings.MaxSpeed, StringFormat='{}{0:F0}'}" />
-                                        </Grid>
-                                        <Grid Margin="0,0,0,10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="90" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
-                                            <Slider Grid.Column="1" x:Name="EditorMouseDeadZoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
-                                                    Value="{Binding Editor.MouseSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
-                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                       Text="{Binding Editor.MouseSettings.DeadZone, StringFormat='{}{0:F2}'}" />
-                                        </Grid>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="90" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间 (s)" VerticalAlignment="Center" Margin="0" />
-                                            <Slider Grid.Column="1" x:Name="EditorMouseResponseTimeBox" Minimum="0" Maximum="0.5" TickFrequency="0.05"
-                                                    Value="{Binding Editor.MouseSettings.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
-                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                       Text="{Binding Editor.MouseSettings.ResponseTime, StringFormat='{}{0:F2}'}" />
-                                        </Grid>
-                                    </StackPanel>
+                                   <StackPanel x:Name="MouseMoveRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
+                                       <TextBlock Classes="sectionLabel" Text="鼠标移动参数" />
+                                       <Grid Margin="0,0,0,10">
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度 (px/s)" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="EditorMouseMaxSpeedBox" Minimum="100" Maximum="6000" TickFrequency="50"
+                                                   Value="{Binding Editor.MouseSettings.MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.MouseSettings.MaxSpeed, StringFormat='{}{0:F0}'}" />
+                                       </Grid>
+                                       <Grid Margin="0,0,0,10">
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="EditorMouseDeadZoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                                   Value="{Binding Editor.MouseSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.MouseSettings.DeadZone, StringFormat='{}{0:F2}'}" />
+                                       </Grid>
+                                       <Grid>
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间 (s)" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="EditorMouseResponseTimeBox" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                                                   Value="{Binding Editor.MouseSettings.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.MouseSettings.ResponseTime, StringFormat='{}{0:F2}'}" />
+                                       </Grid>
+                                   </StackPanel>
 
-                                    <StackPanel x:Name="WheelRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
-                                        <TextBlock Classes="sectionLabel" Text="滚轮参数" />
-                                        <Grid Margin="0,0,0,10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="90" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率 (格/s)" VerticalAlignment="Center" Margin="0" />
-                                            <Slider Grid.Column="1" x:Name="EditorScrollRateBox" Minimum="1" Maximum="40" TickFrequency="1"
-                                                    Value="{Binding Editor.ScrollSettings.MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
-                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                       Text="{Binding Editor.ScrollSettings.MaxTicksPerSecond, StringFormat='{}{0:F0}'}" />
-                                        </Grid>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="90" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
-                                            <Slider Grid.Column="1" x:Name="EditorScrollDeadzoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
-                                                    Value="{Binding Editor.ScrollSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
-                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                       Text="{Binding Editor.ScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
-                                        </Grid>
+                                   <StackPanel x:Name="WheelRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
+                                       <TextBlock Classes="sectionLabel" Text="滚轮参数" />
+                                       <Grid Margin="0,0,0,10">
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率 (格/s)" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="EditorScrollRateBox" Minimum="1" Maximum="40" TickFrequency="1"
+                                                   Value="{Binding Editor.ScrollSettings.MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.ScrollSettings.MaxTicksPerSecond, StringFormat='{}{0:F0}'}" />
+                                       </Grid>
+                                       <Grid>
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="EditorScrollDeadzoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                                   Value="{Binding Editor.ScrollSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.ScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
+                                       </Grid>
+                                   </StackPanel>
+
+                                   <!-- Gestures. The editor view model already carries the three
+                                        gesture properties (double-click window, long-press threshold,
+                                        long-press repeat interval); they are surfaced here for button
+                                        sources only, since the engine attaches a gesture to a
+                                        ButtonBinding. A gamepad needs no 单击/双击/长按 slots, so these
+                                        are plain sliders, and a zero value keeps the zero-latency
+                                        single-press path. -->
+                                   <StackPanel x:Name="GestureRow" IsVisible="{Binding Editor.SourceIsStick, Converter={StaticResource Not}}">
+                                       <TextBlock Classes="sectionLabel" Text="手势" />
+                                       <TextBlock Classes="hint" Margin="0,0,0,8"
+                                                  Text="仅按键支持手势；时间设为 0 即关闭对应手势，全部为 0 时单击保持零延迟。" />
+                                       <Grid Margin="0,0,0,10">
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="双击窗口 (s)" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="GestureDoubleClickBox" Minimum="0" Maximum="1" TickFrequency="0.05"
+                                                   Value="{Binding Editor.DoubleClickWindow, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.DoubleClickWindow, StringFormat='{}{0:F2}'}" />
+                                       </Grid>
+                                       <Grid Margin="0,0,0,10">
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按阈值 (s)" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="GestureLongPressBox" Minimum="0" Maximum="3" TickFrequency="0.1"
+                                                   Value="{Binding Editor.LongPressThreshold, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.LongPressThreshold, StringFormat='{}{0:F2}'}" />
+                                       </Grid>
+                                       <Grid>
+                                           <Grid.ColumnDefinitions>
+                                               <ColumnDefinition Width="150" />
+                                               <ColumnDefinition Width="*" />
+                                               <ColumnDefinition Width="90" />
+                                           </Grid.ColumnDefinitions>
+                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按重复间隔 (s)" VerticalAlignment="Center" Margin="0" />
+                                           <Slider Grid.Column="1" x:Name="GestureRepeatBox" Minimum="0" Maximum="1" TickFrequency="0.05"
+                                                   Value="{Binding Editor.LongPressRepeatInterval, Mode=TwoWay}" VerticalAlignment="Center" />
+                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                      Text="{Binding Editor.LongPressRepeatInterval, StringFormat='{}{0:F2}'}" />
+                                         </Grid>
                                     </StackPanel>
                                 </StackPanel>
-                            </Border>
+                                 </Border>
+
+                                <!-- Source rows, split into a left and a right column by the physical
+                                     side of the gamepad. Clicking a row selects it and opens its
+                                     configuration; the selected row is marked on both sides. -->
+                                <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <controls:MappingColumnsPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <StaticResource ResourceKey="MappingRowTemplate" />
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
                         </ScrollViewer>
+
+                        <!-- Connector layer. Drawn last so it sits in front of the cards and the
+                             line stays visible where it crosses them; non-interactive, so it never
+                             steals a click. MappingLink draws it from the selected model element to
+                             that element's source card. -->
+                        <Canvas x:Name="ConnectorLayer" Grid.RowSpan="2" IsHitTestVisible="False" />
+
+                        <!-- Zero-size wiring control: keeps the model, the source list and the
+                             connector layer in step with the selected mapping. Measures to nothing
+                             and takes no hit-testing. -->
+                        <controls:MappingLink Width="0" Height="0" IsHitTestVisible="False" />
                     </Grid>
                 </TabItem>
 
@@ -748,7 +854,7 @@
                                            Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"
                                            Margin="10,0,8,0" VerticalAlignment="Center" />
                                 <Border Grid.Column="2" IsVisible="{Binding HasController}" Background="{DynamicResource SubtleBrush}"
-                                        CornerRadius="6" Padding="8,3" VerticalAlignment="Center">
+                                        CornerRadius="{DynamicResource CornerRadiusMd}" Padding="8,3" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding ActiveController.Descriptor.Layout, Converter={StaticResource LayoutText}}"
                                                FontSize="11" Foreground="{DynamicResource BadgeTextBrush}" />
                                 </Border>

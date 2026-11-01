@@ -23,6 +23,23 @@ public partial class MainWindowViewModel : ObservableObject
 
     private MappingEntry? _editingEntry;
 
+    /// <summary>
+    /// Per-axis deflection at which a stick counts as pushed for navigation. Half travel
+    /// matches the engine's own digital threshold: a resting stick never reaches it and a
+    /// deliberate push always does.
+    /// </summary>
+    private const float StickNavigationThreshold = 0.5f;
+
+    private string? _navigationDeviceId;
+
+    private GamepadButtonMask _navigationButtons;
+
+    private readonly SortedSet<int> _navigationExtra = [];
+
+    private bool _navigationLeftDeflected;
+
+    private bool _navigationRightDeflected;
+
     public MainWindowViewModel(EngineHost host, IProfileStore profileStore, IElevationService? elevationService = null)
     {
         _host = host;
@@ -32,6 +49,8 @@ public partial class MainWindowViewModel : ObservableObject
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
         Visualizer = new GamepadVisualizerViewModel();
+        Appearance = new AppearanceViewModel();
+        DaemonSettings = new DaemonSettingsViewModel();
 
         // Fixed for the lifetime of the process: elevation is decided at launch.
         IsElevationSupported = _elevationService.IsSupported;
@@ -51,6 +70,10 @@ public partial class MainWindowViewModel : ObservableObject
     public ScrollSensitivityViewModel ScrollSensitivity { get; }
 
     public GamepadVisualizerViewModel Visualizer { get; }
+
+    public AppearanceViewModel Appearance { get; }
+
+    public DaemonSettingsViewModel DaemonSettings { get; }
 
     [ObservableProperty]
     private ControllerRuntime? _activeController;
@@ -112,6 +135,14 @@ public partial class MainWindowViewModel : ObservableObject
     partial void OnIsElevationSupportedChanged(bool value) => RelaunchElevatedCommand.NotifyCanExecuteChanged();
 
     partial void OnIsElevatedChanged(bool value) => RelaunchElevatedCommand.NotifyCanExecuteChanged();
+
+    partial void OnIsEditingChanged(bool value)
+    {
+        // The editor hijacks the pad: while a mapping is open, physical presses navigate the
+        // editor instead of being injected, so the engine must not dispatch. Sampling continues
+        // either way - navigation works with the engine running or stopped.
+        _host.SetInjectionSuspended(value);
+    }
 
     /// <summary>
     /// Relaunches the app elevated through the shell "runas" verb (one UAC prompt). The
@@ -385,6 +416,7 @@ public partial class MainWindowViewModel : ObservableObject
     public void ApplySample(ControllerSampledEventArgs args)
     {
         SyncControllers();
+        Navigate(args.State);
 
         if (ActiveController is null)
         {
@@ -394,6 +426,185 @@ public partial class MainWindowViewModel : ObservableObject
         Visualizer.Update(args.State);
         Visualizer.SetConnected(true);
     }
+
+    /// <summary>
+    /// Called from the UI thread for every presence sample - the engine-stopped counterpart of
+    /// <see cref="ApplySample"/>. The host polls without ticking or injecting, so highlighting
+    /// and pad-driven navigation keep working while the mapping loop is off.
+    /// </summary>
+    public void ApplyPresenceSample(ControllerSampledEventArgs args)
+    {
+        SyncControllers();
+        Navigate(args.State);
+
+        if (ActiveController is null)
+        {
+            return;
+        }
+
+        Visualizer.Update(args.State);
+        Visualizer.SetConnected(true);
+    }
+
+    /// <summary>
+    /// Opens the mapping settings for one source, exactly as clicking that element on the model
+    /// does: an element that already has a mapping loads it (so confirming replaces it instead
+    /// of adding a second entry for the same source), and a fresh one is armed anew. The
+    /// matching row is selected so the list side of the link highlights too; an element with no
+    /// mapping selects nothing.
+    /// </summary>
+    public void OpenEditorForSource(InputBinding source)
+    {
+        SelectedMapping = Mappings.FirstOrDefault(row => row.Entry.Source == source);
+
+        if (ActiveProfile?.Mappings.FirstOrDefault(m => m.Source == source) is { } existing
+            && Mappings.FirstOrDefault(row => row.Entry == existing) is { } row)
+        {
+            EditMapping(row);
+            return;
+        }
+
+        AddMapping();
+        Editor.LoadSource(source);
+    }
+
+    /// <summary>
+    /// Routes one gamepad sample to the editor's capture and to navigation, in that order, so
+    /// the two never fight over the same press: a press consumed by capture must not also
+    /// navigate.
+    /// </summary>
+    private void Navigate(IGamepadState state)
+    {
+        if (IsEditing)
+        {
+            // Keyboard capture owns the input while it is armed. A gamepad button is not a
+            // keyboard key, so it cannot set the target; and navigating away would abort the
+            // capture the user just started, so the press is swallowed.
+            if (Editor.IsCapturingKey)
+            {
+                Editor.CaptureGamepadSample(state);
+                RememberNavigation(state);
+                return;
+            }
+
+            // Button capture is armed: the press becomes the mapping's source.
+            if (Editor.CaptureGamepadSample(state))
+            {
+                RememberNavigation(state);
+                return;
+            }
+        }
+
+        NavigateByPhysicalInput(state);
+    }
+
+    /// <summary>
+    /// Opens the mapping settings for whatever was newly pressed or deflected. Only press edges
+    /// count, so a held button navigates once; the first sample for a controller is the
+    /// baseline, so a button held since before the app looked is not a press.
+    /// </summary>
+    private void NavigateByPhysicalInput(IGamepadState state)
+    {
+        var deviceId = ActiveController?.Descriptor.DeviceId;
+
+        if (deviceId is null)
+        {
+            // No pad: forget the baseline so the next connection starts from a clean slate.
+            _navigationDeviceId = null;
+            return;
+        }
+
+        if (!string.Equals(deviceId, _navigationDeviceId, StringComparison.Ordinal))
+        {
+            RememberNavigation(state, deviceId);
+            return;
+        }
+
+        var buttonEdges = state.PressedButtons & ~_navigationButtons;
+        var extraEdges = state.ExtraButtons.Where(code => !_navigationExtra.Contains(code)).ToList();
+        var leftEdge = IsDeflected(state.LeftStickX, state.LeftStickY) && !_navigationLeftDeflected;
+        var rightEdge = IsDeflected(state.RightStickX, state.RightStickY) && !_navigationRightDeflected;
+
+        RememberNavigation(state, deviceId);
+
+        if (NavigationTarget(buttonEdges, extraEdges, leftEdge, rightEdge) is not { } source
+            || IsAlreadyEditing(source))
+        {
+            return;
+        }
+
+        OpenEditorForSource(source);
+    }
+
+    /// <summary>Records the current sample as the navigation baseline.</summary>
+    private void RememberNavigation(IGamepadState state, string? deviceId = null)
+    {
+        _navigationDeviceId = deviceId ?? ActiveController?.Descriptor.DeviceId;
+        _navigationButtons = state.PressedButtons;
+
+        _navigationExtra.Clear();
+        foreach (var code in state.ExtraButtons)
+        {
+            _navigationExtra.Add(code);
+        }
+
+        _navigationLeftDeflected = IsDeflected(state.LeftStickX, state.LeftStickY);
+        _navigationRightDeflected = IsDeflected(state.RightStickX, state.RightStickY);
+    }
+
+    private static bool IsDeflected(float x, float y)
+        => Math.Abs(x) >= StickNavigationThreshold || Math.Abs(y) >= StickNavigationThreshold;
+
+    /// <summary>
+    /// The source a sample's edges stand for, or null when nothing new was pressed. Fixed
+    /// buttons win over raw codes and buttons over sticks, in the picker's own category order,
+    /// so a chord always resolves the same way.
+    /// </summary>
+    private static InputBinding? NavigationTarget(
+        GamepadButtonMask buttonEdges,
+        List<int> extraEdges,
+        bool leftEdge,
+        bool rightEdge)
+    {
+        foreach (var button in ButtonCategories.All)
+        {
+            if (buttonEdges.Has(button))
+            {
+                return new ButtonBinding(button);
+            }
+        }
+
+        if (extraEdges.Count > 0)
+        {
+            return new ButtonBinding(GamepadButton.Extra, extraEdges[0]);
+        }
+
+        if (leftEdge)
+        {
+            return new StickBinding(GamepadStick.Left);
+        }
+
+        if (rightEdge)
+        {
+            return new StickBinding(GamepadStick.Right);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// True when the editor is already open for exactly this source. Re-navigating would reload
+    /// the mapping from the profile and throw away unsaved edits, so a repeat press of the
+    /// element being edited is a no-op.
+    /// </summary>
+    private bool IsAlreadyEditing(InputBinding source) => IsEditing && source switch
+    {
+        ButtonBinding button => !Editor.SourceIsStick
+            && Editor.SelectedButton == button.Button
+            && Editor.SelectedExtraCode == button.Code,
+        StickBinding stick => Editor.SourceIsStick && Editor.SelectedStick == stick.Stick,
+        _ => false,
+    };
 
     /// <summary>Called from the UI thread when controllers connect or disconnect.</summary>
     public void SyncControllers()
@@ -459,19 +670,7 @@ public partial class MainWindowViewModel : ObservableObject
         HasController = true;
         RefreshStatus();
 
-        foreach (var mapping in ActiveProfile.Mappings)
-        {
-            switch (mapping.Target)
-            {
-                case MouseMoveTarget mouse when mapping.Source is StickBinding { Stick: GamepadStick.Right }:
-                    MouseSensitivity.LoadFrom(mouse.Settings);
-                    break;
-                case WheelScrollTarget wheel when mapping.Source is StickBinding { Stick: GamepadStick.Left }:
-                    ScrollSensitivity.LoadFrom(wheel.Settings);
-                    break;
-            }
-        }
-
+        ReloadSensitivityPanels();
         RefreshMappings();
     }
 
@@ -484,7 +683,32 @@ public partial class MainWindowViewModel : ObservableObject
             _host.Reload(ActiveController.Descriptor.DeviceId, updated);
         }
 
+        // The engine now runs the updated profile, so the calibration panels must show the
+        // settings it is actually using. Without this a reset or import leaves the sliders
+        // on the old values while the preview reflects the new ones.
+        ReloadSensitivityPanels();
         RefreshMappings();
+    }
+
+    private void ReloadSensitivityPanels()
+    {
+        if (ActiveProfile is null)
+        {
+            return;
+        }
+
+        foreach (var mapping in ActiveProfile.Mappings)
+        {
+            switch (mapping.Target)
+            {
+                case MouseMoveTarget mouse when mapping.Source is StickBinding { Stick: GamepadStick.Right }:
+                    MouseSensitivity.LoadFrom(mouse.Settings);
+                    break;
+                case WheelScrollTarget wheel when mapping.Source is StickBinding { Stick: GamepadStick.Left }:
+                    ScrollSensitivity.LoadFrom(wheel.Settings);
+                    break;
+            }
+        }
     }
 
     private void RefreshMappings()

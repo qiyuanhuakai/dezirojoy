@@ -28,6 +28,37 @@
             applied the persisted preference.
     -->
 
+    <!--
+        Corner-radius scale. Theme-independent, so it lives once at the root rather than
+        in every ThemeDictionary. A small deliberate scale - not one number everywhere:
+          Sm (4)  chips, badges, pills
+          Md (6)  form controls: buttons, inputs, combos, toggles, list rows
+          Lg (8)  primary buttons and inset wells
+          Xl (12) cards and panels
+        Consume with {DynamicResource CornerRadius...}; a Border that must clip its
+        children to the rounded shape also sets ClipToBounds="True".
+    -->
+    <CornerRadius x:Key="CornerRadiusSm">4</CornerRadius>
+    <CornerRadius x:Key="CornerRadiusMd">6</CornerRadius>
+    <CornerRadius x:Key="CornerRadiusLg">8</CornerRadius>
+    <CornerRadius x:Key="CornerRadiusXl">12</CornerRadius>
+
+    <!--
+        Slider geometry. Theme-independent, so it lives here at app scope where the slider
+        ControlTheme (Themes/Slider.axaml) can reach it with {DynamicResource}. The track
+        height is consumed by the inner TrackBackground border of the RepeatButton template,
+        which is the only place it takes effect - not Track.Height.
+    -->
+    <x:Double x:Key="SliderHorizontalHeight">34</x:Double>
+    <x:Double x:Key="SliderVerticalWidth">34</x:Double>
+    <x:Double x:Key="SliderTrackThemeHeight">6</x:Double>
+    <x:Double x:Key="SliderHorizontalThumbWidth">20</x:Double>
+    <x:Double x:Key="SliderHorizontalThumbHeight">20</x:Double>
+    <x:Double x:Key="SliderVerticalThumbWidth">20</x:Double>
+    <x:Double x:Key="SliderVerticalThumbHeight">20</x:Double>
+    <CornerRadius x:Key="SliderThumbCornerRadius">10</CornerRadius>
+    <CornerRadius x:Key="SliderTrackCornerRadius">3</CornerRadius>
+
     <ResourceDictionary.ThemeDictionaries>
 
         <!-- ======================= FALLBACK (mirrors Dark) ======================= -->
@@ -50,6 +81,10 @@
             <SolidColorBrush x:Key="ControlBorderBrush" Color="#333333" />
             <SolidColorBrush x:Key="PreviewBorderBrush" Color="#2C2C2C" />
             <SolidColorBrush x:Key="TrackBrush" Color="#242424" />
+            <!-- Slider: the unfilled track is a step lighter than the card so the filled
+                 accent portion reads as deliberate; the thumb is white in both themes. -->
+            <SolidColorBrush x:Key="SliderTrackBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="SliderThumbBrush" Color="#FFFFFF" />
 
             <!-- Text -->
             <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F0F0F0" />
@@ -110,6 +145,10 @@
             <SolidColorBrush x:Key="ControlBorderBrush" Color="#AFB8C1" />
             <SolidColorBrush x:Key="PreviewBorderBrush" Color="#C9D1D9" />
             <SolidColorBrush x:Key="TrackBrush" Color="#C9D1D9" />
+            <!-- Slider: the unfilled track is a step darker than the white card so the
+                 filled accent portion reads as deliberate; the thumb stays white. -->
+            <SolidColorBrush x:Key="SliderTrackBrush" Color="#D8DEE4" />
+            <SolidColorBrush x:Key="SliderThumbBrush" Color="#FFFFFF" />
 
             <!--
                 Text. Every value clears 4.5:1 on both the white card and the
@@ -179,6 +218,10 @@
             <SolidColorBrush x:Key="ControlBorderBrush" Color="#333333" />
             <SolidColorBrush x:Key="PreviewBorderBrush" Color="#2C2C2C" />
             <SolidColorBrush x:Key="TrackBrush" Color="#242424" />
+            <!-- Slider: the unfilled track is a step lighter than the card so the filled
+                 accent portion reads as deliberate; the thumb is white in both themes. -->
+            <SolidColorBrush x:Key="SliderTrackBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="SliderThumbBrush" Color="#FFFFFF" />
 
             <!-- Text -->
             <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F0F0F0" />

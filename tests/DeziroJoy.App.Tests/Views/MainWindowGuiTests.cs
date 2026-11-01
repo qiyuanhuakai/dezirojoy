@@ -110,6 +110,34 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
+    public void The_Mapping_Editor_Pins_The_Model_Above_One_Shared_Scroll_Region()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var scroll = window.FindControl<ScrollViewer>("MappingEditorScroll")!;
+        var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
+        var mappings = window.FindControl<ItemsControl>("MappingsList")!;
+        var editor = window.FindControl<Border>("EditorPanel")!;
+
+        // The mapping table and the inline editor share one scroll region, so nothing falls
+        // past the clipped tab content at the window's minimum height.
+        Assert.True(IsDescendantOf(mappings, scroll), "the mapping table must live in the shared scroll region");
+        Assert.True(IsDescendantOf(editor, scroll), "the inline editor must live in the shared scroll region");
+
+        // The model is the spatial reference for what is being edited, so it is pinned above
+        // the scroll region rather than scrolling away with the table.
+        Assert.False(IsDescendantOf(model, scroll), "the gamepad model must stay pinned above the scroll region");
+
+        var modelBottom = model.TranslatePoint(new Point(0, model.Bounds.Height), scroll);
+        Assert.NotNull(modelBottom);
+        Assert.True(modelBottom!.Value.Y <= 0, $"the model must sit entirely above the scroll region, bottom at {modelBottom.Value.Y}");
+    }
+
+    private static bool IsDescendantOf(Visual control, Visual ancestor)
+        => control.GetVisualAncestors().Contains(ancestor);
+
+    [AvaloniaFact]
     public void Window_Declares_All_Eight_Resize_Zones()
     {
         var (window, _, _, _) = BuildWindow();
@@ -407,7 +435,7 @@ public sealed class MainWindowGuiTests
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
-        viewModel.ToggleEngineCommand.Execute(null);
+        SampleHelper.StartEngineManually(viewModel, host);
         window.UpdatePreviewLiveness();
         Assert.True(viewModel.MouseSensitivity.IsLive);
 
@@ -614,6 +642,28 @@ public sealed class MainWindowGuiTests
         Assert.Same(viewModel.ResetToDefaultCommand, reset.Command);
         Assert.Same(viewModel.ExportProfileCommand, export.Command);
         Assert.Same(viewModel.ImportProfileCommand, import.Command);
+    }
+
+    [AvaloniaFact]
+    public void The_Sidebar_Hosts_The_Daemon_Settings_Card_Bound_To_Its_ViewModel()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var card = window.GetVisualDescendants().OfType<DaemonSettingsCard>().Single();
+        Assert.Same(viewModel.DaemonSettings, card.DataContext);
+
+        var autostart = card.GetVisualDescendants().OfType<CheckBox>()
+            .Single(box => box.Content is "登录时自启动");
+        Assert.NotNull(autostart);
+
+        var install = card.GetVisualDescendants().OfType<Button>()
+            .Single(button => button.Content as string == "安装常驻");
+        var uninstall = card.GetVisualDescendants().OfType<Button>()
+            .Single(button => button.Content as string == "卸载常驻");
+
+        Assert.Same(viewModel.DaemonSettings.InstallDaemonCommand, install.Command);
+        Assert.Same(viewModel.DaemonSettings.UninstallDaemonCommand, uninstall.Command);
     }
 
     [AvaloniaFact]
