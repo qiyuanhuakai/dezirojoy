@@ -30,11 +30,35 @@ public sealed class EngineHost : IDisposable
     private readonly IProfileStore _profileStore;
     private readonly Dictionary<string, ControllerRuntime> _runtimes = [];
     private readonly Lock _sync = new();
+    private readonly string _injectionMutexName;
     private Thread? _thread;
     private volatile bool _running;
     private volatile bool _injectionSuspended;
+    private volatile int _injectionVerdict;
+
+    private const int InjectionVerdictPending = 0;
+    private const int InjectionVerdictHeld = 1;
+    private const int InjectionVerdictRefused = 2;
+
+    /// <summary>
+    /// Resolves the injection mutex name for a host constructed without an explicit one.
+    /// Production leaves this at <see cref="InjectionMutex.DefaultName"/> - one
+    /// machine-wide slot shared by the GUI and the resident daemon. The test assembly
+    /// overrides it once at load with a per-instance name: tests construct hosts directly,
+    /// xUnit runs collections in parallel, and one GUI test deliberately leaves an engine
+    /// running for the whole process, so sharing the production name would serialise the
+    /// suite on a single slot and a leaked hold would fail unrelated tests. Tests that
+    /// assert exclusion pass their own shared name explicitly.
+    /// </summary>
+    public static Func<string> DefaultInjectionMutexNameResolver { get; set; }
+        = static () => InjectionMutex.DefaultName;
 
     public EngineHost(IGamepadProvider provider, IOutputSink sink, IProfileStore profileStore)
+        : this(provider, sink, profileStore, injectionMutexName: null)
+    {
+    }
+
+    public EngineHost(IGamepadProvider provider, IOutputSink sink, IProfileStore profileStore, string? injectionMutexName)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(sink);
@@ -43,6 +67,7 @@ public sealed class EngineHost : IDisposable
         _provider = provider;
         _sink = sink;
         _profileStore = profileStore;
+        _injectionMutexName = injectionMutexName ?? DefaultInjectionMutexNameResolver();
     }
 
     public bool IsMappingEnabled { get; private set; } = true;
@@ -246,6 +271,10 @@ public sealed class EngineHost : IDisposable
     }
 
     /// <summary>Starts the background mapping loop.</summary>
+    /// <exception cref="InjectionAlreadyActiveException">
+    /// Another process - the resident service or a second instance - already holds the
+    /// injection mutex. The engine refuses to start rather than inject every input twice.
+    /// </exception>
     public void Start(TimeSpan interval)
     {
         if (_running)
@@ -253,13 +282,52 @@ public sealed class EngineHost : IDisposable
             return;
         }
 
+        // The loop thread must both acquire and release the injection mutex: .NET mutex
+        // ownership is per-thread on every platform, and Stop() can arrive on any thread
+        // (the daemon stops its engine from a signal-handler thread), so the loop thread
+        // is the only thread that can hold the slot for the loop's whole life. Start waits
+        // for the loop thread's verdict so a refused start fails on the caller's thread.
+        _injectionVerdict = InjectionVerdictPending;
         _running = true;
         _thread = new Thread(() => Run(interval))
         {
             IsBackground = true,
             Name = "dezirojoy-engine",
         };
-        _thread.Start();
+
+        try
+        {
+            _thread.Start();
+        }
+        catch
+        {
+            // A thread that never started must not leave the host claiming to run.
+            _running = false;
+            _thread = null;
+            throw;
+        }
+
+        if (!SpinWait.SpinUntil(
+                () => _injectionVerdict != InjectionVerdictPending,
+                TimeSpan.FromSeconds(10)))
+        {
+            // Cannot happen in practice: the loop thread's first act is the acquire, which
+            // is a WaitOne(0). Fail loudly rather than report a start that never happened.
+            _running = false;
+            _thread = null;
+            throw new InvalidOperationException("引擎线程未能在 10 秒内报告注入互斥体的获取结果。");
+        }
+
+        if (_injectionVerdict == InjectionVerdictRefused)
+        {
+            // One injector at a time, machine-wide. Refusing here is the whole point: a
+            // second engine would double every input, and the GUI would claim a start that
+            // never happened. The loop thread has already exited without ticking.
+            _running = false;
+            _thread = null;
+            throw new InjectionAlreadyActiveException(
+                $"另一个进程正在注入映射（注入互斥体 {_injectionMutexName} 已被占用），已拒绝启动以避免重复注入。");
+        }
     }
 
     /// <summary>
@@ -271,6 +339,10 @@ public sealed class EngineHost : IDisposable
     /// <see cref="ControllerRuntime"/> the caller ticks would race the engine's
     /// non-thread-safe state, so a test that drives ticks itself must use this instead.
     /// Production code must call <see cref="Start"/>.
+    ///
+    /// Deliberately does NOT take the injection mutex: it spawns no loop thread, so there is
+    /// no thread that could own the slot for a lifetime, and the caller drives every tick
+    /// itself. The mutex guards the background loop production runs.
     /// </summary>
     public void StartManual()
     {
@@ -309,29 +381,53 @@ public sealed class EngineHost : IDisposable
 
     private void Run(TimeSpan interval)
     {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var last = stopwatch.Elapsed;
+        // Acquired here, on the loop thread, and released in the finally below: .NET mutex
+        // ownership is per-thread on every platform, and Stop() can arrive on any thread
+        // (the daemon stops its engine from a signal-handler thread).
+        var injection = InjectionMutex.TryAcquire(_injectionMutexName);
 
-        while (_running)
+        if (injection is null)
         {
-            var now = stopwatch.Elapsed;
-            var delta = now - last;
-            last = now;
+            // Another process holds the slot. Report the refusal and exit without ticking,
+            // so Start() fails on the caller's thread instead of running a second engine.
+            _injectionVerdict = InjectionVerdictRefused;
+            return;
+        }
 
-            try
-            {
-                TickOnce(delta);
-            }
-            catch (Exception)
-            {
-                // A failing tick must never kill the mapping loop.
-            }
+        _injectionVerdict = InjectionVerdictHeld;
 
-            var sleep = interval - (stopwatch.Elapsed - now);
-            if (sleep > TimeSpan.Zero)
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var last = stopwatch.Elapsed;
+
+            while (_running)
             {
-                Thread.Sleep(sleep);
+                var now = stopwatch.Elapsed;
+                var delta = now - last;
+                last = now;
+
+                try
+                {
+                    TickOnce(delta);
+                }
+                catch (Exception)
+                {
+                    // A failing tick must never kill the mapping loop.
+                }
+
+                var sleep = interval - (stopwatch.Elapsed - now);
+                if (sleep > TimeSpan.Zero)
+                {
+                    Thread.Sleep(sleep);
+                }
             }
+        }
+        finally
+        {
+            // Released on every exit path - Stop, Dispose and an unexpected loop exit
+            // alike - by the thread that owns it.
+            injection.Release();
         }
     }
 

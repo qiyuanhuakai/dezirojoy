@@ -14,7 +14,12 @@ namespace DeziroJoy.App.Tests.Services;
 /// SIGINT is not asserted here: .NET's console layer owns that signal and it is not
 /// deliverable to a process whose stdout is a pipe, which is what a test harness has.
 /// Ctrl+C is verified manually against a real pseudo-terminal instead.
+///
+/// Shares a collection with <see cref="InjectionMutexAbandonmentTests"/>: the daemon
+/// resolves the production mutex name, so two daemons acquiring at once would refuse
+/// each other.
 /// </remarks>
+[Collection("DeziroJoy.DaemonProcess")]
 public class DaemonHostProcessTests
 {
     [Fact]

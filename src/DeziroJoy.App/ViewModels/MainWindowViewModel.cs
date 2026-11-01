@@ -23,6 +23,27 @@ public enum InjectorIntegrityLevel
 }
 
 /// <summary>
+/// Which process is injecting mapped input right now. Deliberately separate from
+/// <see cref="InjectorDescription"/>, which names the process that WOULD inject and its
+/// integrity level: this says who is actually injecting, which is what the resident
+/// daemon made the GUI lie about.
+/// </summary>
+public enum MappingOwner
+{
+    /// <summary>Nothing is injecting: this window's engine is stopped.</summary>
+    None,
+
+    /// <summary>This window's engine holds the injection mutex.</summary>
+    ThisWindow,
+
+    /// <summary>
+    /// Another process holds it - the resident service, or a second DeziroJoy instance.
+    /// The only way to reach this state is a start attempt that was refused.
+    /// </summary>
+    AnotherProcess,
+}
+
+/// <summary>
 /// Main window orchestration: connection state, profile editing, mapping table and
 /// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
 /// only marshals host events onto the UI thread and calls <see cref="ApplySample"/>.
@@ -183,6 +204,23 @@ public partial class MainWindowViewModel : ObservableObject
             : "未提权：向以管理员身份运行的应用注入的输入会被 UIPI 静默丢弃"
         : "当前平台不受 UIPI 限制，无需提权";
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MappingOwnerDescription))]
+    private MappingOwner _mappingOwner;
+
+    /// <summary>
+    /// Who is injecting mapped input, in words. <see cref="MappingOwner.AnotherProcess"/>
+    /// states the refusal outright, so a start the injection mutex blocked can never read
+    /// as a start that succeeded.
+    /// </summary>
+    public string MappingOwnerDescription => MappingOwner switch
+    {
+        MappingOwner.None => "映射未启动",
+        MappingOwner.ThisWindow => "本窗口正在注入映射",
+        MappingOwner.AnotherProcess => "另一个进程正在注入映射（常驻服务或其他 DeziroJoy 实例），本次启动已被拒绝",
+        _ => "映射未启动",
+    };
+
     /// <summary>
     /// Raised after a successful elevated relaunch so the view can shut this instance down
     /// and let the elevated copy take over.
@@ -228,11 +266,25 @@ public partial class MainWindowViewModel : ObservableObject
         {
             _host.Stop();
             IsEngineRunning = false;
+            MappingOwner = MappingOwner.None;
         }
         else
         {
-            _host.Start(TimeSpan.FromMilliseconds(2));
-            IsEngineRunning = true;
+            try
+            {
+                _host.Start(TimeSpan.FromMilliseconds(2));
+                IsEngineRunning = true;
+                MappingOwner = MappingOwner.ThisWindow;
+            }
+            catch (InjectionAlreadyActiveException)
+            {
+                // The resident service - or a second DeziroJoy instance - already holds the
+                // injection mutex. Starting here would double every input, so the start is
+                // refused and the UI says who is injecting instead of pretending this
+                // window took over.
+                IsEngineRunning = false;
+                MappingOwner = MappingOwner.AnotherProcess;
+            }
         }
 
         RefreshStatus();
@@ -747,9 +799,13 @@ public partial class MainWindowViewModel : ObservableObject
             return;
         }
 
+        var device = $"{ActiveController.Descriptor.Name} · {MappingDescriptions.Layout(ActiveController.Descriptor.Layout)}";
+
         StatusMessage = IsEngineRunning
-            ? $"{ActiveController.Descriptor.Name} · {MappingDescriptions.Layout(ActiveController.Descriptor.Layout)}"
-            : $"{ActiveController.Descriptor.Name} · 映射未启动";
+            ? device
+            : MappingOwner == MappingOwner.AnotherProcess
+                ? $"{device} · 启动被拒绝：另一个进程（常驻服务或其他 DeziroJoy 实例）正在注入映射"
+                : $"{device} · 映射未启动";
     }
 
     private void Activate(ControllerRuntime runtime)
