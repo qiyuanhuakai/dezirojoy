@@ -266,6 +266,30 @@ public class ButtonGestureTests
     }
 
     [Fact]
+    public void Long_Press_Auto_Repeat_Does_Not_Fire_On_A_Release_Tick_Crossing_The_Interval()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            LongPressRepeating)));
+
+        // Five held ticks, not the ten above: the long-press fires at 0.2s and one further
+        // 0.05s tick leaves RepeatElapsed at 0.05, just below the 0.1s repeat interval.
+        var held = new List<InputCommand>();
+        for (var i = 0; i < 5; i++)
+        {
+            held.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        Assert.Equal(1, Taps(held));
+
+        // The release tick's 0.1s step carries RepeatElapsed to 0.15, past the interval, so
+        // the release must win: no repeat on the release tick, and none afterwards either.
+        Assert.Empty(engine.Tick(Released, 0.1f));
+        Assert.Empty(engine.Tick(Released, 0.5f));
+    }
+
+    [Fact]
     public void Long_Press_Wins_When_Its_Threshold_Comes_First()
     {
         var engine = new MappingEngine(Profile(Gestured(

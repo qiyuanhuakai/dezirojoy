@@ -304,7 +304,11 @@ public sealed class MappingEngine
                 break;
         }
 
-        if (button.Gesture is { } configured)
+        // The drain mirrors the state machine's own ordering: a release edge ends the cycle
+        // before any repeat is considered, so a release tick whose step carries RepeatElapsed
+        // past the interval must not emit a long-press after the button is already up. The
+        // button being down is also what keeps the catch-up drain working on a held tick.
+        if (button.Gesture is { } configured && isPressed)
         {
             while (gesture.TryDequeueRepeat(configured))
             {
