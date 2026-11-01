@@ -1,7 +1,11 @@
 # 输入注入权限模型与常驻架构
 
-本文记录两类已实证结论：**为何在部分"强制置顶"应用中映射失效**，以及 **Avalonia 应用的内存构成**。
-两者共同指向同一个架构决定：把引擎与输入注入移入一个不加载 UI 栈的常驻进程。
+本文记录三类已实证结论：**为何在部分"强制置顶"应用中映射失效**、**Avalonia 应用的内存构成**，
+以及**由此定稿的常驻与注入架构**。三者共同指向同一个决定：把引擎与输入注入移入一个不加载
+UI 栈的常驻进程，并由它作为唯一权威；GUI 只是它的一个客户端。
+
+定稿架构见 [第 4 节](#4-定稿架构守护进程权威--命名管道-ipc)。第 1 至 3 节是根因与实测记录，
+其中标"当时"的陈述是调查快照，现状以第 4 节与 [`../DESIGN.md`](../DESIGN.md) 为准。
 
 ---
 
@@ -15,8 +19,8 @@
 
 这不是缺陷，而是 Windows 的既定安全设计。
 
-DeziroJoy 的 `src/DeziroJoy.App/app.manifest` **未声明 `<requestedExecutionLevel>`**，
-因此进程以默认的 `asInvoker` 启动，即**中等完整性级别（medium integrity）**，未提权。
+DeziroJoy 的 `src/DeziroJoy.App/app.manifest` 将 `<requestedExecutionLevel>` 声明为
+`level="asInvoker"`，因此普通 GUI 以**中等完整性级别（medium integrity）**运行，未提权。
 
 而 Microsoft 对 `SendInput` 的官方文档明确写道：
 
@@ -43,9 +47,9 @@ Microsoft 工程师 Jeffrey Tan 在 MSDN 论坛给出直接结论：
 DeziroJoy 以中等完整性运行，其 SendInput 被 UIPI 静默丢弃。这与置顶本身无关——
 置顶只影响 Z 序，不影响完整性级别；真正的原因是这些应用同时是提权进程。
 
-### 1.3 代码侧的放大因素
+### 1.3 代码侧的放大因素（调查当时）
 
-`src/DeziroJoy.Platform.Windows/Output/SendInputOutputSink.cs:121` 的 `Send()` **完全丢弃了
+`src/DeziroJoy.Platform.Windows/Output/SendInputOutputSink.cs:121` 的 `Send()` **当时完全丢弃了
 SendInput 的返回值，且从不读取 GetLastError**（尽管 P/Invoke 声明了 `SetLastError = true`）：
 
 ```csharp
@@ -59,6 +63,15 @@ private static void Send(in INPUT input)
 叠加官方文档"错误码不会表明是 UIPI 所致"这一点，失败表现为**完全无声**：
 无异常、无日志、无返回码，映射只是"停止工作"。这与用户观察到的现象一致。
 
+**此项已修复。** `SendInputOutputSink` 现在捕获 SendInput 的返回值与
+`Marshal.GetLastWin32Error()`，并通过 `InjectionFailed` 事件、`LastInjectionFailed`、
+`LastErrorCode`、`FailedInjectionCount` 以及常驻环形缓冲 `InjectionLog` 把结果暴露出来；
+守护进程退出时打印 `injected: N events · M blocked`。失败不再无声。
+
+但修复只解决了"看得见"，没有解决"归因"：被 UIPI 阻止时 Win32 **不设置**错误码，
+所以计数器非零只证明"有注入被丢弃"，不能反推"这一次就是 UIPI"。边界见
+[4.9 节](#49-sendinput-失败计数与-uipi-的边界)。
+
 另有两项已确认的实现细节，影响修复方案：
 
 - 鼠标位移使用 `MOUSEEVENTF_MOVE` **相对**位移（非绝对坐标），因此可**排除** DPI、
@@ -67,7 +80,10 @@ private static void Send(in INPUT input)
   （如 Ctrl+C 为 4 次调用）。若其中一次被丢弃，修饰键可能卡住；目前只有 `ReleaseAll()`
   能清理，且它仅在切换配置/暂停/停止时触发。
 
-### 1.4 已验证的输入路径事实
+### 1.4 已验证的输入路径事实（根因调查当时的快照）
+
+> 下表记录的是**调查当时（修复前）**的仓库状态，保留它是为了说明推理依据。
+> 标 ✗ 的两行现已不成立，见 [1.6 节](#16-调查之后的现状修正)。
 
 | 项 | 事实 |
 |---|---|
@@ -75,8 +91,8 @@ private static void Send(in INPUT input)
 | 鼠标 | `MOUSEEVENTF_MOVE` 相对位移，无 `ABSOLUTE`/`VIRTUALDESK` |
 | 滚轮 | `MOUSEEVENTF_WHEEL` / `MOUSEEVENTF_HWHEEL`，单位 120 |
 | 键盘 | 虚拟键 `WVk` + `MapVirtualKeyW` 扫描码；`KEYEVENTF_SCANCODE` 已定义但未使用 |
-| 错误处理 | 无。返回值丢弃，`GetLastError` 从不读取 |
-| 提权感知 | 全仓无 `requireAdministrator` / `runas` / `IsUserAnAdmin` / 完整性查询 |
+| 错误处理 | ✗ 当时：无。返回值丢弃，`GetLastError` 从不读取 |
+| 提权感知 | ✗ 当时：全仓无 `requireAdministrator` / `runas` / `IsUserAnAdmin` / 完整性查询 |
 | 前台窗口感知 | 全仓无 `GetForegroundWindow` / `AttachThreadInput` / `SetForegroundWindow` |
 
 ### 1.5 修复方向
@@ -86,6 +102,25 @@ private static void Send(in INPUT input)
 1. **提权的用户会话代理进程**（推荐）——GUI 保持非提权，注入移入提权代理。
 2. **UIAccess 应用**——`uiAccess="true"` + Authenticode 代码签名 + 安装于 `Program Files`，
    可使中等完整性进程绕过 UIPI。需要代码签名证书，作为备选记录。
+
+**已定稿采用第 1 条**，定稿形态见第 4 节。第 2 条（UIAccess）**未实现，也不在计划中**：
+它要求代码签名证书与受保护安装位置，代价远高于一个提权的用户会话代理；本文保留它只是
+为了记录"为什么没有选它"。
+
+### 1.6 调查之后的现状修正
+
+调查当时得出的三条否定性结论已经过期，明确纠正如下，以免被当作现状引用：
+
+| 当时的结论 | 现状 |
+|---|---|
+| "错误处理不存在" | 已存在。返回值与 `GetLastError` 均被捕获并计数，见 1.3 节 |
+| "提权感知全仓没有" | 已存在。`WindowsProcessElevation.IsElevated` 查询当前进程令牌，`IElevationService` / `ElevationService` 把它暴露给 UI |
+| "守护进程不存在" | 已存在。`Program.cs --daemon` 走 `DaemonHost.Run()`，不加载任何 Avalonia 程序集；登录时计划任务由 `DaemonInstaller` 注册 |
+
+仍未解决的一项：**组合键部分丢弃时强制释放已按下的修饰键**。`CommandDispatcher` 目前只在
+`ReleaseAll()`（切配置 / 暂停 / 停止）时统一释放；单次组合键里若某几个事件被丢弃，
+dispatcher 得不到反馈，因此无法只补发丢失的那几个。这需要一条从 sink 回到 dispatcher 的
+失败通道，属于独立改动，不与本文定稿架构耦合。
 
 ---
 
@@ -101,13 +136,16 @@ Windows 自 Vista 起实施 **Session 0 隔离**——服务运行于 Session 0�
 
 | 途径 | 说明 |
 |---|---|
-| 登录时计划任务（`schtasks /rl HIGHEST`） | 一次性授权，之后免每次 UAC 弹窗，推荐 |
-| GUI 触发一次性 UAC 提权 | 实现最简单，但每次启动都弹窗 |
-| 运行时 `ShellExecute` `runas` | 按需提权 |
+| 登录时计划任务（`schtasks /rl HIGHEST`） | 一次性授权，之后免每次 UAC 弹窗，**默认途径** |
+| 按需 `ShellExecute` `runas` | 未安装计划任务时可用，**不要求先安装任务**；UAC 被拒绝时界面显示"不可用" |
 
-GUI（非提权）通过**命名管道 IPC** 与代理通信；GUI 侧提供 `IOutputSink` 的 IPC 实现。
-`src/DeziroJoy.App/Services/PlatformFactory.cs:39-67` 的 `TryCreateSink` 是唯一构造点，
-改造集中于此。
+GUI（非提权）通过**命名管道 IPC** 与代理通信。
+
+> **已废弃的早期设想**：本文一度把改造点定在
+> `src/DeziroJoy.App/Services/PlatformFactory.cs:39-67` 的 `TryCreateSink`，即"在 GUI 进程内
+> 把本地 sink 换成一个 IPC sink"。该处方**不再有效**，定稿架构见第 4 节。
+> `TryCreateSink` 至今仍只做平台选择（Windows → `SendInputOutputSink`，Linux → `UInputOutputSink`），
+> GUI 不再通过它取得注入能力。
 
 ---
 
@@ -158,11 +196,140 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 
 ---
 
-## 4. 待办
+## 4. 定稿架构：守护进程权威 + 命名管道 IPC
 
-- [ ] `SendInputOutputSink.cs:121` 增加返回值与 `GetLastError` 检查，使失败不再无声
-- [ ] 组合键部分丢弃时强制释放已按下的修饰键
-- [ ] 提权用户会话代理 + 命名管道 IPC（`PlatformFactory.TryCreateSink` 为唯一构造点）
-- [ ] 登录时计划任务 `/rl HIGHEST` 的安装入口与 UI
-- [ ] `--daemon` 无窗口 CLI 模式（当前 `Program.cs` 为纯 Avalonia 桌面生命周期，无参数解析）
-- [ ] 评估 `InvariantGlobalization` 对中文 UI 的影响
+### 4.1 权威归属
+
+**提升的常驻守护进程是唯一权威。** 它持有 `IGamepadProvider`、`IOutputSink`、`EngineHost`
+与注入互斥体，是唯一真正注入输入的进程。GUI 是客户端，只表达意图与呈现状态。
+
+- 守护进程**自动启动**（登录时计划任务），不等 GUI 发起；配置来自持久化的
+  `FileProfileStore`（Windows `%APPDATA%\DeziroJoy\profiles\`，Linux `~/.config/DeziroJoy/profiles/`），
+  因此 GUI 从未打开过也能按既有配置映射。
+- GUI 的 Start / Stop / Apply 都是**期望状态命令**，不是"让 GUI 自己开始注入"。
+- **Windows 没有本地引擎回退。** GUI 连不上守护进程时不会退而在自己进程内跑引擎——
+  那正是 UIPI 静默丢弃注入的形态，假成功比失败更糟。
+- **Linux 保留本地引擎。** uinput 不受 UIPI 约束，GUI 进程内直接运行引擎仍是正确形态，
+  守护进程与管道是 Windows 提权需求的产物，不是 Linux 的必需品。
+
+### 4.2 GUI 的组合入口
+
+GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `EngineComposition`**。
+
+`EngineComposition`（`src/DeziroJoy.App/Services/EngineComposition.cs`）是本地引擎路径的
+单一装配点：它自己 new 出 `FileProfileStore`、`PlatformFactory.TryCreateProvider` 的 provider、
+`PlatformFactory.TryCreateSink` 的 sink 与 `EngineHost`。GUI 复用它就会连带取得一套真实的
+本地引擎和本地 sink，与"权威在守护进程"直接矛盾。
+
+因此 GUI 侧的组合入口只装配：管道客户端、状态镜像，以及一个**不注入**的呈现用宿主
+（存在性检测、可视化器高亮、编辑器劫持）。注入路径只存在于守护进程内。
+
+### 4.3 两个不同的内核对象
+
+管道与互斥体是**两个独立对象：名字不同，用途不同，不可互相替代**。
+
+| 对象 | 名字 | 作用 |
+|---|---|---|
+| 命名管道 | `DeziroJoy.Mapping` | GUI 与守护进程之间的控制通道 |
+| 命名互斥体 | `Global\DeziroJoy.Injection` | 全机唯一注入者仲裁 |
+
+- 管道名是 `DeziroJoy.Mapping`；Windows 上的完整路径是 `\\.\pipe\DeziroJoy.Mapping`
+  （C# 字面量 `@"\\.\pipe\DeziroJoy.Mapping"`）。
+- 互斥体名保持 `Global\DeziroJoy.Injection` **不变**（`InjectionMutex.DefaultName`）。
+  `Global\` 前缀使它跨会话全机可见，GUI 与提升的守护进程因此竞争同一个槽位。
+- 管道**不承担**互斥语义，互斥体**不承担**通信语义。守护进程持有互斥体的时长，
+  与它是否正在监听管道无关。
+
+### 4.4 协议版本 1
+
+消息按类型携带必要字段：协议版本用于握手协商，请求 ID 用于变更配对，守护进程实例 ID
+与单调递增序号用于识别快照来源和顺序。版本 1 的消息集：
+
+| 消息 | 方向 | 负载 | 语义 |
+|---|---|---|---|
+| `Hello` | GUI → daemon | 客户端标识 | 握手 |
+| `HelloAck` | daemon → GUI | 实例 ID、协议版本、当前配置修订号 | 握手应答 |
+| `GetState` | GUI → daemon | — | 拉取全量快照 |
+| `ApplyConfiguration` | GUI → daemon | 期望配置修订号 + 完整 profile JSON | 提交配置变更 |
+| `Start` | GUI → daemon | 期望配置修订号 | 请求开始映射 |
+| `Stop` | GUI → daemon | — | 请求停止映射 |
+| `MutationAck` | daemon → GUI | 请求 ID、结果、新修订号、新序号 | 变更已被受理 |
+| `StateChanged` | daemon → GUI | 全量快照 | 状态推送 |
+| `Error` | daemon → GUI | 请求 ID、错误码、可读信息 | 请求失败 |
+
+一致性规则：
+
+- **请求 ID**：每个请求唯一，应答原样带回，用于把响应配对到发起它的调用。
+- **守护进程实例 ID**：每次守护进程启动生成一个。GUI 用它判断"我连的还是同一个守护进程吗"；
+  实例 ID 变了说明守护进程重启过，GUI 必须重新握手，不能继续沿用旧会话状态。
+- **单调序号**：守护进程侧每次状态变更递增。GUI 用它检测丢帧与乱序；发现缺号就补一次
+  `GetState`，不猜测中间状态。
+- **全量快照**：`StateChanged` 与 `GetState` 的应答都携带完整状态，不做增量。状态面很小
+  （运行中 / 未运行、已连接设备、活动配置修订号、注入计数），全量比增量更难出错。
+- **期望配置修订号**：`ApplyConfiguration` 与 `Start` 都带 GUI 认为当前的修订号。守护进程
+  发现不一致就拒绝该请求并回 `MutationAck(Accepted=false, ErrorCode="revision-mismatch")`，
+  同时携带当前修订号；GUI 重新 `GetState` 后再决定，**不自动重放**。
+- **完整 profile JSON，不是路径**：配置随消息传输序列化后的 profile 本体。传路径会让
+  守护进程去读一个 GUI 有权限而它未必有权限的位置，也会让"到底改没改"无法从消息本身判断。
+- **同一时刻只有一个未完成变更**：GUI 在收到上一条 `MutationAck` 之前，不发下一条
+  `ApplyConfiguration` / `Start` / `Stop`。
+- **结果未知时对账，绝不重放**：请求超时或连接中断时，GUI 无法知道守护进程是否已经应用了
+  这条变更。此时它重新连接、握手、`GetState`，按真实状态决定下一步。**永不重放**同一条
+  变更——重放会把一次已经生效的变更应用两次。
+
+### 4.5 命令语义
+
+| 命令 | 守护进程行为 | 应答时机 |
+|---|---|---|
+| `Start` | 取得注入互斥体，启动引擎循环 | **在引擎与互斥体都就位之后**才回 ack |
+| `Stop` | `ReleaseAll()` 释放所有按住的键与鼠标键，再释放互斥体，停止循环 | **在释放与互斥体释放都完成之后**才回 ack |
+| `ApplyConfiguration` | 运行中**直接换 profile，不停引擎**；未运行则只更新待用配置 | 配置已生效后 |
+| GUI 关闭 / 断开 | **只断开管道**：不停引擎，不释放互斥体 | — |
+
+- `Start` 的 ack 必须晚于互斥体获取。否则 GUI 会显示"已启动"，而注入槽位其实在另一个进程手里。
+- `Stop` 之后**守护进程继续存活**：它只是不再注入。停止映射不等于退出守护进程。
+- `ApplyConfiguration` 运行中生效是核心场景：改灵敏度不该要求用户先停止映射。
+- GUI 关闭只断开连接，守护进程按当前配置继续映射。这正是常驻架构的意义所在。
+
+### 4.6 安全边界
+
+- **同用户 ACL**：管道只授予同一用户（以及必要的管理员侧）访问权，不做成 Everyone 可写。
+- **同会话验证**：连接建立后守护进程校验对端进程的会话与用户，不匹配即断开。提升的守护进程
+  与普通 GUI 同用户、同会话，这是设计前提；跨会话连接一律拒绝。
+- **最小攻击面**：管道只暴露 4.4 节那 9 条映射控制消息，不提供任意代码执行、文件读写或
+  进程启动能力。
+
+### 4.7 第二个守护进程
+
+守护进程自动启动时若发现**另一个守护进程已在运行**（实例已在监听管道，或已持有注入互斥体），
+它**干净退出**：打印一行说明、释放自己取得的一切、以 0 退出。不抢管道、不抢互斥体、不重复注入。
+
+### 4.8 按需提权与 UAC 失败
+
+- 未安装登录计划任务时，守护进程仍可**按需**通过 `runas` 启动
+  （`WindowsProcessElevation.RelaunchElevated`），**不要求先安装计划任务**。
+- UAC 被用户取消、或 shell 拒绝启动时，界面显示**"不可用"**并说明原因，不显示虚假的
+  "已连接 / 已提权"。`DaemonSettingsViewModel.ElevationText` 的"无法读取其运行级别"分支
+  同理：读不到运行级别时报告"未知"，绝不推断为"已提权"。
+
+### 4.9 SendInput 失败计数与 UIPI 的边界
+
+`SendInputOutputSink` 暴露 `LastInjectionFailed`、`LastErrorCode`、`FailedInjectionCount` 与
+`InjectionFailed` 事件；`InjectionLog` 常驻记录每次注入的成败；守护进程退出时打印
+`injected: N events · M blocked`。这些计数器**必须**在界面上呈现。
+
+但两条边界必须同时说明，否则计数器会被当成 UIPI 探测器用：
+
+1. **不能从每次错误反推 UIPI。** 官方文档明确：被 UIPI 阻止时 SendInput 失败，而
+   "`GetLastError` 的返回值与函数返回值都不会指明失败源于 UIPI"。计数器非零只证明
+   "有注入被丢弃"，不证明"这一次是 UIPI"。
+2. **Linux 测试不能证明 UIPI。** UIPI 是 Windows 的完整性机制；Linux 上 uinput 路径的测试
+   全绿，与 Windows 上的提权行为无关。`docs/QA-CHECKLIST.md` 第 10 节的管理员目标真机验证
+   才是这项的唯一证据。
+
+### 4.10 仍未完成
+
+- **组合键部分丢弃时强制释放已按下的修饰键**（见 1.6 节）：需要一条从 sink 回到
+  `CommandDispatcher` 的失败通道，与本文定稿架构不耦合。
+- **`InvariantGlobalization` 取舍**：已记录于 `docs/MEMORY.md`，按内存之外的理由单独决定，
+  不作为本架构的一部分。
