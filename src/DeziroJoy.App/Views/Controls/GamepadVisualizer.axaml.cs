@@ -2,8 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
-using Avalonia.Media;
 using Avalonia.VisualTree;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
@@ -13,15 +13,21 @@ namespace DeziroJoy.App.Views.Controls;
 
 public partial class GamepadVisualizer : UserControl
 {
-    private const double StickTravel = 15.0;
+    /// <summary>Class the selected element carries; declared last so it outranks the transient states.</summary>
+    private const string SelectedClass = "selected";
 
-    private const double LeftThumbBaseX = 63.0;
+    /// <summary>Class the code-behind adds while the pointer is held on an element.</summary>
+    private const string PressedClass = "pressed";
+
+    private const double StickTravel = 26.0;
+
+    private const double LeftThumbBaseX = 107.0;
 
     private const double LeftThumbBaseY = 95.0;
 
-    private const double RightThumbBaseX = 235.0;
+    private const double RightThumbBaseX = 467.0;
 
-    private const double RightThumbBaseY = 131.0;
+    private const double RightThumbBaseY = 187.0;
 
     private Ellipse? _leftThumb;
 
@@ -29,7 +35,9 @@ public partial class GamepadVisualizer : UserControl
 
     private GamepadVisualizerViewModel? _bound;
 
-    private Control? _selectedElement;
+    private InputElement? _selectedElement;
+
+    private InputElement? _pressedElement;
 
     /// <summary>
     /// The source currently selected for editing, or null. The matching model element is
@@ -49,6 +57,18 @@ public partial class GamepadVisualizer : UserControl
     public GamepadVisualizer()
     {
         AvaloniaXamlLoader.Load(this);
+
+        // Shapes and Borders never receive a pressed state on their own - only PressedMixin
+        // controls such as Button do - so the press ring is driven from here. The release
+        // handlers sit on the canvas in the tunnel phase so they fire wherever the pointer
+        // is let go; the press itself is lit by the element's own bubbling handler, because
+        // the focus-on-press handler runs in the tunnel phase and a ring applied before it
+        // would be overridden by the focus ring.
+        if (this.FindControl<Canvas>("PadCanvas") is { } canvas)
+        {
+            canvas.AddHandler(PointerReleasedEvent, OnPadPointerReleased, RoutingStrategies.Tunnel);
+            canvas.AddHandler(PointerCaptureLostEvent, OnPadPointerCaptureLost, RoutingStrategies.Tunnel);
+        }
     }
 
     /// <summary>
@@ -132,6 +152,37 @@ public partial class GamepadVisualizer : UserControl
         thumb.Opacity = 0.55 + (0.45 * Math.Clamp(magnitude, 0.0, 1.0));
     }
 
+    private void OnPadPointerReleased(object? sender, PointerReleasedEventArgs e) => ReleasePress();
+
+    private void OnPadPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e) => ReleasePress();
+
+    /// <summary>
+    /// Lights the press ring on <paramref name="element"/>. Called from the element's own
+    /// bubbling PointerPressed, which runs after the tunnel-phase focus-on-press handler, so
+    /// the press ring is the last state applied and stays visible while the pointer is held.
+    /// </summary>
+    private void Press(Control element)
+    {
+        element.Classes.Set(PressedClass, true);
+        _pressedElement = element;
+    }
+
+    /// <summary>
+    /// Drops the press ring from whichever element is holding it. The element is remembered
+    /// rather than read off the event because a release can arrive after the pointer has
+    /// already moved off the element that was pressed.
+    /// </summary>
+    private void ReleasePress()
+    {
+        if (_pressedElement is null)
+        {
+            return;
+        }
+
+        _pressedElement.Classes.Set(PressedClass, false);
+        _pressedElement = null;
+    }
+
     private void OnElementPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Control { Tag: string tag } element)
@@ -145,6 +196,8 @@ public partial class GamepadVisualizer : UserControl
             return;
         }
 
+        Press(element);
+
         e.Handled = true;
         ElementClicked?.Invoke(this, new GamepadElementClickedEventArgs(source));
     }
@@ -155,6 +208,8 @@ public partial class GamepadVisualizer : UserControl
         {
             return;
         }
+
+        Press(element);
 
         e.Handled = true;
         ElementClicked?.Invoke(this, new GamepadElementClickedEventArgs(new ButtonBinding(GamepadButton.Extra, code)));
@@ -182,9 +237,12 @@ public partial class GamepadVisualizer : UserControl
 
     private void UpdateSelectionHighlight()
     {
+        // The outline is a class, not a value written onto the element: a local value would
+        // outrank the hover, press and focus styles for the rest of the element's life, so
+        // an element that had once been selected could never be re-ringed again.
         if (_selectedElement is not null)
         {
-            Outline(_selectedElement, selected: false);
+            _selectedElement.Classes.Remove(SelectedClass);
             _selectedElement = null;
         }
 
@@ -194,7 +252,7 @@ public partial class GamepadVisualizer : UserControl
             return;
         }
 
-        Outline(element, selected: true);
+        element.Classes.Add(SelectedClass);
         _selectedElement = element;
     }
 
@@ -212,27 +270,6 @@ public partial class GamepadVisualizer : UserControl
         }
 
         return source is not null && ElementNameFor(source) is { } name ? this.FindControl<Control>(name) : null;
-    }
-
-    private void Outline(Control element, bool selected)
-    {
-        var key = selected ? "AccentBrush" : "StickRingBrush";
-        if (!this.TryFindResource(key, ActualThemeVariant, out var value) || value is not IBrush brush)
-        {
-            return;
-        }
-
-        switch (element)
-        {
-            case Shape shape:
-                shape.Stroke = brush;
-                shape.StrokeThickness = selected ? 2.5 : 1;
-                break;
-            case Border border:
-                border.BorderBrush = brush;
-                border.BorderThickness = selected ? new Thickness(2.5) : new Thickness(1);
-                break;
-        }
     }
 
     private static string? ElementNameFor(InputBinding source) => source switch

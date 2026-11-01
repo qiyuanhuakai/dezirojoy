@@ -12,41 +12,107 @@
 
     <!--
         The model is the editor, not a status panel: every mappable element carries the
-        padHit class so it gets the hand cursor and the hover ring, and each one routes its
-        PointerPressed to the code-behind, which turns the element into an InputBinding and
-        raises ElementClicked. Live gamepad input still drives the pressed fill, so the two
-        ways of pointing at an element agree.
+        padHit class so it gets the hand cursor, the hover ring and keyboard focus, and each
+        one routes its PointerPressed to the code-behind, which turns the element into an
+        InputBinding and raises ElementClicked. Live gamepad input still drives the pressed
+        fill, so the two ways of pointing at an element agree.
+
+        The canvas is 620x380, the aspect of the stage the window gives the model, so the
+        Viewbox that hosts this control fills that stage instead of leaving the baseline's
+        dead margin down both sides - and scales down with it at the window's minimum width.
+        Every coordinate below is in that canvas space.
 
         Rounded bars (triggers, bumpers, dpad arms) are Borders rather than Rectangles:
         Avalonia does not hit-test a Rectangle that has RadiusX/RadiusY set, so a rounded
         Rectangle would draw correctly but never receive a click.
     -->
     <UserControl.Styles>
-        <Style Selector="Shape.padHit">
+        <!--
+            Every mappable element's resting ring. These are plain styles rather than
+            attributes on the elements because a local value - which is what a XAML
+            attribute or a {DynamicResource} compiles to - outranks every activated style in
+            Avalonia: an element carrying its own Stroke could never be re-ringed by
+            :pointerover, :focus, .pressed or .selected below.
+
+            The shape selectors read ":is(Shape)" rather than "Shape" because a bare type
+            selector is CONCRETE in Avalonia: it matches only that exact type, and Shape is
+            abstract, so "Shape.padHit" would never match an Ellipse at all.
+        -->
+        <Style Selector=":is(Shape).padHit">
             <Setter Property="Cursor" Value="Hand" />
-        </Style>
-        <Style Selector="Shape.padHit:pointerover">
-            <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="StrokeThickness" Value="1.5" />
+            <Setter Property="Focusable" Value="True" />
+            <Setter Property="Stroke" Value="{DynamicResource StickRingBrush}" />
+            <Setter Property="StrokeThickness" Value="1" />
         </Style>
         <Style Selector="Border.padHit">
             <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="True" />
+            <Setter Property="BorderBrush" Value="{DynamicResource StickRingBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+
+        <!--
+            Hover: the accent ring. The fade itself is an inline BrushTransition on each
+            element, because Avalonia 12.1.4 drops a Transitions Setter from a Style for
+            Shapes and Borders.
+        -->
+        <Style Selector=":is(Shape).padHit:pointerover">
+            <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="StrokeThickness" Value="1.5" />
         </Style>
         <Style Selector="Border.padHit:pointerover">
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
+
+        <!-- Focus: the keyboard reaches the model too, so a focused element rings as well. -->
+        <Style Selector=":is(Shape).padHit:focus">
+            <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="StrokeThickness" Value="1.5" />
+        </Style>
+        <Style Selector="Border.padHit:focus">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!--
+            Press: a deeper accent while the pointer is held. Shapes and Borders never
+            receive the :pressed pseudo-class on their own - only PressedMixin controls such
+            as Button do - and Avalonia 12.1.4 lets only a control set its own pseudo-classes,
+            so the state rides a plain "pressed" class that the code-behind adds from the
+            element's bubbling PointerPressed.
+        -->
+        <Style Selector=":is(Shape).padHit.pressed">
+            <Setter Property="Stroke" Value="{DynamicResource AccentPressedBrush}" />
+            <Setter Property="StrokeThickness" Value="2" />
+        </Style>
+        <Style Selector="Border.padHit.pressed">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentPressedBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+
+        <!--
+            Selection outranks every transient state: declared last so it wins the tie among
+            the activated styles, because it is the state that says "this element is being
+            edited" and must not be swapped out from under the user mid-edit.
+        -->
+        <Style Selector=":is(Shape).padHit.selected">
+            <Setter Property="Stroke" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="StrokeThickness" Value="2.5" />
+        </Style>
+        <Style Selector="Border.padHit.selected">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="BorderThickness" Value="2.5" />
+        </Style>
     </UserControl.Styles>
 
-    <Grid Width="320" Height="244">
+    <Grid Width="620" Height="380">
         <Canvas x:Name="PadCanvas" Opacity="{Binding IsConnected, Converter={StaticResource ConnectedOpacity}}">
 
-            <Rectangle x:Name="PadBody" Canvas.Left="8" Canvas.Top="34" Width="304" Height="164"
-                       RadiusX="46" RadiusY="46" Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource ControlBorderBrush}" StrokeThickness="1"
+            <Rectangle x:Name="PadBody" Canvas.Left="36" Canvas.Top="44" Width="548" Height="256"
+                       RadiusX="76" RadiusY="76" Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource ControlBorderBrush}" StrokeThickness="1"
                        Effect="{DynamicResource PadShadowEffect}" />
 
-             <Border x:Name="LeftTrigger" Classes="padHit" Canvas.Left="44" Canvas.Top="6" Width="54" Height="12"
-                     CornerRadius="6" Background="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="LeftTrigger" Classes="padHit" Canvas.Left="82" Canvas.Top="2" Width="96" Height="14"
+                     CornerRadius="7" Background="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}"
                      ToolTip.Tip="左扳机 LT" PointerPressed="OnElementPressed" Tag="Button:LeftTrigger">
                  <Border.Transitions>
                      <Transitions>
@@ -54,9 +120,8 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-             <Border x:Name="RightTrigger" Classes="padHit" Canvas.Left="222" Canvas.Top="6" Width="54" Height="12"
-                     CornerRadius="6" Background="{Binding IsRightTriggerPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="RightTrigger" Classes="padHit" Canvas.Left="442" Canvas.Top="2" Width="96" Height="14"
+                     CornerRadius="7" Background="{Binding IsRightTriggerPressed, Converter={StaticResource PadBrush}}"
                      ToolTip.Tip="右扳机 RT" PointerPressed="OnElementPressed" Tag="Button:RightTrigger">
                  <Border.Transitions>
                      <Transitions>
@@ -64,9 +129,8 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-             <Border x:Name="LeftBumper" Classes="padHit" Canvas.Left="38" Canvas.Top="20" Width="66" Height="14"
-                     CornerRadius="7" Background="{Binding IsLeftBumperPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="LeftBumper" Classes="padHit" Canvas.Left="72" Canvas.Top="20" Width="116" Height="16"
+                     CornerRadius="8" Background="{Binding IsLeftBumperPressed, Converter={StaticResource PadBrush}}"
                      ToolTip.Tip="左肩键 LB" PointerPressed="OnElementPressed" Tag="Button:LeftBumper">
                  <Border.Transitions>
                      <Transitions>
@@ -74,9 +138,8 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-             <Border x:Name="RightBumper" Classes="padHit" Canvas.Left="216" Canvas.Top="20" Width="66" Height="14"
-                     CornerRadius="7" Background="{Binding IsRightBumperPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="RightBumper" Classes="padHit" Canvas.Left="432" Canvas.Top="20" Width="116" Height="16"
+                     CornerRadius="8" Background="{Binding IsRightBumperPressed, Converter={StaticResource PadBrush}}"
                      ToolTip.Tip="右肩键 RB" PointerPressed="OnElementPressed" Tag="Button:RightBumper">
                  <Border.Transitions>
                      <Transitions>
@@ -85,8 +148,8 @@
                  </Border.Transitions>
              </Border>
 
-             <Ellipse x:Name="LeftStickPad" Classes="padHit" Canvas.Left="48" Canvas.Top="80" Width="52" Height="52"
-                      Fill="{DynamicResource StickPadBrush}" Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+             <Ellipse x:Name="LeftStickPad" Classes="padHit" Canvas.Left="80" Canvas.Top="68" Width="100" Height="100"
+                      Fill="{DynamicResource StickPadBrush}"
                       PointerPressed="OnElementPressed" Tag="Stick:Left" ToolTip.Tip="左摇杆">
                  <Ellipse.Transitions>
                      <Transitions>
@@ -94,13 +157,12 @@
                      </Transitions>
                  </Ellipse.Transitions>
              </Ellipse>
-            <Ellipse x:Name="LeftStickRing" Canvas.Left="59" Canvas.Top="91" Width="30" Height="30"
+            <Ellipse x:Name="LeftStickRing" Canvas.Left="100" Canvas.Top="88" Width="60" Height="60"
                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
-            <Ellipse x:Name="LeftStickThumb" Canvas.Left="63" Canvas.Top="95" Width="22" Height="22"
+            <Ellipse x:Name="LeftStickThumb" Canvas.Left="107" Canvas.Top="95" Width="46" Height="46"
                      Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
-             <Ellipse x:Name="LeftStickClick" Classes="padHit" Canvas.Left="67" Canvas.Top="133" Width="14" Height="14"
+             <Ellipse x:Name="LeftStickClick" Classes="padHit" Canvas.Left="121" Canvas.Top="186" Width="18" Height="18"
                       Fill="{Binding IsLeftStickPressed, Converter={StaticResource PadBrush}}"
-                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                       PointerPressed="OnElementPressed" Tag="Button:LeftStick" ToolTip.Tip="左摇杆按下">
                  <Ellipse.Transitions>
                      <Transitions>
@@ -109,8 +171,8 @@
                  </Ellipse.Transitions>
              </Ellipse>
 
-             <Ellipse x:Name="RightStickPad" Classes="padHit" Canvas.Left="220" Canvas.Top="116" Width="52" Height="52"
-                      Fill="{DynamicResource StickPadBrush}" Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+             <Ellipse x:Name="RightStickPad" Classes="padHit" Canvas.Left="440" Canvas.Top="160" Width="100" Height="100"
+                      Fill="{DynamicResource StickPadBrush}"
                       PointerPressed="OnElementPressed" Tag="Stick:Right" ToolTip.Tip="右摇杆">
                  <Ellipse.Transitions>
                      <Transitions>
@@ -118,13 +180,12 @@
                      </Transitions>
                  </Ellipse.Transitions>
              </Ellipse>
-            <Ellipse x:Name="RightStickRing" Canvas.Left="231" Canvas.Top="127" Width="30" Height="30"
+            <Ellipse x:Name="RightStickRing" Canvas.Left="460" Canvas.Top="180" Width="60" Height="60"
                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
-            <Ellipse x:Name="RightStickThumb" Canvas.Left="235" Canvas.Top="131" Width="22" Height="22"
+            <Ellipse x:Name="RightStickThumb" Canvas.Left="467" Canvas.Top="187" Width="46" Height="46"
                      Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
-             <Ellipse x:Name="RightStickClick" Classes="padHit" Canvas.Left="239" Canvas.Top="169" Width="14" Height="14"
+             <Ellipse x:Name="RightStickClick" Classes="padHit" Canvas.Left="481" Canvas.Top="272" Width="18" Height="18"
                       Fill="{Binding IsRightStickPressed, Converter={StaticResource PadBrush}}"
-                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                       PointerPressed="OnElementPressed" Tag="Button:RightStick" ToolTip.Tip="右摇杆按下">
                  <Ellipse.Transitions>
                      <Transitions>
@@ -133,9 +194,8 @@
                  </Ellipse.Transitions>
              </Ellipse>
 
-             <Border x:Name="DpadUp" Classes="padHit" Canvas.Left="122" Canvas.Top="126" Width="12" Height="24"
-                     CornerRadius="2" Background="{Binding IsDPadUpPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="DpadUp" Classes="padHit" Canvas.Left="236" Canvas.Top="184" Width="28" Height="56"
+                     CornerRadius="3" Background="{Binding IsDPadUpPressed, Converter={StaticResource PadBrush}}"
                      PointerPressed="OnElementPressed" Tag="Button:DPadUp" ToolTip.Tip="十字键 上">
                  <Border.Transitions>
                      <Transitions>
@@ -143,9 +203,8 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-             <Border x:Name="DpadDown" Classes="padHit" Canvas.Left="122" Canvas.Top="150" Width="12" Height="24"
-                     CornerRadius="2" Background="{Binding IsDPadDownPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="DpadDown" Classes="padHit" Canvas.Left="236" Canvas.Top="240" Width="28" Height="56"
+                     CornerRadius="3" Background="{Binding IsDPadDownPressed, Converter={StaticResource PadBrush}}"
                      PointerPressed="OnElementPressed" Tag="Button:DPadDown" ToolTip.Tip="十字键 下">
                  <Border.Transitions>
                      <Transitions>
@@ -153,9 +212,8 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-             <Border x:Name="DpadLeft" Classes="padHit" Canvas.Left="104" Canvas.Top="144" Width="24" Height="12"
-                     CornerRadius="2" Background="{Binding IsDPadLeftPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="DpadLeft" Classes="padHit" Canvas.Left="194" Canvas.Top="226" Width="56" Height="28"
+                     CornerRadius="3" Background="{Binding IsDPadLeftPressed, Converter={StaticResource PadBrush}}"
                      PointerPressed="OnElementPressed" Tag="Button:DPadLeft" ToolTip.Tip="十字键 左">
                  <Border.Transitions>
                      <Transitions>
@@ -163,9 +221,8 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-             <Border x:Name="DpadRight" Classes="padHit" Canvas.Left="128" Canvas.Top="144" Width="24" Height="12"
-                     CornerRadius="2" Background="{Binding IsDPadRightPressed, Converter={StaticResource PadBrush}}"
-                     BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
+             <Border x:Name="DpadRight" Classes="padHit" Canvas.Left="250" Canvas.Top="226" Width="56" Height="28"
+                     CornerRadius="3" Background="{Binding IsDPadRightPressed, Converter={StaticResource PadBrush}}"
                      PointerPressed="OnElementPressed" Tag="Button:DPadRight" ToolTip.Tip="十字键 右">
                  <Border.Transitions>
                      <Transitions>
@@ -173,16 +230,15 @@
                      </Transitions>
                  </Border.Transitions>
              </Border>
-            <Rectangle x:Name="DpadCenter" Canvas.Left="122" Canvas.Top="144" Width="12" Height="12" RadiusX="2" RadiusY="2"
+            <Rectangle x:Name="DpadCenter" Canvas.Left="236" Canvas.Top="226" Width="28" Height="28" RadiusX="3" RadiusY="3"
                        Fill="{DynamicResource DpadCenterBrush}" IsHitTestVisible="False" />
 
             <!-- Each face button and its letter share one panel. A Shape cannot hold a child in
                  Avalonia, so the only way to keep the two together is a shared parent: the
                  button moves, the letter moves with it, and neither can drift out of centre. -->
-            <Canvas Canvas.Left="198" Canvas.Top="56" Width="22" Height="22">
-                <Ellipse x:Name="ButtonY" Classes="padHit" Width="22" Height="22"
+            <Canvas Canvas.Left="373" Canvas.Top="55" Width="34" Height="34">
+                <Ellipse x:Name="ButtonY" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}"
-                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                          PointerPressed="OnElementPressed" Tag="Button:Y">
                     <Ellipse.Transitions>
                         <Transitions>
@@ -190,14 +246,13 @@
                         </Transitions>
                     </Ellipse.Transitions>
                 </Ellipse>
-                <TextBlock Width="22" Height="22" LineHeight="22" Text="Y" FontSize="10"
+                <TextBlock Width="34" Height="34" LineHeight="34" Text="Y" FontSize="15"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
-            <Canvas Canvas.Left="174" Canvas.Top="80" Width="22" Height="22">
-                <Ellipse x:Name="ButtonX" Classes="padHit" Width="22" Height="22"
+            <Canvas Canvas.Left="351" Canvas.Top="99" Width="34" Height="34">
+                <Ellipse x:Name="ButtonX" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}"
-                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                          PointerPressed="OnElementPressed" Tag="Button:X">
                     <Ellipse.Transitions>
                         <Transitions>
@@ -205,14 +260,13 @@
                         </Transitions>
                     </Ellipse.Transitions>
                 </Ellipse>
-                <TextBlock Width="22" Height="22" LineHeight="22" Text="X" FontSize="10"
+                <TextBlock Width="34" Height="34" LineHeight="34" Text="X" FontSize="15"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
-            <Canvas Canvas.Left="222" Canvas.Top="80" Width="22" Height="22">
-                <Ellipse x:Name="ButtonB" Classes="padHit" Width="22" Height="22"
+            <Canvas Canvas.Left="395" Canvas.Top="99" Width="34" Height="34">
+                <Ellipse x:Name="ButtonB" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}"
-                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                          PointerPressed="OnElementPressed" Tag="Button:B">
                     <Ellipse.Transitions>
                         <Transitions>
@@ -220,14 +274,13 @@
                         </Transitions>
                     </Ellipse.Transitions>
                 </Ellipse>
-                <TextBlock Width="22" Height="22" LineHeight="22" Text="B" FontSize="10"
+                <TextBlock Width="34" Height="34" LineHeight="34" Text="B" FontSize="15"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
-            <Canvas Canvas.Left="198" Canvas.Top="104" Width="22" Height="22">
-                <Ellipse x:Name="ButtonA" Classes="padHit" Width="22" Height="22"
+            <Canvas Canvas.Left="373" Canvas.Top="143" Width="34" Height="34">
+                <Ellipse x:Name="ButtonA" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}"
-                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                          PointerPressed="OnElementPressed" Tag="Button:A">
                     <Ellipse.Transitions>
                         <Transitions>
@@ -235,14 +288,13 @@
                         </Transitions>
                     </Ellipse.Transitions>
                 </Ellipse>
-                <TextBlock Width="22" Height="22" LineHeight="22" Text="A" FontSize="10"
+                <TextBlock Width="34" Height="34" LineHeight="34" Text="A" FontSize="15"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
 
-              <Ellipse x:Name="BackButton" Classes="padHit" Canvas.Left="138" Canvas.Top="64" Width="14" Height="14"
+              <Ellipse x:Name="BackButton" Classes="padHit" Canvas.Left="263" Canvas.Top="80" Width="18" Height="18"
                        Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
-                       Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                        ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back">
                   <Ellipse.Transitions>
                       <Transitions>
@@ -250,9 +302,8 @@
                       </Transitions>
                   </Ellipse.Transitions>
               </Ellipse>
-              <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="157" Canvas.Top="64" Width="14" Height="14"
+              <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="291" Canvas.Top="80" Width="18" Height="18"
                        Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}"
-                       Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                        ToolTip.Tip="主页键 Guide" PointerPressed="OnElementPressed" Tag="Button:Guide">
                   <Ellipse.Transitions>
                       <Transitions>
@@ -260,9 +311,8 @@
                       </Transitions>
                   </Ellipse.Transitions>
               </Ellipse>
-              <Ellipse x:Name="StartButton" Classes="padHit" Canvas.Left="176" Canvas.Top="64" Width="14" Height="14"
+              <Ellipse x:Name="StartButton" Classes="padHit" Canvas.Left="319" Canvas.Top="80" Width="18" Height="18"
                        Fill="{Binding IsStartPressed, Converter={StaticResource PadBrush}}"
-                       Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
                        ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start">
                   <Ellipse.Transitions>
                       <Transitions>
@@ -272,25 +322,24 @@
               </Ellipse>
 
             <!-- Unmapped evdev codes, drawn as pills under the pad body. -->
-            <ItemsControl x:Name="ExtraButtonsHost" Canvas.Left="8" Canvas.Top="202" Width="304"
+            <ItemsControl x:Name="ExtraButtonsHost" Canvas.Left="36" Canvas.Top="308" Width="548"
                           ItemsSource="{Binding ExtraButtonCodes}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="4" />
+                        <StackPanel Orientation="Horizontal" Spacing="6" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border Classes="padHit" Tag="{Binding}" Background="{DynamicResource SubtleBrush}"
-                                BorderBrush="{DynamicResource StickRingBrush}" BorderThickness="1"
-                                CornerRadius="4" Padding="6,1" Height="16"
+                                CornerRadius="6" Padding="9,2" Height="24"
                                 PointerPressed="OnExtraButtonPressed">
                             <Border.Transitions>
                                 <Transitions>
                                     <BrushTransition Property="BorderBrush" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
                                 </Transitions>
                             </Border.Transitions>
-                            <TextBlock Text="{Binding StringFormat='按键 {0}'}" FontSize="9"
+                            <TextBlock Text="{Binding StringFormat='按键 {0}'}" FontSize="13"
                                        Foreground="{DynamicResource ControlForegroundBrush}" />
                         </Border>
                     </DataTemplate>
@@ -299,7 +348,7 @@
         </Canvas>
 
         <TextBlock x:Name="DisconnectedLabel" Text="未连接" IsVisible="{Binding IsConnected, Converter={StaticResource Not}}"
-                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,6"
-                   FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" IsHitTestVisible="False" />
+                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,10"
+                   FontSize="16" Foreground="{DynamicResource TextSecondaryBrush}" IsHitTestVisible="False" />
     </Grid>
 </UserControl>

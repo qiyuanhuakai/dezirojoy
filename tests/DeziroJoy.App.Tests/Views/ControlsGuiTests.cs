@@ -104,17 +104,20 @@ public sealed class ControlsGuiTests
         var leftThumb = control.FindControl<Ellipse>("LeftStickThumb")!;
         var rightThumb = control.FindControl<Ellipse>("RightStickThumb")!;
 
-        Assert.Equal(63d, Canvas.GetLeft(leftThumb));
+        // The enlarged model's stick pads are 100 wide with 46 thumbs, so the rest position
+        // is each pad's centre minus half the thumb, and the travel is what keeps the thumb
+        // inside the pad at full deflection.
+        Assert.Equal(107d, Canvas.GetLeft(leftThumb));
         Assert.Equal(95d, Canvas.GetTop(leftThumb));
-        Assert.Equal(235d, Canvas.GetLeft(rightThumb));
-        Assert.Equal(131d, Canvas.GetTop(rightThumb));
+        Assert.Equal(467d, Canvas.GetLeft(rightThumb));
+        Assert.Equal(187d, Canvas.GetTop(rightThumb));
 
         viewModel.Update(GamepadState.Create(default, 1f, -1f, -0.5f, 0.5f));
 
-        Assert.Equal(78d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(110d, Canvas.GetTop(leftThumb));
-        Assert.Equal(227.5d, Canvas.GetLeft(rightThumb));
-        Assert.Equal(123.5d, Canvas.GetTop(rightThumb));
+        Assert.Equal(133d, Canvas.GetLeft(leftThumb));
+        Assert.Equal(121d, Canvas.GetTop(leftThumb));
+        Assert.Equal(454d, Canvas.GetLeft(rightThumb));
+        Assert.Equal(174d, Canvas.GetTop(rightThumb));
     }
 
     [AvaloniaFact]
@@ -131,24 +134,24 @@ public sealed class ControlsGuiTests
         // bug: adding instead of subtracting mirrored the preview against the physical stick.
         viewModel.Update(GamepadState.Create(default, 0f, 1f, 0f, 1f));
 
-        Assert.Equal(80d, Canvas.GetTop(leftThumb));
-        Assert.Equal(116d, Canvas.GetTop(rightThumb));
+        Assert.Equal(69d, Canvas.GetTop(leftThumb));
+        Assert.Equal(161d, Canvas.GetTop(rightThumb));
 
         viewModel.Update(GamepadState.Create(default, 0f, -1f, 0f, -1f));
 
-        Assert.Equal(110d, Canvas.GetTop(leftThumb));
-        Assert.Equal(146d, Canvas.GetTop(rightThumb));
+        Assert.Equal(121d, Canvas.GetTop(leftThumb));
+        Assert.Equal(213d, Canvas.GetTop(rightThumb));
 
         // Horizontal is unambiguous on every platform: pushing right is a larger Canvas.Left.
         viewModel.Update(GamepadState.Create(default, 1f, 0f, 1f, 0f));
 
-        Assert.Equal(78d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(250d, Canvas.GetLeft(rightThumb));
+        Assert.Equal(133d, Canvas.GetLeft(leftThumb));
+        Assert.Equal(493d, Canvas.GetLeft(rightThumb));
 
         viewModel.Update(GamepadState.Create(default, -1f, 0f, -1f, 0f));
 
-        Assert.Equal(48d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(220d, Canvas.GetLeft(rightThumb));
+        Assert.Equal(81d, Canvas.GetLeft(leftThumb));
+        Assert.Equal(441d, Canvas.GetLeft(rightThumb));
     }
 
     [AvaloniaFact]
