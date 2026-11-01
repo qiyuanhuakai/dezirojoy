@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views;
 using DeziroJoy.App.Views.Controls;
 using System.ComponentModel;
 
@@ -196,22 +197,36 @@ public partial class MainWindow : Window
     private void OnSettingsKeyDown(object? sender, KeyEventArgs e)
     {
         var viewModel = ViewModel;
+        var action = WindowShortcutRouter.Route(
+            e.Key,
+            e.KeyModifiers,
+            viewModel.IsSettingsOpen,
+            viewModel.Editor.IsCapturingKey);
 
-        // The settings surface is the topmost layer: while it is open, Escape closes it
-        // instead of reaching the editor underneath, so a visit to settings never cancels
-        // a mapping edit that is still in progress.
-        if (viewModel.IsSettingsOpen)
+        switch (action)
         {
-            if (e.Key == Key.Escape)
-            {
+            case WindowShortcutAction.CloseSettings:
                 e.Handled = true;
                 viewModel.CloseSettingsCommand.Execute(null);
-            }
-
-            return;
+                return;
+            case WindowShortcutAction.OpenSettings:
+                e.Handled = true;
+                viewModel.OpenSettingsCommand.Execute(null);
+                return;
+            case WindowShortcutAction.SelectMappingTab:
+            case WindowShortcutAction.SelectMouseTab:
+            case WindowShortcutAction.SelectScrollTab:
+                e.Handled = true;
+                this.FindControl<TabControl>("MainTabs")!.SelectedIndex = action switch
+                {
+                    WindowShortcutAction.SelectMappingTab => 0,
+                    WindowShortcutAction.SelectMouseTab => 1,
+                    _ => 2,
+                };
+                return;
         }
 
-        if (e.Handled || !viewModel.IsEditing)
+        if (viewModel.IsSettingsOpen || e.Handled || !viewModel.IsEditing)
         {
             return;
         }

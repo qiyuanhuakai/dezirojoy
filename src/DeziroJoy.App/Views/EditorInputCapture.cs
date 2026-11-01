@@ -82,6 +82,13 @@ public sealed class EditorInputCapture : Control
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         var editor = _viewModel?.Editor;
+        if (_viewModel?.IsSettingsOpen == true && editor is not null)
+        {
+            _heldKeys.Clear();
+            editor.EndKeyboardCapture();
+            return;
+        }
+
         if (editor is null || !editor.IsCapturingKey)
         {
             return;
@@ -114,6 +121,13 @@ public sealed class EditorInputCapture : Control
     private void OnKeyUp(object? sender, KeyEventArgs e)
     {
         var editor = _viewModel?.Editor;
+        if (_viewModel?.IsSettingsOpen == true && editor is not null)
+        {
+            _heldKeys.Clear();
+            editor.EndKeyboardCapture();
+            return;
+        }
+
         if (editor is null || !editor.IsCapturingKey)
         {
             return;
