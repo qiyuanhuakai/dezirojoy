@@ -6,6 +6,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views.Controls;
@@ -257,10 +258,30 @@ public partial class MainWindow : Window
 
     private void TitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && ShouldBeginMoveDrag(e.Source))
         {
             BeginMoveDrag(e);
         }
+    }
+
+    /// <summary>
+    /// A press that lands on an interactive caption control must not start a window drag:
+    /// BeginMoveDrag hands the pointer to the native move loop, which swallows the control's
+    /// Click. The walk starts at the pressed element so a press on a glyph inside a button is
+    /// attributed to that button; presses on the bare drag surface (title text, icon, the
+    /// title-bar Border) still drag.
+    /// </summary>
+    internal static bool ShouldBeginMoveDrag(object? source)
+    {
+        for (var current = source as Visual; current is not null; current = current.GetVisualParent())
+        {
+            if (current is Button)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void MinimizeClick(object? sender, RoutedEventArgs e)

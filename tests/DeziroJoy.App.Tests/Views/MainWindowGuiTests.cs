@@ -215,6 +215,57 @@ public sealed class MainWindowGuiTests
         Assert.True(minimize.Bounds.Width > 0 && close.Bounds.Width > 0);
     }
 
+    [AvaloniaFact]
+    public void Pressing_A_Caption_Button_Does_Not_Begin_A_Window_Drag()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var toggle = window.GetVisualDescendants().OfType<ThemeToggleButton>().Single();
+        var minimize = window.FindControl<Button>("MinimizeButton")!;
+        var close = window.FindControl<Button>("CloseButton")!;
+        var glyph = toggle.GetVisualDescendants().OfType<Shape>().First();
+
+        // A press that lands on a caption button - or on a glyph drawn inside one - must
+        // not start a window drag: BeginMoveDrag hands the pointer to the native move loop,
+        // which swallows the button's Click. This is the R01 title-bar toggle bug.
+        Assert.False(MainWindow.ShouldBeginMoveDrag(toggle), "the theme toggle must not drag");
+        Assert.False(MainWindow.ShouldBeginMoveDrag(minimize), "minimize must not drag");
+        Assert.False(MainWindow.ShouldBeginMoveDrag(close), "close must not drag");
+        Assert.False(MainWindow.ShouldBeginMoveDrag(glyph), "a glyph inside the toggle must not drag");
+    }
+
+    [AvaloniaFact]
+    public void Caption_Buttons_Are_Outside_The_Native_Titlebar_Drag_Region()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var titleText = window.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == "DeziroJoy");
+        var titleBar = titleText.GetVisualAncestors().OfType<Border>().First();
+        var minimize = window.FindControl<Button>("MinimizeButton")!;
+
+        Assert.False(
+            titleBar.GetVisualDescendants().Contains(minimize),
+            "caption controls must not inherit the native title-bar drag role");
+    }
+
+    [AvaloniaFact]
+    public void Pressing_The_Bare_Title_Surface_Still_Begins_A_Window_Drag()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var titleText = window.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Text == "DeziroJoy");
+        var icon = window.FindControl<Image>("TitleBarIcon")!;
+        // The title text shares the native drag Border; caption controls are siblings outside it.
+        var titleBar = titleText.GetVisualAncestors().OfType<Border>().First();
+
+        Assert.True(MainWindow.ShouldBeginMoveDrag(titleText), "the title text must still drag");
+        Assert.True(MainWindow.ShouldBeginMoveDrag(icon), "the app icon must still drag");
+        Assert.True(MainWindow.ShouldBeginMoveDrag(titleBar), "the bare title-bar surface must still drag");
+    }
+
     private static WindowDecorationsElementRole RoleOf(Window window, string gripName)
     {
         var grip = window.FindControl<Border>(gripName);

@@ -206,8 +206,8 @@
             <Setter Property="Opacity" Value="0.85" />
         </Style>
 
-        <Style Selector="Button.caption">
-            <Setter Property="Background" Value="Transparent" />
+        <Style Selector=":is(Button).caption">
+            <Setter Property="Background" Value="{DynamicResource TitleBarBrush}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Width" Value="44" />
             <Setter Property="Height" Value="32" />
@@ -222,15 +222,15 @@
             </Setter>
         </Style>
 
-        <Style Selector="Button.caption:pointerover">
+        <Style Selector=":is(Button).caption:pointerover">
             <Setter Property="Background" Value="{DynamicResource CaptionHoverBrush}" />
         </Style>
 
-        <Style Selector="Button.caption:pressed">
+        <Style Selector=":is(Button).caption:pressed">
             <Setter Property="Opacity" Value="0.85" />
         </Style>
 
-        <Style Selector="Button.caption.close:pointerover">
+        <Style Selector=":is(Button).caption.close:pointerover">
             <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
         </Style>
 
@@ -375,43 +375,43 @@
 
     <Grid RowDefinitions="Auto,*">
 
-        <Border Grid.Row="0" Height="44" Background="{DynamicResource TitleBarBrush}"
-                chrome:WindowDecorationProperties.ElementRole="TitleBar"
-                PointerPressed="TitleBarPointerPressed">
-            <Grid ColumnDefinitions="Auto,*,Auto">
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+        <Grid Grid.Row="0" Height="44">
+            <Border Background="{DynamicResource TitleBarBrush}"
+                    chrome:WindowDecorationProperties.ElementRole="TitleBar"
+                    PointerPressed="TitleBarPointerPressed">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                     <Image x:Name="TitleBarIcon" Width="16" Height="16" VerticalAlignment="Center" />
                     <TextBlock Text="DeziroJoy" FontSize="13" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimaryBrush}" Margin="10,0,0,0" VerticalAlignment="Center" />
                     <TextBlock Text="手柄映射工具" FontSize="11" Foreground="{DynamicResource MutedTextBrush}"
                                Margin="10,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
+            </Border>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <Button x:Name="MinimizeButton" Classes="caption"
-                            chrome:WindowDecorationProperties.ElementRole="MinimizeButton"
-                            Click="MinimizeClick">
-                        <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}" />
-                    </Button>
-                    <Button x:Name="CloseButton" Classes="caption close"
-                            chrome:WindowDecorationProperties.ElementRole="CloseButton"
-                            Click="CloseClick">
-                        <Grid Width="10" Height="10">
-                            <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}">
-                                <Rectangle.RenderTransform>
-                                    <RotateTransform Angle="45" />
-                                </Rectangle.RenderTransform>
-                            </Rectangle>
-                            <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}">
-                                <Rectangle.RenderTransform>
-                                    <RotateTransform Angle="-45" />
-                                </Rectangle.RenderTransform>
-                            </Rectangle>
-                        </Grid>
-                    </Button>
-                </StackPanel>
-            </Grid>
-        </Border>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,8,0">
+                <Button x:Name="MinimizeButton" Classes="caption"
+                        chrome:WindowDecorationProperties.ElementRole="MinimizeButton"
+                        Click="MinimizeClick">
+                    <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}" />
+                </Button>
+                <Button x:Name="CloseButton" Classes="caption close"
+                        chrome:WindowDecorationProperties.ElementRole="CloseButton"
+                        Click="CloseClick">
+                    <Grid Width="10" Height="10">
+                        <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}">
+                            <Rectangle.RenderTransform>
+                                <RotateTransform Angle="45" />
+                            </Rectangle.RenderTransform>
+                        </Rectangle>
+                        <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}">
+                            <Rectangle.RenderTransform>
+                                <RotateTransform Angle="-45" />
+                            </Rectangle.RenderTransform>
+                        </Rectangle>
+                    </Grid>
+                </Button>
+            </StackPanel>
+        </Grid>
 
         <!-- Three zones with a splitter between each: the sidebars are user-resizable, and
              each column carries a MinWidth so neither can be dragged to nothing. The

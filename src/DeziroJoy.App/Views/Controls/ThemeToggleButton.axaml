@@ -1,7 +1,9 @@
 <Button xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:chrome="using:Avalonia.Controls.Chrome"
         x:Class="DeziroJoy.App.Views.Controls.ThemeToggleButton"
         Classes="caption"
+        chrome:WindowDecorationProperties.ElementRole="User"
         ToolTip.Tip="切换浅色 / 深色主题">
 
     <!--

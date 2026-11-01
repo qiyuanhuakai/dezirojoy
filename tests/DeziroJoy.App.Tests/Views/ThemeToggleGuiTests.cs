@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Chrome;
 using ShapePath = Avalonia.Controls.Shapes.Path;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -86,10 +87,22 @@ public sealed class ThemeToggleGuiTests : IDisposable
         var minimize = window.FindControl<Button>("MinimizeButton")!;
 
         Assert.Same(toggle.Parent, minimize.Parent);
-        Assert.True(toggle.Bounds.Width > 0 && toggle.Bounds.Height > 0);
+        Assert.Equal(44, toggle.Bounds.Width);
+        Assert.Equal(32, toggle.Bounds.Height);
         Assert.True(
             toggle.Bounds.Right <= minimize.Bounds.Left,
             $"the toggle ends at {toggle.Bounds.Right} but minimize starts at {minimize.Bounds.Left}");
+    }
+
+    [AvaloniaFact]
+    public void The_Title_Bar_Toggle_Receives_Input_Over_The_Chrome_Drag_Region()
+    {
+        var (window, _) = BuildWindow();
+        var toggle = ToggleOf(window);
+
+        Assert.Equal(
+            WindowDecorationsElementRole.User,
+            WindowDecorationProperties.GetElementRole(toggle));
     }
 
     [AvaloniaFact]
