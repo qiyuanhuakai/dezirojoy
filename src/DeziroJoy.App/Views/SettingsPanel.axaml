@@ -67,6 +67,42 @@
                         </StackPanel>
                     </Border>
 
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="注入状态" />
+                            <TextBlock Classes="fieldLabel" Margin="0,10,0,0"
+                                       Text="{Binding InjectorDescription}" />
+                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="{Binding MappingOwnerDescription}" />
+                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="{Binding InjectorStatusText}" />
+                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="{Binding DaemonStatusText}" />
+                            <Button Classes="ghost" Margin="0,10,0,0" Padding="10,4"
+                                    Content="重新连接守护" IsVisible="{Binding IsDaemonMode}"
+                                    Command="{Binding ReconnectDaemonCommand}" />
+
+                            <Grid Margin="0,10,0,0" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                                  IsVisible="{Binding IsDaemonMode}">
+                                <TextBlock Grid.Row="0" Grid.Column="0" Classes="hint" Text="权限" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Classes="hint" Margin="12,0,0,0"
+                                           x:Name="InjectorIntegrityText" Text="{Binding DaemonSnapshot.InjectorIntegrity}" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Classes="hint" Margin="0,6,0,0" Text="修订" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Classes="hint" Margin="12,6,0,0"
+                                           x:Name="DaemonRevisionText" Text="{Binding DaemonSnapshot.Revision}" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Classes="hint" Margin="0,6,0,0" Text="已注入" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Classes="hint" Margin="12,6,0,0"
+                                           x:Name="InjectedEventsText" Text="{Binding DaemonSnapshot.InjectedEvents}" />
+                                <TextBlock Grid.Row="3" Grid.Column="0" Classes="hint" Margin="0,6,0,0" Text="已阻止" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Classes="hint" Margin="12,6,0,0"
+                                           x:Name="BlockedEventsText" Text="{Binding DaemonSnapshot.BlockedEvents}" />
+                                <TextBlock Grid.Row="4" Grid.Column="0" Classes="hint" Margin="0,6,0,0" Text="错误" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Classes="hint" Margin="12,6,0,0" TextWrapping="Wrap"
+                                           x:Name="DaemonLastErrorText" Text="{Binding DaemonSnapshot.LastError}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
                     <controls:DaemonSettingsCard DataContext="{Binding DaemonSettings}" />
 
                 </StackPanel>

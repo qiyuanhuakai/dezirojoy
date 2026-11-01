@@ -7,7 +7,7 @@
         <StackPanel>
             <TextBlock Classes="cardTitle" Text="后台服务" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                       Text="常驻服务是一个无界面的后台进程，登录时自动运行手柄映射，无需打开主窗口。" />
+                       Text="登录后运行映射，无需保持主窗口打开。" />
 
             <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="{Binding DaemonStateText}" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding ElevationText}" />
@@ -26,7 +26,7 @@
                     <CheckBox Content="登录时自启动" IsEnabled="{Binding IsSupported}"
                               IsChecked="{Binding AutostartEnabled, Mode=TwoWay}" />
                     <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                               Text="登录时自启动使用 Windows 计划任务的“登录时”触发器，而非开机启动：服务或登录前进程运行在会话 0（Session 0），受会话隔离限制无法向用户桌面注入输入，因此必须在用户登录之后运行。它启动的是带窗口的主程序（方便你改配置），不是后台映射；要让映射无人值守地跑，请用上面的“常驻服务”。安装 / 卸载需要管理员权限。" />
+                               Text="登录后启动主程序；常驻服务负责后台映射。安装或卸载需要管理员权限。" />
                 </StackPanel>
             </Border>
 
