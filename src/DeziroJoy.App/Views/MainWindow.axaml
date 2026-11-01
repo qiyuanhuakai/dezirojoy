@@ -225,6 +225,45 @@
             <Setter Property="FontSize" Value="12" />
         </Style>
 
+        <!-- The gesture switcher: one segmented control where 单击 / 双击 / 长按 are equal
+             peers. The selected segment carries the accent surface; a disabled one - the
+             long-press while auto-repeat runs - is muted rather than hidden, so the exclusion
+             stays visible instead of looking like a missing feature. -->
+        <Style Selector="RadioButton.gestureSegment">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="18,8" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="{DynamicResource CornerRadiusSm}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="RadioButton.gestureSegment:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="RadioButton.gestureSegment:checked">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style Selector="RadioButton.gestureSegment:disabled">
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
+
         <!-- The slider's own ControlTheme (Themes/Slider.axaml) sets Foreground to the accent
              and Background to the delineated track, so no per-window override is needed. -->
 
@@ -496,7 +535,7 @@
                                 <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel>
                                    <TextBlock Classes="sectionLabel" Text="目标动作" />
-                                   <WrapPanel>
+                                   <WrapPanel IsEnabled="{Binding Editor.ClickIsNone, Converter={StaticResource Not}}">
                                        <StackPanel Width="230" Margin="0,0,12,0">
                                            <TextBlock Classes="fieldLabel" Text="类型" />
                                            <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
@@ -523,6 +562,7 @@
                                    <TextBlock Classes="sectionLabel" Text="或从列表选择"
                                               IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}" />
                                    <ListBox x:Name="TargetKeyList" Classes="pickerList" MaxHeight="240"
+                                            IsEnabled="{Binding Editor.ClickIsNone, Converter={StaticResource Not}}"
                                             IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
                                             ItemsSource="{Binding Editor.KeyOptions}"
                                             SelectedItem="{Binding Editor.SelectedKeyOption, Mode=TwoWay}">
@@ -547,6 +587,7 @@
                                    </ListBox>
 
                                    <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
+                                               IsEnabled="{Binding Editor.ClickIsNone, Converter={StaticResource Not}}"
                                                IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
                                        <CheckBox x:Name="ModifierCtrlBox" Content="Ctrl" IsChecked="{Binding Editor.ModifierCtrl, Mode=TwoWay}" />
                                        <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierShift, Mode=TwoWay}" />
@@ -554,7 +595,8 @@
                                        <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding Editor.ModifierWin, Mode=TwoWay}" />
                                    </StackPanel>
 
-                                   <StackPanel x:Name="MouseMoveRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
+                                   <StackPanel x:Name="MouseMoveRow" IsEnabled="{Binding Editor.ClickIsNone, Converter={StaticResource Not}}"
+                                               IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
                                        <TextBlock Classes="sectionLabel" Text="鼠标移动参数" />
                                        <Grid Margin="0,0,0,10">
                                            <Grid.ColumnDefinitions>
@@ -594,7 +636,8 @@
                                        </Grid>
                                    </StackPanel>
 
-                                   <StackPanel x:Name="WheelRow" IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
+                                    <StackPanel x:Name="WheelRow" IsEnabled="{Binding Editor.ClickIsNone, Converter={StaticResource Not}}"
+                                                IsVisible="{Binding Editor.TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
                                        <TextBlock Classes="sectionLabel" Text="滚轮参数" />
                                        <Grid Margin="0,0,0,10">
                                            <Grid.ColumnDefinitions>
@@ -622,93 +665,95 @@
                                        </Grid>
                                    </StackPanel>
 
-                                   <!-- Gestures. The editor view model already carries the three
-                                        gesture properties (double-click window, long-press threshold,
-                                        long-press repeat interval); they are surfaced here for button
-                                        sources only, since the engine attaches a gesture to a
-                                        ButtonBinding. A gamepad needs no 单击/双击/长按 slots, so these
-                                        are plain sliders, and a zero value keeps the zero-latency
-                                        single-press path. -->
-                                   <StackPanel x:Name="GestureRow" IsVisible="{Binding Editor.SourceIsStick, Converter={StaticResource Not}}">
-                                       <TextBlock Classes="sectionLabel" Text="手势" />
-                                       <TextBlock Classes="hint" Margin="0,0,0,8"
-                                                  Text="仅按键支持手势；时间设为 0 即关闭对应手势，全部为 0 时单击保持零延迟。" />
-                                       <Grid Margin="0,0,0,10">
-                                           <Grid.ColumnDefinitions>
-                                               <ColumnDefinition Width="150" />
-                                               <ColumnDefinition Width="*" />
-                                               <ColumnDefinition Width="90" />
-                                           </Grid.ColumnDefinitions>
-                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="双击窗口 (s)" VerticalAlignment="Center" Margin="0" />
-                                           <Slider Grid.Column="1" x:Name="GestureDoubleClickBox" Minimum="0" Maximum="1" TickFrequency="0.05"
-                                                   Value="{Binding Editor.DoubleClickWindow, Mode=TwoWay}" VerticalAlignment="Center" />
-                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                      Text="{Binding Editor.DoubleClickWindow, StringFormat='{}{0:F2}'}" />
-                                       </Grid>
-                                       <Grid Margin="0,0,0,10">
-                                           <Grid.ColumnDefinitions>
-                                               <ColumnDefinition Width="150" />
-                                               <ColumnDefinition Width="*" />
-                                               <ColumnDefinition Width="90" />
-                                           </Grid.ColumnDefinitions>
-                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按阈值 (s)" VerticalAlignment="Center" Margin="0" />
-                                           <Slider Grid.Column="1" x:Name="GestureLongPressBox" Minimum="0" Maximum="3" TickFrequency="0.1"
-                                                   Value="{Binding Editor.LongPressThreshold, Mode=TwoWay}" VerticalAlignment="Center" />
-                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                      Text="{Binding Editor.LongPressThreshold, StringFormat='{}{0:F2}'}" />
-                                       </Grid>
-                                       <Grid>
-                                           <Grid.ColumnDefinitions>
-                                               <ColumnDefinition Width="150" />
-                                               <ColumnDefinition Width="*" />
-                                               <ColumnDefinition Width="90" />
-                                           </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按重复间隔 (s)" VerticalAlignment="Center" Margin="0" />
-                                            <Slider Grid.Column="1" x:Name="GestureRepeatBox" Minimum="0" Maximum="1" TickFrequency="0.05"
-                                                    Value="{Binding Editor.LongPressRepeatInterval, Mode=TwoWay}" VerticalAlignment="Center" />
-                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                        Text="{Binding Editor.LongPressRepeatInterval, StringFormat='{}{0:F2}'}" />
-                                        </Grid>
+                                    <!-- Gestures. 单击 / 双击 / 长按 are three equal peers chosen
+                                         through one switcher; the action for the selected gesture
+                                         is configured below it. The timings are the Core's pinned
+                                         defaults, so there are no sliders here. Button sources
+                                         only, since the engine attaches a gesture to a
+                                         ButtonBinding. -->
+                                    <StackPanel x:Name="GestureRow" IsVisible="{Binding Editor.SourceIsStick, Converter={StaticResource Not}}">
+                                        <TextBlock Classes="sectionLabel" Text="手势" />
+                                        <TextBlock Classes="hint" Margin="0,0,0,8"
+                                                   Text="单击、双击、长按是三种平等的手势：选择要配置的一种，再设置它的功能（可设为无功能）。" />
 
+                                        <!-- The switcher. One segmented control where all three
+                                             gestures are equally reachable - the double-click and
+                                             the long-press are peers of the click, not extras
+                                             buried under it. -->
+                                        <Border Background="{DynamicResource SubtleBrush}" CornerRadius="{DynamicResource CornerRadiusMd}"
+                                                Padding="3" Margin="0,0,0,10" HorizontalAlignment="Left">
+                                            <StackPanel Orientation="Horizontal">
+                                                <RadioButton x:Name="GestureClickTab" Classes="gestureSegment" GroupName="GestureSlots"
+                                                             Content="单击" IsChecked="{Binding Editor.IsClickSelected, Mode=TwoWay}" />
+                                                <RadioButton x:Name="GestureDoubleClickTab" Classes="gestureSegment" GroupName="GestureSlots"
+                                                             Content="双击" IsChecked="{Binding Editor.IsDoubleClickSelected, Mode=TwoWay}" />
+                                                <RadioButton x:Name="GestureLongPressTab" Classes="gestureSegment" GroupName="GestureSlots"
+                                                             Content="长按" IsChecked="{Binding Editor.IsLongPressSelected, Mode=TwoWay}"
+                                                             IsEnabled="{Binding Editor.LongPressAvailable}" />
+                                            </StackPanel>
+                                        </Border>
 
-                                        <!-- What each gesture does. The timing above only says when a
-                                             gesture resolves; without these it has no function of its own
-                                             and just re-fires the mapping's own target. Choosing an action
-                                             while its timing still sits at 0 arms a default window, since a
-                                             gesture with no window can never resolve. -->
-                                        <Grid Margin="0,0,0,10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="双击时执行" VerticalAlignment="Center" Margin="0" />
-                                            <ComboBox Grid.Column="1" x:Name="GestureDoubleClickActionCombo" Classes="enumCombo"
-                                                      ItemsSource="{Binding Editor.GestureActionOptions}"
-                                                      SelectedItem="{Binding Editor.SelectedDoubleClickOption, Mode=TwoWay}">
-                                                <ComboBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding Label}" />
-                                                    </DataTemplate>
-                                                </ComboBox.ItemTemplate>
-                                            </ComboBox>
-                                        </Grid>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="150" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按时执行" VerticalAlignment="Center" Margin="0" />
-                                            <ComboBox Grid.Column="1" x:Name="GestureLongPressActionCombo" Classes="enumCombo"
-                                                      ItemsSource="{Binding Editor.GestureActionOptions}"
-                                                      SelectedItem="{Binding Editor.SelectedLongPressOption, Mode=TwoWay}">
-                                                <ComboBox.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock Text="{Binding Label}" />
-                                                    </DataTemplate>
-                                                </ComboBox.ItemTemplate>
-                                            </ComboBox>
-                                        </Grid>
-                                       </StackPanel>
+                                        <!-- Auto-repeat and the long-press are mutually exclusive:
+                                             while repeat runs the long-press branch is unavailable,
+                                             and the reason is stated rather than left to guesswork. -->
+                                        <TextBlock x:Name="GestureRepeatHint" Classes="hint" Margin="0,0,0,10"
+                                                   IsVisible="{Binding Editor.ClickRepeatEnabled}"
+                                                   Text="「长按重复触发」已启用：重复触发与长按互斥，长按手势暂不可用。关闭重复触发后即可配置长按。" />
+
+                                        <!-- 单击: the mapping's own target, which can be set to
+                                             无功能, plus the auto-repeat option that belongs to
+                                             the click alone. -->
+                                        <StackPanel x:Name="GestureClickBranch" IsVisible="{Binding Editor.IsClickSelected}">
+                                            <CheckBox x:Name="GestureClickNoneBox" Content="无功能（单击不触发任何操作）"
+                                                      IsChecked="{Binding Editor.ClickIsNone, Mode=TwoWay}" />
+                                            <TextBlock Classes="hint" Margin="0,4,0,0" IsVisible="{Binding Editor.ClickIsNone}"
+                                                       Text="单击已设为无功能：上方「目标动作」不会生效，按下时什么都不会发生。" />
+                                            <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发（按住时每 0.10 秒重复一次单击）"
+                                                      Margin="0,10,0,0" IsChecked="{Binding Editor.ClickRepeatEnabled, Mode=TwoWay}" />
+                                        </StackPanel>
+
+                                        <!-- 双击: what the double-click emits. 无功能 makes it
+                                             resolve and emit nothing; 重复单击的功能 re-fires the
+                                             mapping's own target. -->
+                                        <StackPanel x:Name="GestureDoubleClickBranch" IsVisible="{Binding Editor.IsDoubleClickSelected}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="150" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="双击时执行" VerticalAlignment="Center" Margin="0" />
+                                                <ComboBox Grid.Column="1" x:Name="GestureDoubleClickActionCombo" Classes="enumCombo"
+                                                          ItemsSource="{Binding Editor.GestureActionOptions}"
+                                                          SelectedItem="{Binding Editor.SelectedDoubleClickOption, Mode=TwoWay}">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Label}" />
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- 长按: what the long-press emits, on the same rows. -->
+                                        <StackPanel x:Name="GestureLongPressBranch" IsVisible="{Binding Editor.IsLongPressSelected}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="150" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按时执行" VerticalAlignment="Center" Margin="0" />
+                                                <ComboBox Grid.Column="1" x:Name="GestureLongPressActionCombo" Classes="enumCombo"
+                                                          ItemsSource="{Binding Editor.GestureActionOptions}"
+                                                          SelectedItem="{Binding Editor.SelectedLongPressOption, Mode=TwoWay}">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Label}" />
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
                                 </StackPanel>
                                 </ScrollViewer>
                             </Grid>

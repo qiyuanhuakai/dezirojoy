@@ -571,7 +571,7 @@ public sealed class GamepadModelEditorTests
     // ---- Gesture actions ----------------------------------------------------
 
     [AvaloniaFact]
-    public void Each_Gesture_Has_An_Action_Picker_Besides_Its_Timing()
+    public void The_Gesture_Section_Offers_A_Three_Way_Switcher()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
@@ -580,18 +580,40 @@ public sealed class GamepadModelEditorTests
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
         Assert.True(viewModel.IsEditing);
 
-        // Timing alone is not a configuration.
-        var doubleClick = window.FindControl<ComboBox>("GestureDoubleClickActionCombo")!;
-        var longPress = window.FindControl<ComboBox>("GestureLongPressActionCombo")!;
+        var click = window.FindControl<RadioButton>("GestureClickTab")!;
+        var doubleClick = window.FindControl<RadioButton>("GestureDoubleClickTab")!;
+        var longPress = window.FindControl<RadioButton>("GestureLongPressTab")!;
 
+        Assert.True(click.IsVisible);
         Assert.True(doubleClick.IsVisible);
         Assert.True(longPress.IsVisible);
-        Assert.NotEmpty(doubleClick.Items!);
-        Assert.NotEmpty(longPress.Items!);
+        Assert.True(click.IsChecked);
+        Assert.False(doubleClick.IsChecked);
+        Assert.False(longPress.IsChecked);
+
+        // The click branch leads; the switcher - not a buried extra - reaches the other two.
+        Assert.True(window.FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
+        Assert.False(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+
+        Click(doubleClick, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(GestureSlot.DoubleClick, viewModel.Editor.SelectedGesture);
+        Assert.True(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+        Assert.False(window.FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
+
+        Click(longPress, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(GestureSlot.LongPress, viewModel.Editor.SelectedGesture);
+        Assert.True(window.FindControl<StackPanel>("GestureLongPressBranch")!.IsVisible);
+        Assert.False(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
     }
 
     [AvaloniaFact]
-    public void Choosing_A_Double_Click_Action_Arms_Its_Timing()
+    public void Each_Gesture_Action_Picker_Offers_The_No_Function_Row()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
@@ -599,20 +621,44 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        Assert.Equal(0f, viewModel.Editor.DoubleClickWindow);
+        var doubleClickCombo = window.FindControl<ComboBox>("GestureDoubleClickActionCombo")!;
+        Assert.Contains(
+            doubleClickCombo.Items!.OfType<GestureActionOption>(),
+            option => option.Target is NoneTarget);
 
-        // A gesture with no window can never resolve, so picking an action must arm its timing.
+        Click(window.FindControl<RadioButton>("GestureLongPressTab")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var longPressCombo = window.FindControl<ComboBox>("GestureLongPressActionCombo")!;
+        Assert.True(longPressCombo.IsVisible);
+        Assert.Contains(
+            longPressCombo.Items!.OfType<GestureActionOption>(),
+            option => option.Target is NoneTarget);
+    }
+
+    [AvaloniaFact]
+    public void Choosing_A_Double_Click_Action_Enables_The_Gesture_With_The_Pinned_Default()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+
+        Assert.False(viewModel.Editor.HasDoubleClick);
+
         viewModel.Editor.SelectedDoubleClickOption = viewModel.Editor.GestureActionOptions
             .First(o => o.Target is KeyPressTarget);
 
-        Assert.True(viewModel.Editor.DoubleClickWindow > 0f);
+        Assert.True(viewModel.Editor.HasDoubleClick);
         Assert.Equal(
-            MappingEditorViewModel.DefaultDoubleClickWindow,
-            viewModel.Editor.DoubleClickWindow);
+            ButtonGesture.DefaultDoubleClickWindow,
+            Assert.IsType<ButtonBinding>(viewModel.Editor.BuildSource()).Gesture!.DoubleClickWindow);
     }
 
     [AvaloniaFact]
-    public void Choosing_A_Long_Press_Action_Arms_Its_Timing()
+    public void Choosing_A_Long_Press_Action_Enables_The_Gesture_With_The_Pinned_Default()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
@@ -620,15 +666,69 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        Assert.Equal(0f, viewModel.Editor.LongPressThreshold);
+        Assert.False(viewModel.Editor.HasLongPress);
 
         viewModel.Editor.SelectedLongPressOption = viewModel.Editor.GestureActionOptions
             .First(o => o.Target is MouseButtonTarget);
 
-        Assert.True(viewModel.Editor.LongPressThreshold > 0f);
+        Assert.True(viewModel.Editor.HasLongPress);
         Assert.Equal(
-            MappingEditorViewModel.DefaultLongPressThreshold,
-            viewModel.Editor.LongPressThreshold);
+            ButtonGesture.DefaultLongPressThreshold,
+            Assert.IsType<ButtonBinding>(viewModel.Editor.BuildSource()).Gesture!.LongPressThreshold);
+    }
+
+    [AvaloniaFact]
+    public void Enabling_Click_Repeat_Disables_The_Long_Press_Tab()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+
+        var longPressTab = window.FindControl<RadioButton>("GestureLongPressTab")!;
+        var repeatBox = window.FindControl<CheckBox>("GestureClickRepeatBox")!;
+        var hint = window.FindControl<TextBlock>("GestureRepeatHint")!;
+
+        Assert.True(longPressTab.IsEnabled);
+        Assert.False(hint.IsVisible);
+
+        Click(repeatBox, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.Editor.ClickRepeatEnabled);
+        Assert.False(longPressTab.IsEnabled, "the long-press must be unavailable while auto-repeat runs");
+        Assert.True(hint.IsVisible, "the exclusion must be explained in copy");
+
+        var gesture = Assert.IsType<ButtonBinding>(viewModel.Editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, gesture.ClickRepeatInterval);
+        Assert.Equal(0f, gesture.LongPressThreshold);
+    }
+
+    [AvaloniaFact]
+    public void The_Click_Can_Be_Set_To_No_Function()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+
+        Click(window.FindControl<CheckBox>("GestureClickNoneBox")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.Editor.ClickIsNone);
+        Assert.IsType<NoneTarget>(viewModel.Editor.BuildTarget());
+
+        viewModel.CommitEditorCommand.Execute(null);
+
+        var committed = viewModel.ActiveProfile!.Mappings
+            .First(mapping => mapping.Source is ButtonBinding { Button: GamepadButton.A });
+        Assert.IsType<NoneTarget>(committed.Target);
     }
 
     [AvaloniaFact]

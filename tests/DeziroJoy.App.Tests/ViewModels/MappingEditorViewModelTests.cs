@@ -299,11 +299,17 @@ public class MappingEditorViewModelTests
         var editor = new MappingEditorViewModel();
         editor.LoadFrom(entry);
 
-        Assert.Equal(0.25f, editor.DoubleClickWindow);
-        Assert.Equal(0.4f, editor.LongPressThreshold);
-        Assert.Equal(0.1f, editor.LongPressRepeatInterval);
+        // The timings are pinned now: a loaded gesture is enabled, not restored verbatim.
+        Assert.True(editor.HasDoubleClick);
+        Assert.True(editor.HasLongPress);
         Assert.True(editor.HasAnyGesture);
-        Assert.Equal(entry.Source, editor.BuildSource());
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultDoubleClickWindow, gesture.DoubleClickWindow);
+        Assert.Equal(ButtonGesture.DefaultLongPressThreshold, gesture.LongPressThreshold);
+        Assert.Equal(0.1f, gesture.LongPressRepeatInterval);
     }
 
     [Fact]
@@ -324,32 +330,41 @@ public class MappingEditorViewModelTests
             TargetKind = MappingTargetKind.KeyPress,
         };
 
-        editor.DoubleClickWindow = 0.3f;
-        editor.LongPressThreshold = 0.5f;
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is MouseButtonTarget { Button: MouseButton.Right });
 
         var gesture = Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture;
 
         Assert.NotNull(gesture);
-        Assert.Equal(0.3f, gesture.DoubleClickWindow);
-        Assert.Equal(0.5f, gesture.LongPressThreshold);
+        Assert.Equal(ButtonGesture.DefaultDoubleClickWindow, gesture.DoubleClickWindow);
+        Assert.Equal(ButtonGesture.DefaultLongPressThreshold, gesture.LongPressThreshold);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), gesture.DoubleClickAction);
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), gesture.LongPressAction);
     }
 
     [Fact]
     public void Reset_Clears_The_Gesture_Settings()
     {
-        var editor = new MappingEditorViewModel
-        {
-            DoubleClickWindow = 0.3f,
-            LongPressThreshold = 0.5f,
-            LongPressRepeatInterval = 0.1f,
-        };
+        var editor = new MappingEditorViewModel { SelectedGesture = GestureSlot.LongPress };
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is MouseButtonTarget { Button: MouseButton.Right });
+        editor.ClickRepeatEnabled = true;
+        editor.ClickIsNone = true;
 
         editor.Reset();
 
-        Assert.Equal(0f, editor.DoubleClickWindow);
-        Assert.Equal(0f, editor.LongPressThreshold);
-        Assert.Equal(0f, editor.LongPressRepeatInterval);
+        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.False(editor.HasDoubleClick);
+        Assert.False(editor.HasLongPress);
+        Assert.False(editor.HasClickRepeat);
+        Assert.False(editor.ClickIsNone);
         Assert.False(editor.HasAnyGesture);
+        Assert.Null(editor.DoubleClickAction);
+        Assert.Null(editor.LongPressAction);
     }
 
     [Fact]
@@ -378,7 +393,12 @@ public class MappingEditorViewModelTests
         Assert.Equal(new MouseButtonTarget(MouseButton.Right), editor.LongPressAction);
         Assert.True(editor.HasDoubleClickAction);
         Assert.True(editor.HasLongPressAction);
-        Assert.Equal(entry.Source, editor.BuildSource());
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), gesture.DoubleClickAction);
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), gesture.LongPressAction);
     }
 
     [Fact]
@@ -388,8 +408,6 @@ public class MappingEditorViewModelTests
         {
             SelectedButton = GamepadButton.B,
             TargetKind = MappingTargetKind.KeyPress,
-            DoubleClickWindow = 0.3f,
-            LongPressThreshold = 0.5f,
         };
 
         editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
@@ -405,13 +423,9 @@ public class MappingEditorViewModelTests
     [Fact]
     public void Reset_Clears_The_Gesture_Actions()
     {
-        var editor = new MappingEditorViewModel
-        {
-            DoubleClickWindow = 0.3f,
-            LongPressThreshold = 0.5f,
-            DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
-            LongPressAction = new KeyPressTarget(GamepadKey.F13),
-        };
+        var editor = new MappingEditorViewModel();
+        editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
+        editor.LongPressAction = new KeyPressTarget(GamepadKey.F13);
 
         editor.Reset();
 
@@ -422,20 +436,28 @@ public class MappingEditorViewModelTests
     }
 
     [Fact]
-    public void Choosing_A_Gesture_Action_Enables_Its_Timing()
+    public void Choosing_A_Gesture_Action_Enables_Its_Gesture()
     {
         var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
 
         Assert.False(editor.HasAnyGesture);
 
-        editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
 
-        Assert.True(editor.HasDoubleClick, "a double-click action cannot fire without a window");
+        Assert.True(editor.HasDoubleClick, "a double-click action cannot fire without the gesture");
         Assert.True(editor.HasAnyGesture, "configuring an action introduces the wait");
+        Assert.Equal(
+            ButtonGesture.DefaultDoubleClickWindow,
+            Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture!.DoubleClickWindow);
 
-        editor.LongPressAction = new KeyPressTarget(GamepadKey.F13);
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.F13 });
 
         Assert.True(editor.HasLongPress);
+        Assert.Equal(
+            ButtonGesture.DefaultLongPressThreshold,
+            Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture!.LongPressThreshold);
     }
 
     [Fact]
@@ -462,30 +484,378 @@ public class MappingEditorViewModelTests
     {
         var editor = new MappingEditorViewModel();
 
-        Assert.Equal("无", editor.DoubleClickActionDescription);
-        Assert.Equal("无", editor.LongPressActionDescription);
+        Assert.Equal("已关闭", editor.DoubleClickActionDescription);
+        Assert.Equal("已关闭", editor.LongPressActionDescription);
 
-        editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
-        editor.LongPressAction = new MouseButtonTarget(MouseButton.Right);
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Label == "重复单击的功能");
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is MouseButtonTarget { Button: MouseButton.Right });
 
-        Assert.Equal("Space", editor.DoubleClickActionDescription);
+        Assert.Equal("重复单击的功能", editor.DoubleClickActionDescription);
         Assert.Equal("鼠标右键", editor.LongPressActionDescription);
+
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is NoneTarget);
+
+        Assert.Equal("无功能", editor.DoubleClickActionDescription);
     }
 
     [Fact]
     public void Clearing_A_Gesture_Action_Drops_It_From_The_Built_Source()
     {
-        var editor = new MappingEditorViewModel
-        {
-            SelectedButton = GamepadButton.B,
-            DoubleClickWindow = 0.3f,
-            DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
-        };
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
 
         editor.ClearDoubleClickActionCommand.Execute(null);
 
         Assert.Null(editor.DoubleClickAction);
+        Assert.False(editor.HasDoubleClick);
         Assert.Null(Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture?.DoubleClickAction);
+    }
+
+    // ---- The three-way gesture switcher -------------------------------------
+
+    [Fact]
+    public void The_Gesture_Switcher_Defaults_To_The_Click()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.True(editor.IsClickSelected);
+        Assert.False(editor.IsDoubleClickSelected);
+        Assert.False(editor.IsLongPressSelected);
+    }
+
+    [Fact]
+    public void The_Gesture_Switcher_Selects_Each_Of_The_Three_Gestures()
+    {
+        var editor = new MappingEditorViewModel();
+
+        editor.SelectedGesture = GestureSlot.DoubleClick;
+
+        Assert.True(editor.IsDoubleClickSelected);
+        Assert.False(editor.IsClickSelected);
+        Assert.False(editor.IsLongPressSelected);
+
+        editor.SelectedGesture = GestureSlot.LongPress;
+
+        Assert.True(editor.IsLongPressSelected);
+        Assert.False(editor.IsClickSelected);
+        Assert.False(editor.IsDoubleClickSelected);
+
+        editor.SelectedGesture = GestureSlot.Click;
+
+        Assert.True(editor.IsClickSelected);
+        Assert.False(editor.IsDoubleClickSelected);
+        Assert.False(editor.IsLongPressSelected);
+    }
+
+    [Fact]
+    public void The_Switcher_Flags_Follow_The_Selection_Back()
+    {
+        var editor = new MappingEditorViewModel { SelectedGesture = GestureSlot.LongPress };
+
+        editor.IsClickSelected = true;
+
+        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.True(editor.IsClickSelected);
+        Assert.False(editor.IsLongPressSelected);
+    }
+
+    [Fact]
+    public void Gesture_Action_Options_Offer_None_Off_And_Repeat_Rows()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Contains(editor.GestureActionOptions, o => o.Target is NoneTarget);
+        Assert.Contains(editor.GestureActionOptions, o => o.Label == "已关闭");
+        Assert.Contains(editor.GestureActionOptions, o => o.Label == "重复单击的功能");
+        Assert.Contains(
+            editor.GestureActionOptions,
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+    }
+
+    [Fact]
+    public void The_Picker_Shows_The_Repeat_Row_For_A_Re_Firing_Gesture_And_Off_For_A_Disabled_One()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Equal("已关闭", editor.SelectedDoubleClickOption!.Label);
+
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Label == "重复单击的功能");
+
+        Assert.Equal("重复单击的功能", editor.SelectedDoubleClickOption!.Label);
+        Assert.True(editor.HasDoubleClick);
+        Assert.Null(editor.DoubleClickAction);
+    }
+
+    // ---- 无功能 for every gesture -------------------------------------------
+
+    [Fact]
+    public void Every_Gesture_Action_Can_Be_Set_To_No_Function()
+    {
+        var doubleClick = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        doubleClick.SelectedDoubleClickOption = doubleClick.GestureActionOptions.First(
+            o => o.Target is NoneTarget);
+
+        Assert.IsType<NoneTarget>(doubleClick.DoubleClickAction);
+        Assert.True(doubleClick.HasDoubleClick);
+        Assert.Equal(
+            new NoneTarget(),
+            Assert.IsType<ButtonBinding>(doubleClick.BuildSource()).Gesture!.DoubleClickAction);
+
+        var longPress = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        longPress.SelectedLongPressOption = longPress.GestureActionOptions.First(
+            o => o.Target is NoneTarget);
+
+        Assert.IsType<NoneTarget>(longPress.LongPressAction);
+        Assert.True(longPress.HasLongPress);
+        Assert.Equal(
+            new NoneTarget(),
+            Assert.IsType<ButtonBinding>(longPress.BuildSource()).Gesture!.LongPressAction);
+    }
+
+    [Fact]
+    public void The_Click_Action_Can_Be_Set_To_No_Function()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SelectedButton = GamepadButton.B,
+            TargetKind = MappingTargetKind.KeyPress,
+        };
+
+        editor.ClickIsNone = true;
+
+        Assert.IsType<NoneTarget>(editor.BuildTarget());
+        Assert.IsType<NoneTarget>(editor.BuildEntry().Target);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(editor.BuildEntry());
+
+        Assert.True(reloaded.ClickIsNone);
+        Assert.IsType<NoneTarget>(reloaded.BuildTarget());
+    }
+
+    [Fact]
+    public void TargetDescription_Names_The_No_Function_Target()
+    {
+        var editor = new MappingEditorViewModel { ClickIsNone = true };
+
+        Assert.Equal("无功能", editor.TargetDescription);
+    }
+
+    // ---- Auto-repeat and the long-press are mutually exclusive --------------
+
+    [Fact]
+    public void Enabling_Click_Repeat_Disables_The_Long_Press()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.F13 });
+        Assert.True(editor.HasLongPress);
+
+        editor.ClickRepeatEnabled = true;
+
+        Assert.False(editor.LongPressAvailable);
+        Assert.False(editor.HasLongPress);
+        Assert.Null(editor.LongPressAction);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, gesture.ClickRepeatInterval);
+        Assert.Equal(0f, gesture.LongPressThreshold);
+        Assert.Null(gesture.LongPressAction);
+    }
+
+    [Fact]
+    public void Configuring_The_Long_Press_Disables_Click_Repeat()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.ClickRepeatEnabled = true;
+        Assert.True(editor.HasClickRepeat);
+
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.F13 });
+
+        Assert.False(editor.ClickRepeatEnabled);
+        Assert.True(editor.HasLongPress);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(0f, gesture.ClickRepeatInterval);
+        Assert.Equal(ButtonGesture.DefaultLongPressThreshold, gesture.LongPressThreshold);
+    }
+
+    [Fact]
+    public void Selecting_The_Long_Press_Switches_Click_Repeat_Off()
+    {
+        var editor = new MappingEditorViewModel { SelectedGesture = GestureSlot.LongPress };
+        editor.ClickRepeatEnabled = true;
+
+        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+
+        editor.SelectedGesture = GestureSlot.LongPress;
+
+        Assert.False(editor.ClickRepeatEnabled);
+        Assert.True(editor.LongPressAvailable);
+    }
+
+    [Fact]
+    public void A_Loaded_Inert_Long_Press_Is_Dropped_When_Click_Repeat_Is_On()
+    {
+        // The Core makes the long-press inert while click auto-repeat runs, so the editor
+        // must not load a long-press that would silently do nothing.
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = 0.4f,
+                    ClickRepeatInterval = 0.1f,
+                    LongPressAction = new KeyPressTarget(GamepadKey.F13),
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        Assert.True(editor.ClickRepeatEnabled);
+        Assert.False(editor.LongPressAvailable);
+        Assert.False(editor.HasLongPress);
+        Assert.Null(editor.LongPressAction);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, gesture.ClickRepeatInterval);
+        Assert.Equal(0f, gesture.LongPressThreshold);
+    }
+
+    [Fact]
+    public void LoadFrom_Restores_Click_Repeat_And_The_Click_None_Target()
+    {
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture { ClickRepeatInterval = 0.1f },
+            },
+            Target = new NoneTarget(),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        Assert.True(editor.ClickRepeatEnabled);
+        Assert.True(editor.ClickIsNone);
+        Assert.IsType<NoneTarget>(editor.BuildTarget());
+    }
+
+    // ---- Pinned defaults, no slider input -----------------------------------
+
+    [Fact]
+    public void The_Built_Gesture_Carries_The_Pinned_Defaults_With_No_Slider_Input()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(
+            o => o.Target is MouseButtonTarget { Button: MouseButton.Right });
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultDoubleClickWindow, gesture.DoubleClickWindow);
+        Assert.Equal(ButtonGesture.DefaultLongPressThreshold, gesture.LongPressThreshold);
+        Assert.Equal(0f, gesture.ClickRepeatInterval);
+    }
+
+    [Fact]
+    public void Click_Repeat_Uses_The_Pinned_Default_Interval()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.ClickRepeatEnabled = true;
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, gesture.ClickRepeatInterval);
+    }
+
+    [Fact]
+    public void Every_Previously_Reachable_Configuration_Is_Still_Reachable()
+    {
+        // The click keeps every target kind it always had, and gains 无功能.
+        foreach (var kind in new[]
+        {
+            MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
+            MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll,
+        })
+        {
+            var editor = new MappingEditorViewModel { TargetKind = kind, SelectedDirection = InputDirection.Up };
+            Assert.IsNotType<NoneTarget>(editor.BuildTarget());
+        }
+
+        Assert.IsType<NoneTarget>(new MappingEditorViewModel { ClickIsNone = true }.BuildTarget());
+
+        // 双击 / 长按 each keep their four reachable states: off, re-fire, 无功能, custom.
+        var doubleClick = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        Assert.False(doubleClick.HasDoubleClick, "a gesture nothing was chosen for stays off");
+        doubleClick.SelectedDoubleClickOption = Row(doubleClick, "重复单击的功能");
+        Assert.True(doubleClick.HasDoubleClick);
+        Assert.Null(doubleClick.DoubleClickAction);
+        doubleClick.SelectedDoubleClickOption = Row(doubleClick, "无功能");
+        Assert.IsType<NoneTarget>(doubleClick.DoubleClickAction);
+        doubleClick.SelectedDoubleClickOption = Row(doubleClick, "已关闭");
+        Assert.False(doubleClick.HasDoubleClick);
+        doubleClick.SelectedDoubleClickOption = doubleClick.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), doubleClick.DoubleClickAction);
+
+        var longPress = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        Assert.False(longPress.HasLongPress);
+        longPress.SelectedLongPressOption = Row(longPress, "重复单击的功能");
+        Assert.True(longPress.HasLongPress);
+        Assert.Null(longPress.LongPressAction);
+        longPress.SelectedLongPressOption = Row(longPress, "无功能");
+        Assert.IsType<NoneTarget>(longPress.LongPressAction);
+        longPress.SelectedLongPressOption = Row(longPress, "已关闭");
+        Assert.False(longPress.HasLongPress);
+        longPress.SelectedLongPressOption = longPress.GestureActionOptions.First(
+            o => o.Target is MouseButtonTarget { Button: MouseButton.Right });
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), longPress.LongPressAction);
+
+        // 长按重复触发 on and off, and a loaded long-press repeat interval survives.
+        var repeat = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        repeat.ClickRepeatEnabled = true;
+        Assert.True(repeat.HasClickRepeat);
+        repeat.ClickRepeatEnabled = false;
+        Assert.False(repeat.HasClickRepeat);
+
+        var carried = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture { LongPressThreshold = 0.4f, LongPressRepeatInterval = 0.15f },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        };
+        var loaded = new MappingEditorViewModel();
+        loaded.LoadFrom(carried);
+        Assert.Equal(
+            0.15f,
+            Assert.IsType<ButtonBinding>(loaded.BuildSource()).Gesture!.LongPressRepeatInterval);
+
+        static GestureActionOption Row(MappingEditorViewModel editor, string label)
+            => editor.GestureActionOptions.First(o => o.Label == label);
     }
 
     [Fact]
