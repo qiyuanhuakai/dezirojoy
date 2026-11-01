@@ -1,4 +1,7 @@
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using DeziroJoy.App.Ipc;
+using DeziroJoy.Core.Mapping;
 using DeziroJoy.Platform.Windows.Output;
 
 namespace DeziroJoy.App.Services;
@@ -24,9 +27,22 @@ public static class DaemonHost
     /// Runs the daemon until SIGINT, SIGTERM or SIGHUP arrives, then stops the engine and
     /// exits. Every supported termination path exits from its own handler, so this method
     /// only returns if a future runtime lets a handler return normally.
+    ///
+    /// The daemon is the authority: it owns the provider, sink, <see cref="EngineHost"/> and
+    /// the injection mutex, and it serves the version-1 mapping control channel on
+    /// <see cref="IpcContract.PipeName"/> for the whole of its life. A second daemon that
+    /// finds this one already listening exits cleanly instead of competing for the slot
+    /// (section 4.7).
     /// </summary>
     public static int Run()
     {
+        if (IsAnotherDaemonListening())
+        {
+            // Section 4.7: clean exit, no pipe theft, no mutex theft, no double injection.
+            Console.WriteLine("[DeziroJoy] another daemon is already listening on the mapping pipe; exiting without competing.");
+            return 0;
+        }
+
         using var composition = new EngineComposition();
 
         if (composition.Sink is SendInputOutputSink sendInputSink)
@@ -36,9 +52,26 @@ public static class DaemonHost
             sendInputSink.InjectionFailed += OnInjectionFailed;
         }
 
+        var stateStore = new DaemonStateStore(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "DeziroJoy",
+            "daemon-state.json"));
+
+        var daemon = new DaemonServer(
+            new EngineHostAdapter(composition),
+            composition.ProfileStore,
+            stateStore);
+
         Console.WriteLine(BuildStartupSummary(composition, DefaultInterval));
 
-        composition.Host.Start(DefaultInterval);
+        // Resume the mapping the user last asked for before the pipe opens, so a GUI that
+        // never connects still gets the persisted configuration.
+        daemon.ResumeDesiredState();
+
+        using var pipeCts = new CancellationTokenSource();
+        var pipeTask = ServePipeAsync(daemon, pipeCts.Token);
+
+        composition.Host.RefreshPresence();
 
         // .NET 10 no longer installs SIGTERM/SIGHUP handlers, so without one the default
         // action (terminate) applies and the daemon would die without releasing held keys.
@@ -46,11 +79,11 @@ public static class DaemonHost
         // it shuts down inline and exits explicitly.
         void ShutdownAndExit()
         {
+            pipeCts.Cancel();
             Shutdown(composition);
             Console.Out.Flush();
             Environment.Exit(0);
         }
-
         // Ctrl+C in a terminal. SIGINT is deliberately left to the console layer: .NET owns
         // that signal, and a PosixSignalRegistration for it never fires without a TTY.
         Console.CancelKeyPress += (_, args) =>
@@ -76,7 +109,6 @@ public static class DaemonHost
 
         return 0;
     }
-
     /// <summary>
     /// Reconciles device presence and renders the startup summary. Returns the text so the
     /// daemon and the tests see exactly the same lines.
@@ -143,6 +175,103 @@ public static class DaemonHost
     {
         composition.Host.Stop();
         Console.WriteLine(BuildShutdownSummary(composition, composition.InjectionLog));
+    }
+
+    /// <summary>
+    /// Serves the mapping control channel for the daemon's whole life, one task per connected
+    /// GUI. A client disconnect ends only that client's loop; the engine and the injection
+    /// mutex are untouched, which is what makes the daemon resident.
+    /// </summary>
+    private static async Task ServePipeAsync(DaemonServer daemon, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var server = new NamedPipeServerStream(
+                    IpcContract.PipeName,
+                    PipeDirection.InOut,
+                    maxNumberOfServerInstances: 1,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous);
+
+                await using (server)
+                {
+                    await server.WaitForConnectionAsync(cancellationToken);
+                    await daemon.ServeConnectionAsync(server, cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                // A pipe failure must never take the mapping down with it: the engine is the
+                // daemon's reason to exist, the pipe is only how a GUI talks to it.
+                Console.WriteLine($"[DeziroJoy] mapping pipe error: {exception.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when another daemon already answers on the mapping pipe. The pipe, not the mutex,
+    /// is the liveness signal: a daemon holds the mutex only while it is injecting, but it
+    /// listens for its whole life (section 4.3).
+    /// </summary>
+    private static bool IsAnotherDaemonListening()
+    {
+        try
+        {
+            using var client = new NamedPipeClientStream(
+                ".", IpcContract.PipeName, PipeDirection.InOut, PipeOptions.None);
+            client.Connect(TimeSpan.FromMilliseconds(250));
+            return client.IsConnected;
+        }
+        catch (Exception exception) when (exception is TimeoutException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Adapts the real composition to <see cref="IDaemonHost"/>. The counters are totalled from
+    /// the injection log, which is the only record of what the sink actually injected - and of
+    /// what UIPI silently dropped.
+    /// </summary>
+    private sealed class EngineHostAdapter : IDaemonHost
+    {
+        private readonly EngineComposition _composition;
+
+        public EngineHostAdapter(EngineComposition composition) => _composition = composition;
+
+        public bool IsRunning => _composition.Host.IsRunning;
+
+        public bool IsMappingEnabled => _composition.Host.IsMappingEnabled;
+
+        public bool HasController => _composition.Host.Controllers.Count > 0;
+
+        public int InjectorPid => Environment.ProcessId;
+
+        public string? InjectorIntegrity => _composition.IsElevationSupported
+            ? _composition.IsElevated ? "high" : "medium"
+            : null;
+
+        public long InjectedEvents => _composition.InjectionLog.Count;
+
+        public long BlockedEvents => _composition.InjectionLog.Snapshot(_composition.InjectionLog.Count)
+            .Count(record => !record.Success);
+
+        public IReadOnlyList<string> ConnectedDeviceIds
+            => _composition.Host.Controllers.Select(runtime => runtime.Descriptor.DeviceId).ToList();
+
+        public void Start() => _composition.Host.Start(DaemonHost.DefaultInterval);
+
+        public void StopMapping() => _composition.Host.Stop();
+
+        public void SetMappingEnabled(bool enabled) => _composition.Host.SetMappingEnabled(enabled);
+
+        public void Reload(string deviceId, GamepadProfile profile) => _composition.Host.Reload(deviceId, profile);
     }
 
     private static string DescribeElevation(EngineComposition composition)
