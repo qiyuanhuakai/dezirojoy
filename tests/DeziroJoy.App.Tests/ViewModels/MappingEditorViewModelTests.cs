@@ -353,6 +353,142 @@ public class MappingEditorViewModelTests
     }
 
     [Fact]
+    public void LoadFrom_Restores_The_Gesture_Actions()
+    {
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = 0.25f,
+                    LongPressThreshold = 0.4f,
+                    LongPressRepeatInterval = 0.1f,
+                    DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+                    LongPressAction = new MouseButtonTarget(MouseButton.Right),
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), editor.DoubleClickAction);
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), editor.LongPressAction);
+        Assert.True(editor.HasDoubleClickAction);
+        Assert.True(editor.HasLongPressAction);
+        Assert.Equal(entry.Source, editor.BuildSource());
+    }
+
+    [Fact]
+    public void BuildEntry_Writes_The_Gesture_Actions_Back_On_Commit()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SelectedButton = GamepadButton.B,
+            TargetKind = MappingTargetKind.KeyPress,
+            DoubleClickWindow = 0.3f,
+            LongPressThreshold = 0.5f,
+        };
+
+        editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
+        editor.LongPressAction = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.W);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), gesture.DoubleClickAction);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.W), gesture.LongPressAction);
+    }
+
+    [Fact]
+    public void Reset_Clears_The_Gesture_Actions()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            DoubleClickWindow = 0.3f,
+            LongPressThreshold = 0.5f,
+            DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+            LongPressAction = new KeyPressTarget(GamepadKey.F13),
+        };
+
+        editor.Reset();
+
+        Assert.Null(editor.DoubleClickAction);
+        Assert.Null(editor.LongPressAction);
+        Assert.False(editor.HasDoubleClickAction);
+        Assert.False(editor.HasLongPressAction);
+    }
+
+    [Fact]
+    public void Choosing_A_Gesture_Action_Enables_Its_Timing()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        Assert.False(editor.HasAnyGesture);
+
+        editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
+
+        Assert.True(editor.HasDoubleClick, "a double-click action cannot fire without a window");
+        Assert.True(editor.HasAnyGesture, "configuring an action introduces the wait");
+
+        editor.LongPressAction = new KeyPressTarget(GamepadKey.F13);
+
+        Assert.True(editor.HasLongPress);
+    }
+
+    [Fact]
+    public void Gesture_Action_Options_Are_Offered_And_Selecting_One_Sets_The_Action()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.NotEmpty(editor.GestureActionOptions);
+        Assert.Contains(
+            editor.GestureActionOptions,
+            option => option.Target is KeyPressTarget { Key: GamepadKey.Space });
+
+        var option = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+
+        editor.SelectedDoubleClickOption = option;
+
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), editor.DoubleClickAction);
+        Assert.Equal(option, editor.SelectedDoubleClickOption);
+    }
+
+    [Fact]
+    public void Gesture_Action_Descriptions_Name_The_Chosen_Action()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Equal("无", editor.DoubleClickActionDescription);
+        Assert.Equal("无", editor.LongPressActionDescription);
+
+        editor.DoubleClickAction = new KeyPressTarget(GamepadKey.Space);
+        editor.LongPressAction = new MouseButtonTarget(MouseButton.Right);
+
+        Assert.Equal("Space", editor.DoubleClickActionDescription);
+        Assert.Equal("鼠标右键", editor.LongPressActionDescription);
+    }
+
+    [Fact]
+    public void Clearing_A_Gesture_Action_Drops_It_From_The_Built_Source()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SelectedButton = GamepadButton.B,
+            DoubleClickWindow = 0.3f,
+            DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+        };
+
+        editor.ClearDoubleClickActionCommand.Execute(null);
+
+        Assert.Null(editor.DoubleClickAction);
+        Assert.Null(Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture?.DoubleClickAction);
+    }
+
+    [Fact]
     public void Switching_Back_To_A_Button_Source_Moves_The_Target_To_A_Key()
     {
         var editor = new MappingEditorViewModel { SourceKind = MappingSourceKind.Stick };

@@ -13,9 +13,11 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// Physical-gamepad navigation through the real window: a press on the connected pad opens
-/// that element's mapping settings, with the engine running or stopped, and while a mapping
-/// is open the press navigates the editor instead of being injected.
+/// Physical-gamepad navigation through the real window, in two levels. A press on the pad
+/// SELECTS that element and nothing else - the mapping keeps injecting, because browsing the
+/// pad is not a request to configure. Entering the editor (a click) is the second level, and
+/// that is the only thing that hijacks the pad: while a mapping is open, presses switch which
+/// element is being configured instead of being injected.
 /// </summary>
 public sealed class PhysicalInputNavigationTests
 {
@@ -67,7 +69,7 @@ public sealed class PhysicalInputNavigationTests
     }
 
     [AvaloniaFact]
-    public void Pressing_A_Physical_Button_Opens_The_Mapping_Settings()
+    public void Pressing_A_Physical_Button_Selects_Without_Opening_The_Editor()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
 
@@ -77,13 +79,36 @@ public sealed class PhysicalInputNavigationTests
         SetPadState(provider, GamepadButtonMask.B);
         EngineTick(host, window);
 
+        Assert.Equal(new ButtonBinding(GamepadButton.B), viewModel.SelectedSource);
+        Assert.False(viewModel.IsEditing, "a press selects; only a click enters the editor");
+        Assert.False(host.IsInjectionSuspended);
+        Assert.False(window.FindControl<Border>("EditorPanel")!.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void Clicking_The_Selected_Element_Opens_The_Editor_And_Hijacks_The_Pad()
+    {
+        var (window, viewModel, host, provider, sink) = BuildWindow();
+
+        ConnectPad(provider);
+        EngineTick(host, window);
+
+        SetPadState(provider, GamepadButtonMask.B);
+        EngineTick(host, window);
+        Assert.False(viewModel.IsEditing);
+
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.B));
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+
         Assert.True(viewModel.IsEditing);
+        Assert.True(host.IsInjectionSuspended, "entering the editor is what hijacks the pad");
         Assert.Equal(GamepadButton.B, viewModel.Editor.SelectedButton);
         Assert.True(window.FindControl<Border>("EditorPanel")!.IsVisible);
     }
 
     [AvaloniaFact]
-    public void Pressing_A_Physical_Button_Navigates_With_The_Engine_Stopped()
+    public void Pressing_A_Physical_Button_Selects_With_The_Engine_Stopped()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
 
@@ -95,9 +120,9 @@ public sealed class PhysicalInputNavigationTests
         PresenceSample(host, window);
 
         Assert.False(host.IsRunning);
-        Assert.True(viewModel.IsEditing);
-        Assert.Equal(GamepadButton.B, viewModel.Editor.SelectedButton);
-        Assert.True(window.FindControl<Border>("EditorPanel")!.IsVisible);
+        Assert.Equal(new ButtonBinding(GamepadButton.B), viewModel.SelectedSource);
+        Assert.False(viewModel.IsEditing);
+        Assert.False(window.FindControl<Border>("EditorPanel")!.IsVisible);
     }
 
     [AvaloniaFact]
@@ -110,6 +135,9 @@ public sealed class PhysicalInputNavigationTests
 
         SetPadState(provider, GamepadButtonMask.B);
         EngineTick(host, window);
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.B));
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
         Assert.True(viewModel.IsEditing);
 
         sink.Calls.Clear();
@@ -122,7 +150,7 @@ public sealed class PhysicalInputNavigationTests
     }
 
     [AvaloniaFact]
-    public void Deflecting_A_Stick_On_The_Pad_Opens_The_Stick_Mapping_Settings()
+    public void Deflecting_A_Stick_On_The_Pad_Selects_The_Stick()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
 
@@ -132,8 +160,8 @@ public sealed class PhysicalInputNavigationTests
         SetPadState(provider, default, 0f, 0f, 0.9f, 0f);
         EngineTick(host, window);
 
-        Assert.True(viewModel.IsEditing);
-        Assert.True(viewModel.Editor.SourceIsStick);
-        Assert.Equal(GamepadStick.Right, viewModel.Editor.SelectedStick);
+        Assert.Equal(new StickBinding(GamepadStick.Right), viewModel.SelectedSource);
+        Assert.False(viewModel.IsEditing);
+        Assert.False(window.FindControl<Border>("EditorPanel")!.IsVisible);
     }
 }

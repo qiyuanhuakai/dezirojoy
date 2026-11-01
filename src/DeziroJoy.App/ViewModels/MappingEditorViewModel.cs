@@ -7,6 +7,14 @@ using DeziroJoy.Core.Mapping;
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>
+/// A row in a gesture-action picker: the label to show and the target it stands for. A gesture
+/// action is an ordinary <see cref="MappingTarget"/> - the same type a mapping's target uses -
+/// so a double-click or long-press can fire a key, a combo or a mouse button exactly like the
+/// mapping itself, with no second representation to keep in step.
+/// </summary>
+public sealed record GestureActionOption(string Label, MappingTarget Target);
+
+/// <summary>
 /// Editing surface for one mapping: pick the source (button or stick) and the target
 /// (single key, combo, mouse button, stick-to-mouse, stick-to-wheel).
 /// </summary>
@@ -45,8 +53,44 @@ public partial class MappingEditorViewModel : ObservableObject
     private ButtonPickerItem? _selectedButtonOption;
     private KeyPickerItem? _selectedKeyOption;
     private DirectionPickerItem? _selectedDirectionOption;
+    private GestureActionOption? _selectedDoubleClickOption;
+    private GestureActionOption? _selectedLongPressOption;
     private InputDirection? _loadedDirection;
     private GamepadButtonMask _previousCaptureButtons;
+
+    /// <summary>
+    /// Timing armed when an action is chosen while its slider still sits at 0. A gesture with no
+    /// window can never resolve, so picking an action has to arm its timing too; the slider stays
+    /// free afterwards, and dragging it back to 0 disables the gesture exactly as before.
+    /// </summary>
+    public const float DefaultDoubleClickWindow = 0.25f;
+
+    /// <summary>Timing armed for the long-press when its action is chosen at a 0 threshold.</summary>
+    public const float DefaultLongPressThreshold = 0.5f;
+
+    private static readonly GestureActionOption[] GestureActionRows = BuildGestureActionRows();
+
+    /// <summary>Every target a gesture action can be set to, for the picker.</summary>
+    public IReadOnlyList<GestureActionOption> GestureActionOptions { get; } = GestureActionRows;
+
+    private static GestureActionOption[] BuildGestureActionRows()
+    {
+        var keys = Enum.GetValues<GamepadKey>().Select(
+            key =>
+            {
+                var target = new KeyPressTarget(key);
+                return new GestureActionOption(MappingDescriptions.Target(target), target);
+            });
+
+        var buttons = Enum.GetValues<MouseButton>().Select(
+            button =>
+            {
+                var target = new MouseButtonTarget(button);
+                return new GestureActionOption(MappingDescriptions.Target(target), target);
+            });
+
+        return [.. keys, .. buttons];
+    }
 
     public MappingEditorViewModel()
     {
@@ -89,6 +133,18 @@ public partial class MappingEditorViewModel : ObservableObject
 
     [ObservableProperty]
     private float _longPressRepeatInterval;
+
+    /// <summary>
+    /// What the double-click emits. Null leaves the double-click without a function of its own,
+    /// so it re-fires the mapping's target - the behaviour every profile written before this
+    /// field existed already has.
+    /// </summary>
+    [ObservableProperty]
+    private MappingTarget? _doubleClickAction;
+
+    /// <summary>What the long-press emits, and what auto-repeat re-fires. Null behaves as above.</summary>
+    [ObservableProperty]
+    private MappingTarget? _longPressAction;
 
     [ObservableProperty]
     private GamepadKey _selectedKey = GamepadKey.Enter;
@@ -178,6 +234,60 @@ public partial class MappingEditorViewModel : ObservableObject
     /// the single action can fire. False keeps the zero-latency single-click path.
     /// </summary>
     public bool HasAnyGesture => HasDoubleClick || HasLongPress;
+
+    /// <summary>True when the double-click has a function of its own rather than re-firing the single.</summary>
+    public bool HasDoubleClickAction => DoubleClickAction is not null;
+
+    /// <summary>True when the long-press has a function of its own rather than re-firing the single.</summary>
+    public bool HasLongPressAction => LongPressAction is not null;
+
+    /// <summary>What the double-click currently does, for the readout beside its picker.</summary>
+    public string DoubleClickActionDescription => DoubleClickAction is { } doubleClick
+        ? MappingDescriptions.Target(doubleClick)
+        : "无";
+
+    /// <summary>What the long-press currently does, for the readout beside its picker.</summary>
+    public string LongPressActionDescription => LongPressAction is { } longPress
+        ? MappingDescriptions.Target(longPress)
+        : "无";
+
+    /// <summary>
+    /// The selected double-click picker row, kept in step with <see cref="DoubleClickAction"/>.
+    /// A hand-edited profile may name a target the picker does not list, which leaves this null
+    /// while the action itself survives the round-trip untouched.
+    /// </summary>
+    public GestureActionOption? SelectedDoubleClickOption
+    {
+        get => _selectedDoubleClickOption;
+        set
+        {
+            if (EqualityComparer<GestureActionOption?>.Default.Equals(value, _selectedDoubleClickOption))
+            {
+                return;
+            }
+
+            _selectedDoubleClickOption = value;
+            DoubleClickAction = value?.Target;
+            OnPropertyChanged(nameof(SelectedDoubleClickOption));
+        }
+    }
+
+    /// <summary>The selected long-press picker row, kept in step with <see cref="LongPressAction"/>.</summary>
+    public GestureActionOption? SelectedLongPressOption
+    {
+        get => _selectedLongPressOption;
+        set
+        {
+            if (EqualityComparer<GestureActionOption?>.Default.Equals(value, _selectedLongPressOption))
+            {
+                return;
+            }
+
+            _selectedLongPressOption = value;
+            LongPressAction = value?.Target;
+            OnPropertyChanged(nameof(SelectedLongPressOption));
+        }
+    }
 
     public string CaptureButtonLabel => IsCapturingButton ? "停止捕获" : "捕获按键";
 
@@ -306,6 +416,8 @@ public partial class MappingEditorViewModel : ObservableObject
             DoubleClickWindow = DoubleClickWindow,
             LongPressThreshold = LongPressThreshold,
             LongPressRepeatInterval = LongPressRepeatInterval,
+            DoubleClickAction = DoubleClickAction,
+            LongPressAction = LongPressAction,
         }
         : null;
 
@@ -343,6 +455,11 @@ public partial class MappingEditorViewModel : ObservableObject
                 DoubleClickWindow = button.Gesture?.DoubleClickWindow ?? 0f;
                 LongPressThreshold = button.Gesture?.LongPressThreshold ?? 0f;
                 LongPressRepeatInterval = button.Gesture?.LongPressRepeatInterval ?? 0f;
+
+                // Assigned after the timings so a profile carrying an action at a zero timing is
+                // repaired by the same rule the picker uses, rather than silently dropped.
+                DoubleClickAction = button.Gesture?.DoubleClickAction;
+                LongPressAction = button.Gesture?.LongPressAction;
                 break;
             case StickBinding stick:
                 SourceIsStick = true;
@@ -398,6 +515,8 @@ public partial class MappingEditorViewModel : ObservableObject
         DoubleClickWindow = 0f;
         LongPressThreshold = 0f;
         LongPressRepeatInterval = 0f;
+        DoubleClickAction = null;
+        LongPressAction = null;
         ModifierCtrl = false;
         ModifierShift = false;
         ModifierAlt = false;
@@ -602,6 +721,42 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(HasLongPress));
         OnPropertyChanged(nameof(HasAnyGesture));
     }
+
+    partial void OnDoubleClickActionChanged(MappingTarget? value)
+    {
+        // An action with no window can never resolve, so choosing one arms the timing. Dragging
+        // the slider back to 0 still disables the gesture, exactly as the product rule says.
+        if (value is not null && DoubleClickWindow <= 0f)
+        {
+            DoubleClickWindow = DefaultDoubleClickWindow;
+        }
+
+        _selectedDoubleClickOption = GestureActionOptions.FirstOrDefault(
+            option => EqualityComparer<MappingTarget>.Default.Equals(option.Target, value));
+        OnPropertyChanged(nameof(SelectedDoubleClickOption));
+        OnPropertyChanged(nameof(HasDoubleClickAction));
+        OnPropertyChanged(nameof(DoubleClickActionDescription));
+    }
+
+    partial void OnLongPressActionChanged(MappingTarget? value)
+    {
+        if (value is not null && LongPressThreshold <= 0f)
+        {
+            LongPressThreshold = DefaultLongPressThreshold;
+        }
+
+        _selectedLongPressOption = GestureActionOptions.FirstOrDefault(
+            option => EqualityComparer<MappingTarget>.Default.Equals(option.Target, value));
+        OnPropertyChanged(nameof(SelectedLongPressOption));
+        OnPropertyChanged(nameof(HasLongPressAction));
+        OnPropertyChanged(nameof(LongPressActionDescription));
+    }
+
+    [RelayCommand]
+    private void ClearDoubleClickAction() => DoubleClickAction = null;
+
+    [RelayCommand]
+    private void ClearLongPressAction() => LongPressAction = null;
 
     partial void OnSelectedKeyChanged(GamepadKey value)
     {

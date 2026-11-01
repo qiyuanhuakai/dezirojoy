@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using DeziroJoy.Platform.Windows.Elevation;
 
 namespace DeziroJoy.App.Services;
@@ -47,6 +48,12 @@ public interface IDaemonService
 
     bool IsAutostartInstalled { get; }
 
+    /// <summary>
+    /// The resident daemon's run level ("Highest" / "LeastPrivilege" / null when not installed).
+    /// This, not the GUI's own token, decides whether injection can reach elevated targets.
+    /// </summary>
+    string? DaemonRunLevel { get; }
+
     void Refresh();
 
     DaemonActionResult InstallDaemon();
@@ -72,17 +79,21 @@ public sealed class WindowsDaemonService : IDaemonService
 
     public bool IsAutostartInstalled { get; private set; }
 
+    public string? DaemonRunLevel { get; private set; }
+
     public void Refresh()
     {
         if (!IsSupported)
         {
             IsDaemonInstalled = false;
             IsAutostartInstalled = false;
+            DaemonRunLevel = null;
             return;
         }
 
         IsDaemonInstalled = QueryTask(DaemonInstaller.TaskName);
         IsAutostartInstalled = QueryTask(AutostartInstaller.TaskName);
+        DaemonRunLevel = IsDaemonInstalled ? QueryRunLevel(DaemonInstaller.TaskName) : null;
     }
 
     public DaemonActionResult InstallDaemon()
@@ -203,6 +214,43 @@ public sealed class WindowsDaemonService : IDaemonService
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads the task's <c>&lt;RunLevel&gt;</c> from its XML. XML is used rather than the
+    /// CSV/table listing because every column name in those is localised, while the XML
+    /// element name is not. Returns null when the run level cannot be read (a non-admin
+    /// caller may be denied XML access to an admin-created task), which the caller must
+    /// treat as "unknown", never as "elevated".
+    /// </summary>
+    private static string? QueryRunLevel(string taskName)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("cmd.exe", $"/c schtasks /Query /TN \"{taskName}\" /XML")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+
+            var xml = process?.StandardOutput.ReadToEnd();
+            process?.WaitForExit();
+
+            if (string.IsNullOrEmpty(xml) || process is null || process.ExitCode != 0)
+            {
+                return null;
+            }
+
+            var match = Regex.Match(xml, "<RunLevel>([^<]+)</RunLevel>", RegexOptions.IgnoreCase);
+
+            return match.Success ? match.Groups[1].Value.Trim() : null;
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        {
+            return null;
         }
     }
 }

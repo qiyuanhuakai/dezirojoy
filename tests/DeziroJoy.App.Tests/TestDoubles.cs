@@ -129,6 +129,9 @@ internal sealed class FakeDaemonService : IDaemonService
 
     public bool IsAutostartInstalled { get; set; }
 
+    /// <summary>Null means "not installed", mirroring the real service.</summary>
+    public string? DaemonRunLevel { get; set; }
+
     public int RefreshCalls { get; private set; }
 
     public DaemonOp NextResult { get; set; } = DaemonOp.Completed;
@@ -147,6 +150,7 @@ internal sealed class FakeDaemonService : IDaemonService
         if (NextResult == DaemonOp.Completed)
         {
             IsDaemonInstalled = true;
+            DaemonRunLevel = "Highest";
         }
 
         return Message("已注册常驻服务");
@@ -162,6 +166,7 @@ internal sealed class FakeDaemonService : IDaemonService
         if (NextResult == DaemonOp.Completed)
         {
             IsDaemonInstalled = false;
+            DaemonRunLevel = null;
         }
 
         return Message("已移除常驻服务");

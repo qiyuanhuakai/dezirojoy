@@ -7,10 +7,12 @@ using Xunit;
 namespace DeziroJoy.App.Tests.ViewModels;
 
 /// <summary>
-/// Physical-gamepad navigation: pressing a button - or deflecting a stick - on the connected
-/// pad opens that element's mapping settings, exactly as clicking it on the model does. While
-/// a mapping is open the press navigates the editor instead of being injected, so the engine
-/// is suspended for the duration of the edit.
+/// Physical-gamepad navigation is two-level. A press on the pad SELECTS that element in the
+/// model and the source list, and nothing else: it must not open the editor and must not
+/// suspend injection, because browsing the pad is not a request to configure. Entering the
+/// editor - a click, or Enter - is the second level, and that is the only thing that hijacks
+/// the pad: while a mapping is open, presses switch which element is being configured instead
+/// of being injected.
 /// </summary>
 public sealed class GamepadNavigationTests
 {
@@ -76,8 +78,11 @@ public sealed class GamepadNavigationTests
         float rightY = 0f)
         => provider.SetState(DeviceId, GamepadState.Create(buttons, leftX, leftY, rightX, rightY));
 
+    /// <summary>Enters the second level for one source, exactly as clicking it on the model does.</summary>
+    private static void Click(MainWindowViewModel vm, InputBinding source) => vm.OpenEditorForSource(source);
+
     [Fact]
-    public void Pressing_A_Button_While_The_Engine_Runs_Opens_Its_Mapping_Settings()
+    public void Pressing_A_Button_Selects_Its_Element_Without_Opening_The_Editor()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider);
@@ -86,43 +91,58 @@ public sealed class GamepadNavigationTests
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
 
-        Assert.True(vm.IsEditing, "a physical press must open the mapping settings");
-        Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
+        Assert.False(vm.IsEditing, "selecting must not open the editor - that is the second level");
+        Assert.False(vm.Host.IsInjectionSuspended);
     }
 
     [Fact]
-    public void Pressing_A_Button_Selects_Its_Mapping_Row_And_Loads_Its_Mapping()
+    public void Pressing_A_Button_Keeps_Injecting_While_The_Engine_Runs()
+    {
+        var (vm, host, provider, sink) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        // B carries a default mapping (B -> Enter). Pressing it must select the element AND
+        // still inject: browsing the pad is not a request to configure, so nothing may be
+        // hijacked at the first level.
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
+        Assert.Contains("down:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void Pressing_A_Button_Selects_Its_Mapping_Row_Without_Loading_It()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider);
         Sample(vm, host);
 
-        // B carries a default mapping (B -> Enter), so the press must select that row and
-        // load the mapping rather than arming a fresh one that would duplicate the source.
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
 
         var selected = Assert.IsType<MappingRowViewModel>(vm.SelectedMapping);
         Assert.Equal(new ButtonBinding(GamepadButton.B), selected.Entry.Source);
-        Assert.Equal(MappingTargetKind.KeyPress, vm.Editor.TargetKind);
-        Assert.Equal(GamepadKey.Enter, vm.Editor.SelectedKey);
+        Assert.False(vm.IsEditing, "the mapping must load only when the editor is entered");
     }
 
     [Fact]
-    public void Pressing_An_Unmapped_Button_Arms_A_Fresh_Mapping()
+    public void Pressing_An_Unmapped_Button_Selects_It_Without_Arming_A_Mapping()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider);
         Sample(vm, host);
 
-        // LeftBumper has no default mapping, so there is no row to select.
+        // LeftBumper has no default mapping, so there is no row to select - but the element
+        // is still selected in the model so the user sees what they touched.
         SetState(provider, GamepadButtonMask.LeftBumper);
         Sample(vm, host);
 
-        Assert.True(vm.IsEditing);
-        Assert.Equal(GamepadButton.LeftBumper, vm.Editor.SelectedButton);
+        Assert.Equal(new ButtonBinding(GamepadButton.LeftBumper), vm.SelectedSource);
         Assert.Null(vm.SelectedMapping);
-        Assert.Equal(MappingTargetKind.KeyPress, vm.Editor.TargetKind);
+        Assert.False(vm.IsEditing);
     }
 
     [Fact]
@@ -135,34 +155,34 @@ public sealed class GamepadNavigationTests
         SetState(provider, default, 0f, 0f, 0.9f, 0f);
         Sample(vm, host);
 
-        Assert.True(vm.IsEditing);
-        Assert.True(vm.Editor.SourceIsStick);
-        Assert.Equal(GamepadStick.Right, vm.Editor.SelectedStick);
+        Assert.Equal(new StickBinding(GamepadStick.Right), vm.SelectedSource);
+        Assert.False(vm.IsEditing);
 
         var selected = Assert.IsType<MappingRowViewModel>(vm.SelectedMapping);
         Assert.Equal(new StickBinding(GamepadStick.Right), selected.Entry.Source);
     }
 
     [Fact]
-    public void A_Button_Held_From_Connect_Does_Not_Navigate()
+    public void A_Button_Held_From_Connect_Does_Not_Select()
     {
         var (vm, host, provider, _) = CreateHost();
 
         // The pad is already holding B when the first sample arrives: that is the baseline,
-        // not a press, so nothing must open.
+        // not a press, so nothing must be selected.
         Connect(provider, GamepadButtonMask.B);
         Sample(vm, host);
 
+        Assert.Null(vm.SelectedSource);
         Assert.False(vm.IsEditing);
     }
 
     [Fact]
-    public void Releasing_And_Pressing_Again_Navigates_Again()
+    public void Releasing_And_Pressing_Again_Selects_Again()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider, GamepadButtonMask.B);
         Sample(vm, host);
-        Assert.False(vm.IsEditing);
+        Assert.Null(vm.SelectedSource);
 
         SetState(provider);
         Sample(vm, host);
@@ -170,12 +190,12 @@ public sealed class GamepadNavigationTests
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
 
-        Assert.True(vm.IsEditing);
-        Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
+        Assert.False(vm.IsEditing);
     }
 
     [Fact]
-    public void Holding_A_Button_Does_Not_Re_Navigate()
+    public void Holding_A_Button_Does_Not_Re_Select()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider);
@@ -183,15 +203,33 @@ public sealed class GamepadNavigationTests
 
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
-        Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
 
-        // The user retargets the mapping while still holding the button; a held button is not
-        // a new press, so the editor must not reload and throw the edit away.
-        vm.Editor.SelectedKey = GamepadKey.Space;
-
+        // A held button is not a new press, so the selection must not change underneath the
+        // user while they are looking at that element.
+        SetState(provider, GamepadButtonMask.X);
         Sample(vm, host);
 
-        Assert.Equal(GamepadKey.Space, vm.Editor.SelectedKey);
+        Assert.Equal(new ButtonBinding(GamepadButton.X), vm.SelectedSource);
+        Assert.False(vm.IsEditing);
+    }
+
+    [Fact]
+    public void Clicking_The_Selected_Element_Opens_The_Editor_And_Suspends_Injection()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+        Assert.False(vm.IsEditing, "the press only selects");
+
+        Click(vm, new ButtonBinding(GamepadButton.B));
+
+        Assert.True(vm.IsEditing);
+        Assert.True(vm.Host.IsInjectionSuspended, "entering the editor is what hijacks the pad");
+        Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
     }
 
     [Fact]
@@ -203,6 +241,7 @@ public sealed class GamepadNavigationTests
 
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
         Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
 
         SetState(provider, GamepadButtonMask.B | GamepadButtonMask.X);
@@ -221,6 +260,7 @@ public sealed class GamepadNavigationTests
 
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
         vm.Editor.SelectedKey = GamepadKey.Space;
 
         // Release and press the same button again: it is a fresh press, but the editor is
@@ -244,6 +284,8 @@ public sealed class GamepadNavigationTests
         Sample(vm, host);
         var row = Assert.IsType<MappingRowViewModel>(vm.SelectedMapping);
 
+        Click(vm, new ButtonBinding(GamepadButton.A));
+
         // Capture is armed: the next press is the mapping's new source, not a navigation.
         vm.Editor.IsCapturingButton = true;
         SetState(provider, GamepadButtonMask.X);
@@ -265,6 +307,8 @@ public sealed class GamepadNavigationTests
         Sample(vm, host);
         var row = Assert.IsType<MappingRowViewModel>(vm.SelectedMapping);
 
+        Click(vm, new ButtonBinding(GamepadButton.A));
+
         // Keyboard capture owns the input while it is armed: a gamepad button is not a
         // keyboard key, and navigating away would abort the capture the user just started.
         vm.Editor.IsCapturingKey = true;
@@ -283,11 +327,9 @@ public sealed class GamepadNavigationTests
         Connect(provider);
         Sample(vm, host);
 
-        // The press that opens the editor may still inject once - the engine was live and
-        // unsuspended at that moment - but everything pressed while editing must not.
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
-        Assert.True(vm.IsEditing);
+        Click(vm, new ButtonBinding(GamepadButton.B));
 
         sink.Calls.Clear();
         SetState(provider, GamepadButtonMask.B | GamepadButtonMask.X);
@@ -307,6 +349,7 @@ public sealed class GamepadNavigationTests
 
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
         Assert.True(vm.IsEditing);
 
         vm.CancelEditorCommand.Execute(null);
@@ -328,12 +371,11 @@ public sealed class GamepadNavigationTests
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
 
-        Assert.True(vm.IsEditing);
         Assert.False(host.IsRunning, "navigation must sample, never start the mapping loop");
     }
 
     [Fact]
-    public void Pressing_A_Button_With_The_Engine_Stopped_Opens_Its_Mapping_Settings()
+    public void Pressing_A_Button_With_The_Engine_Stopped_Selects_Without_Opening_The_Editor()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider);
@@ -343,8 +385,9 @@ public sealed class GamepadNavigationTests
         PresenceSample(vm, host);
 
         Assert.False(host.IsRunning);
-        Assert.True(vm.IsEditing);
-        Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
+        Assert.False(vm.IsEditing);
+        Assert.False(vm.Host.IsInjectionSuspended);
     }
 
     [Fact]
@@ -365,7 +408,7 @@ public sealed class GamepadNavigationTests
     }
 
     [Fact]
-    public void Deflecting_A_Stick_Navigates_With_The_Engine_Stopped()
+    public void Deflecting_A_Stick_Selects_With_The_Engine_Stopped()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(provider);
@@ -374,8 +417,8 @@ public sealed class GamepadNavigationTests
         SetState(provider, default, 0f, 0f, 0.9f, 0f);
         PresenceSample(vm, host);
 
-        Assert.True(vm.IsEditing);
-        Assert.Equal(GamepadStick.Right, vm.Editor.SelectedStick);
+        Assert.Equal(new StickBinding(GamepadStick.Right), vm.SelectedSource);
+        Assert.False(vm.IsEditing);
     }
 
     [Fact]
@@ -388,7 +431,8 @@ public sealed class GamepadNavigationTests
         SetState(provider, GamepadButtonMask.B);
         PresenceSample(vm, host);
 
-        Assert.True(vm.IsEditing);
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
+        Assert.False(vm.IsEditing);
         Assert.Empty(sink.Calls);
     }
 }

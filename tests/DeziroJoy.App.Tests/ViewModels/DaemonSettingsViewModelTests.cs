@@ -18,6 +18,7 @@ public class DaemonSettingsViewModelTests
         {
             IsDaemonInstalled = true,
             IsAutostartInstalled = true,
+            DaemonRunLevel = "Highest",
         };
 
         var vm = new DaemonSettingsViewModel(service);
@@ -27,7 +28,7 @@ public class DaemonSettingsViewModelTests
         Assert.True(vm.IsDaemonInstalled);
         Assert.True(vm.AutostartEnabled);
         Assert.Contains("已安装", vm.DaemonStateText);
-        Assert.Contains("管理员", vm.ElevationText);
+        Assert.Contains("常驻服务以管理员身份运行", vm.ElevationText);
     }
 
     [Fact]
@@ -123,5 +124,58 @@ public class DaemonSettingsViewModelTests
 
         vm.InstallDaemonCommand.Execute(null);
         Assert.Contains("不支持", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void An_Unelevated_Gui_With_An_Elevated_Daemon_Still_Reports_Injection_Reach()
+    {
+        var service = new FakeDaemonService(isSupported: true, isElevated: false)
+        {
+            IsDaemonInstalled = true,
+            DaemonRunLevel = "Highest",
+        };
+
+        var vm = new DaemonSettingsViewModel(service);
+
+        Assert.False(vm.IsElevated);
+        Assert.Contains("常驻服务以管理员身份运行", vm.ElevationText);
+    }
+
+    [Fact]
+    public void Installing_The_Daemon_Reports_The_Run_Level_It_Gained()
+    {
+        var service = new FakeDaemonService();
+        var vm = new DaemonSettingsViewModel(service);
+
+        vm.InstallDaemonCommand.Execute(null);
+
+        Assert.Contains("常驻服务以管理员身份运行", vm.ElevationText);
+    }
+
+    [Fact]
+    public void A_Daemon_Without_The_Highest_Run_Level_Says_Injection_Cannot_Reach()
+    {
+        var service = new FakeDaemonService { IsDaemonInstalled = true, DaemonRunLevel = "LeastPrivilege" };
+        var vm = new DaemonSettingsViewModel(service);
+
+        Assert.Contains("未以管理员身份运行", vm.ElevationText);
+    }
+
+    [Fact]
+    public void An_Unreadable_Run_Level_Is_Reported_As_Unknown_Never_As_Elevated()
+    {
+        var service = new FakeDaemonService { IsDaemonInstalled = true, DaemonRunLevel = null };
+        var vm = new DaemonSettingsViewModel(service);
+
+        Assert.Contains("无法读取", vm.ElevationText);
+        Assert.DoesNotContain("以管理员身份运行", vm.ElevationText);
+    }
+
+    [Fact]
+    public void No_Daemon_Installed_Says_Injection_Cannot_Reach_Elevated_Targets()
+    {
+        var vm = new DaemonSettingsViewModel(new FakeDaemonService());
+
+        Assert.Contains("未安装", vm.ElevationText);
     }
 }

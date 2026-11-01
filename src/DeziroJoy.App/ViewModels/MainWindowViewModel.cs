@@ -84,6 +84,13 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private MappingRowViewModel? _selectedMapping;
 
+    /// <summary>
+    /// First-level selection. Selecting deliberately does NOT open the editor: browsing the
+    /// pad must never suspend injection. Only entering the editor hijacks the pad.
+    /// </summary>
+    [ObservableProperty]
+    private InputBinding? _selectedSource;
+
     [ObservableProperty]
     private string _statusMessage = "未检测到手柄，请连接手柄";
 
@@ -446,6 +453,13 @@ public partial class MainWindowViewModel : ObservableObject
         Visualizer.SetConnected(true);
     }
 
+    /// <summary>Selects an element without opening the editor, so injection is never suspended.</summary>
+    public void SelectSource(InputBinding source)
+    {
+        SelectedSource = source;
+        SelectedMapping = Mappings.FirstOrDefault(row => row.Entry.Source == source);
+    }
+
     /// <summary>
     /// Opens the mapping settings for one source, exactly as clicking that element on the model
     /// does: an element that already has a mapping loads it (so confirming replaces it instead
@@ -455,6 +469,7 @@ public partial class MainWindowViewModel : ObservableObject
     /// </summary>
     public void OpenEditorForSource(InputBinding source)
     {
+        SelectedSource = source;
         SelectedMapping = Mappings.FirstOrDefault(row => row.Entry.Source == source);
 
         if (ActiveProfile?.Mappings.FirstOrDefault(m => m.Source == source) is { } existing
@@ -499,9 +514,13 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Opens the mapping settings for whatever was newly pressed or deflected. Only press edges
-    /// count, so a held button navigates once; the first sample for a controller is the
-    /// baseline, so a button held since before the app looked is not a press.
+    /// Handles a newly pressed button or deflected stick. While the editor is open (second
+    /// level) the press switches which element is being configured, and injection stays
+    /// suspended - that is the hijack, and it is scoped to the editor. Otherwise the press
+    /// only selects the element in the model (first level): it never opens the editor, so the
+    /// mapping keeps injecting while the user browses the pad. Only press edges count, so a
+    /// held button acts once; the first sample for a controller is the baseline, so a button
+    /// held since before the app looked is not a press.
     /// </summary>
     private void NavigateByPhysicalInput(IGamepadState state)
     {
@@ -527,13 +546,22 @@ public partial class MainWindowViewModel : ObservableObject
 
         RememberNavigation(state, deviceId);
 
-        if (NavigationTarget(buttonEdges, extraEdges, leftEdge, rightEdge) is not { } source
-            || IsAlreadyEditing(source))
+        if (NavigationTarget(buttonEdges, extraEdges, leftEdge, rightEdge) is not { } source)
         {
             return;
         }
 
-        OpenEditorForSource(source);
+        if (IsEditing)
+        {
+            if (!IsAlreadyEditing(source))
+            {
+                OpenEditorForSource(source);
+            }
+
+            return;
+        }
+
+        SelectSource(source);
     }
 
     /// <summary>Records the current sample as the navigation baseline.</summary>

@@ -27,17 +27,45 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     public bool IsDaemonInstalled => _service.IsDaemonInstalled;
 
+    public string? DaemonRunLevel => _service.DaemonRunLevel;
+
     public string DaemonStateText => !IsSupported
         ? "常驻服务：当前平台不支持"
         : IsDaemonInstalled
             ? "常驻服务：已安装"
             : "常驻服务：未安装";
 
-    public string ElevationText => !IsSupported
-        ? "提权状态：不适用"
-        : IsElevated
-            ? "提权状态：已以管理员身份运行"
-            : "提权状态：未提权（安装 / 卸载常驻需要管理员权限）";
+    /// <summary>
+    /// Injection reach is decided by the daemon's run level, not this window's token: the GUI
+    /// deliberately stays unelevated and only configures.
+    /// </summary>
+    public string ElevationText
+    {
+        get
+        {
+            if (!IsSupported)
+            {
+                return "注入权限：不适用";
+            }
+
+            if (!IsDaemonInstalled)
+            {
+                return "注入权限：常驻服务未安装，无法向以管理员身份运行的应用注入输入（UIPI 会静默拦截）。安装常驻服务即会提权。";
+            }
+
+            if (string.Equals(DaemonRunLevel, "Highest", StringComparison.OrdinalIgnoreCase))
+            {
+                return "注入权限：常驻服务以管理员身份运行，可向管理员权限的应用注入输入";
+            }
+
+            if (string.Equals(DaemonRunLevel, "LeastPrivilege", StringComparison.OrdinalIgnoreCase))
+            {
+                return "注入权限：常驻服务未以管理员身份运行，无法向管理员权限的应用注入输入";
+            }
+
+            return "注入权限：常驻服务已安装，但无法读取其运行级别（非管理员可能被拒绝读取管理员创建的任务）";
+        }
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
@@ -60,6 +88,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsSupported));
         OnPropertyChanged(nameof(IsElevated));
         OnPropertyChanged(nameof(IsDaemonInstalled));
+        OnPropertyChanged(nameof(DaemonRunLevel));
         OnPropertyChanged(nameof(DaemonStateText));
         OnPropertyChanged(nameof(ElevationText));
     }
