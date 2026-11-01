@@ -111,11 +111,17 @@ public sealed class MappingSurfaceTests
         var row = viewModel.Mappings.First(r => r.Entry.Source == new ButtonBinding(GamepadButton.B));
 
         // Selecting from the list side must light up the model element on the other side.
+        var buttonB = ModelElement(window, "ButtonB");
+
+        // The accent stroke now fades in (a BrushTransition on the padHit shapes), so detach it
+        // to read the target the selection drives it to - headless runs no clock, exactly as
+        // Selecting_A_Row_Fades_Its_Tint_In already does for the row tint.
+        buttonB.Transitions = null;
+
         viewModel.SelectedMapping = row;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var buttonB = ModelElement(window, "ButtonB");
         Assert.Equal(Accent(buttonB.ActualThemeVariant), ColorOf(buttonB.GetValue(Shape.StrokeProperty)));
     }
 
@@ -128,11 +134,20 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
 
         var row = viewModel.Mappings.First(r => r.Entry.Source == new ButtonBinding(GamepadButton.B));
+
+        var visualizer = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
+
+        // Detach the fade on every shape so the accent target is observable without a ticking
+        // clock (the padHit strokes now fade in via a BrushTransition).
+        foreach (var shape in visualizer.GetVisualDescendants().OfType<Shape>())
+        {
+            shape.Transitions = null;
+        }
+
         viewModel.SelectedMapping = row;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var visualizer = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
         var accent = Accent(visualizer.ActualThemeVariant);
         var highlighted = visualizer
             .GetVisualDescendants()

@@ -47,7 +47,12 @@
              wall of cards. Clicking the row opens its settings, so there is no separate edit
              button - only the enable toggle and delete remain. -->
         <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
-            <controls:MappingRowBorder Classes="card" Padding="0" Margin="0,0,0,6">
+            <controls:MappingRowBorder Classes="card mappingRow" Padding="0" Margin="0,0,0,6">
+                <controls:MappingRowBorder.Transitions>
+                    <Transitions>
+                        <BrushTransition Property="Background" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                    </Transitions>
+                </controls:MappingRowBorder.Transitions>
                 <Grid>
                     <Border CornerRadius="{DynamicResource CornerRadiusXl}"
                             Background="{DynamicResource RowSelectedBrush}"
@@ -109,6 +114,16 @@
             <Setter Property="Margin" Value="0,0,0,12" />
         </Style>
 
+        <!-- A mapping row is clickable (it opens that mapping's settings), so it answers the
+             pointer: the card background fades to the hover tone. The selected row's tint sits
+             on top of this, so a selected row keeps its own emphasis while an unselected one
+             lights up under the cursor. The fade is inlined on the element rather than set from
+             this style: a Transitions setter does not reach a derived Border, so the style
+             alone would leave the hover snapping on. -->
+        <Style Selector="Border.mappingRow:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
         <Style Selector="TextBlock.cardTitle">
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -148,10 +163,22 @@
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <!-- Hover and press are transitions, not instant flips: the background fades to the
+                 hover tone and the whole button dims while it is held. -->
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                </Transitions>
+            </Setter>
         </Style>
 
         <Style Selector="Button.primary:pointerover">
             <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.primary:pressed">
+            <Setter Property="Opacity" Value="0.85" />
         </Style>
 
         <Style Selector="Button.ghost">
@@ -163,10 +190,20 @@
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                </Transitions>
+            </Setter>
         </Style>
 
         <Style Selector="Button.ghost:pointerover">
             <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.ghost:pressed">
+            <Setter Property="Opacity" Value="0.85" />
         </Style>
 
         <Style Selector="Button.caption">
@@ -177,10 +214,20 @@
             <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                </Transitions>
+            </Setter>
         </Style>
 
         <Style Selector="Button.caption:pointerover">
             <Setter Property="Background" Value="{DynamicResource CaptionHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.caption:pressed">
+            <Setter Property="Opacity" Value="0.85" />
         </Style>
 
         <Style Selector="Button.caption.close:pointerover">
@@ -481,7 +528,7 @@
                                     <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
                                         <TranslateTransform.Transitions>
                                             <Transitions>
-                                                <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="CubicEaseOut" />
+                                                <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
                                             </Transitions>
                                         </TranslateTransform.Transitions>
                                     </TranslateTransform>
@@ -505,14 +552,14 @@
                                 <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorSlide}}">
                                     <TranslateTransform.Transitions>
                                         <Transitions>
-                                            <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationBase}" Easing="CubicEaseOut" />
+                                            <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationBase}" Easing="{DynamicResource MotionEaseStandard}" />
                                         </Transitions>
                                     </TranslateTransform.Transitions>
                                 </TranslateTransform>
                             </Border.RenderTransform>
                             <Border.Transitions>
                                 <Transitions>
-                                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationBase}" Easing="CubicEaseOut" />
+                                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationBase}" Easing="{DynamicResource MotionEaseStandard}" />
                                 </Transitions>
                             </Border.Transitions>
                             <Grid RowDefinitions="Auto,*">

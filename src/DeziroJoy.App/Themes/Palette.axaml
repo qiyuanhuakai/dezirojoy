@@ -58,6 +58,16 @@
     <x:TimeSpan x:Key="MotionDurationSlow">0:0:0.28</x:TimeSpan>
 
     <!--
+        Motion easing. Theme-independent for the same reason the durations are: an easing curve
+        is a property of the interaction, not of the variant. CubicEaseOut is the app's one
+        house curve - a fast start that settles gently, which reads as responsive without the
+        linear "robotic" ramp or the overshoot of a back/elastic ease. Centralised here so the
+        duration tokens and the easing token are consumed the same way:
+        Duration="{DynamicResource MotionDuration...}" Easing="{DynamicResource MotionEaseStandard}".
+    -->
+    <CubicEaseOut x:Key="MotionEaseStandard" />
+
+    <!--
         Slider geometry. Theme-independent, so it lives here at app scope where the slider
         ControlTheme (Themes/Slider.axaml) can reach it with {DynamicResource}. The track
         height is consumed by the inner TrackBackground border of the RepeatButton template,
