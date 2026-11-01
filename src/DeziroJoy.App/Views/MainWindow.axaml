@@ -394,6 +394,23 @@
                         Click="MinimizeClick">
                     <Rectangle Width="10" Height="1" Fill="{DynamicResource CaptionGlyphBrush}" />
                 </Button>
+                <Button x:Name="MaximizeButton" Classes="caption"
+                        chrome:WindowDecorationProperties.ElementRole="User"
+                        ToolTip.Tip="最大化" Click="MaximizeClick">
+                    <Grid Width="12" Height="12">
+                        <Rectangle x:Name="MaximizeGlyph" Width="10" Height="10"
+                                   Stroke="{DynamicResource CaptionGlyphBrush}" StrokeThickness="1" />
+                        <Grid x:Name="RestoreGlyph" IsVisible="False">
+                            <Rectangle Width="8" Height="8" Margin="0,0,4,4"
+                                       HorizontalAlignment="Left" VerticalAlignment="Top"
+                                       Stroke="{DynamicResource CaptionGlyphBrush}" StrokeThickness="1" />
+                            <Rectangle Width="8" Height="8" Margin="4,4,0,0"
+                                       HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                       Fill="{DynamicResource TitleBarBrush}"
+                                       Stroke="{DynamicResource CaptionGlyphBrush}" StrokeThickness="1" />
+                        </Grid>
+                    </Grid>
+                </Button>
                 <Button x:Name="CloseButton" Classes="caption close"
                         chrome:WindowDecorationProperties.ElementRole="CloseButton"
                         Click="CloseClick">

@@ -284,6 +284,37 @@ public partial class MainWindow : Window
         return true;
     }
 
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == WindowStateProperty)
+        {
+            UpdateMaximizeGlyph();
+        }
+    }
+
+    private void MaximizeClick(object? sender, RoutedEventArgs e)
+        => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void UpdateMaximizeGlyph()
+    {
+        var maximized = WindowState == WindowState.Maximized;
+        if (this.FindControl<Control>("MaximizeGlyph") is { } maximize)
+        {
+            maximize.IsVisible = !maximized;
+        }
+
+        if (this.FindControl<Control>("RestoreGlyph") is { } restore)
+        {
+            restore.IsVisible = maximized;
+        }
+
+        if (this.FindControl<Button>("MaximizeButton") is { } button)
+        {
+            ToolTip.SetTip(button, maximized ? "还原" : "最大化");
+        }
+    }
+
     private void MinimizeClick(object? sender, RoutedEventArgs e)
         => WindowState = WindowState.Minimized;
 

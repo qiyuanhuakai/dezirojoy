@@ -6,6 +6,7 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -103,14 +104,6 @@ public sealed class MainWindowGuiTests
         Assert.Null(window.FindControl<ComboBox>("SourceButtonCombo"));
         Assert.Null(window.FindControl<ComboBox>("SourceStickCombo"));
         Assert.Null(window.FindControl<Button>("CaptureSourceButton"));
-    }
-
-    [AvaloniaFact]
-    public void TitleBar_Has_No_MaximizeButton()
-    {
-        var (window, _, _, _) = BuildWindow();
-
-        Assert.Null(window.FindControl<Button>("MaximizeButton"));
     }
 
     [AvaloniaFact]
@@ -213,6 +206,28 @@ public sealed class MainWindowGuiTests
         Assert.True(gripLeft >= close.Bounds.Right,
             $"resize grip starts at {gripLeft} but the close button ends at {close.Bounds.Right}");
         Assert.True(minimize.Bounds.Width > 0 && close.Bounds.Width > 0);
+    }
+
+    [AvaloniaFact]
+    public void The_Maximize_Button_Toggles_And_Restores_The_Window()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var maximize = window.FindControl<Button>("MaximizeButton");
+        Assert.NotNull(maximize);
+        Assert.Equal(WindowDecorationsElementRole.User,
+            WindowDecorationProperties.GetElementRole(maximize));
+
+        maximize.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(WindowState.Maximized, window.WindowState);
+        Assert.True(window.FindControl<Control>("RestoreGlyph")!.IsVisible);
+        Assert.False(window.FindControl<Control>("MaximizeGlyph")!.IsVisible);
+
+        maximize.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(WindowState.Normal, window.WindowState);
+        Assert.False(window.FindControl<Control>("RestoreGlyph")!.IsVisible);
+        Assert.True(window.FindControl<Control>("MaximizeGlyph")!.IsVisible);
     }
 
     [AvaloniaFact]
