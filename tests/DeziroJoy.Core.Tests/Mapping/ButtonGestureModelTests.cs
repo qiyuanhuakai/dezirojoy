@@ -105,6 +105,117 @@ public class ButtonGestureModelTests
     }
 
     [Fact]
+    public void Gesture_Actions_Roundtrip_Through_Json()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "gesture-actions",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            DoubleClickWindow = 0.3f,
+                            LongPressThreshold = 0.5f,
+                            LongPressRepeatInterval = 0.1f,
+                            DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+                            LongPressAction = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.W),
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.Contains("\"DoubleClickAction\"", json);
+        Assert.Contains("\"$type\": \"key\"", json);
+        Assert.Contains("\"LongPressAction\"", json);
+
+        var back = ProfileSerializer.Deserialize(json);
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(back.Mappings[0].Source).Gesture);
+
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), gesture.DoubleClickAction);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.W), gesture.LongPressAction);
+        Assert.Equal(json, ProfileSerializer.Serialize(back));
+    }
+
+    [Fact]
+    public void Gestures_Without_Actions_Stay_Free_Of_The_Action_Fields()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "timing-only",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture { DoubleClickWindow = 0.3f },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.Contains("\"Gesture\"", json);
+        Assert.DoesNotContain("DoubleClickAction", json);
+        Assert.DoesNotContain("LongPressAction", json);
+    }
+
+    [Fact]
+    public void Old_Profiles_Without_Gesture_Actions_Load_With_Null_Actions()
+    {
+        const string json = """
+        {
+          "SchemaVersion": 1,
+          "Name": "old-gesture",
+          "Layout": "Generic",
+          "Mappings": [
+            {
+              "Id": "00000000-0000-0000-0000-000000000001",
+              "Source": {
+                "$type": "button",
+                "Button": "B",
+                "Gesture": {
+                  "DoubleClickWindow": 0.25,
+                  "LongPressThreshold": 0.4
+                }
+              },
+              "Target": { "$type": "key", "Key": "Enter" },
+              "Enabled": true
+            }
+          ]
+        }
+        """;
+
+        var back = ProfileSerializer.Deserialize(json);
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(back.Mappings[0].Source).Gesture);
+
+        Assert.Null(gesture.DoubleClickAction);
+        Assert.Null(gesture.LongPressAction);
+
+        // With no action configured the gesture keeps re-firing the mapping's own target,
+        // exactly as it did before the action fields existed.
+        var engine = new MappingEngine(back);
+
+        Assert.Empty(engine.Tick(GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0), 0.05f));
+        Assert.Empty(engine.Tick(GamepadState.Neutral, 0.05f));
+
+        var second = engine.Tick(GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0), 0.05f);
+        Assert.Equal(2, second.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), second[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), second[1]);
+    }
+
+    [Fact]
     public void Stick_Direction_Roundtrips_Through_Json()
     {
         var profile = new GamepadProfile

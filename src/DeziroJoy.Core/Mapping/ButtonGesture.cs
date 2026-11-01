@@ -11,6 +11,11 @@ namespace DeziroJoy.Core.Mapping;
 /// <remarks>
 /// Every threshold defaults to 0, which disables that gesture, so <c>new ButtonGesture()</c>
 /// behaves exactly like no gesture at all and keeps the zero-latency single-click path.
+/// <para>
+/// The two action fields are additive: they say what a gesture emits, not whether it is enabled.
+/// Left null a gesture re-fires the mapping's own target, which is the behaviour every profile
+/// written before they existed already has, so an old profile loads and runs unchanged.
+/// </para>
 /// </remarks>
 public sealed record ButtonGesture
 {
@@ -31,6 +36,22 @@ public sealed record ButtonGesture
     /// </summary>
     public float LongPressRepeatInterval { get; init; }
 
+    /// <summary>
+    /// What the double-click emits. Null - the default - leaves the double-click without a
+    /// function of its own: it re-fires the mapping's own <see cref="MappingEntry.Target"/>,
+    /// which is exactly how the gesture behaved before this field existed.
+    /// </summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public MappingTarget? DoubleClickAction { get; init; }
+
+    /// <summary>
+    /// What the long-press emits, and what auto-repeat re-fires. Null - the default - leaves
+    /// the long-press without a function of its own: it re-fires the mapping's own
+    /// <see cref="MappingEntry.Target"/>.
+    /// </summary>
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public MappingTarget? LongPressAction { get; init; }
+
     /// <summary>True when a second press inside the window fires the double-click.</summary>
     [JsonIgnore]
     public bool HasDoubleClick => DoubleClickWindow > 0f;
@@ -42,4 +63,12 @@ public sealed record ButtonGesture
     /// <summary>True when any gesture is configured, i.e. when a wait must be introduced.</summary>
     [JsonIgnore]
     public bool HasAnyGesture => HasDoubleClick || HasLongPress;
+
+    /// <summary>True when the double-click has a function of its own.</summary>
+    [JsonIgnore]
+    public bool HasDoubleClickAction => DoubleClickAction is not null;
+
+    /// <summary>True when the long-press has a function of its own.</summary>
+    [JsonIgnore]
+    public bool HasLongPressAction => LongPressAction is not null;
 }

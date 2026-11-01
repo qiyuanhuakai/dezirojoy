@@ -38,6 +38,39 @@ public enum GestureAction
 }
 
 /// <summary>
+/// Which gesture an activation belongs to. The engine owns targets, so the machine only reports
+/// which gesture resolved and lets <see cref="MappingEngine"/> pick what it fires: a gesture with
+/// no action of its own re-fires the mapping's target, which is what keeps the action fields
+/// purely additive.
+/// </summary>
+public enum GestureKind
+{
+    /// <summary>No gesture resolved.</summary>
+    None,
+
+    /// <summary>The plain click: the mapping's own target.</summary>
+    Click,
+
+    /// <summary>The double-click gesture.</summary>
+    DoubleClick,
+
+    /// <summary>The long-press gesture, including every auto-repeat activation.</summary>
+    LongPress,
+}
+
+/// <summary>What the engine should do on this tick, and which gesture resolved it.</summary>
+/// <param name="Action">What to do to the target.</param>
+/// <param name="Kind">Which gesture resolved, so the right target can be picked.</param>
+public readonly record struct GestureStep(GestureAction Action, GestureKind Kind)
+{
+    /// <summary>A tick that changes nothing.</summary>
+    public static GestureStep None { get; } = new(GestureAction.None, GestureKind.None);
+
+    /// <summary>One instantaneous activation of <paramref name="kind"/>.</summary>
+    public static GestureStep Tap(GestureKind kind) => new(GestureAction.Tap, kind);
+}
+
+/// <summary>
 /// Per-button gesture state machine. It owns no clock: every transition is driven by the
 /// press/release edges and the <paramref name="deltaSeconds"/> the host threads through
 /// <see cref="Update"/>, which is what keeps the whole mapping layer deterministic.
@@ -48,19 +81,25 @@ public enum GestureAction
 /// </para>
 /// <list type="bullet">
 ///   <item><description><b>Idle</b> --press--&gt; ClickPending (双击 configured) or LongPressPending (长按 only).</description></item>
-///   <item><description><b>ClickPending</b> --second press inside the window--&gt; Idle, firing the double-click tap.</description></item>
+///   <item><description><b>ClickPending</b> --second press inside the window--&gt; Idle, firing the double-click.</description></item>
 ///   <item><description><b>ClickPending</b> --window expires, still held--&gt; Holding (单击 as a hold) or LongPressPending (长按 still ahead).</description></item>
 ///   <item><description><b>ClickPending</b> --window expires, released--&gt; Idle, firing the single as a tap.</description></item>
-///   <item><description><b>LongPressPending</b> --release before the threshold--&gt; Idle, firing the single as a tap.</description></item>
-///   <item><description><b>LongPressPending</b> --threshold reached--&gt; LongPressActive, firing the long-press tap.</description></item>
+///   <item><description><b>LongPressPending</b> --release before the threshold--&gt; Idle, firing the single as a tap, or nothing at all when the long-press carries an action of its own.</description></item>
+///   <item><description><b>LongPressPending</b> --threshold reached--&gt; LongPressActive, firing the long-press.</description></item>
 ///   <item><description><b>Holding</b> --release--&gt; Idle, ending the hold.</description></item>
-///   <item><description><b>LongPressActive</b> --every repeat interval--&gt; tap again; --release--&gt; Idle.</description></item>
+///   <item><description><b>LongPressActive</b> --every repeat interval--&gt; fire the long-press again; --release--&gt; Idle.</description></item>
 /// </list>
 /// <para>
 /// When more than one gesture is configured, whichever resolves first wins and the others are
 /// cancelled: the long-press threshold is checked before the double-click window closes, so a
 /// short threshold beats a long window, and a window that closes first hands a still-held
 /// button over to the long-press instead of firing the single.
+/// </para>
+/// <para>
+/// A long-press that carries its own action consumes the press: releasing before the threshold
+/// fires nothing, because the button now has two functions and a press that reached neither is
+/// discarded rather than guessed at. Without an action the long-press stays a pure timing
+/// modifier on the single, so an early release still fires the single exactly as it always did.
 /// </para>
 /// <para>
 /// With no gesture configured (or nothing enabled) the machine takes the zero-latency path:
@@ -111,13 +150,14 @@ public sealed class ButtonGestureState
     }
 
     /// <summary>
-    /// Advances the machine by one tick and reports what the engine should do to the target.
+    /// Advances the machine by one tick and reports what the engine should do, and which gesture
+    /// resolved it.
     /// </summary>
     /// <param name="gesture">Configured gestures, or null for the zero-latency path.</param>
     /// <param name="isPressed">Whether the button is down in this tick's snapshot.</param>
     /// <param name="wasPressed">Whether it was down in the previous tick's snapshot.</param>
     /// <param name="deltaSeconds">This tick's timestep; NaN or negative counts as no time passing.</param>
-    public GestureAction Update(ButtonGesture? gesture, bool isPressed, bool wasPressed, float deltaSeconds)
+    public GestureStep Update(ButtonGesture? gesture, bool isPressed, bool wasPressed, float deltaSeconds)
     {
         var pressEdge = isPressed && !wasPressed;
         var releaseEdge = !isPressed && wasPressed;
@@ -127,16 +167,16 @@ public sealed class ButtonGestureState
             if (pressEdge)
             {
                 IsActive = true;
-                return GestureAction.BeginHold;
+                return new GestureStep(GestureAction.BeginHold, GestureKind.Click);
             }
 
             if (releaseEdge)
             {
                 IsActive = false;
-                return GestureAction.EndHold;
+                return new GestureStep(GestureAction.EndHold, GestureKind.Click);
             }
 
-            return GestureAction.None;
+            return GestureStep.None;
         }
 
         // A NaN or negative step must never rewind or explode the gesture timers.
@@ -171,7 +211,7 @@ public sealed class ButtonGestureState
                 if (pressEdge && !cycleStarted)
                 {
                     Phase = GesturePhase.Idle;
-                    return GestureAction.Tap;
+                    return GestureStep.Tap(GestureKind.DoubleClick);
                 }
 
                 if (gesture.HasLongPress && isPressed && Reached(Elapsed, gesture.LongPressThreshold))
@@ -184,7 +224,7 @@ public sealed class ButtonGestureState
                     if (!isPressed)
                     {
                         Phase = GesturePhase.Idle;
-                        return GestureAction.Tap;
+                        return GestureStep.Tap(GestureKind.Click);
                     }
 
                     if (gesture.HasLongPress)
@@ -195,7 +235,7 @@ public sealed class ButtonGestureState
                     {
                         Phase = GesturePhase.Holding;
                         IsActive = true;
-                        return GestureAction.BeginHold;
+                        return new GestureStep(GestureAction.BeginHold, GestureKind.Click);
                     }
                 }
 
@@ -205,7 +245,12 @@ public sealed class ButtonGestureState
                 if (releaseEdge)
                 {
                     Phase = GesturePhase.Idle;
-                    return GestureAction.Tap;
+
+                    // A long-press with an action of its own owns the press: a release that
+                    // reached neither gesture is discarded rather than guessed at.
+                    return gesture.HasLongPressAction
+                        ? GestureStep.None
+                        : GestureStep.Tap(GestureKind.Click);
                 }
 
                 if (Reached(Elapsed, gesture.LongPressThreshold))
@@ -220,7 +265,7 @@ public sealed class ButtonGestureState
                 {
                     Phase = GesturePhase.Idle;
                     IsActive = false;
-                    return GestureAction.EndHold;
+                    return new GestureStep(GestureAction.EndHold, GestureKind.Click);
                 }
 
                 break;
@@ -228,7 +273,7 @@ public sealed class ButtonGestureState
             case GesturePhase.LongPressActive:
                 if (TryDequeueRepeat(gesture))
                 {
-                    return GestureAction.Tap;
+                    return GestureStep.Tap(GestureKind.LongPress);
                 }
 
                 if (releaseEdge)
@@ -240,7 +285,7 @@ public sealed class ButtonGestureState
                 break;
         }
 
-        return GestureAction.None;
+        return GestureStep.None;
     }
 
     /// <summary>
@@ -260,7 +305,7 @@ public sealed class ButtonGestureState
         return true;
     }
 
-    private GestureAction ActivateLongPress(ButtonGesture gesture)
+    private GestureStep ActivateLongPress(ButtonGesture gesture)
     {
         Phase = GesturePhase.LongPressActive;
 
@@ -269,6 +314,6 @@ public sealed class ButtonGestureState
 
         // Time spent past the threshold inside this tick carries into the repeat clock.
         RepeatElapsed = Math.Max(Elapsed - gesture.LongPressThreshold, 0d);
-        return GestureAction.Tap;
+        return GestureStep.Tap(GestureKind.LongPress);
     }
 }

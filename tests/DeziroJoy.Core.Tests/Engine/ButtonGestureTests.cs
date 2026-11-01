@@ -41,6 +41,33 @@ public class ButtonGestureTests
         LongPressThreshold = 0.4f,
     };
 
+    private static readonly ButtonGesture DoubleClickWithAction = new()
+    {
+        DoubleClickWindow = 0.25f,
+        DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+    };
+
+    private static readonly ButtonGesture LongPressWithAction = new()
+    {
+        LongPressThreshold = 0.4f,
+        LongPressAction = new KeyPressTarget(GamepadKey.Space),
+    };
+
+    private static readonly ButtonGesture LongPressActionRepeating = new()
+    {
+        LongPressThreshold = 0.2f,
+        LongPressRepeatInterval = 0.1f,
+        LongPressAction = new KeyPressTarget(GamepadKey.Space),
+    };
+
+    private static readonly ButtonGesture BothActions = new()
+    {
+        DoubleClickWindow = 0.25f,
+        LongPressThreshold = 0.4f,
+        DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+        LongPressAction = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.W),
+    };
+
     private static GamepadState Held(GamepadButton button)
         => GamepadState.Create(button.ToMask(), 0, 0, 0, 0);
 
@@ -358,6 +385,215 @@ public class ButtonGestureTests
 
         var release = engine.Tick(Released, 0.1f);
         Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(release));
+    }
+
+    [Fact]
+    public void Double_Click_Action_Fires_On_The_Second_Press()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            DoubleClickWithAction)));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+
+        var second = engine.Tick(Held(GamepadButton.B), 0.05f);
+        Assert.Equal(2, second.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Space, KeyModifiers.None), second[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Space, KeyModifiers.None), second[1]);
+
+        // The double-click action won, so the single stays cancelled.
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.2f));
+    }
+
+    [Fact]
+    public void Double_Click_Action_Null_Adds_No_Wait_And_Fires_The_Single_Immediately()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { DoubleClickWindow = 0f, DoubleClickAction = null })));
+
+        var press = engine.Tick(Held(GamepadButton.B), 0.016f);
+
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(press));
+    }
+
+    [Fact]
+    public void Double_Click_Action_Taps_A_Mouse_Button()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.RightBumper,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture
+            {
+                DoubleClickWindow = 0.25f,
+                DoubleClickAction = new MouseButtonTarget(MouseButton.Right),
+            })));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.RightBumper), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+
+        var second = engine.Tick(Held(GamepadButton.RightBumper), 0.05f);
+        Assert.Equal(2, second.Count);
+        Assert.Equal(new MouseDownCommand(MouseButton.Right), second[0]);
+        Assert.Equal(new MouseUpCommand(MouseButton.Right), second[1]);
+    }
+
+    [Fact]
+    public void Double_Click_Action_Scrolls_The_Wheel_Once()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture
+            {
+                DoubleClickWindow = 0.25f,
+                DoubleClickAction = new WheelScrollTarget(new ScrollStickSettings()),
+            })));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+
+        var second = engine.Tick(Held(GamepadButton.B), 0.05f);
+        Assert.Equal(new WheelCommand(0, 1), Assert.Single(second));
+    }
+
+    [Fact]
+    public void Long_Press_Action_Fires_When_The_Threshold_Elapses()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            LongPressWithAction)));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+
+        var fired = engine.Tick(Held(GamepadButton.B), 0.1f);
+        Assert.Equal(2, fired.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Space, KeyModifiers.None), fired[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Space, KeyModifiers.None), fired[1]);
+
+        // The long-press action owns the hold, so the single never fires.
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+        Assert.Empty(engine.Tick(Released, 0.1f));
+    }
+
+    [Fact]
+    public void Long_Press_Action_Released_Before_The_Threshold_Fires_Nothing()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            LongPressWithAction)));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+
+        // The press was consumed by the pending long-press: neither the long-press action
+        // nor the single-click action fires.
+        Assert.Empty(engine.Tick(Released, 0.1f));
+        Assert.Empty(engine.Tick(Released, 0.5f));
+    }
+
+    [Fact]
+    public void Long_Press_Action_Repeats_At_The_Interval()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            LongPressActionRepeating)));
+
+        var commands = new List<InputCommand>();
+        for (var i = 0; i < 20; i++)
+        {
+            commands.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        // Held for 1.0s: fires at 0.2s, then every 0.1s -> 0.2, 0.3, ... 1.0 = 9 activations,
+        // every one of them the long-press action rather than the single.
+        Assert.Equal(9, Taps(commands));
+        Assert.All(
+            commands.OfType<KeyDownCommand>(),
+            down => Assert.Equal(GamepadKey.Space, down.Key));
+    }
+
+    [Fact]
+    public void Long_Press_Action_Repeat_Stops_On_Release()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            LongPressActionRepeating)));
+
+        var held = new List<InputCommand>();
+        for (var i = 0; i < 10; i++)
+        {
+            held.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        Assert.Equal(4, Taps(held));
+        Assert.All(
+            held.OfType<KeyDownCommand>(),
+            down => Assert.Equal(GamepadKey.Space, down.Key));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.5f));
+    }
+
+    [Fact]
+    public void Both_Gesture_Actions_Fire_Their_Own_Targets()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            BothActions)));
+
+        // A double-click resolves to its own action.
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        var doubleClick = engine.Tick(Held(GamepadButton.B), 0.05f);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Space, KeyModifiers.None), doubleClick[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Space, KeyModifiers.None), doubleClick[1]);
+
+        // A long press resolves to its own, different action.
+        Assert.Empty(engine.Tick(Released, 0.2f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+
+        var longPress = engine.Tick(Held(GamepadButton.B), 0.1f);
+        Assert.Equal(2, longPress.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.W, KeyModifiers.Ctrl), longPress[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.W, KeyModifiers.Ctrl), longPress[1]);
+
+        Assert.Empty(engine.Tick(Released, 0.1f));
+    }
+
+    [Fact]
+    public void Gesture_Actions_Apply_To_Extra_Buttons_Too()
+    {
+        var engine = new MappingEngine(Profile(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.Extra, 305)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = 0.2f,
+                    LongPressAction = new KeyPressTarget(GamepadKey.F13),
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        }));
+
+        Assert.Empty(engine.Tick(new ExtraButtonState(305), 0.1f));
+
+        var fired = engine.Tick(new ExtraButtonState(305), 0.1f);
+        Assert.Equal(2, fired.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.F13, KeyModifiers.None), fired[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.F13, KeyModifiers.None), fired[1]);
     }
 
     private sealed record ExtraButtonState(params int[] Codes) : IGamepadState

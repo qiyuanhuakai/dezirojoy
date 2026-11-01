@@ -19,7 +19,10 @@ namespace DeziroJoy.Core.Engine;
 /// Buttons may carry a <see cref="ButtonGesture"/> (双击 / 长按). The latency rule: a button
 /// with no gesture configured fires on the press edge with zero wait; configuring 双击 or
 /// 长按 introduces a wait, because the single action cannot fire until the gesture resolves.
-/// All gesture timing derives from the tick's <c>deltaSeconds</c>.
+/// A gesture may also carry an action of its own (<see cref="ButtonGesture.DoubleClickAction"/>,
+/// <see cref="ButtonGesture.LongPressAction"/>); without one it re-fires the mapping's target,
+/// so the action fields are purely additive. All gesture timing derives from the tick's
+/// <c>deltaSeconds</c>.
 /// </para>
 /// </remarks>
 public sealed class MappingEngine
@@ -31,8 +34,12 @@ public sealed class MappingEngine
     /// </summary>
     internal const float StickDigitalThreshold = 0.5f;
 
+    /// <summary>Identifies one gesture action's smoothing processor: a mapping plus a gesture.</summary>
+    private readonly record struct GestureProcessorKey(Guid MappingId, GestureKind Kind);
+
     private readonly GamepadProfile _profile;
     private readonly Dictionary<Guid, MouseStickProcessor> _mouseProcessors = [];
+    private readonly Dictionary<GestureProcessorKey, MouseStickProcessor> _gestureMouseProcessors = [];
     private readonly Dictionary<Guid, ScrollStickProcessor> _scrollProcessors = [];
     private readonly Dictionary<Guid, ButtonGestureState> _gestures = [];
     private readonly SortedSet<int> _previousExtraButtons = [];
@@ -51,6 +58,7 @@ public sealed class MappingEngine
             }
 
             ValidateMapping(mapping);
+            RegisterGestureProcessors(mapping);
 
             switch (mapping.Target)
             {
@@ -122,6 +130,7 @@ public sealed class MappingEngine
         _previousButtons = GamepadButtonMask.None;
         _previousExtraButtons.Clear();
         _gestures.Clear();
+        _gestureMouseProcessors.Clear();
         foreach (var processor in _mouseProcessors.Values)
         {
             processor.Reset();
@@ -130,6 +139,30 @@ public sealed class MappingEngine
         foreach (var processor in _scrollProcessors.Values)
         {
             processor.Reset();
+        }
+    }
+
+    /// <summary>
+    /// Builds the smoothing processor a gesture action needs when it names a continuous target.
+    /// A gesture action is only ever tapped, so this exists purely so a mouse-moving gesture
+    /// action ramps exactly like the mapping's own target would.
+    /// </summary>
+    private void RegisterGestureProcessors(MappingEntry mapping)
+    {
+        if (mapping.Source is not ButtonBinding { Gesture: { } gesture })
+        {
+            return;
+        }
+
+        RegisterGestureProcessor(mapping.Id, GestureKind.DoubleClick, gesture.DoubleClickAction);
+        RegisterGestureProcessor(mapping.Id, GestureKind.LongPress, gesture.LongPressAction);
+    }
+
+    private void RegisterGestureProcessor(Guid mappingId, GestureKind kind, MappingTarget? action)
+    {
+        if (action is MouseMoveTarget mouse)
+        {
+            _gestureMouseProcessors[new GestureProcessorKey(mappingId, kind)] = new MouseStickProcessor(mouse.Settings);
         }
     }
 
@@ -193,7 +226,7 @@ public sealed class MappingEngine
     /// <summary>
     /// One button mapping for one tick. Without a gesture the press edge activates the target
     /// immediately (zero latency); with one, the gesture state machine decides when - and
-    /// whether - the single action fires.
+    /// whether - the single action fires, and which target a resolved gesture emits.
     /// </summary>
     private void UpdateButton(
         MappingEntry mapping,
@@ -205,9 +238,9 @@ public sealed class MappingEngine
         List<InputCommand> commands)
     {
         var gesture = GestureStateFor(mapping.Id);
-        var action = gesture.Update(button.Gesture, isPressed, wasPressed, deltaSeconds);
+        var step = gesture.Update(button.Gesture, isPressed, wasPressed, deltaSeconds);
 
-        switch (action)
+        switch (step.Action)
         {
             case GestureAction.BeginHold:
                 BeginHold(mapping.Target, commands);
@@ -216,7 +249,7 @@ public sealed class MappingEngine
                 EndHold(mapping.Target, commands);
                 break;
             case GestureAction.Tap:
-                Tap(mapping, button, current, deltaSeconds, commands);
+                Tap(mapping, button, step.Kind, current, deltaSeconds, commands);
                 break;
         }
 
@@ -224,12 +257,25 @@ public sealed class MappingEngine
         {
             while (gesture.TryDequeueRepeat(configured))
             {
-                Tap(mapping, button, current, deltaSeconds, commands);
+                Tap(mapping, button, GestureKind.LongPress, current, deltaSeconds, commands);
             }
         }
 
         UpdateContinuous(mapping, button, gesture, current, deltaSeconds, commands);
     }
+
+    /// <summary>
+    /// The target a resolved gesture emits. A gesture carrying an action of its own fires that
+    /// action; one without re-fires the mapping's own target, which is what makes the action
+    /// fields purely additive - a profile that never sets them behaves exactly as before.
+    /// </summary>
+    private static MappingTarget TargetFor(MappingEntry mapping, ButtonGesture? gesture, GestureKind kind)
+        => kind switch
+        {
+            GestureKind.DoubleClick => gesture?.DoubleClickAction ?? mapping.Target,
+            GestureKind.LongPress => gesture?.LongPressAction ?? mapping.Target,
+            _ => mapping.Target,
+        };
 
     /// <summary>
     /// Per-tick output for continuous targets driven by a button: while the activation is in
@@ -370,28 +416,31 @@ public sealed class MappingEngine
     };
 
     /// <summary>
-    /// One instantaneous activation of the target: a key or mouse button goes down and straight
-    /// back up, a mouse-move target nudges one tick's worth of full deflection in the button's
-    /// direction, and a wheel target emits exactly one notch.
+    /// One instantaneous activation of the target a resolved gesture names: a key or mouse button
+    /// goes down and straight back up, a mouse-move target nudges one tick's worth of full
+    /// deflection in the button's direction, and a wheel target emits exactly one notch.
     /// </summary>
     private void Tap(
         MappingEntry mapping,
         ButtonBinding button,
+        GestureKind kind,
         IGamepadState current,
         float deltaSeconds,
         List<InputCommand> commands)
     {
-        switch (mapping.Target)
+        var target = TargetFor(mapping, button.Gesture, kind);
+
+        switch (target)
         {
             case MouseMoveTarget mouse:
-                TapMouseMove(mapping.Id, mouse, button, current, deltaSeconds, commands);
+                TapMouseMove(mapping.Id, mouse, button, kind, current, deltaSeconds, commands);
                 break;
             case WheelScrollTarget wheel:
                 TapWheel(wheel, button, commands);
                 break;
             default:
-                BeginHold(mapping.Target, commands);
-                EndHold(mapping.Target, commands);
+                BeginHold(target, commands);
+                EndHold(target, commands);
                 break;
         }
     }
@@ -400,11 +449,13 @@ public sealed class MappingEngine
         Guid mappingId,
         MouseMoveTarget mouse,
         ButtonBinding button,
+        GestureKind kind,
         IGamepadState current,
         float deltaSeconds,
         List<InputCommand> commands)
     {
-        if (!_mouseProcessors.TryGetValue(mappingId, out var processor))
+        var processor = MouseProcessorFor(mappingId, kind);
+        if (processor is null)
         {
             return;
         }
@@ -423,6 +474,16 @@ public sealed class MappingEngine
             commands.Add(new MouseMoveCommand(dx, dy));
         }
     }
+
+    /// <summary>
+    /// The smoothing processor a tap feeds: the mapping's own for the single, and the gesture
+    /// action's own for 双击 / 长按, so a gesture action that moves the mouse ramps with its own
+    /// sensitivity rather than borrowing the mapping's.
+    /// </summary>
+    private MouseStickProcessor? MouseProcessorFor(Guid mappingId, GestureKind kind)
+        => kind == GestureKind.Click
+            ? _mouseProcessors.GetValueOrDefault(mappingId)
+            : _gestureMouseProcessors.GetValueOrDefault(new GestureProcessorKey(mappingId, kind));
 
     private static void TapWheel(WheelScrollTarget wheel, ButtonBinding button, List<InputCommand> commands)
     {

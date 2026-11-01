@@ -489,3 +489,6 @@ $RECYCLE.BIN/
 
 # QA 截图是过程证据，不入库
 .qa-screenshots/
+
+# 会话过程文件
+session-*.md
