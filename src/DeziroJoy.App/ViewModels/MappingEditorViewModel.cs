@@ -189,6 +189,14 @@ public partial class MappingEditorViewModel : ObservableObject
     public float LongPressRepeatInterval { get; set; }
 
     /// <summary>
+    /// Seconds between click auto-repeat activations while the button is held. No longer
+    /// user-editable - the timing sliders are gone - but a profile that carries one keeps it
+    /// through a round trip; 0 means the pinned
+    /// <see cref="ButtonGesture.DefaultClickRepeatInterval"/>.
+    /// </summary>
+    public float ClickRepeatInterval { get; set; }
+
+    /// <summary>
     /// What the double-click emits. Null leaves the double-click without a function of its own,
     /// so it re-fires the mapping's target - the behaviour every profile written before this
     /// field existed already has.
@@ -565,7 +573,12 @@ public partial class MappingEditorViewModel : ObservableObject
     {
         var doubleClickWindow = HasDoubleClick ? ButtonGesture.DefaultDoubleClickWindow : 0f;
         var longPressThreshold = HasLongPress ? ButtonGesture.DefaultLongPressThreshold : 0f;
-        var clickRepeatInterval = ClickRepeatEnabled ? ButtonGesture.DefaultClickRepeatInterval : 0f;
+
+        // A carried interval wins; a freshly enabled repeat with nothing loaded falls back to
+        // the pinned default, exactly as it did before profiles could carry their own.
+        var clickRepeatInterval = ClickRepeatEnabled
+            ? ClickRepeatInterval > 0f ? ClickRepeatInterval : ButtonGesture.DefaultClickRepeatInterval
+            : 0f;
 
         if (doubleClickWindow <= 0f && longPressThreshold <= 0f && clickRepeatInterval <= 0f)
         {
@@ -622,6 +635,7 @@ public partial class MappingEditorViewModel : ObservableObject
                 // runs, so an inert long-press action is dropped rather than loaded into a
                 // gesture that can never fire it.
                 ClickRepeatEnabled = button.Gesture is { HasClickRepeat: true };
+                ClickRepeatInterval = button.Gesture?.ClickRepeatInterval ?? 0f;
                 DoubleClickEnabled = button.Gesture is { HasDoubleClick: true };
                 LongPressEnabled = button.Gesture is { HasEffectiveLongPress: true };
                 LongPressRepeatInterval = button.Gesture?.LongPressRepeatInterval ?? 0f;
@@ -694,6 +708,7 @@ public partial class MappingEditorViewModel : ObservableObject
         ClickRepeatEnabled = false;
         ClickIsNone = false;
         LongPressRepeatInterval = 0f;
+        ClickRepeatInterval = 0f;
         DoubleClickAction = null;
         LongPressAction = null;
         ModifierCtrl = false;

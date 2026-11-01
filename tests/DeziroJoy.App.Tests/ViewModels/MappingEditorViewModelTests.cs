@@ -1,3 +1,4 @@
+using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
@@ -757,6 +758,129 @@ public class MappingEditorViewModelTests
         Assert.True(editor.ClickRepeatEnabled);
         Assert.True(editor.ClickIsNone);
         Assert.IsType<NoneTarget>(editor.BuildTarget());
+    }
+
+    [Fact]
+    public void LoadFrom_Then_BuildEntry_Preserves_A_Custom_Click_Repeat_Interval()
+    {
+        // A profile that carries its own click auto-repeat interval must keep it: the
+        // editor reads the enabled flag, but the interval itself has to survive the
+        // round trip instead of collapsing onto the pinned default.
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture { ClickRepeatInterval = 0.15f },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(0.15f, gesture.ClickRepeatInterval);
+    }
+
+    [Fact]
+    public void Custom_Repeat_Intervals_Survive_The_Store_And_Editor_Chain()
+    {
+        // The whole chain a profile travels: store save, a fresh store instance reading
+        // the file back (evidence of deserialization, not of a process restart), the
+        // editor committing every mapping the way MainWindowViewModel does, save, reload.
+        var directory = Path.Combine(Path.GetTempPath(), "dezirojoy-editor-chain", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            var profile = new GamepadProfile
+            {
+                Name = "手势链",
+                DeviceId = "gesture-chain",
+                Layout = GamepadLayout.Xbox,
+                Mappings =
+                [
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.B)
+                        {
+                            Gesture = new ButtonGesture
+                            {
+                                DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                                DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+                                ClickRepeatInterval = 0.15f,
+                            },
+                        },
+                        Target = new KeyPressTarget(GamepadKey.Enter),
+                    },
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.X)
+                        {
+                            Gesture = new ButtonGesture
+                            {
+                                LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                                LongPressRepeatInterval = 0.15f,
+                                LongPressAction = new MouseButtonTarget(MouseButton.Right),
+                            },
+                        },
+                        Target = new KeyPressTarget(GamepadKey.F13),
+                    },
+                ],
+            };
+
+            new FileProfileStore(directory).Save(profile);
+
+            var stored = new FileProfileStore(directory).Load("gesture-chain");
+
+            Assert.NotNull(stored);
+            Assert.Equal(0.15f, GestureOf(stored, GamepadButton.B).ClickRepeatInterval);
+            Assert.Equal(0.15f, GestureOf(stored, GamepadButton.X).LongPressRepeatInterval);
+
+            var committed = stored.Mappings
+                .Select(entry =>
+                {
+                    var editor = new MappingEditorViewModel();
+                    editor.LoadFrom(entry);
+                    return editor.BuildEntry();
+                })
+                .ToList();
+
+            new FileProfileStore(directory).Save(stored with { Mappings = committed });
+
+            var reloaded = new FileProfileStore(directory).Load("gesture-chain");
+
+            Assert.NotNull(reloaded);
+
+            var repeat = GestureOf(reloaded, GamepadButton.B);
+
+            Assert.Equal(0.15f, repeat.ClickRepeatInterval);
+            Assert.Equal(new KeyPressTarget(GamepadKey.Space), repeat.DoubleClickAction);
+            Assert.Equal(0f, repeat.LongPressThreshold);
+            Assert.Null(repeat.LongPressAction);
+
+            var longPress = GestureOf(reloaded, GamepadButton.X);
+
+            Assert.Equal(0.15f, longPress.LongPressRepeatInterval);
+            Assert.Equal(new MouseButtonTarget(MouseButton.Right), longPress.LongPressAction);
+            Assert.Equal(0f, longPress.ClickRepeatInterval);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
+        static ButtonGesture GestureOf(GamepadProfile profile, GamepadButton button)
+        {
+            var entry = profile.Mappings.First(
+                mapping => mapping.Source is ButtonBinding binding && binding.Button == button);
+            var gesture = Assert.IsType<ButtonBinding>(entry.Source).Gesture;
+
+            Assert.NotNull(gesture);
+            return gesture;
+        }
     }
 
     // ---- Pinned defaults, no slider input -----------------------------------
