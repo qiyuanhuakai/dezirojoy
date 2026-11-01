@@ -38,8 +38,8 @@ public sealed class EditorInputCapture : Control
         _window = window;
         _viewModel = viewModel;
         viewModel.Host.Sampled += OnSampled;
-        window.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
-        window.AddHandler(InputElement.KeyUpEvent, OnKeyUp, RoutingStrategies.Bubble, handledEventsToo: true);
+        window.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
+        window.AddHandler(InputElement.KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel, handledEventsToo: true);
         window.Deactivated += OnWindowDeactivated;
     }
 
@@ -88,6 +88,13 @@ public sealed class EditorInputCapture : Control
         }
 
         e.Handled = true;
+
+        if (e.Key == Key.Escape)
+        {
+            _heldKeys.Clear();
+            editor.EndKeyboardCapture();
+            return;
+        }
 
         if (KeyboardKeyMap.IsModifier(e.Key))
         {

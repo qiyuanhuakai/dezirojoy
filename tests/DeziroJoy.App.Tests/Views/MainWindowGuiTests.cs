@@ -407,6 +407,15 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
+    public void Editor_Buttons_Do_Not_Display_Keyboard_Shortcuts()
+    {
+        var (window, _, _, _) = BuildWindow();
+
+        Assert.Equal("确定", window.FindControl<Button>("CommitButton")!.Content);
+        Assert.Equal("取消", window.FindControl<Button>("CancelButton")!.Content);
+    }
+
+    [AvaloniaFact]
     public void CancelButton_Hides_The_Settings_Without_Changing_The_List()
     {
         var (window, viewModel, host, provider) = BuildWindow();
@@ -659,6 +668,27 @@ public sealed class MainWindowGuiTests
 
         Assert.True(viewModel.Editor.IsCapturingKey);
         Assert.Equal("停止捕获", capture.Content);
+    }
+
+    [AvaloniaFact]
+    public void Escape_Stops_Keyboard_Capture_Before_Closing_The_Editor()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+        Click(window.FindControl<Button>("CaptureKeyButton")!, window);
+        Assert.True(viewModel.Editor.IsCapturingKey);
+
+        window.KeyPress(Key.Escape, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Escape, null);
+        window.KeyRelease(Key.Escape, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Escape, null);
+
+        Assert.False(viewModel.Editor.IsCapturingKey);
+        Assert.True(viewModel.IsEditing, "the first Escape only cancels capture");
+
+        window.KeyPress(Key.Escape, Avalonia.Input.RawInputModifiers.None, Avalonia.Input.PhysicalKey.Escape, null);
+        Assert.False(viewModel.IsEditing);
     }
 
     [AvaloniaFact]

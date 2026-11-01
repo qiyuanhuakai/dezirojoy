@@ -589,9 +589,9 @@
                                                    Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <Button x:Name="CommitButton" Classes="primary" Content="确定 (Enter)"
+                                        <Button x:Name="CommitButton" Classes="primary" Content="确定"
                                                 Command="{Binding CommitEditorCommand}" />
-                                        <Button x:Name="CancelButton" Classes="ghost" Content="取消 (Esc)"
+                                        <Button x:Name="CancelButton" Classes="ghost" Content="取消"
                                                 Margin="8,0,0,0" Command="{Binding CancelEditorCommand}" />
                                     </StackPanel>
                                 </Grid>

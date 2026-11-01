@@ -196,7 +196,7 @@ public partial class MainWindow : Window
     private void OnSettingsKeyDown(object? sender, KeyEventArgs e)
     {
         var viewModel = ViewModel;
-        if (!viewModel.IsEditing)
+        if (e.Handled || !viewModel.IsEditing)
         {
             return;
         }
