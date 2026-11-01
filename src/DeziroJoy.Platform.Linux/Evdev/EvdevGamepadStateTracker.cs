@@ -111,13 +111,13 @@ public sealed class EvdevGamepadStateTracker
                 _leftStickX = Normalize(value, EvdevCodes.AbsX);
                 break;
             case EvdevCodes.AbsY:
-                _leftStickY = Normalize(value, EvdevCodes.AbsY);
+                _leftStickY = NormalizeStickY(value, EvdevCodes.AbsY);
                 break;
             case EvdevCodes.AbsRx:
                 _rightStickX = Normalize(value, EvdevCodes.AbsRx);
                 break;
             case EvdevCodes.AbsRy:
-                _rightStickY = Normalize(value, EvdevCodes.AbsRy);
+                _rightStickY = NormalizeStickY(value, EvdevCodes.AbsRy);
                 break;
             case EvdevCodes.AbsHat0X:
                 SetDpad(value < 0, value > 0, GamepadButton.DPadLeft, GamepadButton.DPadRight);
@@ -147,6 +147,16 @@ public sealed class EvdevGamepadStateTracker
 
         _buttons = pressed ? _buttons.Add(button) : _buttons.Remove(button);
     }
+
+    /// <summary>
+    /// Core contract: a positive stick Y means "pushed up". XInput's <c>sThumbLY</c> already
+    /// reports that direction, and <c>MouseStickProcessor</c> relies on it when it applies
+    /// <c>dy = -stickY</c> for <see cref="DeziroJoy.Core.Mapping.MouseStickSettings.InvertY"/>
+    /// (on by default). evdev's ABS_Y and ABS_RY are the opposite - positive when pushed DOWN -
+    /// so this is the single place the platform convention is reconciled: negate the
+    /// normalized value. X axes are untouched.
+    /// </summary>
+    private float NormalizeStickY(int value, ushort axisCode) => -Normalize(value, axisCode);
 
     private float Normalize(int value, ushort axisCode)
     {

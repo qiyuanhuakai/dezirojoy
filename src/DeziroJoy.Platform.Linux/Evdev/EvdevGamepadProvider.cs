@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using DeziroJoy.Core.Input;
@@ -21,7 +22,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         lock (_sync)
         {
             Scan();
-            return _devices.Select(d => new GamepadDescriptor(d.Path, d.Name)).ToList();
+            return _devices.Select(d => new GamepadDescriptor(d.Path, d.Name) { ButtonCount = d.ButtonCount }).ToList();
         }
     }
 
@@ -117,6 +118,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
                 Path = path,
                 Name = name,
                 Tracker = new EvdevGamepadStateTracker(ReadAxisRanges(fd)),
+                ButtonCount = ReadButtonCount(fd),
                 Fd = fd,
             };
 
@@ -167,6 +169,40 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         var hasRightStick = (mask & (1UL << EvdevCodes.AbsRx)) != 0;
 
         return hasLeftStick && hasRightStick;
+    }
+
+    /// <summary>
+    /// Asks the kernel how many buttons the device has, via EVIOCGBIT(EV_KEY). Returns null
+    /// when the ioctl is unsupported, which keeps "unknown" distinct from "zero buttons".
+    /// </summary>
+    internal static unsafe int? ReadButtonCount(int fd)
+    {
+        Span<byte> bits = stackalloc byte[EvdevNative.KeyBitBufferSize];
+
+        fixed (byte* pointer = bits)
+        {
+            if (EvdevNative.Ioctl(fd, EvdevNative.EvIocGBitKey, pointer) < 0)
+            {
+                return null;
+            }
+        }
+
+        return CountSetBits(bits);
+    }
+
+    /// <summary>
+    /// Popcounts an EVIOCGBIT(EV_KEY) bitmask: bit N of byte N/8 is set when key code N exists
+    /// on the device, so the number of set bits is the device's button count.
+    /// </summary>
+    internal static int CountSetBits(ReadOnlySpan<byte> bits)
+    {
+        var count = 0;
+        foreach (var value in bits)
+        {
+            count += BitOperations.PopCount(value);
+        }
+
+        return count;
     }
 
     private static unsafe Dictionary<ushort, EvdevAxisRange> ReadAxisRanges(int fd)
@@ -266,6 +302,8 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         public required string Name { get; init; }
 
         public required EvdevGamepadStateTracker Tracker { get; init; }
+
+        public int? ButtonCount { get; init; }
 
         public int Fd { get; set; }
 

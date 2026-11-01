@@ -18,6 +18,18 @@ internal static partial class EvdevNative
 
     public const uint EvIocGBitAbs = 0x80084523;
 
+    /// <summary>
+    /// EVIOCGBIT(EV_KEY, 96) = 0x80604521. Derived with the kernel's _IOC macro
+    /// (<c>_IOC_READ</c> = 2, type 'E' = 0x45, nr = 0x20 + EV_KEY = 0x21, size = 96):
+    /// (2 &lt;&lt; 30) | (0x45 &lt;&lt; 8) | 0x21 | (96 &lt;&lt; 16). The same formula reproduces
+    /// <see cref="EvIocGBitAbs"/> (EVIOCGBIT(EV_ABS, 8) = 0x80084523), which is the check that
+    /// this constant is derived rather than guessed.
+    /// </summary>
+    public const uint EvIocGBitKey = 0x80604521;
+
+    /// <summary>Bytes for a full EV_KEY bitmask: KEY_CNT (0x300) bits rounded up to whole bytes.</summary>
+    public const int KeyBitBufferSize = 96;
+
     [LibraryImport("libc.so.6", EntryPoint = "open", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     public static partial int Open(string path, int flags);
 

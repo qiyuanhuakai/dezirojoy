@@ -23,8 +23,9 @@ public class EvdevGamepadStateTrackerTests
     {
         Assert.Equal(GamepadButton.A, EvdevButtonMap.ToButton(EvdevCodes.BtnSouth));
         Assert.Equal(GamepadButton.B, EvdevButtonMap.ToButton(EvdevCodes.BtnEast));
-        Assert.Equal(GamepadButton.X, EvdevButtonMap.ToButton(EvdevCodes.BtnWest));
-        Assert.Equal(GamepadButton.Y, EvdevButtonMap.ToButton(EvdevCodes.BtnNorth));
+        // input-event-codes.h: BTN_WEST 0x134 is #defined as BTN_Y, BTN_NORTH 0x133 as BTN_X.
+        Assert.Equal(GamepadButton.Y, EvdevButtonMap.ToButton(EvdevCodes.BtnWest));
+        Assert.Equal(GamepadButton.X, EvdevButtonMap.ToButton(EvdevCodes.BtnNorth));
         Assert.Equal(GamepadButton.LeftBumper, EvdevButtonMap.ToButton(EvdevCodes.BtnTl));
         Assert.Equal(GamepadButton.RightBumper, EvdevButtonMap.ToButton(EvdevCodes.BtnTr));
         Assert.Equal(GamepadButton.LeftTrigger, EvdevButtonMap.ToButton(EvdevCodes.BtnTl2));
@@ -34,6 +35,11 @@ public class EvdevGamepadStateTrackerTests
         Assert.Equal(GamepadButton.Guide, EvdevButtonMap.ToButton(EvdevCodes.BtnMode));
         Assert.Equal(GamepadButton.LeftStick, EvdevButtonMap.ToButton(EvdevCodes.BtnThumbL));
         Assert.Equal(GamepadButton.RightStick, EvdevButtonMap.ToButton(EvdevCodes.BtnThumbR));
+        // input-event-codes.h: BTN_DPAD_UP/DOWN/LEFT/RIGHT = 0x220..0x223.
+        Assert.Equal(GamepadButton.DPadUp, EvdevButtonMap.ToButton(0x220));
+        Assert.Equal(GamepadButton.DPadDown, EvdevButtonMap.ToButton(0x221));
+        Assert.Equal(GamepadButton.DPadLeft, EvdevButtonMap.ToButton(0x222));
+        Assert.Equal(GamepadButton.DPadRight, EvdevButtonMap.ToButton(0x223));
     }
 
     [Fact]
@@ -60,7 +66,9 @@ public class EvdevGamepadStateTrackerTests
         var state = tracker.Snapshot();
 
         Assert.Equal(-1f, state.LeftStickX);
-        Assert.Equal(1f, state.LeftStickY);
+        // Core contract: positive stick Y means "pushed up". evdev's ABS_Y is positive when
+        // pushed DOWN, so a raw maximum must normalize to -1, not +1.
+        Assert.Equal(-1f, state.LeftStickY);
         Assert.Equal(0f, state.RightStickX, 4);
     }
 
@@ -187,5 +195,143 @@ public class EvdevGamepadStateTrackerTests
 
         Assert.Equal(GamepadButtonMask.None, tracker.Snapshot().PressedButtons);
         Assert.Equal(0f, tracker.Snapshot().LeftStickX);
+    }
+
+    [Fact]
+    public void BTN_C_And_BTN_Z_Have_No_Logical_Position()
+    {
+        // input-event-codes.h: BTN_C 0x132, BTN_Z 0x135. The Xbox layout that GamepadButton
+        // follows has exactly four face buttons, so C and Z stay raw-code extras.
+        Assert.Null(EvdevButtonMap.ToButton(0x132));
+        Assert.Null(EvdevButtonMap.ToButton(0x135));
+    }
+
+    [Fact]
+    public void BTN_GEAR_DOWN_And_Up_Have_No_Logical_Position()
+    {
+        // input-event-codes.h: BTN_GEAR_DOWN 0x150 (also #defined as BTN_WHEEL), BTN_GEAR_UP
+        // 0x151. 0x150 is dual-named, so it is not reliably a menu button; both stay extras.
+        Assert.Null(EvdevButtonMap.ToButton(0x150));
+        Assert.Null(EvdevButtonMap.ToButton(0x151));
+    }
+
+    [Fact]
+    public void Dpad_Key_Codes_Drive_The_Same_Logical_Buttons_As_The_Hat_Axis()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x220, 1));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x222, 1));
+
+        var state = tracker.Snapshot();
+
+        Assert.True(state.IsPressed(GamepadButton.DPadUp));
+        Assert.True(state.IsPressed(GamepadButton.DPadLeft));
+        Assert.False(state.IsPressed(GamepadButton.DPadDown));
+        Assert.False(state.IsPressed(GamepadButton.DPadRight));
+        Assert.Empty(state.ExtraButtons);
+    }
+
+    [Fact]
+    public void Dpad_Key_Release_Clears_The_Logical_Button()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x221, 1));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, 0x221, 0));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.DPadDown));
+    }
+
+    [Theory]
+    [InlineData(0x2c0)]
+    [InlineData(0x2c1)]
+    [InlineData(0x2e7)]
+    public void Trigger_Happy_Codes_Stay_Raw_Extra_Buttons(int code)
+    {
+        // input-event-codes.h: BTN_TRIGGER_HAPPY1 0x2c0 .. BTN_TRIGGER_HAPPY40 0x2e7. No
+        // logical equivalent exists, and IsButtonCode accepts 0x100..0x2FF, so they must
+        // surface as raw-code extras rather than being dropped.
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, (ushort)code, 1));
+
+        var state = tracker.Snapshot();
+
+        Assert.Contains(code, state.ExtraButtons);
+        Assert.Equal(GamepadButtonMask.None, state.PressedButtons);
+    }
+
+    [Theory]
+    [InlineData(0x132)]
+    [InlineData(0x135)]
+    [InlineData(0x150)]
+    [InlineData(0x151)]
+    public void Codes_With_No_Logical_Position_Surface_As_Raw_Extra_Buttons(int code)
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvKey, (ushort)code, 1));
+
+        var state = tracker.Snapshot();
+
+        Assert.Contains(code, state.ExtraButtons);
+        Assert.Equal(GamepadButtonMask.None, state.PressedButtons);
+    }
+
+    [Fact]
+    public void Stick_Y_Is_Positive_When_Pushed_Up_On_Both_Sticks()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsY, -32768));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRy, -32768));
+
+        var state = tracker.Snapshot();
+
+        Assert.Equal(1f, state.LeftStickY);
+        Assert.Equal(1f, state.RightStickY);
+    }
+
+    [Fact]
+    public void Stick_Y_Is_Negative_When_Pushed_Down_On_Both_Sticks()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsY, 32767));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRy, 32767));
+
+        var state = tracker.Snapshot();
+
+        Assert.Equal(-1f, state.LeftStickY);
+        Assert.Equal(-1f, state.RightStickY);
+    }
+
+    [Fact]
+    public void Stick_X_Keeps_Its_Sign_On_Both_Sticks()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsX, -32768));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRx, 32767));
+
+        var state = tracker.Snapshot();
+
+        Assert.Equal(-1f, state.LeftStickX);
+        Assert.Equal(1f, state.RightStickX);
+    }
+
+    [Fact]
+    public void Stick_Y_Negation_Is_Linear_Through_The_Midpoint()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsY, 0));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRy, 0));
+
+        var state = tracker.Snapshot();
+
+        Assert.Equal(0f, state.LeftStickY, 4);
+        Assert.Equal(0f, state.RightStickY, 4);
     }
 }

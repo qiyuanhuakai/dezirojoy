@@ -142,4 +142,35 @@ public class ScrollStickProcessorTests
 
         Assert.True(processor.CurrentRate > 60, $"expected sustained rate, got {processor.CurrentRate}");
     }
+
+    [Fact]
+    public void UpdateSettings_Keeps_Smoothed_Rate_And_Sub_Notch_Residual()
+    {
+        // 1536 notches/s at dt = 1/2048 s is exactly 0.75 notches per tick, so three ticks
+        // leave the smoothed rate at max with a known 0.25 notch pending in the residual.
+        var processor = new ScrollStickProcessor(Raw(1536f));
+
+        for (var i = 0; i < 3; i++)
+        {
+            processor.Update(0f, 1f, 1f / 2048f);
+        }
+
+        Assert.Equal(1536, processor.CurrentRate);
+
+        // A different MaxTicksPerSecond, exactly what dragging the rate slider produces.
+        processor.UpdateSettings(Raw(1792f));
+
+        // The swap must not disturb the smoothed rate...
+        Assert.Equal(1536, processor.CurrentRate);
+
+        // ...nor the residual: the carried 0.25 notch plus 1792/2048 = 0.875 crosses the
+        // whole-notch boundary, so one notch is emitted. A dropped residual would emit none.
+        var (horizontal, vertical) = processor.Update(0f, 1f, 1f / 2048f);
+
+        Assert.Equal(1, vertical);
+        Assert.Equal(0, horizontal);
+
+        // The new MaxTicksPerSecond is live from here on.
+        Assert.Equal(1792, processor.CurrentRate);
+    }
 }

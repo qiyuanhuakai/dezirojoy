@@ -11,13 +11,23 @@ public readonly record struct MouseStickDelta(int Dx, int Dy);
 /// </summary>
 public sealed class MouseStickProcessor
 {
-    private readonly MouseStickSettings _settings;
+    private MouseStickSettings _settings;
     private double _velocityX;
     private double _velocityY;
     private double _residualX;
     private double _residualY;
 
     public MouseStickProcessor(MouseStickSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings;
+    }
+
+    /// <summary>
+    /// Replaces the settings without discarding the smoothed velocity or the sub-pixel
+    /// residual, so applying a setting mid-drag never makes the pointer stutter.
+    /// </summary>
+    public void UpdateSettings(MouseStickSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;

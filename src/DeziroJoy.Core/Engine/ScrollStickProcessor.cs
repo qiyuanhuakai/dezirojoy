@@ -11,13 +11,23 @@ public readonly record struct ScrollStickDelta(int HorizontalNotches, int Vertic
 /// </summary>
 public sealed class ScrollStickProcessor
 {
-    private readonly ScrollStickSettings _settings;
+    private ScrollStickSettings _settings;
     private double _rateX;
     private double _rateY;
     private double _residualX;
     private double _residualY;
 
     public ScrollStickProcessor(ScrollStickSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings;
+    }
+
+    /// <summary>
+    /// Replaces the settings without discarding the smoothed rate or the sub-notch
+    /// residual, so applying a setting mid-drag never makes the wheel stutter.
+    /// </summary>
+    public void UpdateSettings(ScrollStickSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;

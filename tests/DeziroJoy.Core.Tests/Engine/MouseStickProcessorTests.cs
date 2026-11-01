@@ -216,4 +216,35 @@ public class MouseStickProcessorTests
 
         Assert.True(processor.CurrentSpeed > 900, $"expected sustained speed, got {processor.CurrentSpeed}");
     }
+
+    [Fact]
+    public void UpdateSettings_Keeps_Smoothed_Speed_And_Sub_Pixel_Residual()
+    {
+        // 1536 px/s at dt = 1/2048 s is exactly 0.75 px per tick, so three ticks leave the
+        // smoothed speed at max with a known 0.25 px still pending in the residual.
+        var processor = new MouseStickProcessor(Raw(1536f));
+
+        for (var i = 0; i < 3; i++)
+        {
+            processor.Update(1f, 0f, precisionActive: false, 1f / 2048f);
+        }
+
+        Assert.Equal(1536, processor.CurrentSpeed);
+
+        // A different MaxSpeed, exactly what dragging the sensitivity slider produces.
+        processor.UpdateSettings(Raw(1792f));
+
+        // The swap must not disturb the smoothed velocity...
+        Assert.Equal(1536, processor.CurrentSpeed);
+
+        // ...nor the residual: the carried 0.25 px plus 1792/2048 = 0.875 px crosses the
+        // whole-pixel boundary, so one pixel is emitted. A dropped residual would emit none.
+        var (dx, dy) = processor.Update(1f, 0f, precisionActive: false, 1f / 2048f);
+
+        Assert.Equal(1, dx);
+        Assert.Equal(0, dy);
+
+        // The new MaxSpeed is live from here on.
+        Assert.Equal(1792, processor.CurrentSpeed);
+    }
 }
