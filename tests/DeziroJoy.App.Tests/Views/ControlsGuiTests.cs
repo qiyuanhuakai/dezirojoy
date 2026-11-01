@@ -5,6 +5,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Threading;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views.Controls;
 using DeziroJoy.Core.Input;
@@ -169,17 +170,49 @@ public sealed class ControlsGuiTests
     }
 
     [AvaloniaFact]
-    public void GamepadVisualizer_ABXY_Labels_Are_Centered_On_Their_Buttons()
+    public void GamepadVisualizer_The_Pad_Body_Casts_A_Shadow()
+    {
+        UnderTheme(ThemeVariant.Dark, () =>
+        {
+            // Hosted in a shown window: a control with no visual parent has no theme variant to
+            // resolve a {DynamicResource} against, so the shadow would read as null here even
+            // though the running app applies it.
+            var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+            var window = new Window { Content = control, Width = 400, Height = 320 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var body = control.FindControl<Rectangle>("PadBody")!;
+
+            // A flat fill with a 1px stroke reads as a sticker; a shadow makes it a raised surface.
+            Assert.IsType<DropShadowEffect>(body.Effect);
+        });
+    }
+
+    [AvaloniaFact]
+    public void GamepadVisualizer_The_Dpad_Arms_Meet_Without_A_Seam()
     {
         var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
 
-        var canvas = control.FindControl<Canvas>("PadCanvas")!;
-        var labels = canvas.Children
-            .OfType<TextBlock>()
-            .Where(t => t.Text is "A" or "B" or "X" or "Y")
-            .ToDictionary(t => t.Text!);
+        var up = control.FindControl<Border>("DpadUp")!;
+        var down = control.FindControl<Border>("DpadDown")!;
+        var left = control.FindControl<Border>("DpadLeft")!;
+        var right = control.FindControl<Border>("DpadRight")!;
 
-        Assert.Equal(4, labels.Count);
+        // Each arm is its own Border so it can be clicked on its own, but they must abut
+        // exactly: a gap or overlap shows as a notch in the middle of the cross.
+        Assert.Equal(Canvas.GetTop(up) + up.Height, Canvas.GetTop(down));
+        Assert.Equal(Canvas.GetLeft(left) + left.Width, Canvas.GetLeft(right));
+        Assert.Equal(Canvas.GetTop(left), Canvas.GetTop(right));
+        Assert.Equal(Canvas.GetLeft(up), Canvas.GetLeft(down));
+        Assert.Equal(up.Width, down.Width);
+        Assert.Equal(left.Height, right.Height);
+    }
+
+    [AvaloniaFact]
+    public void GamepadVisualizer_ABXY_Labels_Are_Owned_By_Their_Buttons()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
 
         foreach (var (letter, ellipseName) in new[]
         {
@@ -190,18 +223,29 @@ public sealed class ControlsGuiTests
         })
         {
             var ellipse = control.FindControl<Ellipse>(ellipseName)!;
-            var label = labels[letter];
 
-            Assert.Equal(Canvas.GetLeft(ellipse), Canvas.GetLeft(label));
-            Assert.Equal(Canvas.GetTop(ellipse), Canvas.GetTop(label));
-            Assert.Equal(ellipse.Width, label.Width);
-            Assert.Equal(ellipse.Height, label.Height);
+            // The label is a sibling inside the same panel as its button, so the two are laid out
+            // by the panel rather than positioned by hand - a moved button carries its label.
+            var owner = ellipse.Parent;
+            Assert.True(owner is Panel, $"expected a Panel, got {owner?.GetType().Name}");
+            var panel = (Panel)owner!;
+            var label = Assert.IsType<TextBlock>(panel.Children
+                .OfType<TextBlock>()
+                .Single(t => t.Text == letter));
+
+            Assert.Same(panel, label.Parent);
             Assert.Equal(TextAlignment.Center, label.TextAlignment);
             Assert.Equal(VerticalAlignment.Center, label.VerticalAlignment);
             // Avalonia's TextBlock only honors VerticalAlignment when the text is taller than the
             // box; LineHeight == box height is what actually centers the glyph ink vertically.
-            Assert.Equal(label.Height, label.LineHeight);
+            Assert.Equal(ellipse.Height, label.LineHeight);
         }
+
+        // No stray label sits loose in the canvas: every letter is owned by its button, so a
+        // moved or resized button carries its label with it.
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+        Assert.DoesNotContain(canvas.Children.OfType<TextBlock>(),
+            t => t.Text is "A" or "B" or "X" or "Y");
     }
 
     [AvaloniaFact]

@@ -118,6 +118,10 @@
             <SolidColorBrush x:Key="DpadCenterBrush" Color="#2E2E2E" />
             <SolidColorBrush x:Key="PadIdleBrush" Color="#3A3A3A" />
             <SolidColorBrush x:Key="PadPressedBrush" Color="#4CC2FF" />
+            <!-- The pad body's drop shadow: what makes it read as a raised surface rather than
+                 a flat shape pasted on the card. -->
+            <DropShadowEffect x:Key="PadShadowEffect" Color="#000000" Opacity="0.5"
+                              BlurRadius="16" OffsetX="0" OffsetY="6" />
 
         </ResourceDictionary>
 
@@ -197,6 +201,11 @@
             <SolidColorBrush x:Key="DpadCenterBrush" Color="#D2D8DE" />
             <SolidColorBrush x:Key="PadIdleBrush" Color="#BFC7CF" />
             <SolidColorBrush x:Key="PadPressedBrush" Color="#0A6FBF" />
+            <!-- The pad body's drop shadow: what makes it read as a raised surface rather than
+                 a flat shape pasted on the card. Softer and cooler than the dark theme's, because
+                 a shadow on white has to stay subtle to avoid looking like dirt. -->
+            <DropShadowEffect x:Key="PadShadowEffect" Color="#1F2328" Opacity="0.2"
+                              BlurRadius="16" OffsetX="0" OffsetY="6" />
 
         </ResourceDictionary>
 
@@ -257,6 +266,10 @@
             <SolidColorBrush x:Key="DpadCenterBrush" Color="#2E2E2E" />
             <SolidColorBrush x:Key="PadIdleBrush" Color="#3A3A3A" />
             <SolidColorBrush x:Key="PadPressedBrush" Color="#4CC2FF" />
+            <!-- The pad body's drop shadow: what makes it read as a raised surface rather than
+                 a flat shape pasted on the card. -->
+            <DropShadowEffect x:Key="PadShadowEffect" Color="#000000" Opacity="0.5"
+                              BlurRadius="16" OffsetX="0" OffsetY="6" />
 
         </ResourceDictionary>
 

@@ -41,7 +41,8 @@
         <Canvas x:Name="PadCanvas" Opacity="{Binding IsConnected, Converter={StaticResource ConnectedOpacity}}">
 
             <Rectangle x:Name="PadBody" Canvas.Left="8" Canvas.Top="34" Width="304" Height="164"
-                       RadiusX="46" RadiusY="46" Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource ControlBorderBrush}" StrokeThickness="1" />
+                       RadiusX="46" RadiusY="46" Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource ControlBorderBrush}" StrokeThickness="1"
+                       Effect="{DynamicResource PadShadowEffect}" />
 
              <Border x:Name="LeftTrigger" Classes="padHit" Canvas.Left="44" Canvas.Top="6" Width="54" Height="12"
                      CornerRadius="6" Background="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}"
@@ -103,31 +104,45 @@
             <Rectangle x:Name="DpadCenter" Canvas.Left="122" Canvas.Top="144" Width="12" Height="12" RadiusX="2" RadiusY="2"
                        Fill="{DynamicResource DpadCenterBrush}" IsHitTestVisible="False" />
 
-            <Ellipse x:Name="ButtonY" Classes="padHit" Canvas.Left="198" Canvas.Top="56" Width="22" Height="22"
-                     Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
-                     PointerPressed="OnElementPressed" Tag="Button:Y" />
-            <Ellipse x:Name="ButtonX" Classes="padHit" Canvas.Left="174" Canvas.Top="80" Width="22" Height="22"
-                     Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
-                     PointerPressed="OnElementPressed" Tag="Button:X" />
-            <Ellipse x:Name="ButtonB" Classes="padHit" Canvas.Left="222" Canvas.Top="80" Width="22" Height="22"
-                     Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
-                     PointerPressed="OnElementPressed" Tag="Button:B" />
-            <Ellipse x:Name="ButtonA" Classes="padHit" Canvas.Left="198" Canvas.Top="104" Width="22" Height="22"
-                     Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
-                     PointerPressed="OnElementPressed" Tag="Button:A" />
-
-            <TextBlock Canvas.Left="198" Canvas.Top="56" Width="22" Height="22" LineHeight="22" Text="Y" FontSize="10"
-                       Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
-            <TextBlock Canvas.Left="174" Canvas.Top="80" Width="22" Height="22" LineHeight="22" Text="X" FontSize="10"
-                       Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
-            <TextBlock Canvas.Left="222" Canvas.Top="80" Width="22" Height="22" LineHeight="22" Text="B" FontSize="10"
-                       Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
-            <TextBlock Canvas.Left="198" Canvas.Top="104" Width="22" Height="22" LineHeight="22" Text="A" FontSize="10"
-                       Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
+            <!-- Each face button and its letter share one panel. A Shape cannot hold a child in
+                 Avalonia, so the only way to keep the two together is a shared parent: the
+                 button moves, the letter moves with it, and neither can drift out of centre. -->
+            <Canvas Canvas.Left="198" Canvas.Top="56" Width="22" Height="22">
+                <Ellipse x:Name="ButtonY" Classes="padHit" Width="22" Height="22"
+                         Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}"
+                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                         PointerPressed="OnElementPressed" Tag="Button:Y" />
+                <TextBlock Width="22" Height="22" LineHeight="22" Text="Y" FontSize="10"
+                           Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
+                           VerticalAlignment="Center" IsHitTestVisible="False" />
+            </Canvas>
+            <Canvas Canvas.Left="174" Canvas.Top="80" Width="22" Height="22">
+                <Ellipse x:Name="ButtonX" Classes="padHit" Width="22" Height="22"
+                         Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}"
+                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                         PointerPressed="OnElementPressed" Tag="Button:X" />
+                <TextBlock Width="22" Height="22" LineHeight="22" Text="X" FontSize="10"
+                           Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
+                           VerticalAlignment="Center" IsHitTestVisible="False" />
+            </Canvas>
+            <Canvas Canvas.Left="222" Canvas.Top="80" Width="22" Height="22">
+                <Ellipse x:Name="ButtonB" Classes="padHit" Width="22" Height="22"
+                         Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}"
+                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                         PointerPressed="OnElementPressed" Tag="Button:B" />
+                <TextBlock Width="22" Height="22" LineHeight="22" Text="B" FontSize="10"
+                           Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
+                           VerticalAlignment="Center" IsHitTestVisible="False" />
+            </Canvas>
+            <Canvas Canvas.Left="198" Canvas.Top="104" Width="22" Height="22">
+                <Ellipse x:Name="ButtonA" Classes="padHit" Width="22" Height="22"
+                         Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}"
+                         Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                         PointerPressed="OnElementPressed" Tag="Button:A" />
+                <TextBlock Width="22" Height="22" LineHeight="22" Text="A" FontSize="10"
+                           Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
+                           VerticalAlignment="Center" IsHitTestVisible="False" />
+            </Canvas>
 
              <Ellipse x:Name="BackButton" Classes="padHit" Canvas.Left="138" Canvas.Top="64" Width="14" Height="14"
                       Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
