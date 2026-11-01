@@ -47,6 +47,13 @@ public sealed class GamepadModelEditorTests
 
     private static void Click(Control target, Window window)
     {
+        // Focus the window before the click, not after. The settings' Esc/Enter handler is a
+        // window-level KeyDown handler reached by bubbling, and MouseDown on an inner control
+        // moves focus - so this focus must be in place when the click lands, or the handler's
+        // reachability depends on what the previous iteration left behind.
+        window.Focus();
+        Dispatcher.UIThread.RunJobs();
+
         window.UpdateLayout();
         // The editor card's body scrolls, so a control below the fold must be scrolled into
         // view first - what a user does before clicking it.
@@ -56,11 +63,6 @@ public sealed class GamepadModelEditorTests
         window.MouseDown(point, Avalonia.Input.MouseButton.Left);
         window.MouseUp(point, Avalonia.Input.MouseButton.Left);
         window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
-
-        // The settings' Esc/Enter handler is a window-level KeyDown handler reached by
-        // bubbling, so the window must hold focus or a later KeyPress is swallowed.
-        window.Focus();
         Dispatcher.UIThread.RunJobs();
     }
 
@@ -159,6 +161,13 @@ public sealed class GamepadModelEditorTests
 
             window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
             Assert.False(viewModel.IsEditing, $"Esc must close the settings opened from {name}");
+
+            // The next iteration clicks a different element on the same model, so the editor
+            // must be fully settled first: the settings row collapses to zero height and the
+            // elements below it shift up. Clicking through that transition is what made this
+            // flaky on Windows, where the failing element was always a few positions in.
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
         }
     }
 
