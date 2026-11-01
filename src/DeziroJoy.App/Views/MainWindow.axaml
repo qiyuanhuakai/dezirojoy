@@ -31,10 +31,23 @@
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
 
         <!-- One source row. Shared by the left and the right column of the mapping surface so
-             both sides render identically; the accent bar marks the selected row. -->
+             both sides render identically. The selected row carries a full-bleed tint behind
+             its content as well as the accent bar: a 3px bar alone reads as a sliver among a
+             wall of cards. Clicking the row opens its settings, so there is no separate edit
+             button - only the enable toggle and delete remain. -->
         <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
-            <controls:MappingRowBorder Classes="card" Padding="0" Margin="0,0,0,8">
+            <controls:MappingRowBorder Classes="card" Padding="0" Margin="0,0,0,6">
                 <Grid>
+                    <Border CornerRadius="{DynamicResource CornerRadiusXl}"
+                            Background="{DynamicResource RowSelectedBrush}">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{StaticResource RowSelected}">
+                                <Binding />
+                                <Binding Path="DataContext.(vm:MainWindowViewModel).SelectedMapping"
+                                         RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
+                            </MultiBinding>
+                        </Border.IsVisible>
+                    </Border>
                     <Border Width="3" Margin="0,8,0,8" CornerRadius="{DynamicResource CornerRadiusSm}"
                             HorizontalAlignment="Left" VerticalAlignment="Stretch"
                             Background="{DynamicResource AccentBrush}">
@@ -46,7 +59,7 @@
                             </MultiBinding>
                         </Border.IsVisible>
                     </Border>
-                    <Grid ColumnDefinitions="*,Auto,Auto,Auto" Margin="12,8,12,8">
+                    <Grid ColumnDefinitions="*,Auto,Auto" Margin="14,9,12,9">
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
                             <TextBlock Text="{Binding SourceText}" FontSize="12"
                                        Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -57,9 +70,7 @@
                                       VerticalAlignment="Center" FontSize="10" Padding="8,4"
                                       Content="{Binding IsEnabled, Converter={StaticResource EnabledText}}"
                                       IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
-                        <Button Grid.Column="2" Classes="ghost" Content="编辑" Margin="6,0,0,0"
-                                FontSize="10" Padding="8,4" Command="{Binding EditCommand}" />
-                        <Button Grid.Column="3" Classes="ghost" Content="删除" Margin="6,0,0,0"
+                        <Button Grid.Column="2" Classes="ghost" Content="删除" Margin="6,0,0,0"
                                 FontSize="10" Padding="8,4" Command="{Binding DeleteCommand}" />
                     </Grid>
                 </Grid>

@@ -74,6 +74,7 @@
             <SolidColorBrush x:Key="ControlHoverBrush" Color="#2C2C2C" />
             <SolidColorBrush x:Key="CaptionHoverBrush" Color="#2A2A2A" />
             <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#1E3A48" />
+            <SolidColorBrush x:Key="RowSelectedBrush" Color="#1F2E38" />
             <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#DD151515" />
 
             <!-- Borders, dividers, tracks -->
@@ -137,6 +138,7 @@
             <SolidColorBrush x:Key="ControlHoverBrush" Color="#E9EDF1" />
             <SolidColorBrush x:Key="CaptionHoverBrush" Color="#E9EDF1" />
             <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#E6F1F9" />
+            <SolidColorBrush x:Key="RowSelectedBrush" Color="#E6F1F9" />
             <!-- Translucent scrim over the sunken preview well; keeps the speed pill legible. -->
             <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#3324292E" />
 
@@ -211,6 +213,7 @@
             <SolidColorBrush x:Key="ControlHoverBrush" Color="#2C2C2C" />
             <SolidColorBrush x:Key="CaptionHoverBrush" Color="#2A2A2A" />
             <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#1E3A48" />
+            <SolidColorBrush x:Key="RowSelectedBrush" Color="#1F2E38" />
             <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#DD151515" />
 
             <!-- Borders, dividers, tracks -->

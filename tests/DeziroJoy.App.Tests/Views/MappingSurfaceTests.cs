@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -73,6 +74,13 @@ public sealed class MappingSurfaceTests
         return ColorOfResource(brush);
     }
 
+    private static Color Token(ThemeVariant variant, string key)
+    {
+        var app = Application.Current!;
+        app.TryFindResource(key, variant, out var brush);
+        return ColorOfResource(brush);
+    }
+
     // ---- Selection linkage -------------------------------------------------
 
     [AvaloniaFact]
@@ -131,6 +139,78 @@ public sealed class MappingSurfaceTests
             .Count(shape => shape.Stroke is ISolidColorBrush solid && solid.Color == accent);
 
         Assert.Equal(1, highlighted);
+    }
+
+    // ---- Row appearance -----------------------------------------------------
+
+    [AvaloniaFact]
+    public void The_Selected_Row_Is_Tinted_Not_Just_Marked_With_A_Bar()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var row = viewModel.Mappings.First(r => r.Entry.Source == new ButtonBinding(GamepadButton.B));
+        viewModel.SelectedMapping = row;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var rows = list.GetVisualDescendants().OfType<MappingRowBorder>().ToList();
+        var selectedRow = rows.Single(r => r.DataContext == row);
+
+        // A 3px accent bar alone reads as a sliver among a wall of cards, so the selected row
+        // also carries a full-bleed tint.
+        var tint = selectedRow.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(b => b.IsVisible && b.Background is ISolidColorBrush solid
+                && solid.Color == Token(selectedRow.ActualThemeVariant, "RowSelectedBrush"));
+
+        Assert.NotNull(tint);
+        Assert.Equal(selectedRow.Bounds.Width, tint!.Bounds.Width);
+    }
+
+    [AvaloniaFact]
+    public void An_Unselected_Row_Has_No_Tint()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var row = viewModel.Mappings.First(r => r.Entry.Source == new ButtonBinding(GamepadButton.B));
+        viewModel.SelectedMapping = row;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var other = list.GetVisualDescendants().OfType<MappingRowBorder>()
+            .First(r => r.DataContext != row);
+
+        var tint = other.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(b => b.IsVisible && b.Background is ISolidColorBrush solid
+                && solid.Color == Token(other.ActualThemeVariant, "RowSelectedBrush"));
+
+        Assert.Null(tint);
+    }
+
+    [AvaloniaFact]
+    public void A_Row_Offers_Toggle_And_Delete_But_No_Redundant_Edit_Button()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var firstRow = list.GetVisualDescendants().OfType<MappingRowBorder>().First();
+
+        // Clicking the row already opens its settings, so an 编辑 button repeats that action.
+        Assert.NotNull(firstRow.GetVisualDescendants().OfType<ToggleButton>().FirstOrDefault());
+        Assert.NotNull(firstRow.GetVisualDescendants().OfType<Button>().FirstOrDefault());
+        Assert.DoesNotContain(firstRow.GetVisualDescendants().OfType<Button>(),
+            b => b.Content as string == "编辑");
     }
 
     // ---- Editor expands in place, below the model, with a connector --------
