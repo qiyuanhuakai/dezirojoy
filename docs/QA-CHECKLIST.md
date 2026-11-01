@@ -199,10 +199,14 @@ Windows 没有任何公开 API 可以禁用它或重置它，因此本应用**�
 - XInput 无法提供稳定硬件 ID，配置按 XInput 槽位（#1-#4）保存；
   两个手柄互换插槽时，配置随槽位而非硬件走
 - XInput 只能看到 Xbox 布局的标准按键（14 个）。超出该布局的按键
-  （部分第三方手柄的宏键、背拨片）Windows 上由**实验性 HID 通道**读取：
-  这类按键在模型上显示为"按键 N"（N 为原始码），可点击配置，但
-  无法在 XInput 槽位之间区分同一型号的两只手柄；Linux 上 evdev 走
-  raw-code 通道，可以识别
+  （部分第三方手柄的宏键、背拨片）在 Windows 上不会被识别。
+  已实测确认（蓝牙 Xbox 无线手柄，VID 045E / PID 0B13）：该手柄唯一的
+  HID 实例是带 `IG_` 标记的 XInput 虚拟副本，能读到报告描述符但
+  `HidD_GetInputReport` 返回 ERROR_INVALID_PARAMETER、`HidD_GetFeature`
+  返回 ERROR_INVALID_FUNCTION、阻塞读零报告——即该接口不承载输入，
+  额外按键根本不在其中。读取这类按键需要自写过滤驱动（Steam / ReWASD
+  的做法），应用层无解
+- Linux 上 evdev 走 raw-code 通道，可以识别
 - 需要 Windows 8+（XInput 1.4）
 - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入输入，
   且失败时错误码不指明源于 UIPI。必须提权运行
