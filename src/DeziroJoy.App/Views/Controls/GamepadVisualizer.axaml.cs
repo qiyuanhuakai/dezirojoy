@@ -66,6 +66,7 @@ public partial class GamepadVisualizer : UserControl
         // would be overridden by the focus ring.
         if (this.FindControl<Canvas>("PadCanvas") is { } canvas)
         {
+            canvas.AddHandler(PointerPressedEvent, OnElementPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
             canvas.AddHandler(PointerReleasedEvent, OnPadPointerReleased, RoutingStrategies.Tunnel);
             canvas.AddHandler(PointerCaptureLostEvent, OnPadPointerCaptureLost, RoutingStrategies.Tunnel);
         }
@@ -185,7 +186,21 @@ public partial class GamepadVisualizer : UserControl
 
     private void OnElementPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is not Control { Tag: string tag } element)
+        var element = sender as Control;
+        if (element?.Tag is null)
+        {
+            element = e.Source as Control;
+        }
+
+        if (element?.Tag is int code && code > 0)
+        {
+            Press(element);
+            e.Handled = true;
+            ElementClicked?.Invoke(this, new GamepadElementClickedEventArgs(new ButtonBinding(GamepadButton.Extra, code)));
+            return;
+        }
+
+        if (element?.Tag is not string tag)
         {
             return;
         }

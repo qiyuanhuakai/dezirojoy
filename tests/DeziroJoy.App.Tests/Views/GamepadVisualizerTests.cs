@@ -5,6 +5,7 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -185,6 +186,21 @@ public sealed class GamepadVisualizerTests
     }
 
     // ---- Repeated click hit-testing ----------------------------------------
+
+    [AvaloniaFact]
+    public void A_Pointer_Press_Marked_Handled_By_The_Native_Route_Still_Opens_The_Editor()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.AddHandler(
+            InputElement.PointerPressedEvent,
+            (_, args) => args.Handled = true,
+            RoutingStrategies.Tunnel);
+
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(GamepadButton.A, viewModel.Editor.SelectedButton);
+    }
 
     [AvaloniaFact]
     public void Repeated_Clicks_Keep_Hitting_The_Same_Element()
