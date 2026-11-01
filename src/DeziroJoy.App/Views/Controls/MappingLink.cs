@@ -28,6 +28,8 @@ public sealed class MappingLink : Control
 {
     private MainWindowViewModel? _vm;
 
+    private MappingEditorViewModel? _editor;
+
     private (Point Start, Point End)? _lastConnector;
 
     protected override void OnDataContextChanged(EventArgs e)
@@ -39,11 +41,19 @@ public sealed class MappingLink : Control
             _vm.PropertyChanged -= OnViewModelPropertyChanged;
         }
 
+        if (_editor is not null)
+        {
+            _editor.PropertyChanged -= OnEditorPropertyChanged;
+            _editor = null;
+        }
+
         _vm = DataContext as MainWindowViewModel;
 
         if (_vm is not null)
         {
             _vm.PropertyChanged += OnViewModelPropertyChanged;
+            _editor = _vm.Editor;
+            _editor.PropertyChanged += OnEditorPropertyChanged;
         }
 
         UpdateLinkage();
@@ -77,6 +87,22 @@ public sealed class MappingLink : Control
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(MainWindowViewModel.SelectedMapping) or nameof(MainWindowViewModel.IsEditing))
+        {
+            UpdateLinkage();
+        }
+    }
+
+    /// <summary>
+    /// A raw-code extra button is armed by setting the editor's SelectedButton/SelectedExtraCode
+    /// rather than by selecting a mapping row, and the view model reports nothing for that, so
+    /// the linkage has to listen to the editor too or the model keeps highlighting the old source.
+    /// </summary>
+    private void OnEditorPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(MappingEditorViewModel.SelectedButton)
+            or nameof(MappingEditorViewModel.SelectedExtraCode)
+            or nameof(MappingEditorViewModel.SelectedStick)
+            or nameof(MappingEditorViewModel.SourceIsStick))
         {
             UpdateLinkage();
         }

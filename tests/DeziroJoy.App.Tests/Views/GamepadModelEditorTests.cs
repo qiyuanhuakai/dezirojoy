@@ -348,4 +348,105 @@ public sealed class GamepadModelEditorTests
         // The app starts on the Light variant, so the pressed accent is the light-theme value.
         Assert.Equal(Color.FromRgb(0x0A, 0x6F, 0xBF), fill.Color);
     }
+
+    [AvaloniaFact]
+    public void Selecting_An_Element_Outlines_It_On_The_Model()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+        var buttonA = model.FindControl<Shape>("ButtonA")!;
+        var buttonB = model.FindControl<Shape>("ButtonB")!;
+        Assert.Equal(1, buttonA.StrokeThickness);
+
+        viewModel.SelectSource(new ButtonBinding(GamepadButton.A));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The selected element is outlined on the model itself.
+        Assert.Equal(2.5, buttonA.StrokeThickness);
+        Assert.Equal(1d, buttonB.StrokeThickness);
+    }
+
+    [AvaloniaFact]
+    public void Selecting_Another_Element_Moves_The_Outline()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+        var buttonA = model.FindControl<Shape>("ButtonA")!;
+        var buttonB = model.FindControl<Shape>("ButtonB")!;
+
+        viewModel.SelectSource(new ButtonBinding(GamepadButton.A));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(2.5, buttonA.StrokeThickness);
+
+        viewModel.SelectSource(new ButtonBinding(GamepadButton.B));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1d, buttonA.StrokeThickness);
+        Assert.Equal(2.5, buttonB.StrokeThickness);
+    }
+
+    [AvaloniaFact]
+    public void An_Element_With_No_Mapping_Is_Not_Outlined_Even_When_Selected()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var back = Model(window).FindControl<Shape>("BackButton")!;
+
+        // The model outline follows the selected mapping ROW, not the selected source: the
+        // default profile leaves Back unmapped, so selecting it outlines nothing.
+        viewModel.SelectSource(new ButtonBinding(GamepadButton.Back));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Null(viewModel.SelectedMapping);
+        Assert.Equal(1d, back.StrokeThickness);
+    }
+
+    [AvaloniaFact]
+    public void An_Extra_Button_Pill_Is_Outlined_When_Selected()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        viewModel.Visualizer.RegisterExtraButton(305);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var pill = Model(window).GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(b => b.Tag is 305);
+        Assert.NotNull(pill);
+
+        Click(pill, window);
+
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(GamepadButton.Extra, viewModel.Editor.SelectedButton);
+        Assert.Equal(305, viewModel.Editor.SelectedExtraCode);
+
+        // Re-found after the click rather than held across it: BringIntoView can recycle the
+        // ItemsControl's container, which would leave a stale reference looking un-outlined.
+        var outlined = Model(window).GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(b => b.Tag is 305);
+
+        // Extra buttons are dynamic pills found by raw code rather than named elements, so
+        // they take a different lookup path and need their own test.
+        Assert.Equal(new Thickness(2.5), outlined!.BorderThickness);
+    }
 }
