@@ -33,6 +33,8 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public bool IsMappingEnabled { get; private set; } = true;
 
+    public bool IsInjectionSuspended { get; private set; }
+
     public bool HasController { get; set; }
 
     public int InjectorPid { get; set; } = 4242;
@@ -75,6 +77,8 @@ internal sealed class FakeDaemonHost : IDaemonHost
     }
 
     public void SetMappingEnabled(bool enabled) => IsMappingEnabled = enabled;
+
+    public void SetInjectionSuspended(bool suspended) => IsInjectionSuspended = suspended;
 
     public void Reload(string deviceId, GamepadProfile profile) => ReloadedDevices.Add(deviceId);
 }
@@ -509,6 +513,59 @@ public class DaemonServerTests
         Assert.Equal(DaemonErrorCodes.InjectionActive, ack.ErrorCode);
         Assert.False(rivalHost.IsRunning);
         Assert.True(host.IsRunning);
+    }
+
+    [Fact]
+    public async Task Pause_And_Resume_Change_Dispatch_Without_Stopping_The_Engine()
+    {
+        var (server, _, host) = CreateRunning();
+        await server.ProcessAsync(new StartMessage("req-1", 0));
+
+        var paused = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetMappingEnabledMessage("req-2", false)));
+
+        Assert.True(paused.Accepted);
+        Assert.True(host.IsRunning);
+        Assert.False(host.IsMappingEnabled);
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-3")));
+        Assert.True(snapshot.Snapshot.Running);
+        Assert.False(snapshot.Snapshot.MappingEnabled);
+
+        await server.ProcessAsync(new SetMappingEnabledMessage("req-4", true));
+        Assert.True(host.IsMappingEnabled);
+        Assert.Equal(0, host.StopCalls);
+    }
+
+    [Fact]
+    public async Task Editor_Suspension_Is_Acked_Without_Publishing_A_Configuration_Change()
+    {
+        var (server, _, host) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetInjectionSuspendedMessage("req-1", true)));
+
+        Assert.True(ack.Accepted);
+        Assert.True(host.IsInjectionSuspended);
+        Assert.Empty(pushes);
+    }
+
+    [Fact]
+    public async Task Start_When_Already_Running_Resumes_Paused_Dispatch()
+    {
+        var (server, _, host) = CreateRunning();
+        await server.ProcessAsync(new StartMessage("req-1", 0));
+        host.SetMappingEnabled(false);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new StartMessage("req-2", 0)));
+
+        Assert.True(ack.Accepted);
+        Assert.True(host.IsMappingEnabled);
+        Assert.Equal(1, host.StartCalls);
     }
 
     [Fact]

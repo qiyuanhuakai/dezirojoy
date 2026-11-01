@@ -47,6 +47,8 @@ public interface IDaemonHost
 
     void SetMappingEnabled(bool enabled);
 
+    void SetInjectionSuspended(bool suspended);
+
     /// <summary>Swaps the active profile of one connected device.</summary>
     void Reload(string deviceId, GamepadProfile profile);
 }

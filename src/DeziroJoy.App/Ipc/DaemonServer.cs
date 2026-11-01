@@ -105,6 +105,12 @@ public sealed partial class DaemonServer
             case StopMessage stop:
                 return HandleStop(stop);
 
+            case SetMappingEnabledMessage setEnabled:
+                return HandleSetMappingEnabled(setEnabled);
+
+            case SetInjectionSuspendedMessage setSuspended:
+                return HandleSetInjectionSuspended(setSuspended);
+
             default:
                 // The union is closed and the deserializer rejects unknown kinds, so this is
                 // a response message arriving at the daemon: a protocol violation, not a crash.
@@ -189,7 +195,15 @@ public sealed partial class DaemonServer
 
             if (_host.IsRunning)
             {
-                // Already mapping: nothing changed, so no push - the ack still confirms it.
+                if (_host.IsMappingEnabled && _desiredEnabled)
+                {
+                    return new MutationAckMessage(start.RequestId, true, _revision, _sequence);
+                }
+
+                _host.SetMappingEnabled(true);
+                _desiredEnabled = true;
+                _lastError = null;
+                PublishStateChange();
                 return new MutationAckMessage(start.RequestId, true, _revision, _sequence);
             }
 
@@ -228,6 +242,29 @@ public sealed partial class DaemonServer
             PublishStateChange();
 
             return new MutationAckMessage(stop.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    private MutationAckMessage HandleSetMappingEnabled(SetMappingEnabledMessage request)
+    {
+        lock (_sync)
+        {
+            if (_host.IsMappingEnabled != request.Enabled)
+            {
+                _host.SetMappingEnabled(request.Enabled);
+                PublishStateChange();
+            }
+
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    private MutationAckMessage HandleSetInjectionSuspended(SetInjectionSuspendedMessage request)
+    {
+        lock (_sync)
+        {
+            _host.SetInjectionSuspended(request.Suspended);
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
         }
     }
 

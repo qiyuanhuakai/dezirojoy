@@ -42,6 +42,17 @@ public class EngineCompositionTests
     }
 
     [Fact]
+    public void Presentation_Only_Composition_Never_Creates_An_Injecting_Sink()
+    {
+        using var composition = new EngineComposition(presentationOnly: true);
+
+        Assert.IsType<NullOutputSink>(composition.Sink);
+        Assert.Null(composition.SinkError);
+        Assert.False(composition.Host.IsRunning);
+        composition.Host.RefreshPresence();
+    }
+
+    [Fact]
     public void Composition_Dispose_Stops_The_Host()
     {
         var composition = new EngineComposition();

@@ -150,6 +150,23 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void Pause_And_Editor_Suspension_Round_Trip_As_Distinct_Messages()
+    {
+        var pause = new SetMappingEnabledMessage("req-pause", false);
+        var suspend = new SetInjectionSuspendedMessage("req-suspend", true);
+
+        var restoredPause = Assert.IsType<SetMappingEnabledMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(pause)));
+        var restoredSuspend = Assert.IsType<SetInjectionSuspendedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(suspend)));
+
+        Assert.Equal(pause, restoredPause);
+        Assert.Equal(suspend, restoredSuspend);
+        Assert.Contains("set-mapping-enabled", IpcSerializer.Serialize(pause));
+        Assert.Contains("set-injection-suspended", IpcSerializer.Serialize(suspend));
+    }
+
+    [Fact]
     public void MutationAck_Echoes_The_Request_Id_Across_The_Wire()
     {
         var request = new ApplyConfigurationMessage("req-42", 7, "Xbox Default", ProfileJson());

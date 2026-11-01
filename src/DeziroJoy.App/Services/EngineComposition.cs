@@ -12,16 +12,27 @@ public sealed class EngineComposition : IDisposable
 {
     private readonly IElevationService _elevationService;
 
-    public EngineComposition(IProfileStore? profileStore = null, IElevationService? elevationService = null)
+    public EngineComposition(
+        IProfileStore? profileStore = null,
+        IElevationService? elevationService = null,
+        bool presentationOnly = false)
     {
         _elevationService = elevationService ?? new ElevationService();
 
         ProfileStore = profileStore ?? new FileProfileStore();
         Provider = PlatformFactory.TryCreateProvider(out var provider) ? provider : new NoGamepadProvider();
 
-        var sinkCreated = PlatformFactory.TryCreateSink(out var sink, out var sinkError);
-        Sink = sinkCreated ? sink : new NullOutputSink();
-        SinkError = sinkCreated ? null : sinkError;
+        if (presentationOnly)
+        {
+            Sink = new NullOutputSink();
+            SinkError = null;
+        }
+        else
+        {
+            var sinkCreated = PlatformFactory.TryCreateSink(out var sink, out var sinkError);
+            Sink = sinkCreated ? sink : new NullOutputSink();
+            SinkError = sinkCreated ? null : sinkError;
+        }
 
         InjectionLog = new InjectionLog();
         if (Sink is SendInputOutputSink sendInputSink)

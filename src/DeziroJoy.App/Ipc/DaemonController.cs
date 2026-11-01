@@ -199,6 +199,12 @@ public sealed class DaemonController : IAsyncDisposable
     public Task<MutationResult> StopAsync(CancellationToken cancellationToken)
         => MutateAsync(requestId => new StopMessage(requestId), cancellationToken);
 
+    public Task<MutationResult> SetMappingEnabledAsync(bool enabled, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SetMappingEnabledMessage(requestId, enabled), cancellationToken);
+
+    public Task<MutationResult> SetInjectionSuspendedAsync(bool suspended, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SetInjectionSuspendedMessage(requestId, suspended), cancellationToken);
+
     private async Task<MutationResult> MutateAsync(
         Func<string, IpcMessage> build,
         CancellationToken cancellationToken)

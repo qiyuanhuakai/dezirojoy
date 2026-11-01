@@ -274,6 +274,8 @@ public static class DaemonHost
 
         public void SetMappingEnabled(bool enabled) => _composition.Host.SetMappingEnabled(enabled);
 
+        public void SetInjectionSuspended(bool suspended) => _composition.Host.SetInjectionSuspended(suspended);
+
         public void Reload(string deviceId, GamepadProfile profile) => _composition.Host.Reload(deviceId, profile);
     }
 

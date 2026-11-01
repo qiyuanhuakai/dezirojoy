@@ -50,6 +50,8 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(ApplyConfigurationMessage), "apply-configuration")]
 [JsonDerivedType(typeof(StartMessage), "start")]
 [JsonDerivedType(typeof(StopMessage), "stop")]
+[JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
+[JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
 [JsonDerivedType(typeof(MutationAckMessage), "mutation-ack")]
 [JsonDerivedType(typeof(StateChangedMessage), "state-changed")]
 [JsonDerivedType(typeof(ErrorMessage), "error")]
@@ -98,6 +100,12 @@ public sealed record StartMessage(string RequestId, long ExpectedRevision) : Ipc
 
 /// <summary>GUI to daemon: request mapping stop. The daemon itself keeps running.</summary>
 public sealed record StopMessage(string RequestId) : IpcMessage;
+
+/// <summary>GUI to daemon: pause or resume dispatch without stopping the mapping loop.</summary>
+public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : IpcMessage;
+
+/// <summary>GUI to daemon: suspend dispatch while the mapping editor owns physical input.</summary>
+public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
 
 /// <summary>
 /// Daemon to GUI: a mutation has been settled. <see cref="RequestId"/> echoes the
