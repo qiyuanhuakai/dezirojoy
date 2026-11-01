@@ -57,6 +57,8 @@ public partial class ScrollSensitivityViewModel : ObservableObject
 
     public string CurveHint => MappingDescriptions.ScrollCurve(Curve);
 
+    public string CurveStrengthHint { get; } = MappingDescriptions.MouseCurveStrength();
+
     public string ResponseTimeHint { get; } = MappingDescriptions.ScrollResponseTime();
 
     public string InvertYHint { get; } = MappingDescriptions.ScrollInvertY();
@@ -81,6 +83,8 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     }
 
     partial void OnResponseTimeChanged(float value) => ApplySettings();
+
+    partial void OnInvertYChanged(bool value) => ApplySettings();
 
     partial void OnEnableHorizontalChanged(bool value) => ApplySettings();
 

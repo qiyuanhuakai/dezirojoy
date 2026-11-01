@@ -156,6 +156,15 @@ public static class MappingDescriptions
     public static string MousePrecisionScale()
         => "按住精准键（默认左摇杆按下）期间的速度倍率：0.35 即降到 35%，用于临时精细瞄准。";
 
+    public static string MousePrecisionMode()
+        => "精准键触发方式：一直按住才降速，或按一下启用、再按一下取消；方式随当前映射一起保存。";
+
+    public static string MouseScaleX()
+        => "水平速度倍率：只改变左右移动的增益，不改变垂直速度；1 为原始速度，0 为关闭水平移动。";
+
+    public static string MouseScaleY()
+        => "垂直速度倍率：只改变上下移动的增益，在“垂直取反”之前应用；1 为原始速度，0 为关闭垂直移动。";
+
     public static string MouseInvertY()
         => "垂直位移取反：默认勾选，推摇杆向上 = 光标向上；取消勾选则上下颠倒。";
 

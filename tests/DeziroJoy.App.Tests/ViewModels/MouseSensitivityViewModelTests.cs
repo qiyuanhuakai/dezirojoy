@@ -345,4 +345,49 @@ public class MouseSensitivityViewModelTests
         Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewY);
         Assert.Equal(0, vm.TravelDistance);
     }
+
+    [Fact]
+    public void Axis_Gain_And_Precision_Mode_Survive_Build_Load_And_Reset()
+    {
+        var vm = new MouseSensitivityViewModel
+        {
+            ScaleX = 0.7f,
+            ScaleY = 1.4f,
+            PrecisionMode = PrecisionMode.Toggle,
+        };
+
+        var settings = vm.BuildSettings();
+        Assert.Equal(0.7f, settings.ScaleX);
+        Assert.Equal(1.4f, settings.ScaleY);
+        Assert.Equal(PrecisionMode.Toggle, settings.PrecisionMode);
+
+        var loaded = new MouseSensitivityViewModel();
+        loaded.LoadFrom(settings);
+        Assert.Equal(0.7f, loaded.ScaleX);
+        Assert.Equal(1.4f, loaded.ScaleY);
+        Assert.Equal(PrecisionMode.Toggle, loaded.PrecisionMode);
+
+        loaded.Reset();
+        Assert.Equal(1f, loaded.ScaleX);
+        Assert.Equal(1f, loaded.ScaleY);
+        Assert.Equal(PrecisionMode.Hold, loaded.PrecisionMode);
+    }
+
+    [Fact]
+    public void Zero_Horizontal_Gain_Stops_Horizontal_Preview_Movement()
+    {
+        var vm = new MouseSensitivityViewModel
+        {
+            ScaleX = 0f,
+            ScaleY = 1f,
+            MaxSpeed = 2000f,
+            ResponseTime = 0f,
+            IsLive = true,
+        };
+
+        AdvanceMany(vm, 30);
+
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewX);
+        Assert.NotEqual(MouseSensitivityViewModel.PreviewCenter, vm.PreviewY);
+    }
 }

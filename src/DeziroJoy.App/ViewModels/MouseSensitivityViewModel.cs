@@ -54,7 +54,16 @@ public partial class MouseSensitivityViewModel : ObservableObject
     private float _precisionScale = 0.35f;
 
     [ObservableProperty]
+    private PrecisionMode _precisionMode = PrecisionMode.Hold;
+
+    [ObservableProperty]
     private bool _invertY = true;
+
+    [ObservableProperty]
+    private float _scaleX = 1f;
+
+    [ObservableProperty]
+    private float _scaleY = 1f;
 
     /// <summary>
     /// Button that temporarily slows the stick for fine aiming. Per-mapping and profile-stored,
@@ -105,10 +114,16 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     public string PrecisionScaleHint { get; } = MappingDescriptions.MousePrecisionScale();
 
+    public string PrecisionModeHint { get; } = MappingDescriptions.MousePrecisionMode();
+
+    public string ScaleXHint { get; } = MappingDescriptions.MouseScaleX();
+
+    public string ScaleYHint { get; } = MappingDescriptions.MouseScaleY();
+
     public string InvertYHint { get; } = MappingDescriptions.MouseInvertY();
 
     public string PrecisionButtonHint { get; } =
-        "按住时临时降速的按键，默认左摇杆按下。每个映射独立保存，改这里只影响当前编辑的映射。";
+        "用于临时降速的按键，默认左摇杆按下。每个映射独立保存，改这里只影响当前编辑的映射。";
 
     /// <summary>
     /// Every button the precision key can be bound to. <see cref="GamepadButton.Extra"/> is
@@ -137,6 +152,14 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     partial void OnResponseTimeChanged(float value) => ApplySettings();
 
+    partial void OnPrecisionScaleChanged(float value) => ApplySettings();
+
+    partial void OnPrecisionModeChanged(PrecisionMode value) => ApplySettings();
+
+    partial void OnScaleXChanged(float value) => ApplySettings();
+
+    partial void OnScaleYChanged(float value) => ApplySettings();
+
     partial void OnInvertYChanged(bool value) => ApplySettings();
 
     partial void OnPrecisionButtonChanged(GamepadButton value)
@@ -151,6 +174,9 @@ public partial class MouseSensitivityViewModel : ObservableObject
         ResponseTime = ResponseTime,
         PrecisionScale = PrecisionScale,
         PrecisionButton = PrecisionButton,
+        PrecisionMode = PrecisionMode,
+        ScaleX = ScaleX,
+        ScaleY = ScaleY,
         InvertY = InvertY,
     };
 
@@ -163,6 +189,9 @@ public partial class MouseSensitivityViewModel : ObservableObject
         ResponseTime = settings.ResponseTime;
         PrecisionScale = settings.PrecisionScale;
         PrecisionButton = settings.PrecisionButton;
+        PrecisionMode = settings.PrecisionMode;
+        ScaleX = settings.ScaleX;
+        ScaleY = settings.ScaleY;
         InvertY = settings.InvertY;
     }
 
@@ -215,6 +244,9 @@ public partial class MouseSensitivityViewModel : ObservableObject
         ResponseTime = 0.08f;
         PrecisionScale = 0.35f;
         PrecisionButton = GamepadButton.LeftStick;
+        PrecisionMode = PrecisionMode.Hold;
+        ScaleX = 1f;
+        ScaleY = 1f;
         InvertY = true;
     }
 

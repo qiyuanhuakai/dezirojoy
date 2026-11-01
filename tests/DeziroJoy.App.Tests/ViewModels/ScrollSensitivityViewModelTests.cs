@@ -151,4 +151,34 @@ public class ScrollSensitivityViewModelTests
         Assert.True(vm.CurrentRate > rateBefore * 0.5,
             $"changing a setting reset the smoothing state: {vm.CurrentRate} vs {rateBefore}");
     }
+
+    [Fact]
+    public void InvertY_Changes_The_Live_Preview_Direction()
+    {
+        var normal = new ScrollSensitivityViewModel
+        {
+            MaxTicksPerSecond = 64f,
+            DeadZone = 0f,
+            Curve = ResponseCurve.Linear,
+            CurveStrength = 0f,
+            ResponseTime = 0f,
+            IsLive = true,
+        };
+        var inverted = new ScrollSensitivityViewModel
+        {
+            MaxTicksPerSecond = 64f,
+            DeadZone = 0f,
+            Curve = ResponseCurve.Linear,
+            CurveStrength = 0f,
+            ResponseTime = 0f,
+            InvertY = true,
+            IsLive = true,
+        };
+
+        AdvanceMany(normal, 16);
+        AdvanceMany(inverted, 16);
+
+        Assert.NotEqual(0, normal.WheelOffset);
+        Assert.Equal(-normal.WheelOffset, inverted.WheelOffset, 6);
+    }
 }
