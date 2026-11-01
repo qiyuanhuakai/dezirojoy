@@ -9,5 +9,5 @@ public sealed class ElevationService : IElevationService
 
     public bool IsElevated => IsSupported && WindowsProcessElevation.IsElevated;
 
-    public bool RelaunchElevated() => IsSupported && WindowsProcessElevation.RelaunchElevated();
+    public bool RelaunchElevated(string? arguments) => IsSupported && WindowsProcessElevation.RelaunchElevated(arguments);
 }

@@ -9,8 +9,22 @@ using DeziroJoy.Core.Profiles;
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>
+/// Integrity level of the process that actually calls SendInput for mappings started from
+/// the main window. <see cref="Unknown"/> means the platform has no integrity-level concept
+/// - Linux injects through uinput, which UIPI does not gate - not that the query failed.
+/// </summary>
+public enum InjectorIntegrityLevel
+{
+    Unknown,
+
+    Medium,
+
+    Elevated,
+}
+
+/// <summary>
 /// Main window orchestration: connection state, profile editing, mapping table and
- /// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
+/// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
 /// only marshals host events onto the UI thread and calls <see cref="ApplySample"/>.
 /// </summary>
 public partial class MainWindowViewModel : ObservableObject
@@ -107,12 +121,16 @@ public partial class MainWindowViewModel : ObservableObject
     private bool _isEngineRunning;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ElevationStatusText))]
+    [NotifyPropertyChangedFor(nameof(InjectorDescription))]
+    [NotifyPropertyChangedFor(nameof(InjectorIntegrity))]
+    [NotifyPropertyChangedFor(nameof(InjectorStatusText))]
     [NotifyPropertyChangedFor(nameof(CanRelaunchElevated))]
     private bool _isElevationSupported;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ElevationStatusText))]
+    [NotifyPropertyChangedFor(nameof(InjectorDescription))]
+    [NotifyPropertyChangedFor(nameof(InjectorIntegrity))]
+    [NotifyPropertyChangedFor(nameof(InjectorStatusText))]
     [NotifyPropertyChangedFor(nameof(CanRelaunchElevated))]
     private bool _isElevated;
 
@@ -123,14 +141,46 @@ public partial class MainWindowViewModel : ObservableObject
     public bool CanRelaunchElevated => IsElevationSupported && !IsElevated;
 
     /// <summary>
-    /// Why elevated targets are or are not reachable. SendInput is subject to UIPI and
-    /// fails silently when blocked, so this is the only place the user can tell
-    /// "UIPI blocked me" from "it worked".
+    /// Command-line flag an elevated relaunch carries when mapping is running, so the
+    /// elevated copy can resume the user's intent. The startup path has to act on this
+    /// flag; until it does, the relaunch transmits the request but the elevated copy
+    /// still starts with mapping off.
     /// </summary>
-    public string ElevationStatusText => IsElevationSupported
+    public const string ResumeMappingArgument = "--resume-mapping";
+
+    /// <summary>
+    /// Which process actually injects mapped input, named together with its integrity
+    /// level. The GUI owns the <see cref="EngineHost"/> through <see cref="EngineComposition"/>
+    /// and that host's output sink calls SendInput inside this process, so the injector is
+    /// always the main window - never the resident daemon, whose scheduled-task run level
+    /// says nothing about what this window injects.
+    /// </summary>
+    public string InjectorDescription => IsElevationSupported
         ? IsElevated
-            ? "已以管理员身份运行：可向管理员权限的应用注入输入"
-            : "未提权：无法向以管理员身份运行的应用注入输入（UIPI 会静默拦截）"
+            ? "DeziroJoy 主窗口（已提权）"
+            : "DeziroJoy 主窗口（未提权）"
+        : "DeziroJoy 主窗口";
+
+    /// <summary>
+    /// Integrity level of that injector: what this process's Windows token actually holds,
+    /// or <see cref="InjectorIntegrityLevel.Unknown"/> where integrity levels do not apply.
+    /// </summary>
+    public InjectorIntegrityLevel InjectorIntegrity => IsElevationSupported
+        ? IsElevated
+            ? InjectorIntegrityLevel.Elevated
+            : InjectorIntegrityLevel.Medium
+        : InjectorIntegrityLevel.Unknown;
+
+    /// <summary>
+    /// What the injector's integrity level means for reach, stated plainly. SendInput is
+    /// subject to UIPI and fails silently when blocked, so this is the only place the user
+    /// can tell "UIPI dropped my input" from "it worked" - and the only hint that the
+    /// relaunch is the fix.
+    /// </summary>
+    public string InjectorStatusText => IsElevationSupported
+        ? IsElevated
+            ? "已提权：可向以管理员身份运行的应用注入输入"
+            : "未提权：向以管理员身份运行的应用注入的输入会被 UIPI 静默丢弃"
         : "当前平台不受 UIPI 限制，无需提权";
 
     /// <summary>
@@ -153,12 +203,16 @@ public partial class MainWindowViewModel : ObservableObject
 
     /// <summary>
     /// Relaunches the app elevated through the shell "runas" verb (one UAC prompt). The
-    /// manifest stays at asInvoker, so this is the only thing that ever elevates.
+    /// manifest stays at asInvoker, so this is the only thing that ever elevates. When
+    /// mapping is running the relaunch carries <see cref="ResumeMappingArgument"/> so the
+    /// elevated copy can pick the user's intent back up.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanRelaunchElevated))]
     private void RelaunchElevated()
     {
-        if (!_elevationService.RelaunchElevated())
+        var resume = IsEngineRunning ? ResumeMappingArgument : null;
+
+        if (!_elevationService.RelaunchElevated(resume))
         {
             // The UAC prompt was declined; keep running unelevated.
             return;

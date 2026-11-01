@@ -19,7 +19,9 @@ public interface IElevationService
 
     /// <summary>
     /// Relaunches this executable elevated through the shell "runas" verb, which shows the
-    /// UAC prompt. Returns false when the prompt is declined or elevation is unavailable.
+    /// UAC prompt. <paramref name="arguments"/> are carried into the elevated copy so it can
+    /// resume the caller's intent - for example mapping that was running when the user asked
+    /// to elevate. Returns false when the prompt is declined or elevation is unavailable.
     /// </summary>
-    bool RelaunchElevated();
+    bool RelaunchElevated(string? arguments);
 }
