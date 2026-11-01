@@ -73,10 +73,15 @@ jobs:
       # Linux builds carry no PE version resource and the .NET SDK appends +<sha> to
       # InformationalVersion, so the Windows ProductVersion prefix check has no Linux
       # equivalent. Verify the artefact is an ELF executable of the right architecture,
-      # then actually run the headless daemon: a binary whose native libraries fail to
-      # resolve exits immediately, while a healthy one is still running when timeout
-      # kills it, which is exit code 124.
-      - name: Smoke check the published binary (Linux)
+      # then actually run the headless daemon on x64: a binary whose native libraries fail to
+      # resolve exits immediately, while a healthy one is still running when timeout kills it,
+      # which is exit code 124.
+      #
+      # Two traps this step has to survive. GitHub's `bash` shell runs with -e, so the expected
+      # 124 from timeout would abort the script before it could be inspected - the call is
+      # therefore written to capture the code instead of failing. And an aarch64 binary cannot
+      # run on an x64 runner at all, so the run check is x64-only; arm64 is verified by the
+      # ELF/architecture check above, which is all a cross-published binary can prove here.      - name: Smoke check the published binary (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -92,8 +97,11 @@ jobs:
           echo "file: $got"
           echo "$got" | grep -q "ELF" || { echo "not an ELF binary"; exit 1; }
           echo "$got" | grep -q "$want" || { echo "wrong architecture, wanted $want"; exit 1; }
-          timeout 10 "$exe" --daemon > daemon.log 2>&1
-          code=$?
+          if [ "${{ matrix.rid }}" != "linux-x64" ]; then
+            echo "cross-compiled for $want, run check needs that architecture - skipped"
+            exit 0
+          fi
+          timeout 10 "$exe" --daemon > daemon.log 2>&1 && code=0 || code=$?
           echo "daemon exit code: $code"
           sed -n '1,20p' daemon.log
           if [ "$code" -ne 124 ]; then
