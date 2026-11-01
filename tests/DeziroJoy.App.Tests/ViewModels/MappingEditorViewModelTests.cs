@@ -348,7 +348,7 @@ public class MappingEditorViewModelTests
     [Fact]
     public void Reset_Clears_The_Gesture_Settings()
     {
-        var editor = new MappingEditorViewModel { SelectedGesture = GestureSlot.LongPress };
+        var editor = new MappingEditorViewModel { SelectedGestureKind = GestureKind.LongPress };
         editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
             o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
         editor.SelectedLongPressOption = editor.GestureActionOptions.First(
@@ -358,7 +358,7 @@ public class MappingEditorViewModelTests
 
         editor.Reset();
 
-        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.Equal(GestureKind.Click, editor.SelectedGestureKind);
         Assert.False(editor.HasDoubleClick);
         Assert.False(editor.HasLongPress);
         Assert.False(editor.HasClickRepeat);
@@ -523,7 +523,7 @@ public class MappingEditorViewModelTests
     {
         var editor = new MappingEditorViewModel();
 
-        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.Equal(GestureKind.Click, editor.SelectedGestureKind);
         Assert.True(editor.IsClickSelected);
         Assert.False(editor.IsDoubleClickSelected);
         Assert.False(editor.IsLongPressSelected);
@@ -534,19 +534,19 @@ public class MappingEditorViewModelTests
     {
         var editor = new MappingEditorViewModel();
 
-        editor.SelectedGesture = GestureSlot.DoubleClick;
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
 
         Assert.True(editor.IsDoubleClickSelected);
         Assert.False(editor.IsClickSelected);
         Assert.False(editor.IsLongPressSelected);
 
-        editor.SelectedGesture = GestureSlot.LongPress;
+        editor.SelectedGestureKind = GestureKind.LongPress;
 
         Assert.True(editor.IsLongPressSelected);
         Assert.False(editor.IsClickSelected);
         Assert.False(editor.IsDoubleClickSelected);
 
-        editor.SelectedGesture = GestureSlot.Click;
+        editor.SelectedGestureKind = GestureKind.Click;
 
         Assert.True(editor.IsClickSelected);
         Assert.False(editor.IsDoubleClickSelected);
@@ -556,11 +556,11 @@ public class MappingEditorViewModelTests
     [Fact]
     public void The_Switcher_Flags_Follow_The_Selection_Back()
     {
-        var editor = new MappingEditorViewModel { SelectedGesture = GestureSlot.LongPress };
+        var editor = new MappingEditorViewModel { SelectedGestureKind = GestureKind.LongPress };
 
         editor.IsClickSelected = true;
 
-        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.Equal(GestureKind.Click, editor.SelectedGestureKind);
         Assert.True(editor.IsClickSelected);
         Assert.False(editor.IsLongPressSelected);
     }
@@ -695,12 +695,12 @@ public class MappingEditorViewModelTests
     [Fact]
     public void Selecting_The_Long_Press_Switches_Click_Repeat_Off()
     {
-        var editor = new MappingEditorViewModel { SelectedGesture = GestureSlot.LongPress };
+        var editor = new MappingEditorViewModel { SelectedGestureKind = GestureKind.LongPress };
         editor.ClickRepeatEnabled = true;
 
-        Assert.Equal(GestureSlot.Click, editor.SelectedGesture);
+        Assert.Equal(GestureKind.Click, editor.SelectedGestureKind);
 
-        editor.SelectedGesture = GestureSlot.LongPress;
+        editor.SelectedGestureKind = GestureKind.LongPress;
 
         Assert.False(editor.ClickRepeatEnabled);
         Assert.True(editor.LongPressAvailable);
@@ -1439,5 +1439,257 @@ public class MappingEditorViewModelTests
         editor.TargetKind = MappingTargetKind.MouseButton;
 
         Assert.Equal(KeyModifiers.None, editor.Modifiers);
+    }
+
+    // ---- T17: three equal gesture slots -----------------------------------
+
+    [Fact]
+    public void The_Active_Slot_Follows_The_Selected_Gesture()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Same(editor.ClickSlot, editor.ActiveSlot);
+
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+
+        Assert.Same(editor.DoubleClickSlot, editor.ActiveSlot);
+
+        editor.SelectedGestureKind = GestureKind.LongPress;
+
+        Assert.Same(editor.LongPressSlot, editor.ActiveSlot);
+    }
+
+    [Fact]
+    public void Selecting_Each_Gesture_Keeps_Distinct_Drafts()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        editor.SelectedGestureKind = GestureKind.Click;
+        editor.ActiveSlot.TargetKind = MappingTargetKind.KeyCombo;
+        editor.ActiveSlot.SelectedKey = GamepadKey.C;
+        editor.ActiveSlot.ModifierCtrl = true;
+
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveSlot.SelectedKey = GamepadKey.Space;
+
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveSlot.TargetKind = MappingTargetKind.MouseButton;
+        editor.ActiveSlot.SelectedMouseButton = MouseButton.Right;
+
+        Assert.Equal(MappingTargetKind.KeyCombo, editor.ClickSlot.TargetKind);
+        Assert.Equal(GamepadKey.C, editor.ClickSlot.SelectedKey);
+        Assert.True(editor.ClickSlot.ModifierCtrl);
+
+        Assert.Equal(MappingTargetKind.KeyPress, editor.DoubleClickSlot.TargetKind);
+        Assert.Equal(GamepadKey.Space, editor.DoubleClickSlot.SelectedKey);
+
+        Assert.Equal(MappingTargetKind.MouseButton, editor.LongPressSlot.TargetKind);
+        Assert.Equal(MouseButton.Right, editor.LongPressSlot.SelectedMouseButton);
+    }
+
+    [Fact]
+    public void Every_Slot_Can_Choose_A_Combo_A_Single_Key_Or_No_Function()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        foreach (var slot in new[] { editor.ClickSlot, editor.DoubleClickSlot, editor.LongPressSlot })
+        {
+            slot.TargetKind = MappingTargetKind.KeyCombo;
+            slot.SelectedKey = GamepadKey.V;
+            slot.ModifierCtrl = true;
+            slot.ModifierShift = true;
+
+            Assert.Equal(
+                new KeyComboTarget(KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.V),
+                slot.BuildTarget());
+
+            slot.TargetKind = MappingTargetKind.KeyPress;
+            slot.SelectedKey = GamepadKey.F13;
+
+            Assert.Equal(new KeyPressTarget(GamepadKey.F13), slot.BuildTarget());
+
+            slot.IsNone = true;
+
+            Assert.IsType<NoneTarget>(slot.BuildTarget());
+            Assert.IsType<NoneTarget>(slot.BuildAction());
+        }
+    }
+
+    [Fact]
+    public void Switching_Slots_Restores_Each_Drafts_Values()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveSlot.SelectedKey = GamepadKey.Space;
+
+        editor.SelectedGestureKind = GestureKind.Click;
+        editor.ActiveSlot.SelectedKey = GamepadKey.Z;
+
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+
+        Assert.Same(editor.DoubleClickSlot, editor.ActiveSlot);
+        Assert.Equal(GamepadKey.Space, editor.ActiveSlot.SelectedKey);
+        Assert.Equal(GamepadKey.Space, editor.DoubleClickSlot.SelectedKey);
+        Assert.Equal(GamepadKey.Z, editor.ClickSlot.SelectedKey);
+    }
+
+    [Fact]
+    public void The_Click_Surface_And_Its_Draft_Stay_In_Step()
+    {
+        var editor = new MappingEditorViewModel();
+
+        editor.ClickSlot.TargetKind = MappingTargetKind.KeyCombo;
+        editor.ClickSlot.SelectedKey = GamepadKey.C;
+        editor.ClickSlot.ModifierCtrl = true;
+
+        Assert.Equal(MappingTargetKind.KeyCombo, editor.TargetKind);
+        Assert.Equal(GamepadKey.C, editor.SelectedKey);
+        Assert.True(editor.ModifierCtrl);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), editor.BuildTarget());
+
+        editor.TargetKind = MappingTargetKind.KeyPress;
+
+        Assert.Equal(MappingTargetKind.KeyPress, editor.ClickSlot.TargetKind);
+        Assert.False(editor.ClickSlot.ModifierCtrl);
+    }
+
+    [Fact]
+    public void The_Picker_And_The_Slot_Draft_Agree()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        editor.SelectedDoubleClickOption = editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), editor.DoubleClickSlot.BuildAction());
+        Assert.Equal(GamepadKey.Space, editor.DoubleClickSlot.SelectedKey);
+
+        editor.SelectedLongPressOption = editor.GestureActionOptions.First(o => o.Label == "重复单击的功能");
+
+        Assert.True(editor.LongPressSlot.RepeatsClick);
+        Assert.Null(editor.LongPressSlot.BuildAction());
+    }
+
+    [Fact]
+    public void Committing_A_NoneTarget_Gesture_Action_Never_Silently_Changes_The_Slot()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        editor.DoubleClickSlot.IsNone = true;
+        editor.LongPressSlot.IsNone = true;
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.IsType<NoneTarget>(gesture.DoubleClickAction);
+        Assert.IsType<NoneTarget>(gesture.LongPressAction);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(editor.BuildEntry());
+
+        Assert.IsType<NoneTarget>(reloaded.DoubleClickAction);
+        Assert.IsType<NoneTarget>(reloaded.LongPressAction);
+        Assert.True(reloaded.DoubleClickSlot.IsNone);
+        Assert.True(reloaded.LongPressSlot.IsNone);
+    }
+
+    [Fact]
+    public void Click_Repeat_And_The_Long_Press_Stay_Mutually_Exclusive_Through_The_Slots()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.ClickRepeatEnabled = true;
+
+        // Editing the long-press draft switches auto-repeat back off.
+        editor.LongPressSlot.SelectedKey = GamepadKey.F13;
+
+        Assert.False(editor.ClickRepeatEnabled);
+        Assert.True(editor.HasLongPress);
+        Assert.Equal(new KeyPressTarget(GamepadKey.F13), editor.LongPressAction);
+
+        // And switching auto-repeat back on drops the long-press rather than leaving it
+        // configured into silence.
+        editor.ClickRepeatEnabled = true;
+
+        Assert.False(editor.LongPressAvailable);
+        Assert.False(editor.HasLongPress);
+        Assert.Null(editor.LongPressAction);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, gesture.ClickRepeatInterval);
+        Assert.Equal(0f, gesture.LongPressThreshold);
+        Assert.Null(gesture.LongPressAction);
+    }
+
+    [Fact]
+    public void A_Loaded_Legacy_Gesture_With_Null_Actions_Still_Re_Fires_The_Click()
+    {
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                    LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(entry);
+
+        Assert.True(editor.HasDoubleClick);
+        Assert.True(editor.HasLongPress);
+        Assert.Null(editor.DoubleClickAction);
+        Assert.Null(editor.LongPressAction);
+        Assert.True(editor.DoubleClickSlot.RepeatsClick);
+        Assert.True(editor.LongPressSlot.RepeatsClick);
+        Assert.Equal("重复单击的功能", editor.DoubleClickActionDescription);
+        Assert.Equal("重复单击的功能", editor.LongPressActionDescription);
+
+        var gesture = Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Null(gesture.DoubleClickAction);
+        Assert.Null(gesture.LongPressAction);
+    }
+
+    [Fact]
+    public void BuildEntry_Commits_All_Three_Slots_Into_One_Entry()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SelectedButton = GamepadButton.X,
+            TargetKind = MappingTargetKind.KeyCombo,
+            SelectedKey = GamepadKey.C,
+            ModifierCtrl = true,
+        };
+
+        editor.DoubleClickSlot.SelectedKey = GamepadKey.Space;
+        editor.LongPressSlot.TargetKind = MappingTargetKind.MouseButton;
+        editor.LongPressSlot.SelectedMouseButton = MouseButton.Right;
+
+        var entry = editor.BuildEntry();
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), entry.Target);
+
+        var gesture = Assert.IsType<ButtonBinding>(entry.Source).Gesture;
+
+        Assert.NotNull(gesture);
+        Assert.Equal(ButtonGesture.DefaultDoubleClickWindow, gesture.DoubleClickWindow);
+        Assert.Equal(ButtonGesture.DefaultLongPressThreshold, gesture.LongPressThreshold);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), gesture.DoubleClickAction);
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), gesture.LongPressAction);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(entry);
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), reloaded.BuildEntry().Target);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), reloaded.DoubleClickAction);
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), reloaded.LongPressAction);
     }
 }

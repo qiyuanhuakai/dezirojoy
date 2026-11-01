@@ -7,18 +7,6 @@ using DeziroJoy.Core.Mapping;
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>
-/// Which gesture the editor is configuring. The three are equal peers reached through one
-/// switcher: the click is the mapping's own target, the double-click and the long-press are
-/// the two gestures a button can carry on top of it.
-/// </summary>
-public enum GestureSlot
-{
-    Click,
-    DoubleClick,
-    LongPress,
-}
-
-/// <summary>
 /// A row in a gesture-action picker: the label to show and the target it stands for. A gesture
 /// action is an ordinary <see cref="MappingTarget"/> - the same type a mapping's target uses -
 /// so a double-click or long-press can fire a key, a combo or a mouse button exactly like the
@@ -115,6 +103,13 @@ public partial class MappingEditorViewModel : ObservableObject
         RebuildButtonOptions();
         RebuildKeyOptions();
 
+        // Every draft is its own object, so the switcher moves between the three gestures
+        // without any of them losing an edit; the editor keeps the pickers and the readouts
+        // in step with whatever the drafts hold.
+        ClickSlot.PropertyChanged += (_, e) => OnClickSlotChanged(e.PropertyName);
+        DoubleClickSlot.PropertyChanged += (_, _) => OnDoubleClickSlotChanged();
+        LongPressSlot.PropertyChanged += (_, _) => OnLongPressSlotChanged();
+
         // A fresh editor has both gestures off, so both pickers open on the 已关闭 row rather
         // than on an empty selection.
         SyncDoubleClickOption();
@@ -133,11 +128,36 @@ public partial class MappingEditorViewModel : ObservableObject
     [ObservableProperty]
     private GamepadStick _selectedStick = GamepadStick.Right;
 
-    [ObservableProperty]
-    private MappingTargetKind _targetKind = MappingTargetKind.KeyPress;
+    /// <summary>
+    /// The draft for the click: the mapping's own target. The double-click and the long-press
+    /// drafts are edited through the same fields, so the switcher moves between three equal
+    /// peers without any of them losing an edit.
+    /// </summary>
+    public GestureSlotEditor ClickSlot { get; } = new();
+
+    /// <summary>The draft for the double-click gesture.</summary>
+    public GestureSlotEditor DoubleClickSlot { get; } = new();
+
+    /// <summary>The draft for the long-press gesture.</summary>
+    public GestureSlotEditor LongPressSlot { get; } = new();
+
+    /// <summary>The draft the switcher has selected, for a view that binds one set of fields.</summary>
+    public GestureSlotEditor ActiveSlot => SelectedGestureKind switch
+    {
+        GestureKind.DoubleClick => DoubleClickSlot,
+        GestureKind.LongPress => LongPressSlot,
+        _ => ClickSlot,
+    };
 
     [ObservableProperty]
     private IReadOnlyList<MappingTargetKind> _availableTargetKinds = AllTargetKinds;
+
+    /// <summary>The click's target kind, edited on <see cref="ClickSlot"/>.</summary>
+    public MappingTargetKind TargetKind
+    {
+        get => ClickSlot.TargetKind;
+        set => ClickSlot.TargetKind = value;
+    }
 
     /// <summary>
     /// Direction for the two cross combinations. Ignored elsewhere, where a direction is
@@ -153,10 +173,11 @@ public partial class MappingEditorViewModel : ObservableObject
     /// long-press are reached through the same switcher rather than buried as extras.
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActiveSlot))]
     [NotifyPropertyChangedFor(nameof(IsClickSelected))]
     [NotifyPropertyChangedFor(nameof(IsDoubleClickSelected))]
     [NotifyPropertyChangedFor(nameof(IsLongPressSelected))]
-    private GestureSlot _selectedGesture = GestureSlot.Click;
+    private GestureKind _selectedGestureKind = GestureKind.Click;
 
     /// <summary>True when the double-click gesture resolves. Its timing is the pinned default.</summary>
     [ObservableProperty]
@@ -178,8 +199,11 @@ public partial class MappingEditorViewModel : ObservableObject
     /// True when the click itself is set to 无功能: the mapping's own target becomes a
     /// <see cref="NoneTarget"/>, so a plain press emits nothing.
     /// </summary>
-    [ObservableProperty]
-    private bool _clickIsNone;
+    public bool ClickIsNone
+    {
+        get => ClickSlot.IsNone;
+        set => ClickSlot.IsNone = value;
+    }
 
     /// <summary>
     /// Seconds between long-press activations while the button is held. No longer
@@ -199,38 +223,77 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>
     /// What the double-click emits. Null leaves the double-click without a function of its own,
     /// so it re-fires the mapping's target - the behaviour every profile written before this
-    /// field existed already has.
+    /// field existed already has. A disabled gesture carries no action either, so an off
+    /// double-click never writes a dormant target into the profile.
     /// </summary>
-    [ObservableProperty]
-    private MappingTarget? _doubleClickAction;
+    public MappingTarget? DoubleClickAction
+    {
+        get => DoubleClickEnabled ? DoubleClickSlot.BuildAction() : null;
+        set => DoubleClickSlot.LoadAction(value);
+    }
 
     /// <summary>What the long-press emits, and what auto-repeat re-fires. Null behaves as above.</summary>
-    [ObservableProperty]
-    private MappingTarget? _longPressAction;
+    public MappingTarget? LongPressAction
+    {
+        get => LongPressEnabled ? LongPressSlot.BuildAction() : null;
+        set => LongPressSlot.LoadAction(value);
+    }
 
-    [ObservableProperty]
-    private GamepadKey _selectedKey = GamepadKey.Enter;
+    /// <summary>The click's target key, edited on <see cref="ClickSlot"/>.</summary>
+    public GamepadKey SelectedKey
+    {
+        get => ClickSlot.SelectedKey;
+        set => ClickSlot.SelectedKey = value;
+    }
 
-    [ObservableProperty]
-    private bool _modifierCtrl;
+    /// <summary>The click's Ctrl modifier, edited on <see cref="ClickSlot"/>.</summary>
+    public bool ModifierCtrl
+    {
+        get => ClickSlot.ModifierCtrl;
+        set => ClickSlot.ModifierCtrl = value;
+    }
 
-    [ObservableProperty]
-    private bool _modifierShift;
+    /// <summary>The click's Shift modifier, edited on <see cref="ClickSlot"/>.</summary>
+    public bool ModifierShift
+    {
+        get => ClickSlot.ModifierShift;
+        set => ClickSlot.ModifierShift = value;
+    }
 
-    [ObservableProperty]
-    private bool _modifierAlt;
+    /// <summary>The click's Alt modifier, edited on <see cref="ClickSlot"/>.</summary>
+    public bool ModifierAlt
+    {
+        get => ClickSlot.ModifierAlt;
+        set => ClickSlot.ModifierAlt = value;
+    }
 
-    [ObservableProperty]
-    private bool _modifierWin;
+    /// <summary>The click's Win modifier, edited on <see cref="ClickSlot"/>.</summary>
+    public bool ModifierWin
+    {
+        get => ClickSlot.ModifierWin;
+        set => ClickSlot.ModifierWin = value;
+    }
 
-    [ObservableProperty]
-    private MouseButton _selectedMouseButton = MouseButton.Left;
+    /// <summary>The click's mouse button, edited on <see cref="ClickSlot"/>.</summary>
+    public MouseButton SelectedMouseButton
+    {
+        get => ClickSlot.SelectedMouseButton;
+        set => ClickSlot.SelectedMouseButton = value;
+    }
 
-    [ObservableProperty]
-    private MouseStickSettings _mouseSettings = new();
+    /// <summary>The click's stick-to-mouse settings, edited on <see cref="ClickSlot"/>.</summary>
+    public MouseStickSettings MouseSettings
+    {
+        get => ClickSlot.MouseSettings;
+        set => ClickSlot.MouseSettings = value;
+    }
 
-    [ObservableProperty]
-    private ScrollStickSettings _scrollSettings = new();
+    /// <summary>The click's stick-to-wheel settings, edited on <see cref="ClickSlot"/>.</summary>
+    public ScrollStickSettings ScrollSettings
+    {
+        get => ClickSlot.ScrollSettings;
+        set => ClickSlot.ScrollSettings = value;
+    }
 
     [ObservableProperty]
     private bool _isCapturingButton;
@@ -333,41 +396,41 @@ public partial class MappingEditorViewModel : ObservableObject
         var action => MappingDescriptions.Target(action),
     };
 
-    /// <summary>The switcher flag for the click, kept in step with <see cref="SelectedGesture"/>.</summary>
+    /// <summary>The switcher flag for the click, kept in step with <see cref="SelectedGestureKind"/>.</summary>
     public bool IsClickSelected
     {
-        get => SelectedGesture == GestureSlot.Click;
+        get => SelectedGestureKind == GestureKind.Click;
         set
         {
             if (value)
             {
-                SelectedGesture = GestureSlot.Click;
+                SelectedGestureKind = GestureKind.Click;
             }
         }
     }
 
-    /// <summary>The switcher flag for the double-click, kept in step with <see cref="SelectedGesture"/>.</summary>
+    /// <summary>The switcher flag for the double-click, kept in step with <see cref="SelectedGestureKind"/>.</summary>
     public bool IsDoubleClickSelected
     {
-        get => SelectedGesture == GestureSlot.DoubleClick;
+        get => SelectedGestureKind == GestureKind.DoubleClick;
         set
         {
             if (value)
             {
-                SelectedGesture = GestureSlot.DoubleClick;
+                SelectedGestureKind = GestureKind.DoubleClick;
             }
         }
     }
 
-    /// <summary>The switcher flag for the long-press, kept in step with <see cref="SelectedGesture"/>.</summary>
+    /// <summary>The switcher flag for the long-press, kept in step with <see cref="SelectedGestureKind"/>.</summary>
     public bool IsLongPressSelected
     {
-        get => SelectedGesture == GestureSlot.LongPress;
+        get => SelectedGestureKind == GestureKind.LongPress;
         set
         {
             if (value)
             {
-                SelectedGesture = GestureSlot.LongPress;
+                SelectedGestureKind = GestureKind.LongPress;
             }
         }
     }
@@ -487,34 +550,8 @@ public partial class MappingEditorViewModel : ObservableObject
         }
     }
 
-    public KeyModifiers Modifiers
-    {
-        get
-        {
-            var modifiers = KeyModifiers.None;
-            if (ModifierCtrl)
-            {
-                modifiers |= KeyModifiers.Ctrl;
-            }
-
-            if (ModifierShift)
-            {
-                modifiers |= KeyModifiers.Shift;
-            }
-
-            if (ModifierAlt)
-            {
-                modifiers |= KeyModifiers.Alt;
-            }
-
-            if (ModifierWin)
-            {
-                modifiers |= KeyModifiers.Win;
-            }
-
-            return modifiers;
-        }
-    }
+    /// <summary>The click's modifiers, read from <see cref="ClickSlot"/>.</summary>
+    public KeyModifiers Modifiers => ClickSlot.Modifiers;
 
     /// <summary>
     /// The selected picker row for the target key. A category header is a label, not a choice,
@@ -596,17 +633,7 @@ public partial class MappingEditorViewModel : ObservableObject
         };
     }
 
-    public MappingTarget BuildTarget() => ClickIsNone
-        ? new NoneTarget()
-        : TargetKind switch
-        {
-            MappingTargetKind.KeyPress => new KeyPressTarget(SelectedKey),
-            MappingTargetKind.KeyCombo => new KeyComboTarget(Modifiers, SelectedKey),
-            MappingTargetKind.MouseButton => new MouseButtonTarget(SelectedMouseButton),
-            MappingTargetKind.MouseMove => new MouseMoveTarget(MouseSettings),
-            MappingTargetKind.WheelScroll => new WheelScrollTarget(ScrollSettings),
-            _ => new KeyPressTarget(SelectedKey),
-        };
+    public MappingTarget BuildTarget() => ClickSlot.BuildTarget();
 
     public MappingEntry BuildEntry() => new()
     {
@@ -655,37 +682,9 @@ public partial class MappingEditorViewModel : ObservableObject
                 break;
         }
 
-        switch (entry.Target)
-        {
-            case KeyPressTarget key:
-                TargetKind = MappingTargetKind.KeyPress;
-                SelectedKey = key.Key;
-                break;
-            case KeyComboTarget combo:
-                TargetKind = MappingTargetKind.KeyCombo;
-                SelectedKey = combo.Key;
-                ModifierCtrl = combo.Modifiers.HasFlag(KeyModifiers.Ctrl);
-                ModifierShift = combo.Modifiers.HasFlag(KeyModifiers.Shift);
-                ModifierAlt = combo.Modifiers.HasFlag(KeyModifiers.Alt);
-                ModifierWin = combo.Modifiers.HasFlag(KeyModifiers.Win);
-                break;
-            case MouseButtonTarget mouseButton:
-                TargetKind = MappingTargetKind.MouseButton;
-                SelectedMouseButton = mouseButton.Button;
-                break;
-            case MouseMoveTarget mouseMove:
-                TargetKind = MappingTargetKind.MouseMove;
-                MouseSettings = mouseMove.Settings;
-                break;
-            case WheelScrollTarget wheelScroll:
-                TargetKind = MappingTargetKind.WheelScroll;
-                ScrollSettings = wheelScroll.Settings;
-                break;
-            case NoneTarget:
-                ClickIsNone = true;
-                TargetKind = MappingTargetKind.KeyPress;
-                break;
-        }
+        // The click draft takes the mapping's own target; the two gesture drafts were filled
+        // from the button's gesture above.
+        ClickSlot.LoadAction(entry.Target);
     }
 
     public void Reset()
@@ -699,25 +698,21 @@ public partial class MappingEditorViewModel : ObservableObject
         SelectedButton = GamepadButton.A;
         SelectedExtraCode = 0;
         SelectedStick = GamepadStick.Right;
-        TargetKind = MappingTargetKind.KeyPress;
-        SelectedKey = GamepadKey.Enter;
         SelectedDirection = InputDirection.Up;
-        SelectedGesture = GestureSlot.Click;
+        SelectedGestureKind = GestureKind.Click;
+
+        // The drafts go back to pristine first; the gesture flags and actions follow, so a
+        // reset gesture ends up off rather than carrying a dormant target.
+        ClickSlot.Reset();
+        DoubleClickSlot.Reset();
+        LongPressSlot.Reset();
         DoubleClickEnabled = false;
         LongPressEnabled = false;
         ClickRepeatEnabled = false;
-        ClickIsNone = false;
         LongPressRepeatInterval = 0f;
         ClickRepeatInterval = 0f;
         DoubleClickAction = null;
         LongPressAction = null;
-        ModifierCtrl = false;
-        ModifierShift = false;
-        ModifierAlt = false;
-        ModifierWin = false;
-        SelectedMouseButton = MouseButton.Left;
-        MouseSettings = new MouseStickSettings();
-        ScrollSettings = new ScrollStickSettings();
     }
 
     /// <summary>
@@ -887,28 +882,11 @@ public partial class MappingEditorViewModel : ObservableObject
     partial void OnSelectedStickChanged(GamepadStick value)
         => OnPropertyChanged(nameof(SourceDescription));
 
-    partial void OnTargetKindChanged(MappingTargetKind value)
-    {
-        OnPropertyChanged(nameof(TargetDescription));
-        OnPropertyChanged(nameof(NeedsDirection));
-        OnPropertyChanged(nameof(ShowDirectionPicker));
-
-        // A combo is the only shape that reads the modifier flags, so leaving it must clear
-        // them; otherwise a stale Ctrl would resurface the next time a combo is chosen.
-        if (value != MappingTargetKind.KeyCombo)
-        {
-            ModifierCtrl = false;
-            ModifierShift = false;
-            ModifierAlt = false;
-            ModifierWin = false;
-        }
-    }
-
-    partial void OnSelectedGestureChanged(GestureSlot value)
+    partial void OnSelectedGestureKindChanged(GestureKind value)
     {
         // Selecting the long-press switches auto-repeat off: the two are mutually exclusive,
         // so the long-press branch is only ever reachable with auto-repeat disarmed.
-        if (value == GestureSlot.LongPress)
+        if (value == GestureKind.LongPress)
         {
             ClickRepeatEnabled = false;
         }
@@ -923,9 +901,9 @@ public partial class MappingEditorViewModel : ObservableObject
             LongPressEnabled = false;
             LongPressAction = null;
 
-            if (SelectedGesture == GestureSlot.LongPress)
+            if (SelectedGestureKind == GestureKind.LongPress)
             {
-                SelectedGesture = GestureSlot.Click;
+                SelectedGestureKind = GestureKind.Click;
             }
         }
 
@@ -954,28 +932,78 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(HasAnyGesture));
     }
 
-    partial void OnDoubleClickActionChanged(MappingTarget? value)
+    /// <summary>
+    /// Keeps the click surface in step with its draft: the same notifications the old
+    /// per-field handlers raised, now driven by the draft the fields live on.
+    /// </summary>
+    private void OnClickSlotChanged(string? name)
     {
-        // An action with no gesture can never resolve, so choosing one enables it.
-        if (value is not null)
+        switch (name)
+        {
+            case nameof(GestureSlotEditor.TargetKind):
+                OnPropertyChanged(nameof(TargetKind));
+                OnPropertyChanged(nameof(TargetDescription));
+                OnPropertyChanged(nameof(NeedsDirection));
+                OnPropertyChanged(nameof(ShowDirectionPicker));
+                break;
+            case nameof(GestureSlotEditor.SelectedKey):
+                SetSelectedKeyOption(CurrentKeyOption());
+                OnPropertyChanged(nameof(SelectedKey));
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+            case nameof(GestureSlotEditor.ModifierCtrl):
+            case nameof(GestureSlotEditor.ModifierShift):
+            case nameof(GestureSlotEditor.ModifierAlt):
+            case nameof(GestureSlotEditor.ModifierWin):
+                OnPropertyChanged(name);
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+            case nameof(GestureSlotEditor.SelectedMouseButton):
+                OnPropertyChanged(nameof(SelectedMouseButton));
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+            case nameof(GestureSlotEditor.MouseSettings):
+                OnPropertyChanged(nameof(MouseSettings));
+                break;
+            case nameof(GestureSlotEditor.ScrollSettings):
+                OnPropertyChanged(nameof(ScrollSettings));
+                break;
+            case nameof(GestureSlotEditor.IsNone):
+            case nameof(GestureSlotEditor.Function):
+                OnPropertyChanged(nameof(ClickIsNone));
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Keeps the double-click surface in step with its draft. An action with no gesture can
+    /// never resolve, so a draft that gained a function of its own enables the gesture.
+    /// </summary>
+    private void OnDoubleClickSlotChanged()
+    {
+        if (DoubleClickSlot.BuildAction() is not null)
         {
             DoubleClickEnabled = true;
         }
 
         SyncDoubleClickOption();
+        OnPropertyChanged(nameof(DoubleClickAction));
         OnPropertyChanged(nameof(HasDoubleClickAction));
         OnPropertyChanged(nameof(DoubleClickActionDescription));
     }
 
-    partial void OnLongPressActionChanged(MappingTarget? value)
+    /// <summary>Keeps the long-press surface in step with its draft, as the double-click does.</summary>
+    private void OnLongPressSlotChanged()
     {
-        if (value is not null)
+        if (LongPressSlot.BuildAction() is not null)
         {
             LongPressEnabled = true;
             ClickRepeatEnabled = false;
         }
 
         SyncLongPressOption();
+        OnPropertyChanged(nameof(LongPressAction));
         OnPropertyChanged(nameof(HasLongPressAction));
         OnPropertyChanged(nameof(LongPressActionDescription));
     }
@@ -993,23 +1021,6 @@ public partial class MappingEditorViewModel : ObservableObject
         LongPressEnabled = false;
         LongPressAction = null;
     }
-
-    partial void OnSelectedKeyChanged(GamepadKey value)
-    {
-        SetSelectedKeyOption(CurrentKeyOption());
-        OnPropertyChanged(nameof(TargetDescription));
-    }
-
-    partial void OnModifierCtrlChanged(bool value) => OnPropertyChanged(nameof(TargetDescription));
-
-    partial void OnModifierShiftChanged(bool value) => OnPropertyChanged(nameof(TargetDescription));
-
-    partial void OnModifierAltChanged(bool value) => OnPropertyChanged(nameof(TargetDescription));
-
-    partial void OnModifierWinChanged(bool value) => OnPropertyChanged(nameof(TargetDescription));
-
-    partial void OnSelectedMouseButtonChanged(MouseButton value)
-        => OnPropertyChanged(nameof(TargetDescription));
 
     partial void OnIsCapturingButtonChanged(bool value)
         => OnPropertyChanged(nameof(CaptureButtonLabel));

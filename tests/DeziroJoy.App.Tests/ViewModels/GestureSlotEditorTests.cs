@@ -1,0 +1,144 @@
+using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
+using Xunit;
+
+namespace DeziroJoy.App.Tests.ViewModels;
+
+public class GestureSlotEditorTests
+{
+    [Fact]
+    public void A_Pristine_Draft_Builds_A_Key_Press()
+    {
+        var slot = new GestureSlotEditor();
+
+        Assert.Equal(MappingTargetKind.KeyPress, slot.TargetKind);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Enter), slot.BuildTarget());
+        Assert.Equal(new KeyPressTarget(GamepadKey.Enter), slot.BuildAction());
+    }
+
+    [Fact]
+    public void Loading_A_Null_Action_Leaves_The_Slot_Re_Firing_The_Click()
+    {
+        var slot = new GestureSlotEditor();
+
+        slot.LoadAction(null);
+
+        Assert.True(slot.RepeatsClick);
+        Assert.Null(slot.BuildAction());
+    }
+
+    [Fact]
+    public void Loading_No_Function_Is_Explicit_And_Round_Trips()
+    {
+        var slot = new GestureSlotEditor();
+
+        slot.LoadAction(new NoneTarget());
+
+        Assert.True(slot.IsNone);
+        Assert.IsType<NoneTarget>(slot.BuildAction());
+
+        var reloaded = new GestureSlotEditor();
+        reloaded.LoadAction(slot.BuildAction());
+
+        Assert.True(reloaded.IsNone);
+        Assert.IsType<NoneTarget>(reloaded.BuildAction());
+    }
+
+    [Fact]
+    public void Loading_Each_Target_Kind_Fills_The_Matching_Fields()
+    {
+        var slot = new GestureSlotEditor();
+
+        slot.LoadAction(new KeyPressTarget(GamepadKey.Space));
+
+        Assert.Equal(MappingTargetKind.KeyPress, slot.TargetKind);
+        Assert.Equal(GamepadKey.Space, slot.SelectedKey);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), slot.BuildTarget());
+
+        slot.LoadAction(new KeyComboTarget(KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.C));
+
+        Assert.Equal(MappingTargetKind.KeyCombo, slot.TargetKind);
+        Assert.Equal(GamepadKey.C, slot.SelectedKey);
+        Assert.True(slot.ModifierCtrl);
+        Assert.True(slot.ModifierShift);
+        Assert.False(slot.ModifierAlt);
+        Assert.Equal(KeyModifiers.Ctrl | KeyModifiers.Shift, slot.Modifiers);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.C), slot.BuildTarget());
+
+        slot.LoadAction(new MouseButtonTarget(MouseButton.Right));
+
+        Assert.Equal(MappingTargetKind.MouseButton, slot.TargetKind);
+        Assert.Equal(MouseButton.Right, slot.SelectedMouseButton);
+        Assert.Equal(new MouseButtonTarget(MouseButton.Right), slot.BuildTarget());
+
+        var settings = new MouseStickSettings { MaxSpeed = 2200f };
+        slot.LoadAction(new MouseMoveTarget(settings));
+
+        Assert.Equal(MappingTargetKind.MouseMove, slot.TargetKind);
+        Assert.Equal(2200f, slot.MouseSettings.MaxSpeed);
+        Assert.Equal(new MouseMoveTarget(settings), slot.BuildTarget());
+
+        var scroll = new ScrollStickSettings { MaxTicksPerSecond = 20f };
+        slot.LoadAction(new WheelScrollTarget(scroll));
+
+        Assert.Equal(MappingTargetKind.WheelScroll, slot.TargetKind);
+        Assert.Equal(20f, slot.ScrollSettings.MaxTicksPerSecond);
+        Assert.Equal(new WheelScrollTarget(scroll), slot.BuildTarget());
+    }
+
+    [Fact]
+    public void Leaving_A_Combo_Clears_The_Modifiers()
+    {
+        var slot = new GestureSlotEditor
+        {
+            TargetKind = MappingTargetKind.KeyCombo,
+            ModifierCtrl = true,
+            ModifierWin = true,
+        };
+
+        slot.TargetKind = MappingTargetKind.KeyPress;
+
+        Assert.Equal(KeyModifiers.None, slot.Modifiers);
+    }
+
+    [Fact]
+    public void Editing_A_Field_Gives_A_Re_Firing_Slot_A_Function_Of_Its_Own()
+    {
+        var slot = new GestureSlotEditor();
+        slot.LoadAction(null);
+
+        slot.SelectedKey = GamepadKey.F13;
+
+        Assert.False(slot.RepeatsClick);
+        Assert.Equal(new KeyPressTarget(GamepadKey.F13), slot.BuildAction());
+    }
+
+    [Fact]
+    public void No_Function_Is_Not_Overridden_By_A_Field_Edit()
+    {
+        var slot = new GestureSlotEditor();
+        slot.LoadAction(new NoneTarget());
+
+        slot.SelectedKey = GamepadKey.F13;
+
+        Assert.True(slot.IsNone);
+        Assert.IsType<NoneTarget>(slot.BuildAction());
+    }
+
+    [Fact]
+    public void Reset_Returns_The_Draft_To_Its_Defaults()
+    {
+        var slot = new GestureSlotEditor();
+        slot.LoadAction(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C));
+
+        slot.Reset();
+
+        Assert.Equal(MappingTargetKind.KeyPress, slot.TargetKind);
+        Assert.Equal(GamepadKey.Enter, slot.SelectedKey);
+        Assert.Equal(KeyModifiers.None, slot.Modifiers);
+        Assert.False(slot.IsNone);
+        Assert.False(slot.RepeatsClick);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Enter), slot.BuildTarget());
+    }
+}

@@ -599,7 +599,7 @@ public sealed class GamepadModelEditorTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(GestureSlot.DoubleClick, viewModel.Editor.SelectedGesture);
+        Assert.Equal(GestureKind.DoubleClick, viewModel.Editor.SelectedGestureKind);
         Assert.True(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
         Assert.False(window.FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
 
@@ -607,7 +607,7 @@ public sealed class GamepadModelEditorTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(GestureSlot.LongPress, viewModel.Editor.SelectedGesture);
+        Assert.Equal(GestureKind.LongPress, viewModel.Editor.SelectedGestureKind);
         Assert.True(window.FindControl<StackPanel>("GestureLongPressBranch")!.IsVisible);
         Assert.False(window.FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
     }
