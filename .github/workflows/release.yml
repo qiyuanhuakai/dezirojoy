@@ -110,7 +110,7 @@ jobs:
             exit 1
           fi
 
-      - name: Zip
+      - name: Zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: >
@@ -119,13 +119,22 @@ jobs:
           -DestinationPath DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip
           -CompressionLevel Optimal
 
-      - name: Zip
+      # The zip step used to shell out to the `zip` binary, which is not present on the
+      # ubuntu-latest runner image. It failed silently - `set -e` aborted the step before
+      # anything was printed - and the failure only surfaced 11 seconds later as
+      # "sha256sum: ... No such file or directory". Compressing through the .NET SDK that
+      # just published the binaries keeps the step dependent on nothing but dotnet.
+      - name: Zip (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          cd "publish/${{ matrix.rid }}"
-          zip -q -r -9 "../DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip" .
-          cd -
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          rid='${{ matrix.rid }}'
+          out="DeziroJoy-${version}-${rid}.zip"
+          dotnet run --project tools/ZipPack -c Release -- "publish/${rid}" "$out"
+          test -s "$out" || { echo "no zip produced"; exit 1; }
+          ls -la "$out"
 
       - name: Checksum
         shell: bash
