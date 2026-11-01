@@ -53,6 +53,11 @@ public sealed class GamepadModelEditorTests
         window.MouseUp(point, Avalonia.Input.MouseButton.Left);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
+
+        // The settings' Esc/Enter handler is a window-level KeyDown handler reached by
+        // bubbling, so the window must hold focus or a later KeyPress is swallowed.
+        window.Focus();
+        Dispatcher.UIThread.RunJobs();
     }
 
     private static readonly string[] ExpectedKeyCategories =
