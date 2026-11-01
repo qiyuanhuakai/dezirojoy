@@ -655,7 +655,12 @@ public partial class MainWindowViewModel : ObservableObject
 
         if (controllers.Count == 0)
         {
-            if (ActiveController is not null)
+            // A pad that was here and is gone now is not the same as one never plugged in: the
+            // wireless idle timer fires silently after 15 idle minutes and no public API can
+            // prevent it, so "connect a gamepad" would be misleading for a pad that is asleep.
+            var wasConnected = ActiveController is not null;
+
+            if (wasConnected)
             {
                 ActiveController = null;
                 ActiveProfile = null;
@@ -665,7 +670,7 @@ public partial class MainWindowViewModel : ObservableObject
             }
 
             HasController = false;
-            RefreshStatus();
+            RefreshStatus(wasConnected);
             Visualizer.SetConnected(false);
             return;
         }
@@ -678,11 +683,13 @@ public partial class MainWindowViewModel : ObservableObject
         Visualizer.SetConnected(true);
     }
 
-    private void RefreshStatus()
+    private void RefreshStatus(bool wasConnected = false)
     {
         if (ActiveController is null)
         {
-            StatusMessage = "未检测到手柄，请连接手柄";
+            StatusMessage = wasConnected
+                ? "手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接"
+                : "未检测到手柄，请连接手柄";
             return;
         }
 

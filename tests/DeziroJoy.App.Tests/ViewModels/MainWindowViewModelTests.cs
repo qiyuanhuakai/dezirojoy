@@ -270,6 +270,24 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public void A_Gamepad_That_Disappears_Reports_Asleep_Not_Never_Connected()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        vm.SyncControllers();
+        Assert.True(vm.HasController);
+
+        provider.Remove("xinput:0");
+        vm.SyncControllers();
+
+        Assert.False(vm.HasController);
+        Assert.Contains("已断开连接", vm.StatusMessage);
+        Assert.Contains("休眠", vm.StatusMessage);
+    }
+
+    [Fact]
     public void Stopped_With_Gamepad_Reports_Connected_With_Mapping_Off()
     {
         var (vm, host, provider, _) = CreateHost();
@@ -323,7 +341,7 @@ public class MainWindowViewModelTests
         Assert.True(vm.IsEngineRunning);
         Assert.False(vm.HasController);
         Assert.False(vm.Visualizer.IsConnected);
-        Assert.Equal("未检测到手柄，请连接手柄", vm.StatusMessage);
+        Assert.Contains("已断开连接", vm.StatusMessage);
 
         vm.ToggleEngineCommand.Execute(null);
     }

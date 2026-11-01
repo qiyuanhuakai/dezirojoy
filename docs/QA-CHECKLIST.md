@@ -165,11 +165,37 @@
 - [ ] 窗口缩到最小高度（高度 780）时，映射编辑器的所有控件都能滚动到达
 - [ ] 侧栏在最小高度下需滚动才能看到"后台服务"卡片——这是预期，卡片未被裁切
 
+## 17. 手柄休眠
+
+无线手柄在**无用户输入 15 分钟**后会自动关机。该计时器在手柄固件内，
+Windows 没有任何公开 API 可以禁用它或重置它，因此本应用**不提供"保持唤醒"开关**——
+做一个实际无效的选项比不提供更糟。
+
+- [ ] 连接手柄后拔掉/休眠，状态栏应显示"手柄已断开连接，可能已进入休眠，
+      请按手柄电源键唤醒"，而不是"未检测到手柄，请连接手柄"
+- [ ] 若之前从未连接过手柄，状态栏仍显示"未检测到手柄，请连接手柄"
+
+已验证无效、故未采用的方案（均有官方文档依据）：
+
+| 方案 | 结论 |
+| --- | --- |
+| `SetThreadExecutionState` / `PowerCreateRequest` | 文档明确只作用于**系统/显示器**空闲计时器，无一处提及外设，对手柄无效 |
+| `XInputSetState(0,0)` 周期性调用 | 民间做法。零值确实会送达设备（`XInputEnable` 文档："even if it is 0"），但是否重置计时器无任何文档依据；PPSSPP、Dolphin、RPCS3、SDL、xenia、x360ce 全部调用 `XInputSetState`，无一实现保活循环 |
+| GIP Set Device State = Full power | 微软自家协议规范 MS-GIPUSB 中唯一记录能重置计时器的命令，但**无公开 API 可发送**（微软对开发者的答复："we don't have any public way for an application to send them"） |
+| 未公开 IOCTL（`xboxgip.sys` 0x40001C4C） | 需 SYSTEM 权限、仅 USB、完全未公开，不适合普通用户态应用 |
+
+唯一可靠的办法：**用 USB 线连接**。MS-GIPUSB 原文：该计时器
+"Not relevant to USB wired-only devices"。
+
+同理，软件也无法唤醒已休眠的手柄——检测到断开时只能提示用户按电源键。
+
 ## 已知限制（预期行为，非缺陷）
 
 - XInput 无法提供稳定硬件 ID，配置按 XInput 槽位（#1-#4）保存；
   两个手柄互换插槽时，配置随槽位而非硬件走
-- 仅支持 XInput 兼容手柄（覆盖绝大多数 Xbox/第三方手柄）
+- XInput 只能看到 Xbox 布局的标准按键（14 个）。超出该布局的按键
+  （部分第三方手柄的宏键、背拨片）在 Windows 上不会被识别；
+  Linux 上 evdev 走 raw-code 通道，可以识别
 - 需要 Windows 8+（XInput 1.4）
 - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入输入，
   且失败时错误码不指明源于 UIPI。必须提权运行
