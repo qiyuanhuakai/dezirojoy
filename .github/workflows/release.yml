@@ -81,7 +81,8 @@ jobs:
       # 124 from timeout would abort the script before it could be inspected - the call is
       # therefore written to capture the code instead of failing. And an aarch64 binary cannot
       # run on an x64 runner at all, so the run check is x64-only; arm64 is verified by the
-      # ELF/architecture check above, which is all a cross-published binary can prove here.      - name: Smoke check the published binary (Linux)
+      # ELF/architecture check above, which is all a cross-published binary can prove here.
+      - name: Smoke check the published binary (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
