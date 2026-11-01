@@ -374,6 +374,20 @@ public class MouseSensitivityViewModelTests
     }
 
     [Fact]
+    public void Selecting_A_Precision_Mode_Option_Updates_The_Core_Setting()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        vm.SelectedPrecisionModeOption = vm.PrecisionModeOptions.Single(option => option.Value == PrecisionMode.Toggle);
+
+        Assert.Equal(PrecisionMode.Toggle, vm.PrecisionMode);
+        Assert.Equal(PrecisionMode.Toggle, vm.BuildSettings().PrecisionMode);
+
+        vm.LoadFrom(new MouseStickSettings { PrecisionMode = PrecisionMode.Hold });
+        Assert.Equal(PrecisionMode.Hold, vm.SelectedPrecisionModeOption!.Value);
+    }
+
+    [Fact]
     public void Zero_Horizontal_Gain_Stops_Horizontal_Preview_Movement()
     {
         var vm = new MouseSensitivityViewModel

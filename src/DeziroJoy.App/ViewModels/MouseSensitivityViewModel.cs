@@ -8,6 +8,8 @@ namespace DeziroJoy.App.ViewModels;
 
 public readonly record struct CurvePoint(double X, double Y);
 
+public sealed record PrecisionModeOption(PrecisionMode Value, string Label);
+
 /// <summary>
 /// Live calibration panel for stick-to-mouse. Drives the real
 /// <see cref="MouseStickProcessor"/> with a scripted sweep so the preview, the speed
@@ -97,6 +99,24 @@ public partial class MouseSensitivityViewModel : ObservableObject
     [ObservableProperty]
     private double _travelDistance;
 
+    public IReadOnlyList<PrecisionModeOption> PrecisionModeOptions { get; } =
+    [
+        new(PrecisionMode.Hold, "一直按住才触发"),
+        new(PrecisionMode.Toggle, "按一下启用，再按一下取消"),
+    ];
+
+    public PrecisionModeOption? SelectedPrecisionModeOption
+    {
+        get => PrecisionModeOptions.First(option => option.Value == PrecisionMode);
+        set
+        {
+            if (value is not null)
+            {
+                PrecisionMode = value.Value;
+            }
+        }
+    }
+
     public ObservableCollection<CurvePoint> ResponseCurvePoints { get; } = [];
 
     /// <summary>Panel copy for the physical-units differentiator; see <see cref="MappingDescriptions.PhysicalSpeedUnit"/>.</summary>
@@ -154,7 +174,11 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     partial void OnPrecisionScaleChanged(float value) => ApplySettings();
 
-    partial void OnPrecisionModeChanged(PrecisionMode value) => ApplySettings();
+    partial void OnPrecisionModeChanged(PrecisionMode value)
+    {
+        ApplySettings();
+        OnPropertyChanged(nameof(SelectedPrecisionModeOption));
+    }
 
     partial void OnScaleXChanged(float value) => ApplySettings();
 
