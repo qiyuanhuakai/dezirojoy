@@ -225,6 +225,61 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void Device_Removal_Clears_A_Latched_Precision_Toggle()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(new GamepadProfile
+        {
+            Name = "toggle",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new StickBinding(GamepadStick.Right),
+                    Target = new MouseMoveTarget(new MouseStickSettings
+                    {
+                        DeadZone = 0f,
+                        MaxSpeed = 640f,
+                        Curve = ResponseCurve.Linear,
+                        CurveStrength = 0f,
+                        ResponseTime = 0f,
+                        InvertY = false,
+                        PrecisionScale = 0.5f,
+                        PrecisionButton = GamepadButton.LeftStick,
+                        PrecisionMode = PrecisionMode.Toggle,
+                    }),
+                },
+            ],
+        });
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.LeftStick, 0, 0, 1, 0));
+        host.TickOnce(Tick);
+        Assert.Equal("move:5,0", Assert.Single(sink.Calls));
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0));
+        sink.Calls.Clear();
+        host.TickOnce(Tick);
+        Assert.Equal("move:5,0", Assert.Single(sink.Calls));
+
+        provider.Remove("xinput:0");
+        for (var i = 0; i < EngineHost.DeviceAbsenceGraceTicks + 1; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0));
+        sink.Calls.Clear();
+        host.TickOnce(Tick);
+        Assert.Equal("move:10,0", Assert.Single(sink.Calls));
+    }
+
+    [Fact]
     public void Refresh_Presence_Tracks_Devices_Without_Ticking_Or_Sampling()
     {
         var (host, provider, sink) = CreateHost();

@@ -43,6 +43,8 @@ public sealed class MappingEngine
     private readonly Dictionary<Guid, ScrollStickProcessor> _scrollProcessors = [];
     private readonly Dictionary<Guid, ButtonGestureState> _gestures = [];
     private readonly SortedSet<int> _previousExtraButtons = [];
+    private readonly HashSet<GamepadButton> _togglePrecisionButtons = [];
+    private readonly Dictionary<GamepadButton, bool> _precisionLatches = [];
     private GamepadButtonMask _previousButtons;
 
     public MappingEngine(GamepadProfile profile)
@@ -64,6 +66,7 @@ public sealed class MappingEngine
             {
                 case MouseMoveTarget mouse:
                     _mouseProcessors[mapping.Id] = new MouseStickProcessor(mouse.Settings);
+                    CollectTogglePrecisionButton(mouse.Settings);
                     break;
                 case WheelScrollTarget wheel:
                     _scrollProcessors[mapping.Id] = new ScrollStickProcessor(wheel.Settings);
@@ -78,6 +81,7 @@ public sealed class MappingEngine
 
         var commands = new List<InputCommand>();
         var pressed = current.PressedButtons;
+        UpdatePrecisionLatches(current);
 
         foreach (var mapping in _profile.Mappings)
         {
@@ -131,6 +135,7 @@ public sealed class MappingEngine
         _previousExtraButtons.Clear();
         _gestures.Clear();
         _gestureMouseProcessors.Clear();
+        _precisionLatches.Clear();
         foreach (var processor in _mouseProcessors.Values)
         {
             processor.Reset();
@@ -163,8 +168,54 @@ public sealed class MappingEngine
         if (action is MouseMoveTarget mouse)
         {
             _gestureMouseProcessors[new GestureProcessorKey(mappingId, kind)] = new MouseStickProcessor(mouse.Settings);
+            CollectTogglePrecisionButton(mouse.Settings);
         }
     }
+
+    /// <summary>
+    /// Remembers a precision button whose mode is <see cref="PrecisionMode.Toggle"/>, so
+    /// <see cref="UpdatePrecisionLatches"/> knows which buttons to watch. Buttons shared by
+    /// several mappings collapse into one entry and therefore share one latch.
+    /// </summary>
+    private void CollectTogglePrecisionButton(MouseStickSettings settings)
+    {
+        if (settings.PrecisionMode == PrecisionMode.Toggle)
+        {
+            _togglePrecisionButtons.Add(settings.PrecisionButton);
+        }
+    }
+
+    /// <summary>
+    /// Flips the latch of every Toggle-mode precision button that saw a new press edge this
+    /// tick. Runs before the mapping loop, so the tick that presses the button already moves
+    /// at precision speed, and reads the same previous-button snapshot the mapping edges use.
+    /// </summary>
+    private void UpdatePrecisionLatches(IGamepadState current)
+    {
+        foreach (var button in _togglePrecisionButtons)
+        {
+            var mask = button.ToMask();
+            var isPressed = (current.PressedButtons & mask) != 0;
+            var wasPressed = (_previousButtons & mask) != 0;
+
+            if (isPressed && !wasPressed)
+            {
+                _precisionLatches[button] = !_precisionLatches.GetValueOrDefault(button);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether precision slowing is in effect for one tick. Hold mode reads the physical
+    /// button; Toggle mode reads the latch, which survives the button's release until the
+    /// next press edge.
+    /// </summary>
+    private bool PrecisionActive(IGamepadState current, MouseStickSettings settings)
+        => settings.PrecisionMode switch
+        {
+            PrecisionMode.Toggle => _precisionLatches.GetValueOrDefault(settings.PrecisionButton),
+            _ => current.PressedButtons.Has(settings.PrecisionButton),
+        };
 
     /// <summary>
     /// Rejects mappings that cannot work instead of silently dropping them: a continuous
@@ -297,7 +348,7 @@ public sealed class MappingEngine
         switch (mapping.Target)
         {
             case MouseMoveTarget mouse when _mouseProcessors.TryGetValue(mapping.Id, out var mouseProcessor):
-                var precisionActive = current.PressedButtons.Has(mouse.Settings.PrecisionButton);
+                var precisionActive = PrecisionActive(current, mouse.Settings);
                 var (dx, dy) = mouseProcessor.Update(axisX, axisY, precisionActive, deltaSeconds);
                 if (dx != 0 || dy != 0)
                 {
@@ -329,7 +380,7 @@ public sealed class MappingEngine
         if (mapping.Target is MouseMoveTarget mouseTarget
             && _mouseProcessors.TryGetValue(mapping.Id, out var mouseProcessor))
         {
-            var precisionActive = current.PressedButtons.Has(mouseTarget.Settings.PrecisionButton);
+            var precisionActive = PrecisionActive(current, mouseTarget.Settings);
             var (dx, dy) = mouseProcessor.Update(x, y, precisionActive, deltaSeconds);
             if (dx != 0 || dy != 0)
             {
@@ -463,7 +514,7 @@ public sealed class MappingEngine
         // Validation guarantees a direction for a continuous target; the fallback only keeps
         // the compiler happy.
         var (axisX, axisY) = DirectionAxis(button.Direction ?? InputDirection.Up);
-        var precisionActive = current.PressedButtons.Has(mouse.Settings.PrecisionButton);
+        var precisionActive = PrecisionActive(current, mouse.Settings);
         var (dx, dy) = processor.Update(axisX, axisY, precisionActive, deltaSeconds);
 
         // A tap is a single nudge: leave the processor at rest so no drift trails it.

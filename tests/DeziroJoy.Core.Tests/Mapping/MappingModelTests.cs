@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using Xunit;
@@ -99,6 +100,7 @@ public class MappingModelTests
         Assert.Equal(0.08f, settings.ResponseTime);
         Assert.Equal(0.35f, settings.PrecisionScale);
         Assert.Equal(GamepadButton.LeftStick, settings.PrecisionButton);
+        Assert.Equal(PrecisionMode.Hold, settings.PrecisionMode);
         Assert.True(settings.InvertY);
     }
 
@@ -111,6 +113,51 @@ public class MappingModelTests
         Assert.Equal(12f, settings.MaxTicksPerSecond);
         Assert.True(settings.EnableHorizontal);
         Assert.False(settings.InvertY);
+    }
+
+    [Fact]
+    public void Profile_Json_Without_PrecisionMode_Reads_Back_As_Hold()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "legacy",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new StickBinding(GamepadStick.Right),
+                    Target = new MouseMoveTarget(new MouseStickSettings { PrecisionMode = PrecisionMode.Toggle }),
+                },
+            ],
+        };
+
+        var root = JsonNode.Parse(ProfileSerializer.Serialize(profile))!.AsObject();
+        root["Mappings"]![0]!["Target"]!["Settings"]!.AsObject().Remove("PrecisionMode");
+
+        var back = ProfileSerializer.Deserialize(root.ToJsonString());
+
+        Assert.Equal(PrecisionMode.Hold, Assert.IsType<MouseMoveTarget>(back.Mappings[0].Target).Settings.PrecisionMode);
+    }
+
+    [Fact]
+    public void PrecisionMode_Roundtrips_Through_Profile_Json()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "toggle",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new StickBinding(GamepadStick.Right),
+                    Target = new MouseMoveTarget(new MouseStickSettings { PrecisionMode = PrecisionMode.Toggle }),
+                },
+            ],
+        };
+
+        var back = ProfileSerializer.Deserialize(ProfileSerializer.Serialize(profile));
+
+        Assert.Equal(PrecisionMode.Toggle, Assert.IsType<MouseMoveTarget>(back.Mappings[0].Target).Settings.PrecisionMode);
     }
 
     [Fact]

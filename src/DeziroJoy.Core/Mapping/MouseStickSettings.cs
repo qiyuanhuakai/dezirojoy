@@ -33,6 +33,13 @@ public sealed record MouseStickSettings
     /// <summary>Button that temporarily slows the stick for fine aiming.</summary>
     public GamepadButton PrecisionButton { get; init; } = GamepadButton.LeftStick;
 
+    /// <summary>
+    /// How <see cref="PrecisionButton"/> engages: Hold slows the stick only while the button
+    /// is physically held (the classic behavior); Toggle latches on each new press and
+    /// releases on the next one, so fine aiming survives the button's release.
+    /// </summary>
+    public PrecisionMode PrecisionMode { get; init; } = PrecisionMode.Hold;
+
     /// <summary>Per-axis gain multipliers.</summary>
     public float ScaleX { get; init; } = 1f;
 
