@@ -512,6 +512,18 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public void The_Windows_Pipe_Is_Restricted_To_The_Current_User()
+    {
+        var windows = DaemonHost.MappingPipeOptions(true);
+        var otherPlatforms = DaemonHost.MappingPipeOptions(false);
+
+        Assert.True(windows.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
+        Assert.False(otherPlatforms.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
+        Assert.True(windows.HasFlag(System.IO.Pipes.PipeOptions.Asynchronous));
+        Assert.True(otherPlatforms.HasFlag(System.IO.Pipes.PipeOptions.Asynchronous));
+    }
+
+    [Fact]
     public void The_Pipe_Name_Is_The_Control_Channel_And_Not_The_Injection_Mutex()
     {
         Assert.Equal("DeziroJoy.Mapping", IpcContract.PipeName);

@@ -193,7 +193,7 @@ public static class DaemonHost
                     PipeDirection.InOut,
                     maxNumberOfServerInstances: 1,
                     PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
+                    MappingPipeOptions(OperatingSystem.IsWindows()));
 
                 await using (server)
                 {
@@ -213,6 +213,9 @@ public static class DaemonHost
             }
         }
     }
+
+    internal static PipeOptions MappingPipeOptions(bool isWindows)
+        => PipeOptions.Asynchronous | (isWindows ? PipeOptions.CurrentUserOnly : PipeOptions.None);
 
     /// <summary>
     /// True when another daemon already answers on the mapping pipe. The pipe, not the mutex,
