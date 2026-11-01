@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Platform;
@@ -31,6 +32,21 @@ public sealed class SendInputOutputSink : IOutputSink
 
     /// <summary>Raised whenever SendInput injects fewer events than were requested.</summary>
     public event EventHandler<SendInputFailureEventArgs>? InjectionFailed;
+
+    /// <summary>
+    /// Raised after every injection - success or failure - carrying a lightweight record of what
+    /// was sent. This is the always-on diagnostic feed the <c>InjectionLog</c> subscribes to; it
+    /// fires <em>after</em> the native call, so a subscriber can never alter the injected stream.
+    /// A custom struct delegate keeps the per-event cost allocation-free.
+    /// </summary>
+    public event InjectionEmittedHandler? InjectionEmitted;
+
+    /// <summary>
+    /// Test seam. When set, replaces the user32 SendInput call so tests can capture the exact
+    /// INPUT bytes without the native library (which is absent on Linux). Null in production, so
+    /// the real call runs unchanged.
+    /// </summary>
+    internal Func<INPUT, uint>? TransmitOverride;
 
     /// <summary>
     /// Win32 error code from the last failed call; 0 when the last call succeeded or when
@@ -83,19 +99,19 @@ public sealed class SendInputOutputSink : IOutputSink
             Mouse = new MOUSEINPUT { Dx = dx, Dy = dy, DwFlags = SendInputNative.MouseEventMove },
         };
 
-        Send(input);
+        Send(input, InjectionAction.MouseMove, dx, dy);
     }
 
     public void ScrollWheel(int horizontalNotches, int verticalNotches)
     {
         if (verticalNotches != 0)
         {
-            SendWheel(SendInputNative.MouseEventWheel, verticalNotches * SendInputNative.WheelDelta);
+            SendWheel(SendInputNative.MouseEventWheel, verticalNotches * SendInputNative.WheelDelta, verticalNotches, 0);
         }
 
         if (horizontalNotches != 0)
         {
-            SendWheel(SendInputNative.MouseEventHWheel, horizontalNotches * SendInputNative.WheelDelta);
+            SendWheel(SendInputNative.MouseEventHWheel, horizontalNotches * SendInputNative.WheelDelta, 0, horizontalNotches);
         }
     }
 
@@ -108,7 +124,7 @@ public sealed class SendInputOutputSink : IOutputSink
             Mouse = new MOUSEINPUT { DwFlags = flags, MouseData = data },
         };
 
-        Send(input);
+        Send(input, InjectionAction.MouseButtonDown, (int)button, 0);
     }
 
     public void MouseButtonUp(MouseButton button)
@@ -120,14 +136,14 @@ public sealed class SendInputOutputSink : IOutputSink
             Mouse = new MOUSEINPUT { DwFlags = flags, MouseData = data },
         };
 
-        Send(input);
+        Send(input, InjectionAction.MouseButtonUp, (int)button, 0);
     }
 
     public void Dispose()
     {
     }
 
-    private void SendWheel(uint flags, int amount)
+    private void SendWheel(uint flags, int amount, int verticalNotches, int horizontalNotches)
     {
         var input = new INPUT
         {
@@ -135,7 +151,7 @@ public sealed class SendInputOutputSink : IOutputSink
             Mouse = new MOUSEINPUT { DwFlags = flags, MouseData = (uint)amount },
         };
 
-        Send(input);
+        Send(input, InjectionAction.MouseWheel, verticalNotches, horizontalNotches);
     }
 
     private void SendKey(GamepadKey key, bool keyUp)
@@ -146,7 +162,11 @@ public sealed class SendInputOutputSink : IOutputSink
             return;
         }
 
-        var scanCode = (ushort)SendInputNative.MapVirtualKeyW(virtualKey, SendInputNative.MapVirtualKeyVkToScanCode);
+        // MapVirtualKeyW lives in user32.dll; guard it so the sink stays loadable (and testable)
+        // off Windows, where this sink is never used in production anyway.
+        var scanCode = OperatingSystem.IsWindows()
+            ? (ushort)SendInputNative.MapVirtualKeyW(virtualKey, SendInputNative.MapVirtualKeyVkToScanCode)
+            : (ushort)0;
         var flags = keyUp ? SendInputNative.KeyEventFKeyUp : 0;
 
         if (WindowsVirtualKeys.IsExtendedKey(key))
@@ -160,7 +180,7 @@ public sealed class SendInputOutputSink : IOutputSink
             Keyboard = new KEYBDINPUT { WVk = virtualKey, WScan = scanCode, DwFlags = flags },
         };
 
-        Send(input);
+        Send(input, keyUp ? InjectionAction.KeyUp : InjectionAction.KeyDown, (int)key, 0);
     }
 
     private static (uint Flags, uint Data) MouseButtonFlags(MouseButton button, bool down) => button switch
@@ -173,16 +193,43 @@ public sealed class SendInputOutputSink : IOutputSink
         _ => (0u, 0u),
     };
 
-    private void Send(in INPUT input)
+    private void Send(in INPUT input, InjectionAction action, int primary, int secondary)
     {
-        Span<INPUT> buffer = [input];
-        var injected = SendInputNative.SendInput(1, buffer, Marshal.SizeOf<INPUT>());
+        var injected = Transmit(in input);
 
         // GetLastError is only meaningful on failure and must be read before any other
         // interop call can overwrite the thread's last-error slot.
         var error = injected == 1 ? 0 : Marshal.GetLastWin32Error();
 
         ReportInjectionResult(injected, requested: 1, error);
+        RecordInjection(action, primary, secondary, injected >= 1);
+    }
+
+    private uint Transmit(in INPUT input)
+    {
+        if (TransmitOverride is not null)
+        {
+            return TransmitOverride(input);
+        }
+
+        Span<INPUT> buffer = [input];
+        return SendInputNative.SendInput(1, buffer, Marshal.SizeOf<INPUT>());
+    }
+
+    /// <summary>
+    /// Fires <see cref="InjectionEmitted"/> with a monotonic timestamp. Runs strictly after the
+   /// native call, so it is a pure observer: it can never change what was injected. The timestamp
+    /// is captured here for the diagnostic only and is never fed back into the mapping path.
+    /// </summary>
+    private void RecordInjection(InjectionAction action, int primary, int secondary, bool success)
+    {
+        var handler = InjectionEmitted;
+        if (handler is null)
+        {
+            return;
+        }
+
+        handler(new InjectionRecord(Stopwatch.GetTimestamp(), action, primary, secondary, success));
     }
 
     /// <summary>
@@ -241,3 +288,34 @@ public sealed class SendInputFailureEventArgs : EventArgs
     /// <summary>How many events were submitted.</summary>
     public uint RequestedCount { get; }
 }
+
+/// <summary>The kind of action a single injection performed.</summary>
+public enum InjectionAction : byte
+{
+    KeyDown,
+    KeyUp,
+    MouseMove,
+    MouseWheel,
+    MouseButtonDown,
+    MouseButtonUp,
+}
+
+/// <summary>
+/// One recorded injection. A value type so the always-on log can keep a preallocated ring buffer
+/// of structs with no per-event heap allocation. <see cref="Primary"/> and <see cref="Secondary"/>
+/// carry the action's operands: the <see cref="DeziroJoy.Core.Mapping.GamepadKey"/> or
+/// <see cref="DeziroJoy.Core.Mapping.MouseButton"/> for keys/buttons, dx/dy for a move, and
+/// vertical/horizontal notches for the wheel.
+/// </summary>
+public readonly record struct InjectionRecord(
+    long Timestamp,
+    InjectionAction Action,
+    int Primary,
+    int Secondary,
+    bool Success);
+
+/// <summary>
+/// Handler for <see cref="SendInputOutputSink.InjectionEmitted"/>. Takes the record by value so
+/// raising the event allocates nothing on the hot path.
+/// </summary>
+public delegate void InjectionEmittedHandler(InjectionRecord record);

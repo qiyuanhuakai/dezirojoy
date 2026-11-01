@@ -1,4 +1,5 @@
 using DeziroJoy.Core.Platform;
+using DeziroJoy.Platform.Windows.Output;
 
 namespace DeziroJoy.App.Services;
 
@@ -22,12 +23,25 @@ public sealed class EngineComposition : IDisposable
         Sink = sinkCreated ? sink : new NullOutputSink();
         SinkError = sinkCreated ? null : sinkError;
 
+        InjectionLog = new InjectionLog();
+        if (Sink is SendInputOutputSink sendInputSink)
+        {
+            sendInputSink.InjectionEmitted += InjectionLog.Record;
+        }
+
         Host = new EngineHost(Provider, Sink, ProfileStore);
     }
 
     public IGamepadProvider Provider { get; }
 
     public IOutputSink Sink { get; }
+
+    /// <summary>
+    /// Always-on record of what the output sink injected and when. The Windows SendInput sink
+    /// feeds it; other platforms leave it empty. Bind <see cref="InjectionLog.DumpLast"/> to show
+    /// the tail. Read-only from the UI's perspective - the engine thread is the only writer.
+    /// </summary>
+    public InjectionLog InjectionLog { get; }
 
     public IProfileStore ProfileStore { get; }
 
