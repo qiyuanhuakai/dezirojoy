@@ -138,32 +138,37 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void Both_Sidebars_Are_User_Resizable_With_Floor_Widths()
+    public void Both_Sidebars_Have_Wide_Splitters_And_Can_Collapse_And_Restore()
     {
         var (window, _, _, _) = BuildWindow();
         window.UpdateLayout();
 
         var leftSplitter = window.FindControl<GridSplitter>("LeftSplitter")!;
         var rightSplitter = window.FindControl<GridSplitter>("RightSplitter")!;
+        var shell = (Grid)leftSplitter.Parent!;
 
         Assert.Equal(GridResizeDirection.Columns, leftSplitter.ResizeDirection);
         Assert.Equal(GridResizeDirection.Columns, rightSplitter.ResizeDirection);
+        Assert.Equal(8, shell.ColumnDefinitions[1].Width.Value);
+        Assert.Equal(8, shell.ColumnDefinitions[3].Width.Value);
+        Assert.Equal(0, shell.ColumnDefinitions[0].MinWidth);
+        Assert.Equal(0, shell.ColumnDefinitions[4].MinWidth);
 
-        var left = window.FindControl<ScrollViewer>("LeftPanel")!;
-        var right = window.FindControl<Border>("RightPanel")!;
+        window.SetSidebarCollapsed(true, true);
+        Assert.Equal(0, shell.ColumnDefinitions[0].Width.Value);
+        Assert.True(window.FindControl<Button>("ShowLeftPanelButton")!.IsVisible);
 
-        // Neither sidebar can be dragged to nothing.
-        Assert.True(left.MinWidth >= 200, $"the left sidebar floor is {left.MinWidth}");
-        Assert.True(right.MinWidth >= 260, $"the right sidebar floor is {right.MinWidth}");
+        Click(window.FindControl<Button>("ShowLeftPanelButton")!, window);
+        Assert.Equal(230, shell.ColumnDefinitions[0].Width.Value);
+        Assert.False(window.FindControl<Button>("ShowLeftPanelButton")!.IsVisible);
 
-        // A GridSplitter clamps its drag against the COLUMN's MinWidth, not the control's,
-        // so the floor has to be declared on the column definitions as well.
-        var shell = (Grid)leftSplitter.Parent!;
-        Assert.Equal(5, shell.ColumnDefinitions.Count);
-        Assert.True(shell.ColumnDefinitions[0].MinWidth >= 200,
-            $"the left column floor is {shell.ColumnDefinitions[0].MinWidth}");
-        Assert.True(shell.ColumnDefinitions[4].MinWidth >= 260,
-            $"the right column floor is {shell.ColumnDefinitions[4].MinWidth}");
+        window.SetSidebarCollapsed(false, true);
+        Assert.Equal(0, shell.ColumnDefinitions[4].Width.Value);
+        Assert.True(window.FindControl<Button>("ShowRightPanelButton")!.IsVisible);
+
+        Click(window.FindControl<Button>("ShowRightPanelButton")!, window);
+        Assert.Equal(300, shell.ColumnDefinitions[4].Width.Value);
+        Assert.False(window.FindControl<Button>("ShowRightPanelButton")!.IsVisible);
     }
 
     private static bool IsDescendantOf(Visual control, Visual ancestor)

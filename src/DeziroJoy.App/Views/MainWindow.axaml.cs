@@ -315,6 +315,34 @@ public partial class MainWindow : Window
         }
     }
 
+    internal void SetSidebarCollapsed(bool left, bool collapsed)
+    {
+        var shell = this.FindControl<Grid>("WorkspaceGrid")!;
+        var column = shell.ColumnDefinitions[left ? 0 : 4];
+        column.Width = new GridLength(collapsed ? 0 : left ? 230 : 300);
+        this.FindControl<Button>(left ? "ShowLeftPanelButton" : "ShowRightPanelButton")!.IsVisible = collapsed;
+    }
+
+    private void SidebarDragCompleted(object? sender, VectorEventArgs e)
+    {
+        var left = ReferenceEquals(sender, this.FindControl<GridSplitter>("LeftSplitter"));
+        var shell = this.FindControl<Grid>("WorkspaceGrid")!;
+        var column = shell.ColumnDefinitions[left ? 0 : 4];
+
+        if (column.ActualWidth < 64)
+        {
+            SetSidebarCollapsed(left, true);
+        }
+        else
+        {
+            this.FindControl<Button>(left ? "ShowLeftPanelButton" : "ShowRightPanelButton")!.IsVisible = false;
+        }
+    }
+
+    private void ShowLeftPanelClick(object? sender, RoutedEventArgs e) => SetSidebarCollapsed(true, false);
+
+    private void ShowRightPanelClick(object? sender, RoutedEventArgs e) => SetSidebarCollapsed(false, false);
+
     private void MinimizeClick(object? sender, RoutedEventArgs e)
         => WindowState = WindowState.Minimized;
 

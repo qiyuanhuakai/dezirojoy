@@ -389,6 +389,12 @@
             </Border>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,8,0">
+                <Button x:Name="ShowLeftPanelButton" Classes="ghost" Content="左栏" Width="44" Height="28" FontSize="11"
+                        Padding="8,0" Margin="0,0,4,0" IsVisible="False"
+                        ToolTip.Tip="显示左侧状态栏" Click="ShowLeftPanelClick" />
+                <Button x:Name="ShowRightPanelButton" Classes="ghost" Content="右栏" Width="44" Height="28" FontSize="11"
+                        Padding="8,0" Margin="0,0,4,0" IsVisible="False"
+                        ToolTip.Tip="显示右侧映射列表" Click="ShowRightPanelClick" />
                 <Button x:Name="MinimizeButton" Classes="caption"
                         chrome:WindowDecorationProperties.ElementRole="MinimizeButton"
                         Click="MinimizeClick">
@@ -430,20 +436,16 @@
             </StackPanel>
         </Grid>
 
-        <!-- Three zones with a splitter between each: the sidebars are user-resizable, and
-             each column carries a MinWidth so neither can be dragged to nothing. The
-             splitter clamps its drag against the COLUMN's MinWidth, which is why the floor is
-             declared there as well as on the control. -->
-        <Grid Grid.Row="1">
+        <Grid x:Name="WorkspaceGrid" Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="230" MinWidth="210" />
-                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="230" MinWidth="0" />
+                <ColumnDefinition Width="8" />
                 <ColumnDefinition Width="*" MinWidth="400" />
-                <ColumnDefinition Width="5" />
-                <ColumnDefinition Width="300" MinWidth="280" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="300" MinWidth="0" />
             </Grid.ColumnDefinitions>
 
-            <ScrollViewer x:Name="LeftPanel" Grid.Column="0" MinWidth="210" Padding="16,16,14,16">
+            <ScrollViewer x:Name="LeftPanel" Grid.Column="0" MinWidth="0" Padding="16,16,14,16">
                 <StackPanel>
 
                     <Border Classes="card">
@@ -519,7 +521,7 @@
             </ScrollViewer>
 
             <GridSplitter x:Name="LeftSplitter" Grid.Column="1" ResizeDirection="Columns"
-                          Background="{DynamicResource SubtleBrush}" />
+                          Background="{DynamicResource SubtleBrush}" DragCompleted="SidebarDragCompleted" />
 
             <TabControl x:Name="MainTabs" Grid.Column="2" Margin="6,8,10,16">
 
@@ -1118,13 +1120,9 @@
             </TabControl>
 
             <GridSplitter x:Name="RightSplitter" Grid.Column="3" ResizeDirection="Columns"
-                          Background="{DynamicResource SubtleBrush}" />
+                          Background="{DynamicResource SubtleBrush}" DragCompleted="SidebarDragCompleted" />
 
-            <!-- Configuration column: always visible, never coupled to the tab. It carries the
-                 per-button mapping list that used to sit at the bottom of the mapping tab, so
-                 the centre column is the model's stage alone. Clicking a row opens that
-                 mapping's settings in the mapping tab. -->
-            <Border Grid.Column="4" x:Name="RightPanel" MinWidth="280"
+            <Border Grid.Column="4" x:Name="RightPanel" MinWidth="0"
                     Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}"
                     BorderThickness="1,0,0,0" Padding="12">
                 <Grid RowDefinitions="Auto,*">
