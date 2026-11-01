@@ -283,4 +283,106 @@ public class ButtonGestureModelTests
         Assert.Equal(InputDirection.Right, Assert.IsType<ButtonBinding>(back.Mappings[0].Source).Direction);
         Assert.Equal(json, ProfileSerializer.Serialize(back));
     }
+
+    [Fact]
+    public void Fixed_Default_Timings_Are_Pinned()
+    {
+        // The user chose fixed timings over adaptive/learned ones. The fields keep their 0
+        // defaults for profile compatibility; these constants are the fixed values the UI
+        // applies when it enables a gesture.
+        Assert.Equal(0.25f, ButtonGesture.DefaultDoubleClickWindow);
+        Assert.Equal(0.50f, ButtonGesture.DefaultLongPressThreshold);
+        Assert.Equal(0.10f, ButtonGesture.DefaultClickRepeatInterval);
+    }
+
+    [Fact]
+    public void HasClickRepeat_Reflects_The_Interval()
+    {
+        Assert.False(new ButtonGesture().HasClickRepeat);
+        Assert.True(new ButtonGesture { ClickRepeatInterval = 0.1f }.HasClickRepeat);
+    }
+
+    [Fact]
+    public void HasEffectiveLongPress_Is_Inert_While_Click_Repeat_Is_On()
+    {
+        // Long-press alone is effective.
+        Assert.True(new ButtonGesture { LongPressThreshold = 0.5f }.HasEffectiveLongPress);
+
+        // Click auto-repeat wins: the long-press becomes inert.
+        Assert.False(new ButtonGesture { LongPressThreshold = 0.5f, ClickRepeatInterval = 0.1f }.HasEffectiveLongPress);
+
+        // No long-press configured at all.
+        Assert.False(new ButtonGesture { ClickRepeatInterval = 0.1f }.HasEffectiveLongPress);
+    }
+
+    [Fact]
+    public void HasLongPressFunction_Is_False_For_NoneTarget()
+    {
+        Assert.False(new ButtonGesture().HasLongPressFunction);
+        Assert.False(new ButtonGesture { LongPressAction = new NoneTarget() }.HasLongPressFunction);
+        Assert.True(new ButtonGesture { LongPressAction = new KeyPressTarget(GamepadKey.Space) }.HasLongPressFunction);
+    }
+
+    [Fact]
+    public void Click_Repeat_Roundtrips_Through_Json()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "click-repeat",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture { ClickRepeatInterval = 0.1f },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+        Assert.Contains("\"ClickRepeatInterval\": 0.1", json);
+
+        var back = ProfileSerializer.Deserialize(json);
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(back.Mappings[0].Source).Gesture);
+        Assert.Equal(0.1f, gesture.ClickRepeatInterval);
+        Assert.Equal(json, ProfileSerializer.Serialize(back));
+    }
+
+    [Fact]
+    public void Old_Shaped_Gesture_Profile_Roundtrips_Unchanged_Without_Click_Repeat()
+    {
+        // A profile written before ClickRepeatInterval existed must round-trip byte-for-byte
+        // and must not grow the new field.
+        var profile = new GamepadProfile
+        {
+            Name = "old-gesture",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            DoubleClickWindow = 0.25f,
+                            LongPressThreshold = 0.4f,
+                            LongPressRepeatInterval = 0.1f,
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+        Assert.DoesNotContain("ClickRepeatInterval", json);
+
+        var back = ProfileSerializer.Deserialize(json);
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(back.Mappings[0].Source).Gesture);
+        Assert.Equal(0f, gesture.ClickRepeatInterval);
+        Assert.Equal(json, ProfileSerializer.Serialize(back));
+    }
 }

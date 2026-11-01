@@ -19,6 +19,9 @@ public enum GesturePhase
 
     /// <summary>The long-press fired; auto-repeat may still be running.</summary>
     LongPressActive,
+
+    /// <summary>The click fired on the press edge; click auto-repeat may still be running.</summary>
+    ClickRepeating,
 }
 
 /// <summary>What the engine should do to the target on this tick.</summary>
@@ -80,20 +83,27 @@ public readonly record struct GestureStep(GestureAction Action, GestureKind Kind
 /// States and transitions (a press edge starts a cycle; a release edge or a threshold ends it):
 /// </para>
 /// <list type="bullet">
-///   <item><description><b>Idle</b> --press--&gt; ClickPending (双击 configured) or LongPressPending (长按 only).</description></item>
+///   <item><description><b>Idle</b> --press--&gt; ClickPending (双击 configured), LongPressPending (长按 only), or ClickRepeating (click auto-repeat only, firing the click on the press edge).</description></item>
 ///   <item><description><b>ClickPending</b> --second press inside the window--&gt; Idle, firing the double-click.</description></item>
-///   <item><description><b>ClickPending</b> --window expires, still held--&gt; Holding (单击 as a hold) or LongPressPending (长按 still ahead).</description></item>
+///   <item><description><b>ClickPending</b> --window expires, still held--&gt; LongPressPending (长按 still ahead), ClickRepeating (click auto-repeat, firing the click now), or Holding (单击 as a hold).</description></item>
 ///   <item><description><b>ClickPending</b> --window expires, released--&gt; Idle, firing the single as a tap.</description></item>
-///   <item><description><b>LongPressPending</b> --release before the threshold--&gt; Idle, firing the single as a tap, or nothing at all when the long-press carries an action of its own.</description></item>
+///   <item><description><b>LongPressPending</b> --release before the threshold--&gt; Idle, firing the single as a tap, or nothing at all when the long-press carries a real function of its own.</description></item>
 ///   <item><description><b>LongPressPending</b> --threshold reached--&gt; LongPressActive, firing the long-press.</description></item>
 ///   <item><description><b>Holding</b> --release--&gt; Idle, ending the hold.</description></item>
 ///   <item><description><b>LongPressActive</b> --every repeat interval--&gt; fire the long-press again; --release--&gt; Idle.</description></item>
+///   <item><description><b>ClickRepeating</b> --every click-repeat interval--&gt; fire the click again; --release--&gt; Idle.</description></item>
 /// </list>
 /// <para>
 /// When more than one gesture is configured, whichever resolves first wins and the others are
 /// cancelled: the long-press threshold is checked before the double-click window closes, so a
 /// short threshold beats a long window, and a window that closes first hands a still-held
 /// button over to the long-press instead of firing the single.
+/// </para>
+/// <para>
+/// Click auto-repeat and the long-press are mutually exclusive: enabling the repeat makes the
+/// long-press inert (see <see cref="ButtonGesture.HasEffectiveLongPress"/>), so the two never
+/// compete for the same press and the shared <see cref="RepeatElapsed"/> clock is never
+/// contended. The click auto-repeat wins the both-configured case deterministically.
 /// </para>
 /// <para>
 /// A long-press that carries its own action consumes the press: releasing before the threshold
@@ -185,10 +195,22 @@ public sealed class ButtonGestureState
         var cycleStarted = false;
         if (Phase == GesturePhase.Idle && pressEdge)
         {
-            Phase = gesture.HasDoubleClick ? GesturePhase.ClickPending : GesturePhase.LongPressPending;
+            Phase = gesture.HasDoubleClick
+                ? GesturePhase.ClickPending
+                : gesture.HasEffectiveLongPress
+                    ? GesturePhase.LongPressPending
+                    : GesturePhase.ClickRepeating;
             Elapsed = 0d;
             RepeatElapsed = 0d;
             cycleStarted = true;
+
+            // No double-click wait: the click resolves on the press edge with zero added
+            // latency. With auto-repeat the initial activation is a Tap (a repeat is a
+            // sequence of discrete activations); the repeats follow from ClickRepeating.
+            if (Phase == GesturePhase.ClickRepeating)
+            {
+                return GestureStep.Tap(GestureKind.Click);
+            }
         }
 
         switch (Phase)
@@ -197,7 +219,11 @@ public sealed class ButtonGestureState
             case GesturePhase.LongPressPending:
                 Elapsed += dt;
                 break;
+            // ClickRepeating shares the RepeatElapsed clock with the long-press repeat. The
+            // mutual exclusion (HasEffectiveLongPress) guarantees the two never run at once,
+            // so a single clock is safe and neither repeat can be starved by the other.
             case GesturePhase.LongPressActive:
+            case GesturePhase.ClickRepeating:
                 RepeatElapsed += dt;
                 break;
         }
@@ -214,7 +240,7 @@ public sealed class ButtonGestureState
                     return GestureStep.Tap(GestureKind.DoubleClick);
                 }
 
-                if (gesture.HasLongPress && isPressed && Reached(Elapsed, gesture.LongPressThreshold))
+                if (gesture.HasEffectiveLongPress && isPressed && Reached(Elapsed, gesture.LongPressThreshold))
                 {
                     return ActivateLongPress(gesture);
                 }
@@ -227,9 +253,15 @@ public sealed class ButtonGestureState
                         return GestureStep.Tap(GestureKind.Click);
                     }
 
-                    if (gesture.HasLongPress)
+                    if (gesture.HasEffectiveLongPress)
                     {
                         Phase = GesturePhase.LongPressPending;
+                    }
+                    else if (gesture.HasClickRepeat)
+                    {
+                        // The click resolves now (as a tap), then repeats from ClickRepeating.
+                        Phase = GesturePhase.ClickRepeating;
+                        return GestureStep.Tap(GestureKind.Click);
                     }
                     else
                     {
@@ -246,9 +278,10 @@ public sealed class ButtonGestureState
                 {
                     Phase = GesturePhase.Idle;
 
-                    // A long-press with an action of its own owns the press: a release that
-                    // reached neither gesture is discarded rather than guessed at.
-                    return gesture.HasLongPressAction
+                    // A long-press with a real function of its own owns the press: a release
+                    // that reached neither gesture is discarded rather than guessed at. A
+                    // NoneTarget action is 无功能, not a second function, so it does not consume.
+                    return gesture.HasLongPressFunction
                         ? GestureStep.None
                         : GestureStep.Tap(GestureKind.Click);
                 }
@@ -271,15 +304,32 @@ public sealed class ButtonGestureState
                 break;
 
             case GesturePhase.LongPressActive:
+                // Release before repeat: a repeat on the release tick returns early, which would
+                // leave the phase active and keep the long-press firing after the button is up.
+                if (releaseEdge)
+                {
+                    Phase = GesturePhase.Idle;
+                    IsActive = false;
+                    break;
+                }
+
                 if (TryDequeueRepeat(gesture))
                 {
                     return GestureStep.Tap(GestureKind.LongPress);
                 }
 
+                break;
+
+            case GesturePhase.ClickRepeating:
                 if (releaseEdge)
                 {
                     Phase = GesturePhase.Idle;
-                    IsActive = false;
+                    break;
+                }
+
+                if (TryDequeueClickRepeat(gesture))
+                {
+                    return GestureStep.Tap(GestureKind.Click);
                 }
 
                 break;
@@ -302,6 +352,25 @@ public sealed class ButtonGestureState
         }
 
         RepeatElapsed = Math.Max(RepeatElapsed - gesture.LongPressRepeatInterval, 0d);
+        return true;
+    }
+
+    /// <summary>
+    /// Consumes one due click auto-repeat interval, if any. Mirrors <see cref="TryDequeueRepeat"/>
+    /// for the click: the same one-microsecond tolerance and the same "drain every covered
+    /// interval, never lose a unit" rule. It shares the <see cref="RepeatElapsed"/> clock with
+    /// the long-press repeat, which is safe because click auto-repeat and the long-press are
+    /// mutually exclusive (see <see cref="ButtonGesture.HasEffectiveLongPress"/>) and never run
+    /// at once.
+    /// </summary>
+    public bool TryDequeueClickRepeat(ButtonGesture gesture)
+    {
+        if (gesture.ClickRepeatInterval <= 0f || !Reached(RepeatElapsed, gesture.ClickRepeatInterval))
+        {
+            return false;
+        }
+
+        RepeatElapsed = Math.Max(RepeatElapsed - gesture.ClickRepeatInterval, 0d);
         return true;
     }
 

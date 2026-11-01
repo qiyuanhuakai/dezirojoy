@@ -596,6 +596,195 @@ public class ButtonGestureTests
         Assert.Equal(new KeyUpCommand(GamepadKey.F13, KeyModifiers.None), fired[1]);
     }
 
+    [Fact]
+    public void Single_Click_Only_Fires_BeginHold_And_EndHold_On_The_Edges()
+    {
+        // A gesture object that enables nothing takes the zero-latency path: BeginHold on the
+        // press edge, EndHold on the release edge, byte-for-byte as an ungestured button.
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture())));
+
+        var press = engine.Tick(Held(GamepadButton.B), 0.016f);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(press));
+
+        var release = engine.Tick(Released, 0.016f);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(release));
+    }
+
+    [Fact]
+    public void Click_Repeat_Fires_On_The_Press_Edge_With_Zero_Latency()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { ClickRepeatInterval = 0.1f })));
+
+        // The initial activation is a Tap on the press edge: zero added latency, but a discrete
+        // down+up because a repeat is a sequence of discrete activations.
+        var press = engine.Tick(Held(GamepadButton.B), 0.016f);
+        Assert.Equal(2, press.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), press[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), press[1]);
+    }
+
+    [Fact]
+    public void Click_Repeat_Fires_Every_Interval_While_Held()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { ClickRepeatInterval = 0.1f })));
+
+        var commands = new List<InputCommand>();
+        for (var i = 0; i < 20; i++)
+        {
+            commands.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        // Held for 1.0s: fires on the press edge (t=0), then every 0.1s -> 0, 0.1, ... 0.9 = 10 taps.
+        Assert.Equal(10, Taps(commands));
+    }
+
+    [Fact]
+    public void Click_Repeat_Stops_On_Release()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { ClickRepeatInterval = 0.1f })));
+
+        var held = new List<InputCommand>();
+        for (var i = 0; i < 9; i++)
+        {
+            held.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        // Held for 0.45s: fires on the press edge, then every 0.1s -> 0, 0.1, 0.2, 0.3, 0.4 = 5 taps.
+        Assert.Equal(5, Taps(held));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.5f));
+    }
+
+    [Fact]
+    public void Click_Repeat_Stops_When_The_Release_Tick_Lands_On_A_Repeat_Boundary()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { ClickRepeatInterval = 0.1f })));
+
+        // Ten held ticks, not the nine above: repeats land on even ticks, so the tenth leaves
+        // RepeatElapsed at 0.05 and the release tick takes it to exactly the 0.1 interval.
+        var held = new List<InputCommand>();
+        for (var i = 0; i < 10; i++)
+        {
+            held.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        Assert.Equal(5, Taps(held));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+
+        // A repeat firing on the release tick returns before the release edge is handled,
+        // leaving the phase in ClickRepeating - so repeats continue after the button is up.
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.Empty(engine.Tick(Released, 0.05f));
+        }
+    }
+
+    [Fact]
+    public void Click_Repeat_Wins_Over_Long_Press_When_Both_Configured()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture
+            {
+                ClickRepeatInterval = 0.1f,
+                LongPressThreshold = 0.4f,
+                LongPressAction = new KeyPressTarget(GamepadKey.Space),
+            })));
+
+        var commands = new List<InputCommand>();
+        for (var i = 0; i < 20; i++)
+        {
+            commands.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        // Click auto-repeat wins: the click fires 10 times, the long-press is inert (no Space).
+        Assert.Equal(10, commands.Count(c => c is KeyDownCommand { Key: GamepadKey.Enter }));
+        Assert.Equal(0, commands.Count(c => c is KeyDownCommand { Key: GamepadKey.Space }));
+    }
+
+    [Fact]
+    public void Long_Press_Still_Works_When_Click_Repeat_Is_Off()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { LongPressThreshold = 0.4f })));
+
+        var commands = new List<InputCommand>();
+        for (var i = 0; i < 20; i++)
+        {
+            commands.AddRange(engine.Tick(Held(GamepadButton.B), 0.05f));
+        }
+
+        // Long-press fires once at 0.4s; no click auto-repeat.
+        Assert.Equal(1, Taps(commands));
+    }
+
+    [Fact]
+    public void Long_Press_With_None_Action_Does_Not_Consume_The_Press()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture
+            {
+                LongPressThreshold = 0.4f,
+                LongPressAction = new NoneTarget(),
+            })));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+
+        // 无功能 is not a second function, so an early release still fires the single.
+        var tap = engine.Tick(Released, 0.1f);
+        Assert.Equal(2, tap.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), tap[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), tap[1]);
+    }
+
+    [Fact]
+    public void None_Target_Emits_No_Commands()
+    {
+        var engine = new MappingEngine(Profile(Plain(GamepadButton.B, new NoneTarget())));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.016f));
+        Assert.Empty(engine.Tick(Released, 0.016f));
+    }
+
+    [Fact]
+    public void None_Target_As_A_Gesture_Action_Emits_No_Commands()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture
+            {
+                DoubleClickWindow = 0.25f,
+                DoubleClickAction = new NoneTarget(),
+            })));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+
+        // The double-click resolves to its NoneTarget action, which emits nothing.
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.05f));
+    }
+
     private sealed record ExtraButtonState(params int[] Codes) : IGamepadState
     {
         public GamepadButtonMask PressedButtons => GamepadButtonMask.None;

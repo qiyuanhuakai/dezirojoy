@@ -8,6 +8,7 @@ namespace DeziroJoy.Core.Mapping;
 [JsonDerivedType(typeof(MouseButtonTarget), "mouseButton")]
 [JsonDerivedType(typeof(MouseMoveTarget), "mouseMove")]
 [JsonDerivedType(typeof(WheelScrollTarget), "wheel")]
+[JsonDerivedType(typeof(NoneTarget), "none")]
 public abstract record MappingTarget;
 
 /// <summary>Hold-to-key mapping: key goes down on press, up on release.</summary>
@@ -24,3 +25,6 @@ public sealed record MouseMoveTarget(MouseStickSettings Settings) : MappingTarge
 
 /// <summary>Stick to mouse wheel scrolling.</summary>
 public sealed record WheelScrollTarget(ScrollStickSettings Settings) : MappingTarget;
+
+/// <summary>A gesture action that deliberately does nothing: the gesture resolves, nothing is emitted.</summary>
+public sealed record NoneTarget : MappingTarget;
