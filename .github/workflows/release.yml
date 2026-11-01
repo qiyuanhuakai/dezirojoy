@@ -20,11 +20,19 @@ jobs:
   publish:
     name: publish ${{ matrix.rid }}
     needs: test
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        rid: [win-x64, win-arm64]
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: win-arm64
+            os: windows-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: linux-arm64
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -51,7 +59,8 @@ jobs:
           -p:Version=${{ steps.version.outputs.version }}
           -o publish/${{ matrix.rid }}
 
-      - name: Smoke check the published binary
+      - name: Smoke check the published binary (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $exe = "publish/${{ matrix.rid }}/DeziroJoy.exe"
@@ -61,13 +70,53 @@ jobs:
           "Version : $($info.ProductVersion)"
           if ($info.ProductVersion -notlike '${{ steps.version.outputs.version }}*') { throw "Version mismatch: $($info.ProductVersion)" }
 
+      # Linux builds carry no PE version resource and the .NET SDK appends +<sha> to
+      # InformationalVersion, so the Windows ProductVersion prefix check has no Linux
+      # equivalent. Verify the artefact is an ELF executable of the right architecture,
+      # then actually run the headless daemon: a binary whose native libraries fail to
+      # resolve exits immediately, while a healthy one is still running when timeout
+      # kills it, which is exit code 124.
+      - name: Smoke check the published binary (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -uo pipefail
+          exe="publish/${{ matrix.rid }}/DeziroJoy"
+          test -x "$exe" || { echo "not executable: $exe"; exit 1; }
+          case "${{ matrix.rid }}" in
+            linux-x64)   want="x86-64" ;;
+            linux-arm64) want="aarch64" ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          got=$(file -b "$exe")
+          echo "file: $got"
+          echo "$got" | grep -q "ELF" || { echo "not an ELF binary"; exit 1; }
+          echo "$got" | grep -q "$want" || { echo "wrong architecture, wanted $want"; exit 1; }
+          timeout 10 "$exe" --daemon > daemon.log 2>&1
+          code=$?
+          echo "daemon exit code: $code"
+          sed -n '1,20p' daemon.log
+          if [ "$code" -ne 124 ]; then
+            echo "daemon did not stay running (expected 124 from timeout)"
+            exit 1
+          fi
+
       - name: Zip
+        if: runner.os == 'Windows'
         shell: pwsh
         run: >
           Compress-Archive
           -Path publish/${{ matrix.rid }}/*
           -DestinationPath DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip
           -CompressionLevel Optimal
+
+      - name: Zip
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cd "publish/${{ matrix.rid }}"
+          zip -q -r -9 "../DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip" .
+          cd -
 
       - name: Checksum
         shell: bash
@@ -126,19 +175,33 @@ jobs:
             面板内实时校准预览
           - 按设备持久化配置；深色界面 + 实时手柄可视化器
 
-          ### 下载
+           ### 下载
 
-          | 文件 | 说明 |
-          | --- | --- |
-          | `DeziroJoy-vVERSION-win-x64.zip` | 自包含，解压即用（无需安装 .NET），Intel / AMD 64 位 |
-          | `DeziroJoy-vVERSION-win-arm64.zip` | 同上，ARM64（如骁龙笔记本） |
-          | `*.sha256` | SHA256 校验和 |
+           | 文件 | 平台 | 说明 |
+           | --- | --- | --- |
+           | `DeziroJoy-vVERSION-win-x64.zip` | Windows | 自包含，解压即用（无需安装 .NET），Intel / AMD 64 位 |
+           | `DeziroJoy-vVERSION-win-arm64.zip` | Windows | 同上，ARM64（如骁龙笔记本） |
+           | `DeziroJoy-vVERSION-linux-x64.zip` | Linux | 自包含，解压即用，Intel / AMD 64 位 |
+           | `DeziroJoy-vVERSION-linux-arm64.zip` | Linux | 同上，ARM64（如树莓派） |
+           | `*.sha256` | — | SHA256 校验和 |
 
-          ### 已知限制
+           Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，
+           桌面发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要
+           `evdev`；注入鼠标键盘需要 `/dev/uinput` 可写，若不可写应用会明确报告，
+           不会静默失效。
 
-          - 仅支持 XInput 兼容手柄
-          - 配置按 XInput 槽位保存，两个手柄互换插槽时配置随槽位而非硬件走
-          - Linux 支持为实验性（evdev + uinput），本发布仅提供 Windows 构建
+           ### 已知限制
+
+           - Windows 上输入读取走 XInput，只能看到 Xbox 布局的标准按键；
+             超出该布局的按键（部分第三方手柄的额外宏键）不会被识别。
+           - XInput 无法提供稳定硬件 ID，Windows 上配置按 XInput 槽位（#1-#4）
+             保存；两个手柄互换插槽时，配置随槽位而非硬件走。Linux 上 evdev
+             提供稳定设备路径，按硬件保存。
+           - 常驻服务使用 Windows 计划任务的“登录时”触发器，而非开机启动：
+             登录前进程运行在会话 0，无法向用户桌面注入输入。
+           - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入
+             输入，且失败时错误码不指明源于 UIPI。需提权运行，或安装常驻服务。
+
 
           ### 质量门禁
 
