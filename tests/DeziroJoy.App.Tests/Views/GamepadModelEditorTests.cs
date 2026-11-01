@@ -449,4 +449,90 @@ public sealed class GamepadModelEditorTests
         // they take a different lookup path and need their own test.
         Assert.Equal(new Thickness(2.5), outlined!.BorderThickness);
     }
+
+    // ---- Gesture actions ----------------------------------------------------
+
+    [AvaloniaFact]
+    public void Each_Gesture_Has_An_Action_Picker_Besides_Its_Timing()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        // Timing alone is not a configuration.
+        var doubleClick = window.FindControl<ComboBox>("GestureDoubleClickActionCombo")!;
+        var longPress = window.FindControl<ComboBox>("GestureLongPressActionCombo")!;
+
+        Assert.True(doubleClick.IsVisible);
+        Assert.True(longPress.IsVisible);
+        Assert.NotEmpty(doubleClick.Items!);
+        Assert.NotEmpty(longPress.Items!);
+    }
+
+    [AvaloniaFact]
+    public void Choosing_A_Double_Click_Action_Arms_Its_Timing()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+
+        Assert.Equal(0f, viewModel.Editor.DoubleClickWindow);
+
+        // A gesture with no window can never resolve, so picking an action must arm its timing.
+        viewModel.Editor.SelectedDoubleClickOption = viewModel.Editor.GestureActionOptions
+            .First(o => o.Target is KeyPressTarget);
+
+        Assert.True(viewModel.Editor.DoubleClickWindow > 0f);
+        Assert.Equal(
+            MappingEditorViewModel.DefaultDoubleClickWindow,
+            viewModel.Editor.DoubleClickWindow);
+    }
+
+    [AvaloniaFact]
+    public void Choosing_A_Long_Press_Action_Arms_Its_Timing()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+
+        Assert.Equal(0f, viewModel.Editor.LongPressThreshold);
+
+        viewModel.Editor.SelectedLongPressOption = viewModel.Editor.GestureActionOptions
+            .First(o => o.Target is MouseButtonTarget);
+
+        Assert.True(viewModel.Editor.LongPressThreshold > 0f);
+        Assert.Equal(
+            MappingEditorViewModel.DefaultLongPressThreshold,
+            viewModel.Editor.LongPressThreshold);
+    }
+
+    [AvaloniaFact]
+    public void A_Committed_Gesture_Action_Survives_The_Round_Trip()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        var space = viewModel.Editor.GestureActionOptions.First(
+            o => o.Target is KeyPressTarget { Key: GamepadKey.Space });
+        viewModel.Editor.SelectedDoubleClickOption = space;
+
+        viewModel.CommitEditorCommand.Execute(null);
+
+        var source = viewModel.ActiveProfile!.Mappings
+            .Select(m => m.Source)
+            .OfType<ButtonBinding>()
+            .First(b => b.Button == GamepadButton.A);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), source.Gesture!.DoubleClickAction);
+    }
 }

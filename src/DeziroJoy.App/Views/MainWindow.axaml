@@ -544,13 +544,52 @@
                                                <ColumnDefinition Width="*" />
                                                <ColumnDefinition Width="90" />
                                            </Grid.ColumnDefinitions>
-                                           <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按重复间隔 (s)" VerticalAlignment="Center" Margin="0" />
-                                           <Slider Grid.Column="1" x:Name="GestureRepeatBox" Minimum="0" Maximum="1" TickFrequency="0.05"
-                                                   Value="{Binding Editor.LongPressRepeatInterval, Mode=TwoWay}" VerticalAlignment="Center" />
-                                           <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                      Text="{Binding Editor.LongPressRepeatInterval, StringFormat='{}{0:F2}'}" />
-                                           </Grid>
-                                      </StackPanel>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按重复间隔 (s)" VerticalAlignment="Center" Margin="0" />
+                                            <Slider Grid.Column="1" x:Name="GestureRepeatBox" Minimum="0" Maximum="1" TickFrequency="0.05"
+                                                    Value="{Binding Editor.LongPressRepeatInterval, Mode=TwoWay}" VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                        Text="{Binding Editor.LongPressRepeatInterval, StringFormat='{}{0:F2}'}" />
+                                        </Grid>
+
+
+                                        <!-- What each gesture does. The timing above only says when a
+                                             gesture resolves; without these it has no function of its own
+                                             and just re-fires the mapping's own target. Choosing an action
+                                             while its timing still sits at 0 arms a default window, since a
+                                             gesture with no window can never resolve. -->
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="双击时执行" VerticalAlignment="Center" Margin="0" />
+                                            <ComboBox Grid.Column="1" x:Name="GestureDoubleClickActionCombo" Classes="enumCombo"
+                                                      ItemsSource="{Binding Editor.GestureActionOptions}"
+                                                      SelectedItem="{Binding Editor.SelectedDoubleClickOption, Mode=TwoWay}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Label}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </Grid>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按时执行" VerticalAlignment="Center" Margin="0" />
+                                            <ComboBox Grid.Column="1" x:Name="GestureLongPressActionCombo" Classes="enumCombo"
+                                                      ItemsSource="{Binding Editor.GestureActionOptions}"
+                                                      SelectedItem="{Binding Editor.SelectedLongPressOption, Mode=TwoWay}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Label}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </Grid>
+                                       </StackPanel>
                                 </StackPanel>
                                 </ScrollViewer>
                             </Grid>
