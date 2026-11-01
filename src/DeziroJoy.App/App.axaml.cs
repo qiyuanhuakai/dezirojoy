@@ -18,15 +18,23 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // Same wiring the headless daemon uses; only the lifetime around it differs.
-            var composition = new EngineComposition();
+            var runtime = GuiRuntimeFactory.CreateDefault()
+                .CreateAsync(CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            var composition = runtime.Local ?? new EngineComposition(presentationOnly: true);
+            var viewModel = new MainWindowViewModel(
+                composition.Host,
+                composition.ProfileStore,
+                daemon: runtime.Controller,
+                daemonRequired: OperatingSystem.IsWindows());
 
             var services = new ServiceCollection();
             services.AddSingleton(composition.Provider);
             services.AddSingleton(composition.Sink);
             services.AddSingleton<IProfileStore>(composition.ProfileStore);
             services.AddSingleton(composition.Host);
-            services.AddSingleton<MainWindowViewModel>();
+            services.AddSingleton(viewModel);
             services.AddSingleton<ThemeService>();
             services.AddSingleton<IElevationService, ElevationService>();
 
@@ -35,8 +43,11 @@ public partial class App : Application
             var themes = serviceProvider.GetRequiredService<ThemeService>();
             themes.ApplyPersisted();
 
-            var viewModel = serviceProvider.GetRequiredService<MainWindowViewModel>();
             var host = serviceProvider.GetRequiredService<EngineHost>();
+            if (runtime.UnavailableReason is { } unavailableReason)
+            {
+                viewModel.ReportDaemonUnavailable(unavailableReason);
+            }
 
             desktop.MainWindow = new MainWindow(viewModel, host, themes);
 
@@ -44,7 +55,12 @@ public partial class App : Application
             // open. Constructed exactly once here; disposed when the lifetime exits.
             var tray = new TrayService(this, desktop, themes);
             tray.Install(desktop.MainWindow);
-            desktop.Exit += (_, _) => tray.Dispose();
+            desktop.Exit += (_, _) =>
+            {
+                tray.Dispose();
+                viewModel.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                composition.Dispose();
+            };
         }
 
         base.OnFrameworkInitializationCompleted();

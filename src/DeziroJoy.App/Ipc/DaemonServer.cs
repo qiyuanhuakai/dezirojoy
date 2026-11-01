@@ -130,8 +130,21 @@ public sealed partial class DaemonServer
                 $"the client speaks protocol version {hello.ProtocolVersion}, the daemon speaks {IpcContract.ProtocolVersion}");
         }
 
+        if (!IsSessionAccepted(hello.SessionId, OperatingSystem.IsWindows(), IpcSession.Current))
+        {
+            return new HelloAckMessage(
+                IpcContract.ProtocolVersion,
+                false,
+                DaemonInstanceId,
+                CurrentRevision(),
+                "the client belongs to a different Windows session");
+        }
+
         return new HelloAckMessage(IpcContract.ProtocolVersion, true, DaemonInstanceId, CurrentRevision());
     }
+
+    internal static bool IsSessionAccepted(int clientSessionId, bool isWindows, int daemonSessionId)
+        => !isWindows || clientSessionId == daemonSessionId;
 
     private StateChangedMessage HandleGetState(GetStateMessage getState)
     {

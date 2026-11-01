@@ -8,6 +8,11 @@ namespace DeziroJoy.App.Ipc;
 /// the injection mutex are two different kernel objects with two different names
 /// (section 4.3); only the pipe name belongs here.
 /// </summary>
+internal static class IpcSession
+{
+    public static int Current => System.Diagnostics.Process.GetCurrentProcess().SessionId;
+}
+
 public static class IpcContract
 {
     /// <summary>The protocol version this assembly speaks; bumped only on a breaking change.</summary>
@@ -38,7 +43,7 @@ public static class IpcErrorCodes
 }
 
 /// <summary>
-/// One message on the mapping control channel. The union is closed: exactly the nine
+/// One message on the mapping control channel. The union is closed: exactly the eleven
 /// messages of section 4.4, each carrying only the fields its own semantics need -
 /// there is no envelope that forces every field onto every message. The
 /// <c>kind</c> discriminator is written by the serializer, not by hand.
@@ -60,9 +65,10 @@ public abstract record IpcMessage;
 /// <summary>
 /// GUI to daemon: handshake. <see cref="ProtocolVersion"/> is what the client speaks,
 /// so the daemon can refuse a version it does not implement instead of guessing;
-/// <see cref="ClientInstanceId"/> identifies this GUI run.
+/// <see cref="ClientInstanceId"/> identifies this GUI run, and <see cref="SessionId"/>
+/// lets the Windows daemon reject a client from another session.
 /// </summary>
-public sealed record HelloMessage(string ClientId, int ProtocolVersion, string ClientInstanceId) : IpcMessage;
+public sealed record HelloMessage(string ClientId, int ProtocolVersion, string ClientInstanceId, int SessionId) : IpcMessage;
 
 /// <summary>
 /// Daemon to GUI: handshake answer. <see cref="Accepted"/> is false when the versions

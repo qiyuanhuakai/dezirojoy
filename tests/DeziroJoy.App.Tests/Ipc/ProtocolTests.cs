@@ -43,7 +43,7 @@ public class ProtocolTests
     [Fact]
     public void Hello_Round_Trips_With_The_Client_Protocol_Version_And_Instance()
     {
-        var message = new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-instance-1");
+        var message = new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-instance-1", IpcSession.Current);
 
         var restored = Assert.IsType<HelloMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));

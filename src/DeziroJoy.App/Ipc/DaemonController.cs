@@ -121,7 +121,7 @@ public sealed class DaemonController : IAsyncDisposable
 
             var hello = await ExchangeDirectAsync(
                 channel,
-                new HelloMessage("DeziroJoy.GUI", IpcContract.ProtocolVersion, ClientInstanceId),
+                new HelloMessage("DeziroJoy.GUI", IpcContract.ProtocolVersion, ClientInstanceId, IpcSession.Current),
                 message => message is HelloAckMessage,
                 timeout.Token).ConfigureAwait(false);
             var ack = (HelloAckMessage)hello;

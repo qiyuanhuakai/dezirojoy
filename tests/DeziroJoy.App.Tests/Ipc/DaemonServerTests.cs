@@ -197,7 +197,7 @@ public class DaemonServerTests
         var (server, _, _) = CreateRunning();
 
         var ack = Assert.IsType<HelloAckMessage>(
-            await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1")));
+            await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current)));
 
         Assert.True(ack.Accepted);
         Assert.Equal(IpcContract.ProtocolVersion, ack.ProtocolVersion);
@@ -211,10 +211,18 @@ public class DaemonServerTests
         var (server, _, _) = CreateRunning();
 
         var ack = Assert.IsType<HelloAckMessage>(
-            await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion + 1, "client-1")));
+            await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion + 1, "client-1", IpcSession.Current)));
 
         Assert.False(ack.Accepted);
         Assert.False(string.IsNullOrWhiteSpace(ack.RejectReason));
+    }
+
+    [Fact]
+    public void Windows_Handshake_Accepts_Only_The_Daemons_Own_Session()
+    {
+        Assert.True(DaemonServer.IsSessionAccepted(7, true, 7));
+        Assert.False(DaemonServer.IsSessionAccepted(8, true, 7));
+        Assert.True(DaemonServer.IsSessionAccepted(0, false, 7));
     }
 
     [Fact]
@@ -384,7 +392,7 @@ public class DaemonServerTests
         var pushes = new List<StateChangedMessage>();
         server.StateChanged += push => pushes.Add(push);
 
-        await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1"));
+        await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
         await server.ProcessAsync(new GetStateMessage("req-1"));
         Assert.Empty(pushes);
 
@@ -487,7 +495,7 @@ public class DaemonServerTests
     {
         var (server, _, host) = CreateRunning();
         var stream = new ScriptedStream();
-        stream.Script(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1"));
+        stream.Script(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
         stream.Script(new StartMessage("req-1", 0));
 
         await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);

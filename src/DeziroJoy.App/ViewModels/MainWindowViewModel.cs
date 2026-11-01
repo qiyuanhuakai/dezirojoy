@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
@@ -41,6 +43,8 @@ public enum MappingOwner
     /// The only way to reach this state is a start attempt that was refused.
     /// </summary>
     AnotherProcess,
+
+    ResidentDaemon,
 }
 
 /// <summary>
@@ -48,9 +52,21 @@ public enum MappingOwner
 /// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
 /// only marshals host events onto the UI thread and calls <see cref="ApplySample"/>.
 /// </summary>
-public partial class MainWindowViewModel : ObservableObject
+public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly EngineHost _host;
+
+    private readonly DaemonController? _daemon;
+
+    private readonly bool _daemonRequired;
+
+    private readonly SynchronizationContext? _uiContext;
+
+    private readonly CancellationTokenSource _lifetime = new();
+
+    private bool _mappingEnabledRequested = true;
+
+    private bool _disposed;
 
     private readonly IProfileStore _profileStore;
 
@@ -75,9 +91,17 @@ public partial class MainWindowViewModel : ObservableObject
 
     private bool _navigationRightDeflected;
 
-    public MainWindowViewModel(EngineHost host, IProfileStore profileStore, IElevationService? elevationService = null)
+    public MainWindowViewModel(
+        EngineHost host,
+        IProfileStore profileStore,
+        IElevationService? elevationService = null,
+        DaemonController? daemon = null,
+        bool daemonRequired = false)
     {
         _host = host;
+        _daemon = daemon;
+        _daemonRequired = daemonRequired || daemon is not null;
+        _uiContext = SynchronizationContext.Current;
         _profileStore = profileStore;
         _elevationService = elevationService ?? new ElevationService();
         Editor = new MappingEditorViewModel();
@@ -90,6 +114,18 @@ public partial class MainWindowViewModel : ObservableObject
         // Fixed for the lifetime of the process: elevation is decided at launch.
         IsElevationSupported = _elevationService.IsSupported;
         IsElevated = _elevationService.IsElevated;
+
+        if (_daemon is not null)
+        {
+            _daemon.SnapshotChanged += OnDaemonSnapshot;
+            _daemon.Disconnected += OnDaemonDisconnected;
+            if (_daemon.Snapshot is { } snapshot)
+            {
+                OnDaemonSnapshot(snapshot);
+            }
+        }
+
+        RefreshStatus();
     }
 
     public ObservableCollection<ControllerRuntime> Controllers { get; } = [];
@@ -109,6 +145,19 @@ public partial class MainWindowViewModel : ObservableObject
     public AppearanceViewModel Appearance { get; }
 
     public DaemonSettingsViewModel DaemonSettings { get; }
+
+    public bool IsDaemonMode => _daemonRequired;
+
+    public bool IsDaemonConnected => _daemon?.State == DaemonConnectionState.Connected;
+
+    public string DaemonStatusText => !_daemonRequired
+        ? "本地映射引擎"
+        : DaemonSnapshot is null
+            ? "守护进程不可用；未启用本地注入回退"
+            : $"守护进程已连接 · 修订 {DaemonSnapshot.Revision} · 序列 {DaemonSnapshot.Sequence}";
+
+    [ObservableProperty]
+    private StateSnapshot? _daemonSnapshot;
 
     [ObservableProperty]
     private ControllerRuntime? _activeController;
@@ -172,7 +221,7 @@ public partial class MainWindowViewModel : ObservableObject
     /// True when a relaunch would actually change anything: the platform cares about
     /// integrity levels and this process is not elevated yet.
     /// </summary>
-    public bool CanRelaunchElevated => IsElevationSupported && !IsElevated;
+    public bool CanRelaunchElevated => !_daemonRequired && IsElevationSupported && !IsElevated;
 
     /// <summary>
     /// Command-line flag an elevated relaunch carries when mapping is running, so the
@@ -189,21 +238,32 @@ public partial class MainWindowViewModel : ObservableObject
     /// always the main window - never the resident daemon, whose scheduled-task run level
     /// says nothing about what this window injects.
     /// </summary>
-    public string InjectorDescription => IsElevationSupported
-        ? IsElevated
-            ? "DeziroJoy 主窗口（已提权）"
-            : "DeziroJoy 主窗口（未提权）"
-        : "DeziroJoy 主窗口";
+    public string InjectorDescription => _daemonRequired
+        ? DaemonSnapshot is { } daemon
+            ? $"提权守护进程（PID {daemon.InjectorPid}）"
+            : "提权守护进程（不可用）"
+        : IsElevationSupported
+            ? IsElevated
+                ? "DeziroJoy 主窗口（已提权）"
+                : "DeziroJoy 主窗口（未提权）"
+            : "DeziroJoy 主窗口";
 
     /// <summary>
     /// Integrity level of that injector: what this process's Windows token actually holds,
     /// or <see cref="InjectorIntegrityLevel.Unknown"/> where integrity levels do not apply.
     /// </summary>
-    public InjectorIntegrityLevel InjectorIntegrity => IsElevationSupported
-        ? IsElevated
-            ? InjectorIntegrityLevel.Elevated
-            : InjectorIntegrityLevel.Medium
-        : InjectorIntegrityLevel.Unknown;
+    public InjectorIntegrityLevel InjectorIntegrity => _daemonRequired
+        ? DaemonSnapshot?.InjectorIntegrity switch
+        {
+            "high" => InjectorIntegrityLevel.Elevated,
+            "medium" => InjectorIntegrityLevel.Medium,
+            _ => InjectorIntegrityLevel.Unknown,
+        }
+        : IsElevationSupported
+            ? IsElevated
+                ? InjectorIntegrityLevel.Elevated
+                : InjectorIntegrityLevel.Medium
+            : InjectorIntegrityLevel.Unknown;
 
     /// <summary>
     /// What the injector's integrity level means for reach, stated plainly. SendInput is
@@ -211,11 +271,17 @@ public partial class MainWindowViewModel : ObservableObject
     /// can tell "UIPI dropped my input" from "it worked" - and the only hint that the
     /// relaunch is the fix.
     /// </summary>
-    public string InjectorStatusText => IsElevationSupported
-        ? IsElevated
-            ? "已提权：可向以管理员身份运行的应用注入输入"
-            : "未提权：向以管理员身份运行的应用注入的输入会被 UIPI 静默丢弃"
-        : "当前平台不受 UIPI 限制，无需提权";
+    public string InjectorStatusText => _daemonRequired
+        ? DaemonSnapshot is null
+            ? "守护进程不可用；未启动本地注入"
+            : InjectorIntegrity == InjectorIntegrityLevel.Elevated
+                ? "由提权守护进程注入，可覆盖管理员目标"
+                : "守护进程未提权；管理员目标仍会被 UIPI 拦截"
+        : IsElevationSupported
+            ? IsElevated
+                ? "已提权：可向以管理员身份运行的应用注入输入"
+                : "未提权：向以管理员身份运行的应用注入的输入会被 UIPI 静默丢弃"
+            : "当前平台不受 UIPI 限制，无需提权";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(MappingOwnerDescription))]
@@ -231,6 +297,7 @@ public partial class MainWindowViewModel : ObservableObject
         MappingOwner.None => "映射未启动",
         MappingOwner.ThisWindow => "本窗口正在注入映射",
         MappingOwner.AnotherProcess => "另一个进程正在注入映射（常驻服务或其他 DeziroJoy 实例），本次启动已被拒绝",
+        MappingOwner.ResidentDaemon => $"提权守护进程正在注入映射（PID {DaemonSnapshot?.InjectorPid.ToString(CultureInfo.InvariantCulture) ?? "未知"}）",
         _ => "映射未启动",
     };
 
@@ -249,7 +316,32 @@ public partial class MainWindowViewModel : ObservableObject
         // The editor hijacks the pad: while a mapping is open, physical presses navigate the
         // editor instead of being injected, so the engine must not dispatch. Sampling continues
         // either way - navigation works with the engine running or stopped.
-        _host.SetInjectionSuspended(value);
+        if (_daemon is not null)
+        {
+            _ = SetEditorInjectionSuspended(value);
+        }
+        else if (!_daemonRequired)
+        {
+            _host.SetInjectionSuspended(value);
+        }
+    }
+
+    internal async Task SetEditorInjectionSuspended(bool suspended)
+    {
+        if (_daemon is null || !IsDaemonConnected)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _daemon.SetInjectionSuspendedAsync(suspended, _lifetime.Token);
+            ReportMutationFailure(result, "编辑器输入挂起");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            ReportDaemonUnavailable(exception.Message);
+        }
     }
 
     /// <summary>
@@ -273,7 +365,37 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ToggleEngine()
+    private async Task ToggleEngine()
+    {
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；未启动本地注入回退。");
+            return;
+        }
+
+        if (_daemon is not null)
+        {
+            try
+            {
+                var wasRunning = IsEngineRunning;
+                var result = wasRunning
+                    ? await _daemon.StopAsync(_lifetime.Token)
+                    : await _daemon.StartAsync(_lifetime.Token);
+                ReportMutationFailure(result, wasRunning ? "停止映射" : "启动映射");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            RefreshStatus();
+            return;
+        }
+
+        ToggleLocalEngine();
+    }
+
+    private void ToggleLocalEngine()
     {
         if (IsEngineRunning)
         {
@@ -291,10 +413,6 @@ public partial class MainWindowViewModel : ObservableObject
             }
             catch (InjectionAlreadyActiveException)
             {
-                // The resident service - or a second DeziroJoy instance - already holds the
-                // injection mutex. Starting here would double every input, so the start is
-                // refused and the UI says who is injecting instead of pretending this
-                // window took over.
                 IsEngineRunning = false;
                 MappingOwner = MappingOwner.AnotherProcess;
             }
@@ -304,8 +422,35 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ToggleMapping()
+    private async Task ToggleMapping()
     {
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；暂停状态未改变。");
+            return;
+        }
+
+        if (_daemon is not null)
+        {
+            try
+            {
+                var requested = !_mappingEnabledRequested;
+                var result = await _daemon.SetMappingEnabledAsync(requested, _lifetime.Token);
+                if (result.Outcome == MutationOutcome.Accepted)
+                {
+                    _mappingEnabledRequested = requested;
+                }
+
+                ReportMutationFailure(result, requested ? "恢复映射" : "暂停映射");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            return;
+        }
+
         _host.SetMappingEnabled(!_host.IsMappingEnabled);
         IsMappingEnabled = _host.IsMappingEnabled;
     }
@@ -327,7 +472,7 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void CommitEditor()
+    private async Task CommitEditor()
     {
         if (ActiveProfile is null)
         {
@@ -350,9 +495,11 @@ public partial class MainWindowViewModel : ObservableObject
             }
         }
 
-        ApplyProfile(ActiveProfile with { Mappings = mappings });
-        IsEditing = false;
-        _editingEntry = null;
+        if (await ApplyProfile(ActiveProfile with { Mappings = mappings }))
+        {
+            IsEditing = false;
+            _editingEntry = null;
+        }
     }
 
     [RelayCommand]
@@ -363,7 +510,7 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void DeleteMapping(MappingRowViewModel row)
+    private async Task DeleteMapping(MappingRowViewModel row)
     {
         if (ActiveProfile is null)
         {
@@ -371,7 +518,7 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         var mappings = ActiveProfile.Mappings.Where(m => m.Id != row.Entry.Id).ToList();
-        ApplyProfile(ActiveProfile with { Mappings = mappings });
+        await ApplyProfile(ActiveProfile with { Mappings = mappings });
     }
 
     private void ToggleMappingEnabled(MappingRowViewModel row, bool enabled)
@@ -385,11 +532,11 @@ public partial class MainWindowViewModel : ObservableObject
             .Select(m => m.Id == row.Entry.Id ? m with { Enabled = enabled } : m)
             .ToList();
 
-        ApplyProfile(ActiveProfile with { Mappings = mappings });
+        _ = ApplyProfile(ActiveProfile with { Mappings = mappings });
     }
 
     [RelayCommand]
-    private void ApplyMouseSensitivity()
+    private async Task ApplyMouseSensitivity()
     {
         if (ActiveProfile is null)
         {
@@ -403,11 +550,11 @@ public partial class MainWindowViewModel : ObservableObject
                 : m)
             .ToList();
 
-        ApplyProfile(ActiveProfile with { Mappings = mappings });
+        await ApplyProfile(ActiveProfile with { Mappings = mappings });
     }
 
     [RelayCommand]
-    private void ApplyScrollSensitivity()
+    private async Task ApplyScrollSensitivity()
     {
         if (ActiveProfile is null)
         {
@@ -421,7 +568,7 @@ public partial class MainWindowViewModel : ObservableObject
                 : m)
             .ToList();
 
-        ApplyProfile(ActiveProfile with { Mappings = mappings });
+        await ApplyProfile(ActiveProfile with { Mappings = mappings });
     }
 
     [RelayCommand]
@@ -436,7 +583,7 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ResetToDefault()
+    private async Task ResetToDefault()
     {
         if (ActiveController is null)
         {
@@ -444,7 +591,7 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         var fresh = DefaultProfileLibrary.CreateDefault(ActiveController.Descriptor);
-        ApplyProfile(fresh);
+        await ApplyProfile(fresh);
     }
 
     /// <summary>
@@ -521,9 +668,16 @@ public partial class MainWindowViewModel : ObservableObject
 
         var imported = result.Profile with { DeviceId = ActiveController.Descriptor.DeviceId };
 
-        ApplyProfile(imported);
-        _profileStore.Save(imported);
-        Report(result);
+        _ = ApplyImportedProfile(imported, result);
+    }
+
+    private async Task ApplyImportedProfile(GamepadProfile imported, ProfileTransferResult result)
+    {
+        if (await ApplyProfile(imported))
+        {
+            _profileStore.Save(imported);
+            Report(result);
+        }
     }
 
     private void Report(ProfileTransferResult result)
@@ -804,6 +958,12 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void RefreshStatus(bool wasConnected = false)
     {
+        if (_daemonRequired && DaemonSnapshot is null)
+        {
+            StatusMessage = "提权守护进程不可用；未启用本地注入回退";
+            return;
+        }
+
         if (ActiveController is null)
         {
             StatusMessage = wasConnected
@@ -832,20 +992,197 @@ public partial class MainWindowViewModel : ObservableObject
         RefreshMappings();
     }
 
-    private void ApplyProfile(GamepadProfile updated)
+    internal async Task<bool> ApplyProfile(GamepadProfile updated)
+    {
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；配置未应用。");
+            return false;
+        }
+
+        if (_daemon is not null)
+        {
+            try
+            {
+                var result = await _daemon.ApplyAsync(
+                    updated.Name,
+                    ProfileSerializer.Serialize(updated),
+                    _lifetime.Token);
+                if (result.Outcome != MutationOutcome.Accepted)
+                {
+                    ReportMutationFailure(result, "应用配置");
+                    return false;
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+                return false;
+            }
+        }
+
+        ApplyProfileLocally(updated);
+        return true;
+    }
+
+    private void ApplyProfileLocally(GamepadProfile updated)
     {
         ActiveProfile = updated;
 
-        if (ActiveController is not null)
+        if (_daemon is null && ActiveController is not null)
         {
             _host.Reload(ActiveController.Descriptor.DeviceId, updated);
         }
 
-        // The engine now runs the updated profile, so the calibration panels must show the
-        // settings it is actually using. Without this a reset or import leaves the sliders
-        // on the old values while the preview reflects the new ones.
         ReloadSensitivityPanels();
         RefreshMappings();
+    }
+
+    partial void OnDaemonSnapshotChanged(StateSnapshot? value)
+    {
+        OnPropertyChanged(nameof(DaemonStatusText));
+        OnPropertyChanged(nameof(InjectorDescription));
+        OnPropertyChanged(nameof(InjectorIntegrity));
+        OnPropertyChanged(nameof(InjectorStatusText));
+        OnPropertyChanged(nameof(MappingOwnerDescription));
+        OnPropertyChanged(nameof(CanRelaunchElevated));
+        RelaunchElevatedCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnDaemonSnapshot(StateSnapshot snapshot)
+    {
+        if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+        {
+            _uiContext.Post(_ => OnDaemonSnapshot(snapshot), null);
+            return;
+        }
+
+        DaemonSnapshot = snapshot;
+        IsEngineRunning = snapshot.Running;
+        IsMappingEnabled = snapshot.MappingEnabled;
+        _mappingEnabledRequested = snapshot.MappingEnabled;
+        MappingOwner = snapshot.Running ? MappingOwner.ResidentDaemon : MappingOwner.None;
+        if (!string.IsNullOrWhiteSpace(snapshot.LastError))
+        {
+            SetTransferError(snapshot.LastError);
+        }
+
+        RefreshStatus();
+    }
+
+    private void OnDaemonDisconnected()
+    {
+        if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+        {
+            _uiContext.Post(_ => OnDaemonDisconnected(), null);
+            return;
+        }
+
+        DaemonSnapshot = null;
+        IsEngineRunning = false;
+        IsMappingEnabled = false;
+        MappingOwner = MappingOwner.None;
+        SetTransferError("守护进程连接已断开；映射状态未知，未启用本地注入回退。");
+        RefreshStatus();
+    }
+
+    public void ReportDaemonUnavailable(string reason)
+    {
+        SetTransferError($"提权守护进程不可用：{reason}；未启用本地注入回退。");
+        RefreshStatus();
+    }
+
+    [RelayCommand]
+    private async Task ReconnectDaemon()
+    {
+        if (!_daemonRequired || _daemon is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _daemon.ConnectAsync(_lifetime.Token);
+            if (_daemon.Snapshot is { } snapshot)
+            {
+                OnDaemonSnapshot(snapshot);
+            }
+
+            TransferMessage = string.Empty;
+            IsTransferError = false;
+            RefreshStatus();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            ReportDaemonUnavailable(exception.Message);
+        }
+    }
+
+    private void ReportMutationFailure(MutationResult result, string operation)
+    {
+        switch (result.Outcome)
+        {
+            case MutationOutcome.Unknown:
+                SetTransferError($"{operation}结果未知；已请求重新读取状态，未自动重试。");
+                break;
+            case MutationOutcome.Refused:
+                SetTransferError($"{operation}被拒绝：{result.ErrorMessage ?? result.ErrorCode ?? "守护进程拒绝"}");
+                if (result.ErrorCode == IpcErrorCodes.RevisionMismatch)
+                {
+                    _ = RefreshDaemonStateAfterRefusal();
+                }
+                break;
+            case MutationOutcome.Accepted when IsTransferError:
+                TransferMessage = string.Empty;
+                IsTransferError = false;
+                break;
+        }
+    }
+
+    private async Task RefreshDaemonStateAfterRefusal()
+    {
+        if (_daemon is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _daemon.GetStateAsync(_lifetime.Token);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            SetTransferError($"重新读取守护状态失败：{exception.Message}");
+        }
+    }
+
+    public async Task DisconnectDaemonAsync()
+    {
+        if (_daemon is not null)
+        {
+            _daemon.SnapshotChanged -= OnDaemonSnapshot;
+            _daemon.Disconnected -= OnDaemonDisconnected;
+        }
+
+        await _lifetime.CancelAsync();
+        if (_daemon is not null)
+        {
+            await _daemon.DisposeAsync();
+        }
+
+        _lifetime.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        await DisconnectDaemonAsync();
+        GC.SuppressFinalize(this);
     }
 
     private void ReloadSensitivityPanels()
@@ -880,7 +1217,7 @@ public partial class MainWindowViewModel : ObservableObject
 
         foreach (var entry in ActiveProfile.Mappings)
         {
-            Mappings.Add(new MappingRowViewModel(entry, row => EditMapping(row), row => DeleteMapping(row), ToggleMappingEnabled));
+            Mappings.Add(new MappingRowViewModel(entry, row => EditMapping(row), row => { _ = DeleteMapping(row); }, ToggleMappingEnabled));
         }
     }
 }

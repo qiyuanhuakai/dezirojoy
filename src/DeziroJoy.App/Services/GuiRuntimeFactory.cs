@@ -26,7 +26,7 @@ public sealed class GuiRuntime : IAsyncDisposable
 
     public static GuiRuntime LocalEngine(EngineComposition local) => new(null, local, null);
 
-    public static GuiRuntime Unavailable(string reason) => new(null, null, reason);
+    public static GuiRuntime Unavailable(string reason, DaemonController controller) => new(controller, null, reason);
 
     public async ValueTask DisposeAsync()
     {
@@ -75,8 +75,7 @@ public sealed class GuiRuntimeFactory
             is DaemonUnavailableException or DaemonHandshakeException or IOException or TimeoutException
             || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            await controller.DisposeAsync().ConfigureAwait(false);
-            return GuiRuntime.Unavailable(exception.Message);
+            return GuiRuntime.Unavailable(exception.Message, controller);
         }
         catch
         {

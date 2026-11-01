@@ -24,7 +24,7 @@ public sealed class GuiRuntimeFactoryTests
 
         Assert.False(runtime.IsAvailable);
         Assert.False(string.IsNullOrWhiteSpace(runtime.UnavailableReason));
-        Assert.Null(runtime.Controller);
+        Assert.NotNull(runtime.Controller);
         Assert.Null(runtime.Local);
         Assert.Equal(0, localBuilds);
         Assert.Equal(0, endpoint.OpenCalls);

@@ -247,12 +247,14 @@ GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `Engin
 
 | 消息 | 方向 | 负载 | 语义 |
 |---|---|---|---|
-| `Hello` | GUI → daemon | 客户端标识 | 握手 |
+| `Hello` | GUI → daemon | 客户端标识、协议版本、实例 ID、Windows 会话 ID | 握手 |
 | `HelloAck` | daemon → GUI | 实例 ID、协议版本、当前配置修订号 | 握手应答 |
 | `GetState` | GUI → daemon | — | 拉取全量快照 |
 | `ApplyConfiguration` | GUI → daemon | 期望配置修订号 + 完整 profile JSON | 提交配置变更 |
 | `Start` | GUI → daemon | 期望配置修订号 | 请求开始映射 |
 | `Stop` | GUI → daemon | — | 请求停止映射 |
+| `SetMappingEnabled` | GUI → daemon | 请求 ID、启用状态 | 暂停或恢复分发，不停止引擎 |
+| `SetInjectionSuspended` | GUI → daemon | 请求 ID、挂起状态 | 编辑器劫持手柄期间暂停注入 |
 | `MutationAck` | daemon → GUI | 请求 ID、结果、新修订号、新序号 | 变更已被受理 |
 | `StateChanged` | daemon → GUI | 全量快照 | 状态推送 |
 | `Error` | daemon → GUI | 请求 ID、错误码、可读信息 | 请求失败 |
@@ -272,7 +274,7 @@ GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `Engin
 - **完整 profile JSON，不是路径**：配置随消息传输序列化后的 profile 本体。传路径会让
   守护进程去读一个 GUI 有权限而它未必有权限的位置，也会让"到底改没改"无法从消息本身判断。
 - **同一时刻只有一个未完成变更**：GUI 在收到上一条 `MutationAck` 之前，不发下一条
-  `ApplyConfiguration` / `Start` / `Stop`。
+  `ApplyConfiguration` / `Start` / `Stop` / `SetMappingEnabled` / `SetInjectionSuspended`。
 - **结果未知时对账，绝不重放**：请求超时或连接中断时，GUI 无法知道守护进程是否已经应用了
   这条变更。此时它重新连接、握手、`GetState`，按真实状态决定下一步。**永不重放**同一条
   变更——重放会把一次已经生效的变更应用两次。
@@ -284,6 +286,8 @@ GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `Engin
 | `Start` | 取得注入互斥体，启动引擎循环 | **在引擎与互斥体都就位之后**才回 ack |
 | `Stop` | `ReleaseAll()` 释放所有按住的键与鼠标键，再释放互斥体，停止循环 | **在释放与互斥体释放都完成之后**才回 ack |
 | `ApplyConfiguration` | 运行中**直接换 profile，不停引擎**；未运行则只更新待用配置 | 配置已生效后 |
+| `SetMappingEnabled` | 暂停或恢复分发；引擎与互斥体保持运行 | 分发状态已改变后 |
+| `SetInjectionSuspended` | 编辑器打开期间挂起注入，关闭后按用户原暂停状态恢复 | 挂起状态已改变后 |
 | GUI 关闭 / 断开 | **只断开管道**：不停引擎，不释放互斥体 | — |
 
 - `Start` 的 ack 必须晚于互斥体获取。否则 GUI 会显示"已启动"，而注入槽位其实在另一个进程手里。
@@ -296,7 +300,7 @@ GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `Engin
 - **同用户 ACL**：管道只授予同一用户（以及必要的管理员侧）访问权，不做成 Everyone 可写。
 - **同会话验证**：连接建立后守护进程校验对端进程的会话与用户，不匹配即断开。提升的守护进程
   与普通 GUI 同用户、同会话，这是设计前提；跨会话连接一律拒绝。
-- **最小攻击面**：管道只暴露 4.4 节那 9 条映射控制消息，不提供任意代码执行、文件读写或
+- **最小攻击面**：管道只暴露 4.4 节那 11 条映射控制消息，不提供任意代码执行、文件读写或
   进程启动能力。
 
 ### 4.7 第二个守护进程
