@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Chrome;
+using Avalonia.Controls.Primitives;
 using ShapePath = Avalonia.Controls.Shapes.Path;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -11,6 +12,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views;
 using DeziroJoy.App.Views.Controls;
 using Xunit;
 
@@ -126,12 +128,15 @@ public sealed class ThemeToggleGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Sidebar_Appearance_Radios_Switch_The_Whole_App()
+    public void The_Settings_Appearance_Radios_Switch_The_Whole_App()
     {
         var (window, themes) = BuildWindow();
         themes.Apply(ThemeVariant.Dark);
 
-        var radios = window.GetVisualDescendants().OfType<RadioButton>()
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+
+        var panel = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
+        var radios = panel.GetVisualDescendants().OfType<RadioButton>()
             .Where(radio => radio.Content is "浅色" or "深色")
             .ToList();
         var light = radios.Single(radio => (string?)radio.Content == "浅色");
@@ -153,18 +158,21 @@ public sealed class ThemeToggleGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Title_Bar_Toggle_Updates_The_Sidebar_Selection()
+    public void The_Title_Bar_Toggle_Updates_The_Settings_Selection()
     {
         var (window, themes) = BuildWindow();
         themes.Apply(ThemeVariant.Dark);
 
-        var light = window.GetVisualDescendants().OfType<RadioButton>().Single(radio => (string?)radio.Content == "浅色");
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+
+        var light = window.GetVisualDescendants().OfType<SettingsPanel>().Single()
+            .GetVisualDescendants().OfType<RadioButton>().Single(radio => (string?)radio.Content == "浅色");
         Assert.False(light.IsChecked);
 
         Click(ToggleOf(window), window);
 
         Assert.Equal(ThemeVariant.Light, _application.RequestedThemeVariant);
-        Assert.True(light.IsChecked, "the sidebar radio must follow the title-bar toggle");
+        Assert.True(light.IsChecked, "the settings radio must follow the title-bar toggle");
     }
 
     [AvaloniaFact]

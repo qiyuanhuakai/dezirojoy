@@ -1,0 +1,76 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
+             xmlns:controls="clr-namespace:DeziroJoy.App.Views.Controls"
+             x:Class="DeziroJoy.App.Views.SettingsPanel"
+             x:DataType="vm:MainWindowViewModel">
+
+    <!--
+        The settings surface. It is an overlay beside the workspace, not a replacement
+        for it: the connection and engine state in the left column and the model in the
+        centre column stay visible and live while this is open, so the panel only ever
+        covers the space the settings cards themselves used to occupy.
+
+        Every control here binds to the window's own view models - the profile commands,
+        the shared AppearanceViewModel and the resident DaemonSettingsViewModel - so the
+        surface is a view over the running state rather than a second copy of it.
+    -->
+
+    <UserControl.Resources>
+        <conv:BoolNegationConverter x:Key="Not" />
+        <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
+    </UserControl.Resources>
+
+    <Border Background="{DynamicResource PanelBrush}"
+            BorderBrush="{DynamicResource CardBorderBrush}"
+            BorderThickness="1"
+            CornerRadius="{DynamicResource CornerRadiusXl}"
+            Padding="12">
+        <Grid RowDefinitions="Auto,*">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Classes="cardTitle" Text="设置" VerticalAlignment="Center" />
+                <Button Grid.Column="1" x:Name="CloseSettingsButton" Classes="ghost" Content="关闭"
+                        FontSize="11" Padding="10,4" Command="{Binding CloseSettingsCommand}" />
+            </Grid>
+
+            <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="配置文件" />
+                            <WrapPanel Margin="0,12,0,0">
+                                <Button x:Name="SaveProfileButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="保存配置" Command="{Binding SaveProfileCommand}" />
+                                <Button x:Name="ResetToDefaultButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="恢复默认" Command="{Binding ResetToDefaultCommand}" />
+                                <Button x:Name="ExportProfileButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导出配置" Command="{Binding ExportProfileCommand}" />
+                                <Button x:Name="ImportProfileButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导入配置" Command="{Binding ImportProfileCommand}" />
+                            </WrapPanel>
+                            <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                                       IsVisible="{Binding HasTransferMessage}"
+                                       Foreground="{Binding IsTransferError, Converter={StaticResource TransferMessageBrush}}"
+                                       Text="{Binding TransferMessage}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="外观" />
+                            <StackPanel Margin="0,12,0,0">
+                                <RadioButton Content="浅色" IsChecked="{Binding Appearance.IsLight, Mode=TwoWay}" />
+                                <RadioButton Content="深色" IsChecked="{Binding Appearance.IsLight, Converter={StaticResource Not}, Mode=TwoWay}" Margin="0,8,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <controls:DaemonSettingsCard DataContext="{Binding DaemonSettings}" />
+
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</UserControl>

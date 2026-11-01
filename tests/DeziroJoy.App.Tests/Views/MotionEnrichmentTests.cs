@@ -124,9 +124,14 @@ public sealed class MotionEnrichmentTests
         var (window, _, _, _) = BuildWindow();
         window.UpdateLayout();
 
-        foreach (var name in new[] { "SaveProfileButton", "CloseButton" })
+        // The profile buttons moved into the settings surface, which is its own name scope,
+        // so they are reached through the panel rather than through the window.
+        var panel = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
+        var save = panel.FindControl<Button>("SaveProfileButton")!;
+        var close = window.FindControl<Button>("CloseButton")!;
+
+        foreach (var button in new[] { save, close })
         {
-            var button = window.FindControl<Button>(name)!;
             Assert.Contains(
                 button.Transitions!.OfType<BrushTransition>(),
                 t => t.Property == Button.BackgroundProperty);

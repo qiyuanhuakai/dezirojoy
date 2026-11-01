@@ -61,21 +61,21 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Drops the theme toggle into the caption button row, left of minimize. The
+    /// Drops the theme toggle into the caption button row, left of the settings button. The
     /// title bar is where the app's chrome preferences live and it has free space
     /// between the app name and the caption buttons, so the toggle costs no room in
     /// the already dense left sidebar.
     /// </summary>
     private void InstallThemeToggle(ThemeService themes)
     {
-        var minimize = this.FindControl<Button>("MinimizeButton");
+        var anchor = this.FindControl<Button>("SettingsButton") ?? this.FindControl<Button>("MinimizeButton");
 
-        if (minimize?.Parent is not Panel captionButtons)
+        if (anchor?.Parent is not Panel captionButtons)
         {
             return;
         }
 
-        captionButtons.Children.Insert(captionButtons.Children.IndexOf(minimize), new ThemeToggleButton(themes));
+        captionButtons.Children.Insert(captionButtons.Children.IndexOf(anchor), new ThemeToggleButton(themes));
     }
 
     private void ConfigureResizeGrips()
@@ -196,6 +196,21 @@ public partial class MainWindow : Window
     private void OnSettingsKeyDown(object? sender, KeyEventArgs e)
     {
         var viewModel = ViewModel;
+
+        // The settings surface is the topmost layer: while it is open, Escape closes it
+        // instead of reaching the editor underneath, so a visit to settings never cancels
+        // a mapping edit that is still in progress.
+        if (viewModel.IsSettingsOpen)
+        {
+            if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                viewModel.CloseSettingsCommand.Execute(null);
+            }
+
+            return;
+        }
+
         if (e.Handled || !viewModel.IsEditing)
         {
             return;

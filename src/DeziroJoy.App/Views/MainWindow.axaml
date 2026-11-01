@@ -234,6 +234,13 @@
             <Setter Property="Background" Value="{DynamicResource DangerBrush}" />
         </Style>
 
+        <!-- The settings button is a toggle of the surface's visibility, so it carries the
+             open state the same way the gesture segments do: an accent wash rather than a
+             second glyph. -->
+        <Style Selector=":is(Button).caption.settings:checked">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+        </Style>
+
         <Style Selector="ToggleButton.rowToggle">
             <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource ToggleForegroundBrush}" />
@@ -395,6 +402,19 @@
                 <Button x:Name="ShowRightPanelButton" Classes="ghost" Content="右栏" Width="44" Height="28" FontSize="11"
                         Padding="8,0" Margin="0,0,4,0" IsVisible="False"
                         ToolTip.Tip="显示右侧映射列表" Click="ShowRightPanelClick" />
+                <ToggleButton x:Name="SettingsButton" Classes="caption settings"
+                              chrome:WindowDecorationProperties.ElementRole="User"
+                              ToolTip.Tip="设置" IsChecked="{Binding IsSettingsOpen, Mode=TwoWay}">
+                    <!-- Gear glyph, drawn as a path so it needs no icon font and stays crisp at
+                         the 16px title-bar size. Painted with the CaptionGlyphBrush token, so it
+                         follows the theme like every other caption mark. -->
+                    <Grid Width="16" Height="16">
+                        <Path Stretch="Uniform" Stroke="{DynamicResource CaptionGlyphBrush}" StrokeThickness="2"
+                              StrokeLineCap="Round" StrokeJoin="Round"
+                              Data="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                        <Ellipse Width="6" Height="6" Stroke="{DynamicResource CaptionGlyphBrush}" StrokeThickness="2" />
+                    </Grid>
+                </ToggleButton>
                 <Button x:Name="MinimizeButton" Classes="caption"
                         chrome:WindowDecorationProperties.ElementRole="MinimizeButton"
                         Click="MinimizeClick">
@@ -480,42 +500,6 @@
                                        Text="暂停后仍可编辑配置，恢复后立即生效。" />
                         </StackPanel>
                     </Border>
-
-                    <Border Classes="card">
-                        <StackPanel>
-                            <TextBlock Classes="cardTitle" Text="配置文件" />
-                            <WrapPanel Margin="0,12,0,0">
-                                <Button x:Name="SaveProfileButton" Classes="ghost" Margin="0,0,8,8"
-                                        Content="保存配置" Command="{Binding SaveProfileCommand}" />
-                                <Button x:Name="ResetToDefaultButton" Classes="ghost" Margin="0,0,8,8"
-                                        Content="恢复默认" Command="{Binding ResetToDefaultCommand}" />
-                                <Button x:Name="ExportProfileButton" Classes="ghost" Margin="0,0,8,8"
-                                        Content="导出配置" Command="{Binding ExportProfileCommand}" />
-                                <Button x:Name="ImportProfileButton" Classes="ghost" Margin="0,0,8,8"
-                                        Content="导入配置" Command="{Binding ImportProfileCommand}" />
-                            </WrapPanel>
-                            <TextBlock Classes="hint" Margin="0,2,0,0"
-                                       Text="配置按设备保存，重连后自动恢复。导入/导出为单个 JSON 文件，可在不同电脑间搬运。" />
-                            <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
-                                       IsVisible="{Binding HasTransferMessage}"
-                                       Foreground="{Binding IsTransferError, Converter={StaticResource TransferMessageBrush}}"
-                                       Text="{Binding TransferMessage}" />
-                        </StackPanel>
-                    </Border>
-
-                    <Border Classes="card">
-                        <StackPanel>
-                            <TextBlock Classes="cardTitle" Text="外观" />
-                            <TextBlock Classes="hint" Margin="0,4,0,0"
-                                       Text="切换浅色 / 深色主题；标题栏右侧的月牙 / 太阳图标是同一功能的快捷方式。" />
-                            <StackPanel Margin="0,12,0,0">
-                                <RadioButton Content="浅色" IsChecked="{Binding Appearance.IsLight, Mode=TwoWay}" />
-                                <RadioButton Content="深色" IsChecked="{Binding Appearance.IsLight, Converter={StaticResource Not}, Mode=TwoWay}" Margin="0,8,0,0" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <controls:DaemonSettingsCard DataContext="{Binding DaemonSettings}" />
 
                 </StackPanel>
             </ScrollViewer>
@@ -1146,6 +1130,17 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <!-- The settings surface. It is a sibling of the workspace rather than a child of
+             it, so it floats above the right column without taking part in the column
+             sizing, and it spans only that column's width: the connection and engine state
+             in the left column and the model in the centre column stay visible and live
+             while it is open. Closing it hides the surface and nothing else, so an edit in
+             progress is exactly where it was left. -->
+        <views:SettingsPanel x:Name="SettingsPanelHost" Grid.Row="1"
+                             Width="300" Margin="0,8,0,8"
+                             HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                             IsVisible="{Binding IsSettingsOpen}" />
 
         <!-- WindowDecorations="None" strips the native resize border, so the window has to
              declare its own hit-test zones. Kept as the last child so it sits above the

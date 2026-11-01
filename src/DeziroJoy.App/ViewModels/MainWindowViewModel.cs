@@ -141,6 +141,19 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private bool _isEngineRunning;
 
+    /// <summary>
+    /// True while the settings surface is open. The surface is an overlay over the live
+    /// view models rather than a second copy of them, so this flag is pure visibility.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSettingsOpen;
+
+    [RelayCommand]
+    private void OpenSettings() => IsSettingsOpen = true;
+
+    [RelayCommand]
+    private void CloseSettings() => IsSettingsOpen = false;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(InjectorDescription))]
     [NotifyPropertyChangedFor(nameof(InjectorIntegrity))]

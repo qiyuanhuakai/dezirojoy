@@ -2,6 +2,7 @@ using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Chrome;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -768,14 +769,20 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void The_Profile_Card_Offers_Export_And_Import_Next_To_Save_And_Reset()
+    public void The_Settings_Surface_Offers_Export_And_Import_Next_To_Save_And_Reset()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
 
-        var save = window.FindControl<Button>("SaveProfileButton")!;
-        var reset = window.FindControl<Button>("ResetToDefaultButton")!;
-        var export = window.FindControl<Button>("ExportProfileButton")!;
-        var import = window.FindControl<Button>("ImportProfileButton")!;
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+
+        var panel = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
+        var buttons = panel.GetVisualDescendants().OfType<Button>().ToList();
+
+        var save = buttons.Single(b => b.Name == "SaveProfileButton");
+        var reset = buttons.Single(b => b.Name == "ResetToDefaultButton");
+        var export = buttons.Single(b => b.Name == "ExportProfileButton");
+        var import = buttons.Single(b => b.Name == "ImportProfileButton");
 
         Assert.Equal("保存配置", save.Content);
         Assert.Equal("恢复默认", reset.Content);
@@ -786,15 +793,24 @@ public sealed class MainWindowGuiTests
         Assert.Same(viewModel.ResetToDefaultCommand, reset.Command);
         Assert.Same(viewModel.ExportProfileCommand, export.Command);
         Assert.Same(viewModel.ImportProfileCommand, import.Command);
+
+        // The profile card left the sidebar for the settings surface, so the buttons are
+        // reachable there and nowhere else.
+        var left = window.FindControl<ScrollViewer>("LeftPanel")!;
+        Assert.False(IsDescendantOf(save, left), "the profile card must leave the left sidebar");
+        Assert.False(IsDescendantOf(export, left), "the profile card must leave the left sidebar");
     }
 
     [AvaloniaFact]
-    public void The_Sidebar_Hosts_The_Daemon_Settings_Card_Bound_To_Its_ViewModel()
+    public void The_Settings_Surface_Hosts_The_Daemon_Settings_Card_Bound_To_Its_ViewModel()
     {
         var (window, viewModel, _, _) = BuildWindow();
         window.UpdateLayout();
 
-        var card = window.GetVisualDescendants().OfType<DaemonSettingsCard>().Single();
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+
+        var panel = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
+        var card = panel.GetVisualDescendants().OfType<DaemonSettingsCard>().Single();
         Assert.Same(viewModel.DaemonSettings, card.DataContext);
 
         var autostart = card.GetVisualDescendants().OfType<CheckBox>()
@@ -808,6 +824,9 @@ public sealed class MainWindowGuiTests
 
         Assert.Same(viewModel.DaemonSettings.InstallDaemonCommand, install.Command);
         Assert.Same(viewModel.DaemonSettings.UninstallDaemonCommand, uninstall.Command);
+
+        Assert.False(IsDescendantOf(card, window.FindControl<ScrollViewer>("LeftPanel")!),
+            "the resident-service card must leave the left sidebar");
     }
 
     [AvaloniaFact]
