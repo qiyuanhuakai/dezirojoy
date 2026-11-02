@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,12 +50,27 @@ public partial class App : Application
                 viewModel.ReportDaemonUnavailable(unavailableReason);
             }
 
-            desktop.MainWindow = new MainWindow(viewModel, host, themes);
+            // The tray owns the window lifecycle: the view model, the runtime and the tray
+            // outlive every window generation, and the window itself is a releasable
+            // presentation resource built from them on demand.
+            var tray = new TrayService(this, desktop, themes, () => new MainWindow(viewModel, host, themes));
 
-            // The tray owns hide-on-close, so the engine keeps mapping with no window
-            // open. Constructed exactly once here; disposed when the lifetime exits.
-            var tray = new TrayService(this, desktop, themes);
-            tray.Install(desktop.MainWindow);
+            // A second launch asked this GUI to show itself: answer by restoring the window.
+            // The activation channel is Avalonia-free, so the restore is marshalled onto the
+            // UI thread here.
+            if (GuiActivationServer.ActiveInstance is { } activation)
+            {
+                activation.ShowRequested += ()
+                    => Dispatcher.UIThread.InvokeAsync(tray.ShowMainWindow).GetTask();
+            }
+
+            tray.Install();
+
+            // The tray asks; the application - which owns the runtime - answers by shutting
+            // the lifetime down. Every window is force-closed first, so each detaches its
+            // timers and subscriptions, and Exit then disposes the runtime.
+            tray.ExitRequested += () => desktop.Shutdown();
+
             desktop.Exit += (_, _) =>
             {
                 tray.Dispose();

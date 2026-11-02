@@ -191,6 +191,26 @@ internal static class DesktopLauncher
 {
     public static int Launch(string[] args)
     {
+        // GUI single-instance arbitration runs before any Avalonia or runtime construction:
+        // a second launch only asks the first GUI to show itself and then exits, so the loser
+        // never builds a window, an engine or a daemon controller. A launch that cannot reach
+        // the winner exits too - a failed activation is never a reason to start a second GUI.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        var arbitration = GuiInstanceGuard
+            .ArbitrateAsync(identity, cancellationToken: CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+        if (!arbitration.IsWinner)
+        {
+            return arbitration.ExitCode;
+        }
+
+        // This process is the one GUI: serve the activation channel for its whole life and
+        // hold the instance lease until the process ends.
+        using var lease = arbitration.Lease!;
+        using var activation = GuiActivationServer.StartActive(identity);
+
         Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         return 0;
     }
