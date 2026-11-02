@@ -54,6 +54,7 @@ public partial class MappingEditorViewModel : ObservableObject
     private readonly SortedSet<int> _previousCaptureExtra = [];
     private ButtonPickerItem? _selectedButtonOption;
     private KeyPickerItem? _selectedKeyOption;
+    private KeyPickerItem? _activeSelectedKeyOption;
     private DirectionPickerItem? _selectedDirectionOption;
     private GestureActionOption? _selectedDoubleClickOption;
     private GestureActionOption? _selectedLongPressOption;
@@ -148,6 +149,202 @@ public partial class MappingEditorViewModel : ObservableObject
         GestureKind.LongPress => LongPressSlot,
         _ => ClickSlot,
     };
+
+    /// <summary>The active slot's target kind.</summary>
+    public MappingTargetKind ActiveTargetKind
+    {
+        get => ActiveSlot.TargetKind;
+        set => ActiveSlot.TargetKind = value;
+    }
+
+    /// <summary>The active slot's target key.</summary>
+    public GamepadKey ActiveSelectedKey
+    {
+        get => ActiveSlot.SelectedKey;
+        set => ActiveSlot.SelectedKey = value;
+    }
+
+    /// <summary>The active slot's Ctrl modifier.</summary>
+    public bool ActiveModifierCtrl
+    {
+        get => ActiveSlot.ModifierCtrl;
+        set => ActiveSlot.ModifierCtrl = value;
+    }
+
+    /// <summary>The active slot's Shift modifier.</summary>
+    public bool ActiveModifierShift
+    {
+        get => ActiveSlot.ModifierShift;
+        set => ActiveSlot.ModifierShift = value;
+    }
+
+    /// <summary>The active slot's Alt modifier.</summary>
+    public bool ActiveModifierAlt
+    {
+        get => ActiveSlot.ModifierAlt;
+        set => ActiveSlot.ModifierAlt = value;
+    }
+
+    /// <summary>The active slot's Win modifier.</summary>
+    public bool ActiveModifierWin
+    {
+        get => ActiveSlot.ModifierWin;
+        set => ActiveSlot.ModifierWin = value;
+    }
+
+    /// <summary>The active slot's mouse button.</summary>
+    public MouseButton ActiveSelectedMouseButton
+    {
+        get => ActiveSlot.SelectedMouseButton;
+        set => ActiveSlot.SelectedMouseButton = value;
+    }
+
+    /// <summary>The active slot's stick-to-mouse settings.</summary>
+    public MouseStickSettings ActiveMouseSettings
+    {
+        get => ActiveSlot.MouseSettings;
+        set => ActiveSlot.MouseSettings = value;
+    }
+
+    /// <summary>The active slot's stick-to-wheel settings.</summary>
+    public ScrollStickSettings ActiveScrollSettings
+    {
+        get => ActiveSlot.ScrollSettings;
+        set => ActiveSlot.ScrollSettings = value;
+    }
+
+    /// <summary>无功能 for the active slot: it resolves and emits nothing.</summary>
+    public bool ActiveIsNone
+    {
+        get => ActiveSlot.IsNone;
+        set => ActiveSlot.IsNone = value;
+    }
+
+    /// <summary>
+    /// 重复单击的功能 for the active slot: the legacy state where the gesture has no function
+    /// of its own and re-fires the click. It stays reachable without dominating the editor.
+    /// </summary>
+    public bool ActiveRepeatsClick
+    {
+        get => ActiveSlot.RepeatsClick;
+        set => ActiveSlot.RepeatsClick = value;
+    }
+
+    /// <summary>
+    /// True when the active gesture resolves. The click always resolves - it is the mapping's
+    /// own target - so only the double-click and the long-press carry an off state, and that
+    /// state is 已关闭: the gesture never resolves, which is a different thing from resolving
+    /// to 无功能.
+    /// </summary>
+    public bool ActiveGestureEnabled
+    {
+        get => SelectedGestureKind switch
+        {
+            GestureKind.DoubleClick => DoubleClickEnabled,
+            GestureKind.LongPress => LongPressEnabled,
+            _ => true,
+        };
+        set
+        {
+            switch (SelectedGestureKind)
+            {
+                case GestureKind.DoubleClick:
+                    DoubleClickEnabled = value;
+                    break;
+                case GestureKind.LongPress:
+                    LongPressEnabled = value;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>True when the active slot can be turned off, i.e. when it is a gesture at all.</summary>
+    public bool ActiveGestureCanBeDisabled => SelectedGestureKind != GestureKind.Click;
+
+    /// <summary>The active gesture's own name, for readouts.</summary>
+    public string ActiveGestureName => SelectedGestureKind switch
+    {
+        GestureKind.DoubleClick => "双击",
+        GestureKind.LongPress => "长按",
+        _ => "单击",
+    };
+
+    /// <summary>
+    /// True when the shared target editor's controls are live: the gesture resolves and the
+    /// slot is not 无功能. A disabled gesture has nothing to configure until it is enabled.
+    /// </summary>
+    public bool ActiveTargetEditable => ActiveGestureEnabled && !ActiveSlot.IsNone;
+
+    /// <summary>
+    /// What the active slot does, for the header readout. The click is the mapping's own
+    /// target, so it reads as the target alone; a gesture slot is prefixed with its name, and
+    /// a disabled one reads 已关闭 rather than naming a target that never fires.
+    /// </summary>
+    public string ActiveTargetDescription
+    {
+        get
+        {
+            if (ActiveGestureCanBeDisabled && !ActiveGestureEnabled)
+            {
+                return $"{ActiveGestureName}：已关闭";
+            }
+
+            var what = ActiveSlot.Function switch
+            {
+                GestureSlotFunction.None => "无功能",
+                GestureSlotFunction.RepeatClick => "重复单击的功能",
+                _ => MappingDescriptions.Target(ActiveSlot.BuildTarget()),
+            };
+
+            return ActiveGestureCanBeDisabled ? $"{ActiveGestureName}：{what}" : what;
+        }
+    }
+
+    /// <summary>
+    /// The selected row of the categorized key list for the active slot. A category header is
+    /// a label, not a choice, so assigning one snaps the selection back to the key that is
+    /// actually selected - the rule <see cref="SelectedKeyOption"/> applies to the click alone.
+    /// </summary>
+    public KeyPickerItem? ActiveSelectedKeyOption
+    {
+        get => _activeSelectedKeyOption;
+        set
+        {
+            if (EqualityComparer<KeyPickerItem?>.Default.Equals(value, _activeSelectedKeyOption))
+            {
+                return;
+            }
+
+            if (value is { IsHeader: true })
+            {
+                SetActiveSelectedKeyOption(CurrentActiveKeyOption());
+                return;
+            }
+
+            SetActiveSelectedKeyOption(value);
+
+            if (value is not null)
+            {
+                ActiveSlot.SelectedKey = value.Key;
+
+                // Picking a key implies a key target; a mouse-button target would silently
+                // drop it, so the kind follows the choice.
+                if (ActiveSlot.TargetKind == MappingTargetKind.MouseButton)
+                {
+                    ActiveSlot.TargetKind = MappingTargetKind.KeyPress;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether the categorized key list is expanded. It starts collapsed on every editor - the
+    /// list is the long way to a key, so it stays out of the way until it is asked for - and
+    /// the choice lives here so a new editor opens collapsed rather than wherever the last one
+    /// left it.
+    /// </summary>
+    [ObservableProperty]
+    private bool _keyPickerExpanded;
 
     [ObservableProperty]
     private IReadOnlyList<MappingTargetKind> _availableTargetKinds = AllTargetKinds;
@@ -685,6 +882,10 @@ public partial class MappingEditorViewModel : ObservableObject
         // The click draft takes the mapping's own target; the two gesture drafts were filled
         // from the button's gesture above.
         ClickSlot.LoadAction(entry.Target);
+
+        // The optional key list is collapsed on every editor, so a reloaded mapping opens on
+        // the compact surface rather than wherever the previous edit left the list.
+        KeyPickerExpanded = false;
     }
 
     public void Reset()
@@ -700,6 +901,7 @@ public partial class MappingEditorViewModel : ObservableObject
         SelectedStick = GamepadStick.Right;
         SelectedDirection = InputDirection.Up;
         SelectedGestureKind = GestureKind.Click;
+        KeyPickerExpanded = false;
 
         // The drafts go back to pristine first; the gesture flags and actions follow, so a
         // reset gesture ends up off rather than carrying a dormant target.
@@ -811,7 +1013,9 @@ public partial class MappingEditorViewModel : ObservableObject
 
     /// <summary>
     /// Records a captured keyboard key together with the modifiers held with it. A lone key
-    /// becomes a single-key target; any modifier turns it into a combo target.
+    /// becomes a single-key target; any modifier turns it into a combo target. The capture
+    /// writes the slot the switcher has selected, so the same affordance configures the
+    /// double-click and the long-press as peers of the click.
     /// </summary>
     public void CaptureKeyboardKey(GamepadKey key, KeyModifiers modifiers)
     {
@@ -823,12 +1027,14 @@ public partial class MappingEditorViewModel : ObservableObject
         // A key target is only honored for a button source, so capturing one repairs a stick
         // source instead of producing a mapping the engine would silently drop.
         SourceIsStick = false;
-        TargetKind = modifiers == KeyModifiers.None ? MappingTargetKind.KeyPress : MappingTargetKind.KeyCombo;
-        SelectedKey = key;
-        ModifierCtrl = modifiers.HasFlag(KeyModifiers.Ctrl);
-        ModifierShift = modifiers.HasFlag(KeyModifiers.Shift);
-        ModifierAlt = modifiers.HasFlag(KeyModifiers.Alt);
-        ModifierWin = modifiers.HasFlag(KeyModifiers.Win);
+
+        var slot = ActiveSlot;
+        slot.TargetKind = modifiers == KeyModifiers.None ? MappingTargetKind.KeyPress : MappingTargetKind.KeyCombo;
+        slot.SelectedKey = key;
+        slot.ModifierCtrl = modifiers.HasFlag(KeyModifiers.Ctrl);
+        slot.ModifierShift = modifiers.HasFlag(KeyModifiers.Shift);
+        slot.ModifierAlt = modifiers.HasFlag(KeyModifiers.Alt);
+        slot.ModifierWin = modifiers.HasFlag(KeyModifiers.Win);
     }
 
     /// <summary>Commits keyboard capture once every key has been released.</summary>
@@ -890,6 +1096,8 @@ public partial class MappingEditorViewModel : ObservableObject
         {
             ClickRepeatEnabled = false;
         }
+
+        NotifyActiveSlotChanged();
     }
 
     partial void OnClickRepeatEnabledChanged(bool value)
@@ -917,6 +1125,7 @@ public partial class MappingEditorViewModel : ObservableObject
         SyncDoubleClickOption();
         OnPropertyChanged(nameof(HasDoubleClick));
         OnPropertyChanged(nameof(HasAnyGesture));
+        NotifyActiveSlotChanged();
     }
 
     partial void OnLongPressEnabledChanged(bool value)
@@ -930,6 +1139,7 @@ public partial class MappingEditorViewModel : ObservableObject
         SyncLongPressOption();
         OnPropertyChanged(nameof(HasLongPress));
         OnPropertyChanged(nameof(HasAnyGesture));
+        NotifyActiveSlotChanged();
     }
 
     /// <summary>
@@ -974,6 +1184,8 @@ public partial class MappingEditorViewModel : ObservableObject
                 OnPropertyChanged(nameof(TargetDescription));
                 break;
         }
+
+        NotifyActiveSlotChanged();
     }
 
     /// <summary>
@@ -991,6 +1203,7 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(DoubleClickAction));
         OnPropertyChanged(nameof(HasDoubleClickAction));
         OnPropertyChanged(nameof(DoubleClickActionDescription));
+        NotifyActiveSlotChanged();
     }
 
     /// <summary>Keeps the long-press surface in step with its draft, as the double-click does.</summary>
@@ -1006,6 +1219,49 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(LongPressAction));
         OnPropertyChanged(nameof(HasLongPressAction));
         OnPropertyChanged(nameof(LongPressActionDescription));
+        NotifyActiveSlotChanged();
+    }
+
+    /// <summary>
+    /// Re-reads every active-slot adapter. The adapters are thin views over
+    /// <see cref="ActiveSlot"/>, so any slot edit, any enabled-flag change and any switcher
+    /// move goes through here; the ones whose value did not change cost one binding
+    /// evaluation and nothing else.
+    /// </summary>
+    private void NotifyActiveSlotChanged()
+    {
+        OnPropertyChanged(nameof(ActiveTargetKind));
+        OnPropertyChanged(nameof(ActiveSelectedKey));
+        OnPropertyChanged(nameof(ActiveModifierCtrl));
+        OnPropertyChanged(nameof(ActiveModifierShift));
+        OnPropertyChanged(nameof(ActiveModifierAlt));
+        OnPropertyChanged(nameof(ActiveModifierWin));
+        OnPropertyChanged(nameof(ActiveSelectedMouseButton));
+        OnPropertyChanged(nameof(ActiveMouseSettings));
+        OnPropertyChanged(nameof(ActiveScrollSettings));
+        OnPropertyChanged(nameof(ActiveIsNone));
+        OnPropertyChanged(nameof(ActiveRepeatsClick));
+        OnPropertyChanged(nameof(ActiveGestureEnabled));
+        OnPropertyChanged(nameof(ActiveGestureCanBeDisabled));
+        OnPropertyChanged(nameof(ActiveGestureName));
+        OnPropertyChanged(nameof(ActiveTargetDescription));
+        OnPropertyChanged(nameof(ActiveTargetEditable));
+        SetActiveSelectedKeyOption(CurrentActiveKeyOption());
+    }
+
+    private KeyPickerItem? CurrentActiveKeyOption()
+        => KeyOptions.FirstOrDefault(
+            option => !option.IsHeader && option.Key == ActiveSlot.SelectedKey);
+
+    private void SetActiveSelectedKeyOption(KeyPickerItem? option)
+    {
+        if (EqualityComparer<KeyPickerItem?>.Default.Equals(option, _activeSelectedKeyOption))
+        {
+            return;
+        }
+
+        _activeSelectedKeyOption = option;
+        OnPropertyChanged(nameof(ActiveSelectedKeyOption));
     }
 
     [RelayCommand]
@@ -1090,6 +1346,7 @@ public partial class MappingEditorViewModel : ObservableObject
         }
 
         SetSelectedKeyOption(CurrentKeyOption());
+        SetActiveSelectedKeyOption(CurrentActiveKeyOption());
     }
 
     private static KeyPickerItem KeyOptionFor(GamepadKey key)

@@ -590,9 +590,10 @@ public sealed class GamepadModelEditorTests
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
         Assert.True(viewModel.IsEditing);
 
-        var click = EditorPanelOf(window).FindControl<RadioButton>("GestureClickTab")!;
-        var doubleClick = EditorPanelOf(window).FindControl<RadioButton>("GestureDoubleClickTab")!;
-        var longPress = EditorPanelOf(window).FindControl<RadioButton>("GestureLongPressTab")!;
+        var panel = EditorPanelOf(window);
+        var click = panel.FindControl<RadioButton>("GestureClickTab")!;
+        var doubleClick = panel.FindControl<RadioButton>("GestureDoubleClickTab")!;
+        var longPress = panel.FindControl<RadioButton>("GestureLongPressTab")!;
 
         Assert.True(click.IsVisible);
         Assert.True(doubleClick.IsVisible);
@@ -601,29 +602,32 @@ public sealed class GamepadModelEditorTests
         Assert.False(doubleClick.IsChecked);
         Assert.False(longPress.IsChecked);
 
-        // The click branch leads; the switcher - not a buried extra - reaches the other two.
-        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
-        Assert.False(EditorPanelOf(window).FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+        // The switcher leads the shared target editor: the gesture is chosen before the
+        // target it fires, and the click leads the switcher.
+        var switcherTop = panel.FindControl<Border>("GestureSwitcher")!
+            .TranslatePoint(new Point(0, 0), window)!.Value.Y;
+        var targetTop = panel.FindControl<ComboBox>("TargetKindCombo")!
+            .TranslatePoint(new Point(0, 0), window)!.Value.Y;
+
+        Assert.True(switcherTop < targetTop, "the switcher must lead the shared target editor");
 
         Click(doubleClick, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(GestureKind.DoubleClick, viewModel.Editor.SelectedGestureKind);
-        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
-        Assert.False(EditorPanelOf(window).FindControl<StackPanel>("GestureClickBranch")!.IsVisible);
+        Assert.Same(viewModel.Editor.DoubleClickSlot, viewModel.Editor.ActiveSlot);
 
         Click(longPress, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(GestureKind.LongPress, viewModel.Editor.SelectedGestureKind);
-        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("GestureLongPressBranch")!.IsVisible);
-        Assert.False(EditorPanelOf(window).FindControl<StackPanel>("GestureDoubleClickBranch")!.IsVisible);
+        Assert.Same(viewModel.Editor.LongPressSlot, viewModel.Editor.ActiveSlot);
     }
 
     [AvaloniaFact]
-    public void Each_Gesture_Action_Picker_Offers_The_No_Function_Row()
+    public void Each_Gesture_Can_Be_Set_To_No_Function_Through_The_Shared_Editor()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
@@ -631,20 +635,27 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        var doubleClickCombo = EditorPanelOf(window).FindControl<ComboBox>("GestureDoubleClickActionCombo")!;
-        Assert.Contains(
-            doubleClickCombo.Items!.OfType<GestureActionOption>(),
-            option => option.Target is NoneTarget);
+        var panel = EditorPanelOf(window);
+        var noneBox = panel.FindControl<CheckBox>("ActiveNoneBox")!;
 
-        Click(EditorPanelOf(window).FindControl<RadioButton>("GestureLongPressTab")!, window);
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+        // One shared editor serves every slot, so 无功能 is offered for the two gestures
+        // exactly as it is for the click.
+        foreach (var tab in new[] { "GestureDoubleClickTab", "GestureLongPressTab" })
+        {
+            Click(panel.FindControl<RadioButton>(tab)!, window);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
 
-        var longPressCombo = EditorPanelOf(window).FindControl<ComboBox>("GestureLongPressActionCombo")!;
-        Assert.True(longPressCombo.IsVisible);
-        Assert.Contains(
-            longPressCombo.Items!.OfType<GestureActionOption>(),
-            option => option.Target is NoneTarget);
+            Click(panel.FindControl<CheckBox>("ActiveGestureEnabledBox")!, window);
+            Assert.True(noneBox.IsVisible, "the shared editor must offer 无功能 on every slot");
+
+            Click(noneBox, window);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(viewModel.Editor.ActiveSlot.IsNone);
+            Assert.IsType<NoneTarget>(viewModel.Editor.ActiveSlot.BuildAction());
+        }
     }
 
     [AvaloniaFact]
@@ -727,7 +738,7 @@ public sealed class GamepadModelEditorTests
         SampleHelper.Sample(viewModel, host);
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
-        Click(EditorPanelOf(window).FindControl<CheckBox>("GestureClickNoneBox")!, window);
+        Click(EditorPanelOf(window).FindControl<CheckBox>("ActiveNoneBox")!, window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 

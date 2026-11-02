@@ -437,6 +437,11 @@ public sealed class MappingSurfaceTests
 
         var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
 
+        // The list is optional and starts collapsed, so it is opened before its rows are read.
+        EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!.IsExpanded = true;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
         // The list virtualizes and opens scrolled to the current selection, so only a
         // handful of rows around it are realized. Scrolling back to the top realizes the
         // first category header together with its unselected options.
@@ -493,6 +498,9 @@ public sealed class MappingSurfaceTests
         Click(ModelElement(window, "ButtonA"), window);
 
         var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
+
+        // The list is optional and starts collapsed, so it is opened before its rows are read.
+        EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!.IsExpanded = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 

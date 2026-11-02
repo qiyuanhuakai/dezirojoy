@@ -7,11 +7,16 @@
              x:DataType="vm:MappingEditorViewModel">
 
     <!--
-        The mapping editor's card content: the header (what is being edited, plus 确定/取消)
-        and the scrolling body (target action, key list, modifiers, stick parameters and the
-        gesture switcher). The card frame itself - its border, background, slide/fade motion
-        and visibility - stays on the EditorPanel border in MainWindow, so this panel is only
-        the content that border hosts.
+        The mapping editor's card content. The gesture switcher leads: 单击 / 双击 / 长按 are
+        three equal peers, and the one target editor below it is bound to Editor.ActiveSlot, so
+        the same controls configure whichever slot the switcher has selected. The optional
+        categorized key list sits in a collapsed expander, so the editor opens compact and the
+        model above it stays in view.
+
+        The card frame itself - its border, background, slide/fade motion and visibility -
+        stays on the EditorPanel border in MainWindow, so this panel is only the content that
+        border hosts. The header row is outside the scrolling body, so 确定/取消 never scroll
+        out of reach.
 
         The panel is a view over one MappingEditorViewModel: the host binds it as
         DataContext="{Binding Editor}", so every path here is relative to the editor. The two
@@ -30,166 +35,32 @@
                 <TextBlock Classes="cardTitle" Text="编辑映射" />
                 <TextBlock Text="{Binding SourceDescription}" FontSize="13"
                            Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
-                <TextBlock Text="{Binding TargetDescription}" FontSize="12"
+                <TextBlock Text="{Binding ActiveTargetDescription}" FontSize="12"
                            Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button x:Name="CommitButton" Classes="primary" Content="确定"
+                <Button x:Name="CommitButton" Classes="primary" Content="确定" MinHeight="32"
                         Command="{ReflectionBinding DataContext.CommitEditorCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-                <Button x:Name="CancelButton" Classes="ghost" Content="取消"
-                        Margin="8,0,0,0" Command="{ReflectionBinding DataContext.CancelEditorCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                <Button x:Name="CancelButton" Classes="ghost" Content="取消" MinHeight="32"
+                        Margin="8,0,0,0"
+                        Command="{ReflectionBinding DataContext.CancelEditorCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
             </StackPanel>
         </Grid>
 
         <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <TextBlock Classes="sectionLabel" Text="目标动作" />
-                <WrapPanel IsEnabled="{Binding ClickIsNone, Converter={StaticResource Not}}">
-                    <StackPanel Width="230" Margin="0,0,12,0">
-                        <TextBlock Classes="fieldLabel" Text="类型" />
-                        <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
-                                  ItemsSource="{Binding AvailableTargetKinds}"
-                                  SelectedItem="{Binding TargetKind, Mode=TwoWay}" />
-                    </StackPanel>
-                    <StackPanel x:Name="MouseTargetRow" Width="230"
-                                IsVisible="{Binding TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
-                        <TextBlock Classes="fieldLabel" Text="鼠标按键" />
-                        <ComboBox x:Name="MouseButtonCombo" Classes="enumCombo"
-                                  ItemsSource="{x:Static views:EnumOptions.MouseButtons}"
-                                  SelectedItem="{Binding SelectedMouseButton, Mode=TwoWay}" />
-                    </StackPanel>
-                    <StackPanel VerticalAlignment="Bottom" IsVisible="{Binding ShowButtonPicker}">
-                        <TextBlock Classes="fieldLabel" Text="键盘直接输入" />
-                        <Button x:Name="CaptureKeyButton" Classes="ghost"
-                                Content="{Binding CaptureKeyLabel}"
-                                Command="{Binding ToggleCaptureKeyCommand}" />
-                    </StackPanel>
-                </WrapPanel>
-                <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding IsCapturingKey}"
-                           Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
 
-                <TextBlock Classes="sectionLabel" Text="或从列表选择"
-                           IsVisible="{Binding TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}" />
-                <ListBox x:Name="TargetKeyList" Classes="pickerList" MaxHeight="240"
-                         IsEnabled="{Binding ClickIsNone, Converter={StaticResource Not}}"
-                         IsVisible="{Binding TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
-                         ItemsSource="{Binding KeyOptions}"
-                         SelectedItem="{Binding SelectedKeyOption, Mode=TwoWay}">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:KeyPickerItem">
-                            <Panel>
-                                <Border Classes="pickerHeader" IsVisible="{Binding IsHeader}" Padding="12,12,12,5">
-                                    <Grid ColumnDefinitions="Auto,*">
-                                        <Border Grid.Column="0" Width="3" Height="9" VerticalAlignment="Center"
-                                                CornerRadius="{DynamicResource CornerRadiusSm}"
-                                                Background="{DynamicResource AccentBrush}" />
-                                        <TextBlock Grid.Column="1" Classes="pickerHeaderLabel" Text="{Binding Label}" Margin="8,0,0,0" />
-                                    </Grid>
-                                </Border>
-                                <Border Classes="keyCap" IsVisible="{Binding IsHeader, Converter={StaticResource Not}}"
-                                        Padding="12,7" MinHeight="30">
-                                    <TextBlock Classes="keyCapLabel" Text="{Binding Label}" VerticalAlignment="Center" />
-                                </Border>
-                            </Panel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-
-                <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
-                            IsEnabled="{Binding ClickIsNone, Converter={StaticResource Not}}"
-                            IsVisible="{Binding TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
-                    <CheckBox x:Name="ModifierCtrlBox" Content="Ctrl" IsChecked="{Binding ModifierCtrl, Mode=TwoWay}" />
-                    <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding ModifierShift, Mode=TwoWay}" />
-                    <CheckBox x:Name="ModifierAltBox" Content="Alt" Margin="14,0,0,0" IsChecked="{Binding ModifierAlt, Mode=TwoWay}" />
-                    <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding ModifierWin, Mode=TwoWay}" />
-                </StackPanel>
-
-                <StackPanel x:Name="MouseMoveRow" IsEnabled="{Binding ClickIsNone, Converter={StaticResource Not}}"
-                            IsVisible="{Binding TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
-                    <TextBlock Classes="sectionLabel" Text="鼠标移动参数" />
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度 (px/s)" VerticalAlignment="Center" Margin="0" />
-                        <Slider Grid.Column="1" x:Name="EditorMouseMaxSpeedBox" Minimum="100" Maximum="6000" TickFrequency="50"
-                                Value="{Binding MouseSettings.MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Text="{Binding MouseSettings.MaxSpeed, StringFormat='{}{0:F0}'}" />
-                    </Grid>
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
-                        <Slider Grid.Column="1" x:Name="EditorMouseDeadZoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
-                                Value="{Binding MouseSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Text="{Binding MouseSettings.DeadZone, StringFormat='{}{0:F2}'}" />
-                    </Grid>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间 (s)" VerticalAlignment="Center" Margin="0" />
-                        <Slider Grid.Column="1" x:Name="EditorMouseResponseTimeBox" Minimum="0" Maximum="0.5" TickFrequency="0.05"
-                                Value="{Binding MouseSettings.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Text="{Binding MouseSettings.ResponseTime, StringFormat='{}{0:F2}'}" />
-                    </Grid>
-                </StackPanel>
-
-                <StackPanel x:Name="WheelRow" IsEnabled="{Binding ClickIsNone, Converter={StaticResource Not}}"
-                            IsVisible="{Binding TargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
-                    <TextBlock Classes="sectionLabel" Text="滚轮参数" />
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率 (格/s)" VerticalAlignment="Center" Margin="0" />
-                        <Slider Grid.Column="1" x:Name="EditorScrollRateBox" Minimum="1" Maximum="40" TickFrequency="1"
-                                Value="{Binding ScrollSettings.MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Text="{Binding ScrollSettings.MaxTicksPerSecond, StringFormat='{}{0:F0}'}" />
-                    </Grid>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="90" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
-                        <Slider Grid.Column="1" x:Name="EditorScrollDeadzoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
-                                Value="{Binding ScrollSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Text="{Binding ScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
-                    </Grid>
-                </StackPanel>
-
-                <!-- Gestures. 单击 / 双击 / 长按 are three equal peers chosen
-                     through one switcher; the action for the selected gesture
-                     is configured below it. The timings are the Core's pinned
-                     defaults, so there are no sliders here. Button sources
-                     only, since the engine attaches a gesture to a
-                     ButtonBinding. -->
+                <!-- The switcher. One segmented control where all three gestures are equally
+                     reachable - the double-click and the long-press are peers of the click,
+                     not extras buried under it. It leads the editor, so the gesture is chosen
+                     before the target it fires. -->
                 <StackPanel x:Name="GestureRow" IsVisible="{Binding SourceIsStick, Converter={StaticResource Not}}">
                     <TextBlock Classes="sectionLabel" Text="手势" />
-                    <TextBlock Classes="hint" Margin="0,0,0,8"
+                    <TextBlock Classes="hint" Margin="0,0,0,8" TextWrapping="Wrap"
                                Text="单击、双击、长按是三种平等的手势：选择要配置的一种，再设置它的功能（可设为无功能）。" />
 
-                    <!-- The switcher. One segmented control where all three
-                         gestures are equally reachable - the double-click and
-                         the long-press are peers of the click, not extras
-                         buried under it. -->
-                    <Border Background="{DynamicResource SubtleBrush}" CornerRadius="{DynamicResource CornerRadiusMd}"
+                    <Border x:Name="GestureSwitcher" Background="{DynamicResource SubtleBrush}"
+                            CornerRadius="{DynamicResource CornerRadiusMd}"
                             Padding="3" Margin="0,0,0,10" HorizontalAlignment="Left">
                         <StackPanel Orientation="Horizontal">
                             <RadioButton x:Name="GestureClickTab" Classes="gestureSegment" GroupName="GestureSlots"
@@ -202,66 +73,187 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Auto-repeat and the long-press are mutually exclusive:
-                         while repeat runs the long-press branch is unavailable,
-                         and the reason is stated rather than left to guesswork. -->
+                    <!-- Auto-repeat and the long-press are mutually exclusive: while repeat runs
+                         the long-press branch is unavailable, and the reason is stated rather
+                         than left to guesswork. -->
                     <TextBlock x:Name="GestureRepeatHint" Classes="hint" Margin="0,0,0,10"
                                IsVisible="{Binding ClickRepeatEnabled}"
                                Text="「长按重复触发」已启用：重复触发与长按互斥，长按手势暂不可用。关闭重复触发后即可配置长按。" />
 
-                    <!-- 单击: the mapping's own target, which can be set to
-                         无功能, plus the auto-repeat option that belongs to
-                         the click alone. -->
-                    <StackPanel x:Name="GestureClickBranch" IsVisible="{Binding IsClickSelected}">
-                        <CheckBox x:Name="GestureClickNoneBox" Content="无功能（单击不触发任何操作）"
-                                  IsChecked="{Binding ClickIsNone, Mode=TwoWay}" />
-                        <TextBlock Classes="hint" Margin="0,4,0,0" IsVisible="{Binding ClickIsNone}"
-                                   Text="单击已设为无功能：上方「目标动作」不会生效，按下时什么都不会发生。" />
-                        <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发（按住时每 0.10 秒重复一次单击）"
-                                  Margin="0,10,0,0" IsChecked="{Binding ClickRepeatEnabled, Mode=TwoWay}" />
-                    </StackPanel>
+                    <!-- Auto-repeat belongs to the click alone: it re-fires the click's own
+                         target, so it is offered on the click's tab and nowhere else. -->
+                    <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发（按住时每 0.10 秒重复一次单击）"
+                              IsVisible="{Binding IsClickSelected}"
+                              IsChecked="{Binding ClickRepeatEnabled, Mode=TwoWay}" />
+                </StackPanel>
 
-                    <!-- 双击: what the double-click emits. 无功能 makes it
-                         resolve and emit nothing; 重复单击的功能 re-fires the
-                         mapping's own target. -->
-                    <StackPanel x:Name="GestureDoubleClickBranch" IsVisible="{Binding IsDoubleClickSelected}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="150" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="双击时执行" VerticalAlignment="Center" Margin="0" />
-                            <ComboBox Grid.Column="1" x:Name="GestureDoubleClickActionCombo" Classes="enumCombo"
-                                      ItemsSource="{Binding GestureActionOptions}"
-                                      SelectedItem="{Binding SelectedDoubleClickOption, Mode=TwoWay}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Label}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
-                    </StackPanel>
+                <!-- The shared target editor. Every control below reads and writes the active
+                     slot, so the three gestures are configured through one surface instead of
+                     a click-only editor plus two buried dropdowns. -->
+                <TextBlock Classes="sectionLabel" Text="目标动作" />
 
-                    <!-- 长按: what the long-press emits, on the same rows. -->
-                    <StackPanel x:Name="GestureLongPressBranch" IsVisible="{Binding IsLongPressSelected}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="150" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Classes="fieldLabel" Text="长按时执行" VerticalAlignment="Center" Margin="0" />
-                            <ComboBox Grid.Column="1" x:Name="GestureLongPressActionCombo" Classes="enumCombo"
-                                      ItemsSource="{Binding GestureActionOptions}"
-                                      SelectedItem="{Binding SelectedLongPressOption, Mode=TwoWay}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Label}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                        </Grid>
+                <!-- 已关闭 is the gesture's own off state: it never resolves, so no timing
+                     window is written and a fast double-press simply fires the click twice.
+                     The click has no such state - it is the mapping's own target - so the row
+                     is offered for the two gestures alone. -->
+                <StackPanel x:Name="ActiveGestureRow" IsVisible="{Binding ActiveGestureCanBeDisabled}">
+                    <CheckBox x:Name="ActiveGestureEnabledBox" Content="启用手势"
+                              IsChecked="{Binding ActiveGestureEnabled, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               IsVisible="{Binding ActiveGestureEnabled, Converter={StaticResource Not}}"
+                               Text="手势已关闭：该手势不会触发，双击或长按都只按单击处理。勾选「启用手势」后即可配置它的功能。" />
+                </StackPanel>
+
+                <WrapPanel IsEnabled="{Binding ActiveTargetEditable}">
+                    <StackPanel Width="230" Margin="0,0,12,0">
+                        <TextBlock Classes="fieldLabel" Text="类型" />
+                        <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
+                                  ItemsSource="{Binding AvailableTargetKinds}"
+                                  SelectedItem="{Binding ActiveTargetKind, Mode=TwoWay}" />
                     </StackPanel>
+                    <StackPanel x:Name="MouseTargetRow" Width="230"
+                                IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
+                        <TextBlock Classes="fieldLabel" Text="鼠标按键" />
+                        <ComboBox x:Name="MouseButtonCombo" Classes="enumCombo"
+                                  ItemsSource="{x:Static views:EnumOptions.MouseButtons}"
+                                  SelectedItem="{Binding ActiveSelectedMouseButton, Mode=TwoWay}" />
+                    </StackPanel>
+                    <StackPanel VerticalAlignment="Bottom" IsVisible="{Binding ShowButtonPicker}">
+                        <TextBlock Classes="fieldLabel" Text="键盘直接输入" />
+                        <Button x:Name="CaptureKeyButton" Classes="ghost" MinHeight="32"
+                                Content="{Binding CaptureKeyLabel}"
+                                Command="{Binding ToggleCaptureKeyCommand}" />
+                    </StackPanel>
+                </WrapPanel>
+                <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding IsCapturingKey}"
+                           Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
+
+                <!-- The optional categorized key list. Collapsed by default so the editor opens
+                     compact; expanding it reveals the list without moving anything above it out
+                     of view, and the selection survives both states. The expander stretches:
+                     its own default alignment is Left, which would leave the key caps in a
+                     narrow column instead of the full card width. -->
+                <Expander x:Name="KeyPickerExpander" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                          IsExpanded="{Binding KeyPickerExpanded, Mode=TwoWay}"
+                          IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}">
+                    <Expander.Header>
+                        <TextBlock Classes="fieldLabel" Text="或从列表选择" Margin="0" />
+                    </Expander.Header>
+                    <ListBox x:Name="TargetKeyList" Classes="pickerList" MaxHeight="240"
+                             IsEnabled="{Binding ActiveTargetEditable}"
+                             IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
+                             ItemsSource="{Binding KeyOptions}"
+                             SelectedItem="{Binding ActiveSelectedKeyOption, Mode=TwoWay}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:KeyPickerItem">
+                                <Panel>
+                                    <Border Classes="pickerHeader" IsVisible="{Binding IsHeader}" Padding="12,12,12,5">
+                                        <Grid ColumnDefinitions="Auto,*">
+                                            <Border Grid.Column="0" Width="3" Height="9" VerticalAlignment="Center"
+                                                    CornerRadius="{DynamicResource CornerRadiusSm}"
+                                                    Background="{DynamicResource AccentBrush}" />
+                                            <TextBlock Grid.Column="1" Classes="pickerHeaderLabel" Text="{Binding Label}" Margin="8,0,0,0" />
+                                        </Grid>
+                                    </Border>
+                                    <Border Classes="keyCap" IsVisible="{Binding IsHeader, Converter={StaticResource Not}}"
+                                            Padding="12,7" MinHeight="30">
+                                        <TextBlock Classes="keyCapLabel" Text="{Binding Label}" VerticalAlignment="Center" />
+                                    </Border>
+                                </Panel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Expander>
+
+                <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"
+                            IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyCombo}">
+                    <CheckBox x:Name="ModifierCtrlBox" Content="Ctrl" IsChecked="{Binding ActiveModifierCtrl, Mode=TwoWay}" />
+                    <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding ActiveModifierShift, Mode=TwoWay}" />
+                    <CheckBox x:Name="ModifierAltBox" Content="Alt" Margin="14,0,0,0" IsChecked="{Binding ActiveModifierAlt, Mode=TwoWay}" />
+                    <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding ActiveModifierWin, Mode=TwoWay}" />
+                </StackPanel>
+
+                <!-- What the slot does beyond a target. 无功能 is explicit for every slot; the
+                     legacy repeat-the-click state stays reachable for the two gestures without
+                     standing in the way. -->
+                <StackPanel Margin="0,12,0,0" IsEnabled="{Binding ActiveTargetEditable}">
+                    <CheckBox x:Name="ActiveNoneBox" Content="无功能（不触发任何操作）"
+                              IsChecked="{Binding ActiveIsNone, Mode=TwoWay}" />
+                    <CheckBox x:Name="ActiveRepeatBox" Content="重复单击的功能（沿用单击的目标）"
+                              Margin="0,8,0,0"
+                              IsVisible="{Binding ActiveGestureCanBeDisabled}"
+                              IsChecked="{Binding ActiveRepeatsClick, Mode=TwoWay}" />
+                </StackPanel>
+
+                <StackPanel x:Name="MouseMoveRow" IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseMove}">
+                    <TextBlock Classes="sectionLabel" Text="鼠标移动参数" />
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="最高速度 (px/s)" VerticalAlignment="Center" Margin="0" />
+                        <Slider Grid.Column="1" x:Name="EditorMouseMaxSpeedBox" Minimum="100" Maximum="6000" TickFrequency="50"
+                                Value="{Binding ActiveMouseSettings.MaxSpeed, Mode=TwoWay}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding ActiveMouseSettings.MaxSpeed, StringFormat='{}{0:F0}'}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                        <Slider Grid.Column="1" x:Name="EditorMouseDeadZoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                Value="{Binding ActiveMouseSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding ActiveMouseSettings.DeadZone, StringFormat='{}{0:F2}'}" />
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="平滑时间 (s)" VerticalAlignment="Center" Margin="0" />
+                        <Slider Grid.Column="1" x:Name="EditorMouseResponseTimeBox" Minimum="0" Maximum="0.5" TickFrequency="0.05"
+                                Value="{Binding ActiveMouseSettings.ResponseTime, Mode=TwoWay}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding ActiveMouseSettings.ResponseTime, StringFormat='{}{0:F2}'}" />
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel x:Name="WheelRow" IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=WheelScroll}">
+                    <TextBlock Classes="sectionLabel" Text="滚轮参数" />
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="滚动速率 (格/s)" VerticalAlignment="Center" Margin="0" />
+                        <Slider Grid.Column="1" x:Name="EditorScrollRateBox" Minimum="1" Maximum="40" TickFrequency="1"
+                                Value="{Binding ActiveScrollSettings.MaxTicksPerSecond, Mode=TwoWay}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding ActiveScrollSettings.MaxTicksPerSecond, StringFormat='{}{0:F0}'}" />
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区" VerticalAlignment="Center" Margin="0" />
+                        <Slider Grid.Column="1" x:Name="EditorScrollDeadzoneBox" Minimum="0" Maximum="0.6" TickFrequency="0.05"
+                                Value="{Binding ActiveScrollSettings.DeadZone, Mode=TwoWay}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding ActiveScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
+                    </Grid>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
