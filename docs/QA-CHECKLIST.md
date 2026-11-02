@@ -223,6 +223,22 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
 （提交 026c641）。若此处 blocked 非零，说明注入被 UIPI 丢弃，
 那是提权问题而非本缺陷。
 
+## 19. 2026-11-02 修复验收记录
+
+代码基线：`e970deb`（此后的提交只追加本记录与注释纠偏）。
+
+- Linux Release：Core 182/182、Platform 113/113、App 636/636；App 另有 3 个
+  Windows 专属跳过。`dotnet build DeziroJoy.slnx -c Release` 为 0 警告、0 错误。
+- Windows Release：App 637/637，另跳过 2 个 POSIX 专属用例；真实管道 ACL、
+  对端 PID/SessionId 握手和首客户端不断开时的第二客户端连接均实际执行。
+- 真实 X11：深色/浅色设置面板在 1180×780、1400×900、1920×1080 均完成打开/关闭；
+  Ctrl+1/2/3、Ctrl+,、侧栏收起/恢复、模型点击、捕获期快捷键抑制及两段 Escape 均通过。
+- Windows 提权链路：普通权限客户端连接 high-integrity daemon，Start/Stop 均为 Accepted；
+  独立的提权注入探针向提权 WinForms 目标发送 Enter，目标日志收到 KEYDOWN/KEYUP Return，
+  SendInput 失败计数为 0。测试 daemon、目标和探针均已清理，用户原有 GUI 保持运行。
+
+本节是已执行验证的记录，不替代上面需要真实物理手柄与长期使用观察的人工项目。
+
 ## 已知限制（预期行为，非缺陷）
 
 - XInput 无法提供稳定硬件 ID，配置按 XInput 槽位（#1-#4）保存；

@@ -6,7 +6,7 @@ using System.Text;
 namespace DeziroJoy.App.Ipc;
 
 /// <summary>
-/// The framed transport half of <see cref="DaemonServer"/>: one client connection at a time,
+/// The framed transport half of <see cref="DaemonServer"/>: one loop per client connection,
 /// over any stream. Kept apart from the protocol logic so the contract stays testable with a
 /// fake <see cref="IDaemonHost"/> and no pipe, while this half is exercised through a scripted
 /// stream instead.
