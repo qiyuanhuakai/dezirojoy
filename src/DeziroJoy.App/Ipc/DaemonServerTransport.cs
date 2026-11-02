@@ -44,12 +44,13 @@ public sealed partial class DaemonServer
                 }
 
                 var request = IpcSerializer.Deserialize(Encoding.UTF8.GetString(frame));
-                var response = await ProcessAsync(request).ConfigureAwait(false);
+                var response = await ProcessAsync(request, connection.Id).ConfigureAwait(false);
                 await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
             }
         }
         finally
         {
+            ReleaseConnection(connection.Id);
             lock (_connectionsGate)
             {
                 _connections.Remove(connection);
@@ -67,6 +68,8 @@ public sealed partial class DaemonServer
     {
         private readonly SemaphoreSlim _writeGate = new(1, 1);
         private readonly Stream _stream;
+
+        public string Id { get; } = Guid.NewGuid().ToString("N");
 
         public Connection(Stream stream) => _stream = stream;
 

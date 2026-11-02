@@ -562,6 +562,39 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Editor_Suspension_Is_Scoped_To_Its_Connection()
+    {
+        var (server, _, host) = CreateRunning();
+
+        await server.ProcessAsync(new SetInjectionSuspendedMessage("req-a", true), "client-a");
+        await server.ProcessAsync(new SetInjectionSuspendedMessage("req-b", true), "client-b");
+        server.ReleaseConnection("client-a");
+
+        Assert.True(host.IsInjectionSuspended);
+
+        server.ReleaseConnection("client-b");
+        Assert.False(host.IsInjectionSuspended);
+    }
+
+    [Fact]
+    public async Task Disconnect_Releases_Editor_Suspension_Without_Stopping_Or_Unpausing()
+    {
+        var (server, _, host) = CreateRunning();
+        await server.ProcessAsync(new StartMessage("req-start", 0));
+        await server.ProcessAsync(new SetMappingEnabledMessage("req-pause", false));
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
+        stream.Script(new SetInjectionSuspendedMessage("req-suspend", true));
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        Assert.True(host.IsRunning);
+        Assert.False(host.IsMappingEnabled);
+        Assert.False(host.IsInjectionSuspended);
+        Assert.Equal(0, host.StopCalls);
+    }
+
+    [Fact]
     public async Task Start_When_Already_Running_Resumes_Paused_Dispatch()
     {
         var (server, _, host) = CreateRunning();

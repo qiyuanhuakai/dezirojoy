@@ -21,8 +21,10 @@ public sealed partial class DaemonServer
     private readonly IDaemonHost _host;
     private readonly IProfileStore _profileStore;
     private readonly DaemonStateStore _stateStore;
+    private const string DirectConnectionId = "direct";
     private readonly Lock _sync = new();
     private readonly DaemonState? _restored;
+    private readonly HashSet<string> _injectionSuspensions = new(StringComparer.Ordinal);
 
     private long _revision;
     private long _sequence;
@@ -30,6 +32,7 @@ public sealed partial class DaemonServer
     private string _profileJson = string.Empty;
     private string? _lastError;
     private bool _desiredEnabled;
+    private bool _injectionSuspended;
 
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
@@ -80,13 +83,26 @@ public sealed partial class DaemonServer
     /// spurious state.
     /// </summary>
     public Task<IpcMessage> ProcessAsync(IpcMessage request)
+        => ProcessAsync(request, DirectConnectionId);
+
+    internal Task<IpcMessage> ProcessAsync(IpcMessage request, string connectionId)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
 
-        return Task.FromResult(Process(request));
+        return Task.FromResult(Process(request, connectionId));
     }
 
-    private IpcMessage Process(IpcMessage request)
+    internal void ReleaseConnection(string connectionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
+        lock (_sync)
+        {
+            UpdateInjectionSuspension(connectionId, suspended: false);
+        }
+    }
+
+    private IpcMessage Process(IpcMessage request, string connectionId)
     {
         switch (request)
         {
@@ -109,7 +125,7 @@ public sealed partial class DaemonServer
                 return HandleSetMappingEnabled(setEnabled);
 
             case SetInjectionSuspendedMessage setSuspended:
-                return HandleSetInjectionSuspended(setSuspended);
+                return HandleSetInjectionSuspended(setSuspended, connectionId);
 
             default:
                 // The union is closed and the deserializer rejects unknown kinds, so this is
@@ -272,13 +288,34 @@ public sealed partial class DaemonServer
         }
     }
 
-    private MutationAckMessage HandleSetInjectionSuspended(SetInjectionSuspendedMessage request)
+    private MutationAckMessage HandleSetInjectionSuspended(SetInjectionSuspendedMessage request, string connectionId)
     {
         lock (_sync)
         {
-            _host.SetInjectionSuspended(request.Suspended);
+            UpdateInjectionSuspension(connectionId, request.Suspended);
             return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
         }
+    }
+
+    private void UpdateInjectionSuspension(string connectionId, bool suspended)
+    {
+        if (suspended)
+        {
+            _injectionSuspensions.Add(connectionId);
+        }
+        else
+        {
+            _injectionSuspensions.Remove(connectionId);
+        }
+
+        var shouldSuspend = _injectionSuspensions.Count > 0;
+        if (shouldSuspend == _injectionSuspended)
+        {
+            return;
+        }
+
+        _host.SetInjectionSuspended(shouldSuspend);
+        _injectionSuspended = shouldSuspend;
     }
 
     /// <summary>
