@@ -225,12 +225,14 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
 
 ## 19. 2026-11-02 修复验收记录
 
-代码基线：`e970deb`（此后的提交只追加本记录与注释纠偏）。
+代码与测试基线：`d21b205`（此后的提交只更新本记录）。
 
-- Linux Release：Core 182/182、Platform 113/113、App 636/636；App 另有 3 个
+- Linux Release：Core 182/182、Platform 113/113、App 639/639；App 另有 3 个
   Windows 专属跳过。`dotnet build DeziroJoy.slnx -c Release` 为 0 警告、0 错误。
-- Windows Release：App 637/637，另跳过 2 个 POSIX 专属用例；真实管道 ACL、
+- Windows Release：App 640/640，另跳过 2 个 POSIX 专属用例；真实管道 ACL、
   对端 PID/SessionId 握手和首客户端不断开时的第二客户端连接均实际执行。
+- 追加竞态回归：Apply 排队期间收到外部 revision 后不得发送旧草稿；编辑器打开时
+  断线会释放旧租约，daemon 存活或重启后的重连都必须恢复租约且不改变用户暂停状态。
 - 真实 X11：深色/浅色设置面板在 1180×780、1400×900、1920×1080 均完成打开/关闭；
   Ctrl+1/2/3、Ctrl+,、侧栏收起/恢复、模型点击、捕获期快捷键抑制及两段 Escape 均通过。
 - Windows 提权链路：普通权限客户端连接 high-integrity daemon，Start/Stop 均为 Accepted；
