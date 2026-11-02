@@ -421,11 +421,15 @@ public sealed class MainWindowGuiTests
         Assert.True(editorPanel.IsVisible);
 
         var targetKind = EditorPanelOf(window).FindControl<ComboBox>("TargetKindCombo")!;
-        var targetKey = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
 
         targetKind.SelectedItem = MappingTargetKind.KeyPress;
-        targetKey.SelectedItem = viewModel.Editor.KeyOptions.First(
-            option => !option.IsHeader && option.Key == GamepadKey.Space);
+        viewModel.Editor.KeyPickerExpanded = true;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var targetKey = EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
+            .First(button => button.DataContext is KeyPickerItem { Key: GamepadKey.Space });
+        Click(targetKey, window);
 
         Assert.Equal(GamepadButton.LeftBumper, viewModel.Editor.SelectedButton);
         Assert.Equal(MappingTargetKind.KeyPress, viewModel.Editor.TargetKind);
@@ -610,25 +614,25 @@ public sealed class MainWindowGuiTests
         Click(ModelElement(window, "LeftBumper"), window);
 
         var editor = EditorPanelOf(window);
-        var keyList = editor.FindControl<ListBox>("TargetKeyList")!;
+        var keyPicker = editor.FindControl<Expander>("KeyPickerExpander")!;
         var mouseRow = editor.FindControl<StackPanel>("MouseTargetRow")!;
         var modifierRow = editor.FindControl<StackPanel>("ModifierRow")!;
         var mouseMoveRow = editor.FindControl<StackPanel>("MouseMoveRow")!;
         var wheelRow = editor.FindControl<StackPanel>("WheelRow")!;
         var targetKind = editor.FindControl<ComboBox>("TargetKindCombo")!;
 
-        Assert.True(keyList.IsVisible);
+        Assert.True(keyPicker.IsVisible);
         Assert.False(mouseRow.IsVisible);
         Assert.False(modifierRow.IsVisible);
         Assert.False(mouseMoveRow.IsVisible);
         Assert.False(wheelRow.IsVisible);
 
         targetKind.SelectedItem = MappingTargetKind.KeyCombo;
-        Assert.True(keyList.IsVisible);
+        Assert.True(keyPicker.IsVisible);
         Assert.True(modifierRow.IsVisible);
 
         targetKind.SelectedItem = MappingTargetKind.MouseButton;
-        Assert.False(keyList.IsVisible);
+        Assert.False(keyPicker.IsVisible);
         Assert.True(mouseRow.IsVisible);
 
         // A stick source only offers the two targets the engine honors for a stick, and the
@@ -675,13 +679,13 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
-        var items = list.Items.OfType<KeyPickerItem>().ToArray();
+        var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
+        var groups = grid.Items.OfType<KeyCategoryGroup>().ToArray();
 
         Assert.Equal(
             ["面部按键", "肩键与扳机", "摇杆", "十字键", "系统键", "扩展按键"],
-            items.Where(item => item.IsHeader).Select(item => item.Label));
-        Assert.Equal(Enum.GetValues<GamepadKey>().Length, items.Count(item => !item.IsHeader));
+            groups.Select(group => group.Name));
+        Assert.Equal(Enum.GetValues<GamepadKey>().Length, groups.Sum(group => group.Keys.Count));
     }
 
     [AvaloniaFact]
@@ -942,4 +946,56 @@ public sealed class MainWindowGuiTests
         => (Delegate?)typeof(MainWindowViewModel)
             .GetField(eventName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
             ?.GetValue(viewModel);
+
+    // ---- The editor card spends the height the stage releases -------------
+
+    [AvaloniaFact]
+    public void At_The_Minimum_Window_Size_The_Editor_Card_Gains_The_Height_The_Stage_Releases()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+        window.Width = 1180;
+        window.Height = 780;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var editor = window.FindControl<Border>("EditorPanel")!;
+
+        // The card keeps the 60px the 480 -> 420 stage shrink releases (DESIGN 4.3.7): 218
+        // now, where the old stage left it 158, at the window's minimum size.
+        Assert.Equal(218d, editor.Bounds.Height);
+    }
+
+    [AvaloniaFact]
+    public void At_The_Minimum_Window_Size_Every_Editor_Field_Stays_Reachable_Through_The_Body_Scroll()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+        window.Width = 1180;
+        window.Height = 780;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "ButtonA"), window);
+
+        var panel = EditorPanelOf(window);
+        var body = panel.GetVisualDescendants().OfType<ScrollViewer>().First();
+        var noneBox = panel.FindControl<CheckBox>("ActiveNoneBox")!;
+
+        // The card is a fixed frame whose body scrolls, so at the minimum size the fields
+        // below the fold are reached by scrolling rather than by growing the card past the
+        // window (DESIGN 4.3.7: 最小窗口下所有字段仍可到达).
+        Assert.True(body.Extent.Height > body.Viewport.Height,
+            $"the editor body must scroll at the minimum size (extent {body.Extent.Height}, viewport {body.Viewport.Height})");
+
+        Click(noneBox, window);
+
+        Assert.True(viewModel.Editor.ActiveIsNone);
+    }
 }

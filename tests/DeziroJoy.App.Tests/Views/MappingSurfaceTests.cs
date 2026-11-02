@@ -435,57 +435,28 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
-
-        // The list is optional and starts collapsed, so it is opened before its rows are read.
         EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!.IsExpanded = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        // The list virtualizes and opens scrolled to the current selection, so only a
-        // handful of rows around it are realized. Scrolling back to the top realizes the
-        // first category header together with its unselected options.
-        list.ScrollIntoView(0);
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+        var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
+        var headerLabel = grid.GetVisualDescendants().OfType<TextBlock>()
+            .First(text => text.Classes.Contains("pickerHeaderLabel"));
+        var optionButton = grid.GetVisualDescendants().OfType<Button>()
+            .First(button => button.DataContext is KeyPickerItem);
+        var optionLabel = optionButton.GetVisualDescendants().OfType<TextBlock>()
+            .First(text => text.Classes.Contains("keyCapLabel"));
 
-        var rows = list.GetVisualDescendants().OfType<ListBoxItem>().ToList();
-        Assert.NotEmpty(rows);
-
-        var headerRow = rows.First(r => r.DataContext is KeyPickerItem { IsHeader: true });
-        var optionRow = rows.First(r => r.DataContext is KeyPickerItem { IsHeader: false } && !r.IsSelected);
-
-        // Each row carries both chromes in its template with one switched off, so the
-        // labels are picked by class rather than by tree order.
-        var headerLabel = headerRow.GetVisualDescendants().OfType<TextBlock>()
-            .First(t => t.Classes.Contains("pickerHeaderLabel"));
-        var optionLabel = optionRow.GetVisualDescendants().OfType<TextBlock>()
-            .First(t => t.Classes.Contains("keyCapLabel"));
-
-        // A header must not read as just another row: it is smaller, muted and set apart
-        // by its own band, while an option is a full-size label on a key cap.
+        Assert.Empty(headerLabel.GetVisualAncestors().OfType<Button>());
         Assert.True(
             headerLabel.FontSize < optionLabel.FontSize,
             $"header {headerLabel.FontSize}pt must be smaller than option {optionLabel.FontSize}pt");
-        Assert.Equal(Token(headerRow.ActualThemeVariant, "HintTextBrush"), ColorOf(headerLabel.Foreground));
-        Assert.Equal(Token(optionRow.ActualThemeVariant, "ControlForegroundBrush"), ColorOf(optionLabel.Foreground));
-
-        // The two chromes never swap: a header shows a band, an option shows a cap.
-        var headerBand = headerRow.GetVisualDescendants().OfType<Border>()
-            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("pickerHeader"));
-        var optionCap = optionRow.GetVisualDescendants().OfType<Border>()
-            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("keyCap"));
-
-        Assert.NotNull(headerBand);
-        Assert.NotNull(optionCap);
-        Assert.Null(headerRow.GetVisualDescendants().OfType<Border>()
-            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("keyCap")));
-        Assert.Null(optionRow.GetVisualDescendants().OfType<Border>()
-            .FirstOrDefault(b => b.IsVisible && b.Classes.Contains("pickerHeader")));
-
-        // An option row is a comfortable hit target: a full-width cap, tall enough to click.
-        Assert.True(optionRow.Bounds.Height >= 30, $"option row is only {optionRow.Bounds.Height}px tall");
-        Assert.Equal(optionRow.Bounds.Width, optionCap!.Bounds.Width);
+        Assert.Equal(Token(headerLabel.ActualThemeVariant, "HintTextBrush"), ColorOf(headerLabel.Foreground));
+        Assert.Equal(Token(optionButton.ActualThemeVariant, "ControlForegroundBrush"), ColorOf(optionLabel.Foreground));
+        Assert.True(optionButton.Focusable);
+        Assert.True(optionButton.Bounds.Height >= 32, $"option button is only {optionButton.Bounds.Height}px tall");
+        Assert.NotNull(optionButton.GetVisualDescendants().OfType<Border>()
+            .FirstOrDefault(border => border.IsVisible && border.Classes.Contains("keyCap")));
     }
 
     [AvaloniaFact]
@@ -497,42 +468,151 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
-
-        // The list is optional and starts collapsed, so it is opened before its rows are read.
         EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!.IsExpanded = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        // The list virtualizes and opens scrolled to the current selection, so the realized
-        // rows are the handful around it - enough to read both states of the same row.
-        var rows = list.GetVisualDescendants().OfType<ListBoxItem>().ToList();
-        var resting = rows
-            .Select(row => (Row: row, Option: row.DataContext as KeyPickerItem))
-            .First(pair => pair.Option is { IsHeader: false } && !pair.Row.IsSelected);
+        var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
+        var resting = grid.GetVisualDescendants().OfType<Button>()
+            .Select(button => (Button: button, Option: button.DataContext as KeyPickerItem))
+            .First(pair => pair.Option is not null
+                && !ReferenceEquals(pair.Option, viewModel.Editor.ActiveSelectedKeyOption));
+        var restingCap = resting.Button.GetVisualDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("keyCap"));
 
-        var restingCap = resting.Row.GetVisualDescendants().OfType<Border>()
-            .First(b => b.Classes.Contains("keyCap"));
+        Assert.Equal(Token(resting.Button.ActualThemeVariant, "SubtleBrush"), ColorOf(restingCap.Background));
+        Assert.Equal(Token(resting.Button.ActualThemeVariant, "ControlForegroundBrush"),
+            ColorOf(resting.Button.GetVisualDescendants().OfType<TextBlock>()
+                .First(text => text.Classes.Contains("keyCapLabel")).Foreground));
 
-        // At rest the cap wears the subtle tone and the ordinary label colour.
-        Assert.Equal(Token(resting.Row.ActualThemeVariant, "SubtleBrush"), ColorOf(restingCap.Background));
-        Assert.Equal(Token(resting.Row.ActualThemeVariant, "ControlForegroundBrush"),
-            ColorOf(restingCap.GetVisualDescendants().OfType<TextBlock>().First().Foreground));
-
-        // Selecting it must mark the cap unmistakably: accent surface, accent label.
-        viewModel.Editor.SelectedKeyOption = resting.Option;
+        viewModel.Editor.ActiveSelectedKeyOption = resting.Option;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var selectedRow = list.GetVisualDescendants().OfType<ListBoxItem>()
-            .First(r => r.DataContext is KeyPickerItem selected && selected == resting.Option);
-        Assert.True(selectedRow.IsSelected);
+        Assert.Contains("selected", resting.Button.Classes);
+        Assert.Equal(Token(resting.Button.ActualThemeVariant, "AccentSurfaceBrush"), ColorOf(restingCap.Background));
 
-        var cap = selectedRow.GetVisualDescendants().OfType<Border>()
-            .First(b => b.Classes.Contains("keyCap"));
-        var label = cap.GetVisualDescendants().OfType<TextBlock>().First();
+        var label = resting.Button.GetVisualDescendants().OfType<TextBlock>()
+            .First(text => text.Classes.Contains("keyCapLabel"));
+        var check = resting.Button.GetVisualDescendants().OfType<TextBlock>()
+            .First(text => text.Classes.Contains("keyCapCheck"));
+        Assert.Equal(Token(resting.Button.ActualThemeVariant, "AccentBrush"), ColorOf(label.Foreground));
+        Assert.Equal(1d, check.Opacity);
+    }
 
-        Assert.Equal(Token(selectedRow.ActualThemeVariant, "AccentSurfaceBrush"), ColorOf(cap.Background));
-        Assert.Equal(Token(selectedRow.ActualThemeVariant, "AccentBrush"), ColorOf(label.Foreground));
+    // ---- The stage releases its height to the editor card -----------------
+
+    private static Viewbox ModelViewbox(Window window)
+        => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!
+            .GetVisualAncestors().OfType<Viewbox>().First();
+
+    [AvaloniaFact]
+    public void The_Model_Stage_Row_Is_420_So_The_Editor_Card_Takes_The_Released_Height()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+
+        var stage = (Grid)ModelViewbox(window).Parent!;
+        var shell = (Grid)stage.Parent!;
+
+        // DESIGN 4.3.7: the stage shrinks 480 -> 420 and the editor row keeps the rest, so
+        // the bottom card gains the released height instead of the model hoarding it.
+        Assert.Equal(420d, shell.RowDefinitions[0].Height.Value);
+    }
+
+    [AvaloniaFact]
+    public void Editing_Lifts_The_Model_By_24_Over_A_24_Inset()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var viewbox = ModelViewbox(window);
+
+        // The inset reserved above the model equals the lift, so at full lift the model's
+        // top lands exactly on its own row's top edge and the stage header stays clear.
+        Assert.Equal(new Thickness(0, 24, 0, 0), viewbox.Margin);
+
+        var lift = Assert.IsType<TranslateTransform>(viewbox.RenderTransform);
+
+        // Headless runs no clock, so the animated lift never leaves its start value here;
+        // detaching the transition makes the animation's TARGET observable.
+        lift.Transitions = null;
+
+        Click(ModelElement(window, "ButtonA"), window);
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(-24d, lift.Y);
+    }
+
+    // ---- The right column's scrollbar never covers the rows ---------------
+
+    [AvaloniaFact]
+    public void The_Right_Scroll_Content_Keeps_A_16px_Gutter_Clear_Of_The_Overlay_Scrollbar()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        // Shrink the window so the rows overflow: the scrollbar only exists when it is
+        // needed, and the gutter matters exactly while it is on screen.
+        window.MinHeight = 200;
+        window.Height = 420;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var rightPanel = window.FindControl<Border>("RightPanel")!;
+        var scrollViewer = rightPanel.GetVisualDescendants().OfType<ScrollViewer>().First();
+        var items = window.FindControl<ItemsControl>("MappingsList")!;
+        var rows = items.GetVisualDescendants().OfType<MappingRowBorder>().ToList();
+
+        var bar = scrollViewer.GetVisualDescendants().OfType<ScrollBar>()
+            .Single(candidate => candidate.Orientation == Avalonia.Layout.Orientation.Vertical);
+        Assert.True(bar.IsVisible, "the rows must overflow for the scrollbar to be on screen");
+
+        // The scrollbar is an overlay: it paints over the content's right edge instead of
+        // taking layout space, so the scroll content reserves its own 16px clearance
+        // (DESIGN 4.3.8) and no card, toggle or delete button sits under the bar.
+        Assert.Equal(16d, items.Margin.Right);
+        Assert.Equal(16d, scrollViewer.Bounds.Width - items.Bounds.Width);
+
+        var barLeft = bar.TranslatePoint(new Point(0, 0), window)!.Value.X;
+        foreach (var row in rows)
+        {
+            var rowRight = row.TranslatePoint(new Point(row.Bounds.Width, 0), window)!.Value.X;
+            Assert.True(rowRight <= barLeft,
+                $"a row reaches {rowRight} but the scrollbar starts at {barLeft}");
+        }
+    }
+
+    // ---- A row is the three gestures' complete summary ---------------------
+
+    [AvaloniaFact]
+    public void Each_Mapping_Row_Shows_Labeled_Lines_For_All_Three_Gestures()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var row = list.GetVisualDescendants().OfType<MappingRowBorder>()
+            .Single(candidate => candidate.DataContext == viewModel.Mappings.First(
+                candidate => candidate.Entry.Source == new ButtonBinding(GamepadButton.B)));
+
+        var texts = row.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text).ToList();
+
+        // DESIGN 4.3.8: three labeled lines, not three narrow columns - a fixed category
+        // label, then the function. B -> Enter with both gestures off.
+        Assert.Contains("单击", texts);
+        Assert.Contains("双击", texts);
+        Assert.Contains("长按", texts);
+        Assert.Contains("Enter", texts);
+        Assert.Contains("已关闭", texts);
     }
 }

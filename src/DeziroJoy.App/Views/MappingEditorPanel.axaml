@@ -10,7 +10,7 @@
         The mapping editor's card content. The gesture switcher leads: 单击 / 双击 / 长按 are
         three equal peers, and the one target editor below it is bound to Editor.ActiveSlot, so
         the same controls configure whichever slot the switcher has selected. The optional
-        categorized key list sits in a collapsed expander, so the editor opens compact and the
+        categorized key grid sits in a collapsed expander, so the editor opens compact and the
         model above it stays in view.
 
         The card frame itself - its border, background, slide/fade motion and visibility -
@@ -28,6 +28,111 @@
         <conv:BoolNegationConverter x:Key="Not" />
         <conv:TargetKindMatchConverter x:Key="KindMatch" />
     </UserControl.Resources>
+
+    <UserControl.Styles>
+        <!-- A plain ItemsControl wraps each item in a ContentPresenter whose content
+             alignment defaults to Left, which would leave every key cap at its label's
+             width instead of filling its quarter of the grid. The generated containers
+             stretch, so the caps do. -->
+        <Style Selector="ItemsControl ContentPresenter">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        </Style>
+
+        <!-- The categorized key grid's well: one sunken surface behind every category, so
+             the grid reads as a single picker rather than six floating lists. -->
+        <Style Selector="Border.pickerWell">
+            <Setter Property="Background" Value="{DynamicResource SunkenBrush}" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="Padding" Value="8" />
+        </Style>
+
+        <!-- A key cap: a focusable button that keeps one box in every state. Its surface is
+             the design system's own key-cap border, washed by the selection, and the check
+             glyph fades in beside the label, so the selected state never rests on colour
+             alone. The alignment is explicit because the Button theme's own Left alignment
+             would leave every cap at its label's width instead of filling its quarter of
+             the grid. -->
+        <Style Selector="Button.keyCap">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Classes="keyCapFrame" Background="{TemplateBinding Background}"
+                            BorderThickness="1" BorderBrush="Transparent"
+                            CornerRadius="{DynamicResource CornerRadiusMd}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.keyCap:pointerover Border.keyCap">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.keyCap:pressed Border.keyCap">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <!-- Keyboard focus rings the cap itself in the accent - the same ink the mapping
+             rows wear - so a keyboard user always sees where the selection would land. The
+             border thickness never changes, so focusing a cap shifts nothing. -->
+        <Style Selector="Button.keyCap:focus Border.keyCapFrame">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.keyCap:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
+
+        <!-- The selected cap's surface: the same key-cap border, washed in the accent tone.
+             One surface per cap rather than two stacked ones, so a resting cap can never
+             show the selected tone by sitting on top of it. -->
+        <Style Selector="Button.keyCap.selected Border.keyCap">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+        </Style>
+
+        <Style Selector="Button.keyCap TextBlock.keyCapLabel">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+        </Style>
+
+        <Style Selector="Button.keyCap.selected TextBlock.keyCapLabel">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style Selector="Button.keyCap TextBlock.keyCapCheck">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+
+        <Style Selector="Button.keyCap.selected TextBlock.keyCapCheck">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- The interval editor wears the same form-control chrome the combo boxes do. -->
+        <Style Selector="NumericUpDown">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+    </UserControl.Styles>
 
     <Grid RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
@@ -81,10 +186,30 @@
                                Text="「长按重复触发」已启用：重复触发与长按互斥，长按手势暂不可用。关闭重复触发后即可配置长按。" />
 
                     <!-- Auto-repeat belongs to the click alone: it re-fires the click's own
-                         target, so it is offered on the click's tab and nowhere else. -->
-                    <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发（按住时每 0.10 秒重复一次单击）"
+                         target, so it is offered on the click's tab and nowhere else. The
+                         wording names the behaviour only - the interval below carries the
+                         number, so the label never pins a value the user can change. -->
+                    <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发"
                               IsVisible="{Binding IsClickSelected}"
                               IsChecked="{Binding ClickRepeatEnabled, Mode=TwoWay}" />
+
+                    <!-- The repeat interval, offered once repeat is on: the click tab's own
+                         control, so it waits for the same tab and the same checkbox. The
+                         range and the step are the editor's contract; the value written is
+                         the one the profile round-trips. -->
+                    <StackPanel x:Name="ClickRepeatIntervalRow" Orientation="Horizontal" Margin="4,8,0,0"
+                                IsVisible="{Binding ShowClickRepeatInterval}">
+                        <StackPanel Width="150">
+                            <TextBlock Classes="fieldLabel" Text="重复间隔（秒）" />
+                            <NumericUpDown x:Name="ClickRepeatIntervalBox" Width="140"
+                                           Minimum="0.05" Maximum="2.00" Increment="0.05"
+                                           FormatString="0.00"
+                                           Value="{Binding ClickRepeatIntervalSeconds, Mode=TwoWay}" />
+                        </StackPanel>
+                        <TextBlock Classes="hint" VerticalAlignment="Bottom" Margin="10,0,0,6"
+                                   TextWrapping="Wrap"
+                                   Text="按住时重复触发单击的间隔，范围 0.05–2.00 秒，步进 0.05 秒。" />
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- The shared target editor. Every control below reads and writes the active
@@ -128,41 +253,53 @@
                 <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding IsCapturingKey}"
                            Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
 
-                <!-- The optional categorized key list. Collapsed by default so the editor opens
-                     compact; expanding it reveals the list without moving anything above it out
-                     of view, and the selection survives both states. The expander stretches:
-                     its own default alignment is Left, which would leave the key caps in a
-                     narrow column instead of the full card width. -->
+                <!-- The optional categorized key grid. Collapsed by default so the editor
+                     opens compact; expanding it reveals the grid without moving anything
+                     above it out of view, and the selection survives both states. One
+                     section per category, each a four-column grid of key caps that fills
+                     the card's full width: the caps are the long way to a key, so they get
+                     the room the card has instead of a narrow scrolling column. The grid
+                     owns no scrollbar - the editor body above scrolls it - so a selection
+                     never snaps the list to the top. -->
                 <Expander x:Name="KeyPickerExpander" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                           IsExpanded="{Binding KeyPickerExpanded, Mode=TwoWay}"
                           IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}">
                     <Expander.Header>
                         <TextBlock Classes="fieldLabel" Text="或从列表选择" Margin="0" />
                     </Expander.Header>
-                    <ListBox x:Name="TargetKeyList" Classes="pickerList" MaxHeight="240"
-                             IsEnabled="{Binding ActiveTargetEditable}"
-                             IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}"
-                             ItemsSource="{Binding KeyOptions}"
-                             SelectedItem="{Binding ActiveSelectedKeyOption, Mode=TwoWay}">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:KeyPickerItem">
-                                <Panel>
-                                    <Border Classes="pickerHeader" IsVisible="{Binding IsHeader}" Padding="12,12,12,5">
-                                        <Grid ColumnDefinitions="Auto,*">
-                                            <Border Grid.Column="0" Width="3" Height="9" VerticalAlignment="Center"
-                                                    CornerRadius="{DynamicResource CornerRadiusSm}"
-                                                    Background="{DynamicResource AccentBrush}" />
-                                            <TextBlock Grid.Column="1" Classes="pickerHeaderLabel" Text="{Binding Label}" Margin="8,0,0,0" />
-                                        </Grid>
-                                    </Border>
-                                    <Border Classes="keyCap" IsVisible="{Binding IsHeader, Converter={StaticResource Not}}"
-                                            Padding="12,7" MinHeight="30">
-                                        <TextBlock Classes="keyCapLabel" Text="{Binding Label}" VerticalAlignment="Center" />
-                                    </Border>
-                                </Panel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+                    <Border Classes="pickerWell" IsEnabled="{Binding ActiveTargetEditable}">
+                        <ItemsControl x:Name="KeyCategoryGrid" ItemsSource="{Binding KeyCategoryGroups}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:KeyCategoryGroup">
+                                    <StackPanel Margin="0,0,0,10">
+                                        <TextBlock Classes="pickerHeaderLabel" Text="{Binding Name}" Margin="2,0,0,4" />
+                                        <ItemsControl ItemsSource="{Binding Keys}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <UniformGrid Columns="4" />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:KeyPickerItem">
+                                                    <Button Classes="keyCap"
+                                                             Loaded="OnKeyCapLoaded" Click="OnKeyCapClick">
+                                                        <Panel>
+                                                            <Border Classes="keyCap" />
+                                                            <TextBlock Classes="keyCapLabel" Text="{Binding Label}"
+                                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                            <TextBlock Classes="keyCapCheck" Text="✓"
+                                                                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                                        Margin="0,1,5,0" />
+                                                        </Panel>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
                 </Expander>
 
                 <StackPanel x:Name="ModifierRow" Orientation="Horizontal" Margin="0,10,0,0"

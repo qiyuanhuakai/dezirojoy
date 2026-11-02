@@ -403,19 +403,65 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Seconds between long-press activations while the button is held. No longer
-    /// user-editable - the timing sliders are gone - but a profile that carries one keeps it
-    /// through a round trip.
+    /// Seconds between long-press activations while the button is held. Not user-editable -
+    /// the timing sliders are gone - but a profile that carries one keeps it through a
+    /// round trip.
     /// </summary>
     public float LongPressRepeatInterval { get; set; }
 
+    /// <summary>The lowest click-repeat interval the editor offers, in seconds.</summary>
+    public const double ClickRepeatIntervalMin = 0.05;
+
+    /// <summary>The highest click-repeat interval the editor offers, in seconds.</summary>
+    public const double ClickRepeatIntervalMax = 2.00;
+
+    /// <summary>The click-repeat interval editor's step, in seconds.</summary>
+    public const double ClickRepeatIntervalStep = 0.05;
+
+    private float _clickRepeatInterval;
+
     /// <summary>
-    /// Seconds between click auto-repeat activations while the button is held. No longer
-    /// user-editable - the timing sliders are gone - but a profile that carries one keeps it
-    /// through a round trip; 0 means the pinned
-    /// <see cref="ButtonGesture.DefaultClickRepeatInterval"/>.
+    /// Seconds between click auto-repeat activations while the button is held, as the
+    /// profile carries it: 0 means the pinned
+    /// <see cref="ButtonGesture.DefaultClickRepeatInterval"/>. The editor's interval field
+    /// reads and writes it through <see cref="ClickRepeatIntervalSeconds"/>.
     /// </summary>
-    public float ClickRepeatInterval { get; set; }
+    public float ClickRepeatInterval
+    {
+        get => _clickRepeatInterval;
+        set
+        {
+            _clickRepeatInterval = value;
+            OnPropertyChanged(nameof(ClickRepeatIntervalSeconds));
+        }
+    }
+
+    /// <summary>
+    /// The click-repeat interval the editor shows, in seconds: the pinned default while no
+    /// custom value is carried, otherwise the loaded one. The setter clamps to the editable
+    /// range and snaps to the step, so every value the editor writes is one the profile
+    /// round-trips unchanged.
+    /// </summary>
+    public double ClickRepeatIntervalSeconds
+    {
+        get => ClickRepeatInterval > 0f ? ClickRepeatInterval : ButtonGesture.DefaultClickRepeatInterval;
+        set
+        {
+            ClickRepeatInterval = (float)SnapClickRepeatInterval(value);
+            OnPropertyChanged(nameof(ClickRepeatIntervalSeconds));
+        }
+    }
+
+    /// <summary>
+    /// Clamps to the editable range and snaps to the step: 0.05-2.00s in 0.05s steps, so a
+    /// value typed or spun into the editor lands on the grid the engine and the profile
+    /// both speak.
+    /// </summary>
+    internal static double SnapClickRepeatInterval(double seconds)
+    {
+        var clamped = Math.Clamp(seconds, ClickRepeatIntervalMin, ClickRepeatIntervalMax);
+        return Math.Round(clamped / ClickRepeatIntervalStep, MidpointRounding.AwayFromZero) * ClickRepeatIntervalStep;
+    }
 
     /// <summary>
     /// What the double-click emits. Null leaves the double-click without a function of its own,
@@ -504,6 +550,14 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>Categorized rows for the target-key picker, headers included.</summary>
     public ObservableCollection<KeyPickerItem> KeyOptions { get; } = [];
 
+    /// <summary>
+    /// The categorized key picker as the grid shows it: one group per category, in the
+    /// picker's own order. The groups hold the very same <see cref="KeyPickerItem"/>
+    /// instances the flat <see cref="KeyOptions"/> list carries, so the grid and the lookup
+    /// never disagree about what a key is.
+    /// </summary>
+    public ObservableCollection<KeyCategoryGroup> KeyCategoryGroups { get; } = [];
+
     /// <summary>Source type shown by the selector; the single place the user picks button vs stick.</summary>
     public MappingSourceKind SourceKind
     {
@@ -558,6 +612,13 @@ public partial class MappingEditorViewModel : ObservableObject
 
     /// <summary>True when holding the button repeats the click.</summary>
     public bool HasClickRepeat => ClickRepeatEnabled;
+
+    /// <summary>
+    /// True when the click-repeat interval editor is offered: the click tab with repeat on.
+    /// The interval belongs to the click's own repeat, so it waits for the same tab the
+    /// checkbox lives on.
+    /// </summary>
+    public bool ShowClickRepeatInterval => IsClickSelected && ClickRepeatEnabled;
 
     /// <summary>
     /// True when any gesture is configured, i.e. when the engine must introduce a wait before
@@ -1097,6 +1158,7 @@ public partial class MappingEditorViewModel : ObservableObject
             ClickRepeatEnabled = false;
         }
 
+        OnPropertyChanged(nameof(ShowClickRepeatInterval));
         NotifyActiveSlotChanged();
     }
 
@@ -1118,6 +1180,7 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(LongPressAvailable));
         OnPropertyChanged(nameof(HasLongPress));
         OnPropertyChanged(nameof(HasAnyGesture));
+        OnPropertyChanged(nameof(ShowClickRepeatInterval));
     }
 
     partial void OnDoubleClickEnabledChanged(bool value)
@@ -1345,8 +1408,34 @@ public partial class MappingEditorViewModel : ObservableObject
             }
         }
 
+        RebuildKeyCategoryGroups();
         SetSelectedKeyOption(CurrentKeyOption());
         SetActiveSelectedKeyOption(CurrentActiveKeyOption());
+    }
+
+    /// <summary>
+    /// Groups the flat <see cref="KeyOptions"/> rows by category for the grid. The groups
+    /// hold the same item instances the flat list carries, so a selection made through one
+    /// is the selection the other reports.
+    /// </summary>
+    private void RebuildKeyCategoryGroups()
+    {
+        KeyCategoryGroups.Clear();
+
+        KeyCategoryGroup? group = null;
+
+        foreach (var item in KeyOptions)
+        {
+            if (item.IsHeader)
+            {
+                group = new KeyCategoryGroup(item.Label);
+                KeyCategoryGroups.Add(group);
+            }
+            else
+            {
+                group?.Keys.Add(item);
+            }
+        }
     }
 
     private static KeyPickerItem KeyOptionFor(GamepadKey key)

@@ -36,7 +36,7 @@
                EditorLift  the model rises while the editor is open, clearing the card below
                EditorSlide the editor card settles up into its slot as it appears
                EditorFade  the editor card's opacity, 0 at rest and 1 while open -->
-        <conv:BoolToDoubleConverter x:Key="EditorLift" TrueValue="-44" FalseValue="0" />
+        <conv:BoolToDoubleConverter x:Key="EditorLift" TrueValue="-24" FalseValue="0" />
         <conv:BoolToDoubleConverter x:Key="EditorSlide" TrueValue="0" FalseValue="14" />
         <conv:BoolToDoubleConverter x:Key="EditorFade" TrueValue="1" FalseValue="0" />
         <conv:BoolToDoubleConverter x:Key="RowTintFade" TrueValue="1" FalseValue="0" />
@@ -45,7 +45,13 @@
              both sides render identically. The selected row carries a full-bleed tint behind
              its content as well as the accent bar: a 3px bar alone reads as a sliver among a
              wall of cards. Clicking the row opens its settings, so there is no separate edit
-             button - only the enable toggle and delete remain. -->
+             button - only the enable toggle and delete remain.
+
+             Under the source, the row is the complete summary of the three gestures the
+             mapping carries (DESIGN 4.3.8): 单击 / 双击 / 长按 each get one line with a fixed
+             category label, so the three functions align in one column instead of squeezing
+             into three narrow ones. 已关闭, 无功能 and the legacy 重复单击的功能 are three
+             different states and read differently here, exactly as they do in the editor. -->
         <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
             <controls:MappingRowBorder Classes="card mappingRow" Padding="0" Margin="0,0,0,6">
                 <Grid>
@@ -85,12 +91,16 @@
                         </Border.IsVisible>
                     </Border>
                     <Grid ColumnDefinitions="*,Auto,Auto" Margin="14,9,12,9">
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding SourceText}" FontSize="12"
+                        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto" ColumnDefinitions="30,*">
+                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="{Binding SourceText}" FontSize="12"
                                        Foreground="{DynamicResource TextPrimaryBrush}" />
-                            <TextBlock Text="{Binding TargetText}" FontSize="10"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,1,0,0" />
-                        </StackPanel>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="单击" Classes="gestureLabel" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClickText}" Classes="gestureValue" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="双击" Classes="gestureLabel" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DoubleClickText}" Classes="gestureValue" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="长按" Classes="gestureLabel" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding LongPressText}" Classes="gestureValue" />
+                        </Grid>
                         <ToggleButton Grid.Column="1" Classes="rowToggle" Margin="8,0,0,0"
                                       VerticalAlignment="Center" FontSize="10" Padding="8,4"
                                       Content="{Binding IsEnabled, Converter={StaticResource EnabledText}}"
@@ -170,6 +180,22 @@
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
             <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <!-- The three gesture lines under a mapping row's source. The category label is
+             fixed-width so the three functions align in one column, and the value trims
+             rather than wraps: a row is one glance, not a paragraph. -->
+        <Style Selector="TextBlock.gestureLabel">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="Margin" Value="0,2,0,0" />
+        </Style>
+
+        <Style Selector="TextBlock.gestureValue">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Margin" Value="6,2,0,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
 
         <Style Selector="Button.primary">
@@ -532,8 +558,11 @@
                         <Grid.RowDefinitions>
                             <!-- The model stage is a fixed-height row: opening the editor below
                                  must not re-lay the model out, or it would jump before the lift
-                                 animation even starts. The only motion is the animated lift. -->
-                            <RowDefinition Height="480" />
+                                 animation even starts. The only motion is the animated lift.
+                                 The stage is 420 rather than 480 (DESIGN 4.3.7): the released
+                                 60px go to the editor card below, which is the surface that
+                                 actually needs the room. -->
+                            <RowDefinition Height="420" />
                             <RowDefinition Height="{Binding IsEditing, Converter={StaticResource EditorRowHeight}}" />
                         </Grid.RowDefinitions>
 
@@ -546,7 +575,7 @@
                              so it moves the model without re-laying anything out - which also
                              means nothing but reserved space stops it from carrying the
                              shoulder buttons up over the header text. The model row therefore
-                             reserves an inset equal to the lift (EditorLift, -44): at full
+                             reserves an inset equal to the lift (EditorLift, -24): at full
                              lift the model's top lands exactly on its own row's top edge, so
                              the header stays clear while the editor is open. -->
                         <Grid Grid.Row="0" MaxWidth="620" HorizontalAlignment="Center">
@@ -560,7 +589,7 @@
                                            Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
                             </StackPanel>
                             <Viewbox Grid.Row="1" Stretch="Uniform" MaxHeight="380" MaxWidth="620"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,44,0,0">
+                                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,24,0,0">
                                 <Viewbox.RenderTransform>
                                     <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
                                         <TranslateTransform.Transitions>
@@ -636,8 +665,12 @@
                         <TextBlock Classes="hint" Margin="0,4,0,0"
                                    Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
                     </StackPanel>
+                    <!-- The scroll content reserves a 16px gutter on the right: the vertical
+                         scrollbar is an overlay that paints over the content's edge rather
+                         than taking layout space, so without the gutter it would sit on top
+                         of the rows' delete buttons (DESIGN 4.3.8). -->
                     <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl x:Name="MappingsList" ItemsSource="{Binding Mappings}">
+                        <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding Mappings}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel />

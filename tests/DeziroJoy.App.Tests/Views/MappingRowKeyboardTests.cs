@@ -301,4 +301,36 @@ public sealed class MappingRowKeyboardTests
         Assert.False(viewModel.IsEditing, "a key press on the row's toggle must not open the editor");
         Assert.NotEqual(enabledBefore, rowViewModel.IsEnabled);
     }
+
+    [AvaloniaFact]
+    public void A_Key_That_Lands_On_The_Rows_Delete_Button_Stays_With_That_Button()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+
+        var rowViewModel = viewModel.Mappings.First(
+            candidate => candidate.Entry.Source == new ButtonBinding(GamepadButton.B));
+        var row = RowFor(window, rowViewModel);
+        var delete = row.GetVisualDescendants().OfType<Button>()
+            .First(button => button.Content as string == "删除");
+
+        window.Focus();
+        Assert.True(delete.Focus());
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // Space belongs to the delete button it landed on: the row must not also open its
+        // editor, and the mapping the button owns is the one that goes away.
+        Assert.False(viewModel.IsEditing, "a key press on the row's delete button must not open the editor");
+        Assert.DoesNotContain(viewModel.Mappings,
+            candidate => candidate.Entry.Source == new ButtonBinding(GamepadButton.B));
+    }
 }

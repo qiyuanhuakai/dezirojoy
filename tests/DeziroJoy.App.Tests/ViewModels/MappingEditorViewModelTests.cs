@@ -1692,4 +1692,156 @@ public class MappingEditorViewModelTests
         Assert.Equal(new KeyPressTarget(GamepadKey.Space), reloaded.DoubleClickAction);
         Assert.Equal(new MouseButtonTarget(MouseButton.Right), reloaded.LongPressAction);
     }
+
+    // ---- The categorized key grid -------------------------------------------
+
+    [Fact]
+    public void Key_Category_Groups_Cover_Every_Key_In_Category_Order()
+    {
+        var editor = new MappingEditorViewModel();
+
+        var groups = editor.KeyCategoryGroups.ToArray();
+
+        Assert.Equal(
+            ["面部按键", "肩键与扳机", "摇杆", "十字键", "系统键", "扩展按键"],
+            groups.Select(group => group.Name));
+
+        // The five fixed categories carry exactly their own keys, in the category's order.
+        for (var i = 0; i < KeyCategories.Groups.Length; i++)
+        {
+            Assert.Equal(KeyCategories.Groups[i].Keys, groups[i].Keys.Select(item => item.Key));
+        }
+
+        // The extension group carries every key no fixed category claims.
+        var extension = Enum.GetValues<GamepadKey>().Where(key => !KeyCategories.Grouped.Contains(key));
+
+        Assert.Equal(extension, groups[KeyCategories.Groups.Length].Keys.Select(item => item.Key));
+
+        // Across the groups every key appears exactly once, so the grid is a complete
+        // picker rather than a sample of one.
+        var allKeys = groups.SelectMany(group => group.Keys).Select(item => item.Key).ToArray();
+
+        Assert.Equal(Enum.GetValues<GamepadKey>().OrderBy(key => key), allKeys.OrderBy(key => key));
+        Assert.Equal(allKeys.Length, allKeys.Distinct().Count());
+
+        // The grid and the flat lookup share one item per key, so they can never disagree.
+        foreach (var group in groups)
+        {
+            foreach (var item in group.Keys)
+            {
+                Assert.Contains(editor.KeyOptions, option => ReferenceEquals(option, item));
+            }
+        }
+    }
+
+    [Fact]
+    public void Selecting_A_Key_Through_A_Category_Group_Item_Sets_The_Target_Key()
+    {
+        var editor = new MappingEditorViewModel();
+        var item = editor.KeyCategoryGroups.First(group => group.Name == "系统键").Keys
+            .First(key => key.Key == GamepadKey.Space);
+
+        editor.ActiveSelectedKeyOption = item;
+
+        Assert.Equal(GamepadKey.Space, editor.ActiveSlot.SelectedKey);
+        Assert.Equal(GamepadKey.Space, editor.ActiveSelectedKeyOption!.Key);
+    }
+
+    // ---- The click-repeat interval editor ------------------------------------
+
+    [Fact]
+    public void The_Repeat_Interval_Editor_Shows_The_Default_While_Nothing_Custom_Is_Carried()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, editor.ClickRepeatIntervalSeconds, precision: 5);
+
+        editor.ClickRepeatEnabled = true;
+
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, editor.ClickRepeatIntervalSeconds, precision: 5);
+        Assert.Equal(
+            ButtonGesture.DefaultClickRepeatInterval,
+            Assert.IsType<ButtonBinding>(editor.BuildSource()).Gesture!.ClickRepeatInterval);
+    }
+
+    [Fact]
+    public void The_Repeat_Interval_Clamps_To_Its_Range_And_Snaps_To_Its_Step()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.ClickRepeatEnabled = true;
+
+        editor.ClickRepeatIntervalSeconds = 0.03;
+
+        Assert.Equal(0.05, editor.ClickRepeatIntervalSeconds, precision: 5);
+
+        editor.ClickRepeatIntervalSeconds = 0.07;
+
+        Assert.Equal(0.05, editor.ClickRepeatIntervalSeconds, precision: 5);
+
+        editor.ClickRepeatIntervalSeconds = 0.13;
+
+        Assert.Equal(0.15, editor.ClickRepeatIntervalSeconds, precision: 5);
+
+        editor.ClickRepeatIntervalSeconds = 2.50;
+
+        Assert.Equal(2.00, editor.ClickRepeatIntervalSeconds, precision: 5);
+
+        editor.ClickRepeatIntervalSeconds = 0.15;
+
+        Assert.Equal(0.15, editor.ClickRepeatIntervalSeconds, precision: 5);
+        Assert.Equal(0.15f, editor.ClickRepeatInterval);
+    }
+
+    [Fact]
+    public void A_Custom_Repeat_Interval_Round_Trips_Through_Build_And_Load()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.ClickRepeatEnabled = true;
+        editor.ClickRepeatIntervalSeconds = 0.15;
+
+        var built = editor.BuildEntry();
+
+        Assert.Equal(0.15f, Assert.IsType<ButtonBinding>(built.Source).Gesture!.ClickRepeatInterval);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(built);
+
+        Assert.True(reloaded.ClickRepeatEnabled);
+        Assert.Equal(0.15, reloaded.ClickRepeatIntervalSeconds, precision: 5);
+        Assert.Equal(0.15f, Assert.IsType<ButtonBinding>(reloaded.BuildEntry().Source).Gesture!.ClickRepeatInterval);
+    }
+
+    [Fact]
+    public void The_Repeat_Interval_Editor_Is_Offered_Only_On_The_Click_Tab_With_Repeat_On()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+
+        Assert.False(editor.ShowClickRepeatInterval, "repeat starts off");
+
+        editor.ClickRepeatEnabled = true;
+
+        Assert.True(editor.ShowClickRepeatInterval, "the click tab offers the interval while repeat runs");
+
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+
+        Assert.False(editor.ShowClickRepeatInterval, "the interval belongs to the click tab alone");
+
+        editor.SelectedGestureKind = GestureKind.Click;
+        editor.ClickRepeatEnabled = false;
+
+        Assert.False(editor.ShowClickRepeatInterval, "no repeat, no interval");
+    }
+
+    [Fact]
+    public void Reset_Returns_The_Repeat_Interval_To_The_Default()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.B };
+        editor.ClickRepeatEnabled = true;
+        editor.ClickRepeatIntervalSeconds = 0.15;
+
+        editor.Reset();
+
+        Assert.False(editor.ClickRepeatEnabled);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, editor.ClickRepeatIntervalSeconds, precision: 5);
+    }
 }

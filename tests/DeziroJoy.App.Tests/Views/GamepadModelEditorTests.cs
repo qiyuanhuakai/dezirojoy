@@ -192,14 +192,14 @@ public sealed class GamepadModelEditorTests
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
         var capture = EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!;
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
+        var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
 
         Assert.True(capture.IsVisible, "the keyboard-capture affordance must be visible");
-        Assert.True(list.IsVisible, "the categorized list must be visible at the same time");
+        Assert.True(grid.IsVisible, "the categorized key grid must be available at the same time");
 
-        var headers = list.Items.OfType<KeyPickerItem>().Where(item => item.IsHeader).Select(item => item.Label).ToArray();
+        var categories = grid.Items.OfType<KeyCategoryGroup>().Select(group => group.Name).ToArray();
 
-        Assert.Equal(ExpectedKeyCategories, headers);
+        Assert.Equal(ExpectedKeyCategories, categories);
     }
 
     [AvaloniaFact]

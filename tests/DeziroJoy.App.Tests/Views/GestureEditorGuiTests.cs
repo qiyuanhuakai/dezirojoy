@@ -1,8 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Avalonia.LogicalTree;
@@ -101,13 +104,19 @@ public sealed class GestureEditorGuiTests
 
     private static void ChooseKey(Window window, GamepadKey key)
     {
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
-        list.SelectedItem = EditorPanelOf(window).DataContext is MappingEditorViewModel editor
-            ? editor.KeyOptions.First(option => !option.IsHeader && option.Key == key)
-            : throw new InvalidOperationException("the panel must be bound to the editor");
+        // The picker is a grid of key-cap buttons, and a gesture slot that is 已关闭 keeps
+        // its target parameters disabled - so the choice is written the way the old list's
+        // SelectedItem was: straight onto the editor, which is exactly what the grid's
+        // click handler does. The click and keyboard paths have tests of their own.
+        var editor = (MappingEditorViewModel)EditorPanelOf(window).DataContext!;
+        editor.ActiveSelectedKeyOption = editor.KeyOptions.First(option => !option.IsHeader && option.Key == key);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
     }
+
+    private static Button KeyCapButton(Window window, GamepadKey key)
+        => EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
+            .First(button => button.DataContext is KeyPickerItem item && item.Key == key);
 
     private static void ExpandKeyList(Window window)
     {
@@ -115,6 +124,16 @@ public sealed class GestureEditorGuiTests
         expander.IsExpanded = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
+    }
+
+    private static Color ColorOf(IBrush? brush)
+        => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
+
+    private static Color Token(ThemeVariant variant, string key)
+    {
+        var app = Application.Current!;
+        app.TryFindResource(key, variant, out var brush);
+        return ColorOf(brush as IBrush);
     }
 
     // ---- The switcher leads, one editor serves every slot -------------------
@@ -146,10 +165,11 @@ public sealed class GestureEditorGuiTests
 
         var panel = EditorPanelOf(window);
 
-        // There is exactly one target-kind combo and one key list: the per-gesture action
-        // dropdowns the old surface carried are gone, not merely hidden.
+        // There is exactly one target-kind combo and one categorized key grid: the
+        // per-gesture action dropdowns the old surface carried are gone, not merely hidden.
         Assert.Single(panel.GetLogicalDescendants().OfType<ComboBox>(), c => c.Name == "TargetKindCombo");
-        Assert.Single(panel.GetLogicalDescendants().OfType<ListBox>(), c => c.Name == "TargetKeyList");
+        Assert.Single(panel.GetLogicalDescendants().OfType<ItemsControl>(), c => c.Name == "KeyCategoryGrid");
+        Assert.DoesNotContain(panel.GetLogicalDescendants().OfType<ListBox>(), c => c.Name == "TargetKeyList");
         Assert.DoesNotContain(panel.GetLogicalDescendants().OfType<ComboBox>(),
             c => c.Name is "GestureDoubleClickActionCombo" or "GestureLongPressActionCombo");
 
@@ -487,7 +507,6 @@ public sealed class GestureEditorGuiTests
         var (window, viewModel) = OpenEditorOn("ButtonA");
 
         var expander = EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!;
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
 
         Assert.False(expander.IsExpanded, "the optional key list must start collapsed");
         Assert.False(viewModel.Editor.KeyPickerExpanded);
@@ -503,7 +522,12 @@ public sealed class GestureEditorGuiTests
         Assert.True(viewModel.Editor.KeyPickerExpanded);
         Assert.True(expander.Bounds.Height > collapsedHeight, "expanding must reveal the list");
 
-        var headers = list.Items.OfType<KeyPickerItem>().Where(item => item.IsHeader).Select(item => item.Label).ToArray();
+        // The expanded grid shows one section per category, in the picker's own order.
+        var headers = EditorPanelOf(window).GetLogicalDescendants().OfType<TextBlock>()
+            .Where(text => text.Classes.Contains("pickerHeaderLabel"))
+            .Select(text => text.Text ?? string.Empty)
+            .ToArray();
+
         Assert.Equal(
             ["面部按键", "肩键与扳机", "摇杆", "十字键", "系统键", "扩展按键"],
             headers);
@@ -517,7 +541,6 @@ public sealed class GestureEditorGuiTests
         ExpandKeyList(window);
         ChooseKey(window, GamepadKey.F13);
 
-        var list = EditorPanelOf(window).FindControl<ListBox>("TargetKeyList")!;
         Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSlot.SelectedKey);
 
         var expander = EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!;
@@ -531,7 +554,9 @@ public sealed class GestureEditorGuiTests
 
         Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSlot.SelectedKey);
         Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSelectedKeyOption!.Key);
-        Assert.NotNull(list.SelectedItem);
+
+        // The cap itself comes back marked, so the selection survives both states visually.
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.F13).Classes);
     }
 
     [AvaloniaFact]
@@ -709,5 +734,235 @@ public sealed class GestureEditorGuiTests
         var modelTop = Model(window).TranslatePoint(new Point(0, 0), window)!.Value.Y;
         var panelTop = panel.TranslatePoint(new Point(0, 0), window)!.Value.Y;
         Assert.True(modelTop < panelTop, "the model must stay above the editor");
+    }
+
+    // ---- The expanded picker is a full-width four-column grid ----------------
+
+    [AvaloniaFact]
+    public void The_Expanded_Picker_Is_A_Four_Column_Grid_Across_The_Full_Card_Width()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+
+        var panel = EditorPanelOf(window);
+        var grids = panel.GetVisualDescendants().OfType<UniformGrid>().ToArray();
+
+        Assert.NotEmpty(grids);
+        Assert.All(grids, grid => Assert.Equal(4, grid.Columns));
+
+        // The grid takes the editor card's width: not a narrow centered popup, and not a
+        // column beside the rest of the editor.
+        var grid = grids[0];
+
+        Assert.True(grid.Bounds.Width > 400, $"the grid is only {grid.Bounds.Width}px wide");
+        Assert.True(
+            grid.Bounds.Width >= panel.Bounds.Width * 0.9,
+            $"the grid ({grid.Bounds.Width}px) must fill the card ({panel.Bounds.Width}px)");
+
+        // Four caps share the first row, each a comfortable hit target. The grid's own
+        // children are the per-item containers, so the row is read from them; the caps
+        // themselves are reached through the panel's logical tree.
+        var cells = grid.Children.Cast<Control>().ToArray();
+        var firstRow = cells.Where(cell => Math.Abs(cell.Bounds.Y - cells[0].Bounds.Y) < 0.5).ToArray();
+
+        Assert.Equal(4, firstRow.Length);
+
+        var caps = panel.GetLogicalDescendants().OfType<Button>()
+            .Where(button => button.DataContext is KeyPickerItem)
+            .Take(4)
+            .ToArray();
+
+        Assert.All(caps, cap => Assert.True(cap.Bounds.Height >= 32, $"a key cap is only {cap.Bounds.Height}px tall"));
+        Assert.All(caps, cap => Assert.True(cap.Bounds.Width >= 100, $"a key cap is only {cap.Bounds.Width}px wide"));
+    }
+
+    [AvaloniaFact]
+    public void The_Expanded_Picker_Has_No_Inner_Scroll_Viewer()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+
+        var expander = EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!;
+
+        // The picker owns no scrollbar: the editor body above it is the only scroller, so a
+        // selection never snaps the list to the top.
+        Assert.Empty(expander.GetVisualDescendants().OfType<ScrollViewer>());
+    }
+
+    [AvaloniaFact]
+    public void Selecting_A_Key_Realizes_Every_Cap_Without_Scrolling_The_Picker()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+
+        // Every cap is realized at once: the picker virtualizes nothing, so a key far down
+        // the list is as reachable as the first one and nothing scrolls under the selection.
+        var caps = EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
+            .Where(button => button.DataContext is KeyPickerItem)
+            .ToArray();
+
+        Assert.Equal(Enum.GetValues<GamepadKey>().Length, caps.Length);
+
+        ChooseKey(window, GamepadKey.F13);
+
+        Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSlot.SelectedKey);
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.F13).Classes);
+    }
+
+    [AvaloniaFact]
+    public void The_Key_Caps_Are_Keyboard_Focusable_And_Enter_Selects()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+
+        var cap = KeyCapButton(window, GamepadKey.F13);
+
+        Assert.True(cap.Focusable, "a key cap must be reachable from the keyboard");
+        Assert.True(cap.Focus());
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(cap.IsFocused);
+
+        // The focus ring is visible: the cap's frame takes the accent border while it holds
+        // focus, and the border thickness never changes, so focusing shifts no layout.
+        var frame = cap.GetVisualDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("keyCapFrame"));
+
+        Assert.Equal(Token(window.ActualThemeVariant, "AccentBrush"), ColorOf(frame.BorderBrush));
+        Assert.Equal(new Thickness(1), frame.BorderThickness);
+
+        window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSlot.SelectedKey);
+        Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSelectedKeyOption!.Key);
+        Assert.Contains("selected", cap.Classes);
+    }
+
+    [AvaloniaFact]
+    public void The_Selected_Key_Cap_Shows_An_Accent_Surface_And_A_Check_Glyph()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+        ChooseKey(window, GamepadKey.F13);
+
+        var selected = KeyCapButton(window, GamepadKey.F13);
+        var resting = KeyCapButton(window, GamepadKey.F14);
+
+        // One surface per cap, washed by the selection: the selected cap wears the accent
+        // tone and a resting cap keeps the subtle one, so the two never read the same.
+        var selectedSurface = selected.GetVisualDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("keyCap"));
+        var restingSurface = resting.GetVisualDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("keyCap"));
+
+        Assert.True(selectedSurface.IsVisible, "the selected cap wears the accent surface");
+        Assert.True(restingSurface.IsVisible, "a resting cap wears the subtle surface");
+        Assert.Equal(Token(window.ActualThemeVariant, "AccentSurfaceBrush"), ColorOf(selectedSurface.Background));
+        Assert.Equal(Token(window.ActualThemeVariant, "SubtleBrush"), ColorOf(restingSurface.Background));
+
+        // The check glyph is the non-colour channel: visible on the selected cap alone.
+        var selectedCheck = selected.GetVisualDescendants().OfType<TextBlock>()
+            .First(text => text.Classes.Contains("keyCapCheck"));
+        var restingCheck = resting.GetVisualDescendants().OfType<TextBlock>()
+            .First(text => text.Classes.Contains("keyCapCheck"));
+
+        Assert.Equal(1d, selectedCheck.Opacity);
+        Assert.Equal(0d, restingCheck.Opacity);
+    }
+
+    // ---- The click-repeat interval editor --------------------------------------
+
+    [AvaloniaFact]
+    public void The_Click_Repeat_Checkbox_Wording_Is_Neutral()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        var box = EditorPanelOf(window).FindControl<CheckBox>("GestureClickRepeatBox")!;
+
+        Assert.Equal("长按重复触发", box.Content);
+        Assert.DoesNotContain("0.10", box.Content?.ToString() ?? string.Empty);
+    }
+
+    [AvaloniaFact]
+    public void Enabling_Click_Repeat_Reveals_The_Interval_Editor_With_The_Default()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        var row = EditorPanelOf(window).FindControl<StackPanel>("ClickRepeatIntervalRow")!;
+
+        Assert.False(row.IsVisible, "the interval waits for repeat to be enabled");
+
+        Click(EditorPanelOf(window).FindControl<CheckBox>("GestureClickRepeatBox")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.Editor.ClickRepeatEnabled);
+        Assert.True(row.IsVisible);
+
+        var interval = EditorPanelOf(window).FindControl<NumericUpDown>("ClickRepeatIntervalBox")!;
+
+        Assert.NotNull(interval.Value);
+        Assert.Equal(0.10, (double)interval.Value!, precision: 3);
+        Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, viewModel.Editor.ClickRepeatIntervalSeconds, precision: 3);
+    }
+
+    [AvaloniaFact]
+    public void The_Interval_Editor_Writes_A_Snapped_Value_Through_Commit()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        Click(EditorPanelOf(window).FindControl<CheckBox>("GestureClickRepeatBox")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var interval = EditorPanelOf(window).FindControl<NumericUpDown>("ClickRepeatIntervalBox")!;
+        interval.Value = 0.15m;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(0.15f, viewModel.Editor.ClickRepeatInterval);
+
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        var committed = viewModel.ActiveProfile!.Mappings
+            .First(mapping => mapping.Source is ButtonBinding { Button: GamepadButton.A });
+
+        Assert.Equal(0.15f, Assert.IsType<ButtonBinding>(committed.Source).Gesture!.ClickRepeatInterval);
+    }
+
+    [AvaloniaFact]
+    public void The_Interval_Editor_Is_Hidden_While_Repeat_Is_Off_Or_On_Another_Tab()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        var row = EditorPanelOf(window).FindControl<StackPanel>("ClickRepeatIntervalRow")!;
+        var repeatBox = EditorPanelOf(window).FindControl<CheckBox>("GestureClickRepeatBox")!;
+
+        Click(repeatBox, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(row.IsVisible);
+
+        // The interval belongs to the click tab: another gesture's tab hides it.
+        SelectTab(window, viewModel, "GestureDoubleClickTab");
+        Assert.False(row.IsVisible);
+
+        SelectTab(window, viewModel, "GestureClickTab");
+        Assert.True(row.IsVisible);
+
+        // And switching repeat off takes it away again.
+        Click(repeatBox, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.Editor.ClickRepeatEnabled);
+        Assert.False(row.IsVisible);
     }
 }
