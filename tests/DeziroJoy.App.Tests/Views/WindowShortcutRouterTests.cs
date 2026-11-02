@@ -40,6 +40,17 @@ public sealed class WindowShortcutRouterTests
     }
 
     [Fact]
+    public void Settings_Dismissal_Wins_Over_An_Armed_Capture()
+    {
+        Assert.Equal(
+            WindowShortcutAction.CloseSettings,
+            WindowShortcutRouter.Route(Key.Escape, KeyModifiers.None, settingsOpen: true, captureActive: true));
+        Assert.Equal(
+            WindowShortcutAction.CloseSettings,
+            WindowShortcutRouter.Route(Key.OemComma, KeyModifiers.Control, settingsOpen: true, captureActive: true));
+    }
+
+    [Fact]
     public void Capture_Suppresses_Global_Shortcuts()
     {
         Assert.Equal(

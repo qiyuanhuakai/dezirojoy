@@ -203,12 +203,31 @@ public partial class MainWindow : Window
             viewModel.IsSettingsOpen,
             viewModel.Editor.IsCapturingKey);
 
+        // The settings surface is the topmost keyboard layer and an armed key capture consumes
+        // every key, so both are arbitrated before any consumed-event guard: the surface can
+        // always be dismissed and the capture always sees its key.
+        if (action is WindowShortcutAction.CloseSettings)
+        {
+            e.Handled = true;
+            viewModel.CloseSettingsCommand.Execute(null);
+            return;
+        }
+
+        if (viewModel.IsSettingsOpen || viewModel.Editor.IsCapturingKey)
+        {
+            return;
+        }
+
+        // A key an input control already consumed, or one typed into a text field or pressed
+        // while a dropdown is open, belongs to that control: the global shortcuts must not
+        // override it.
+        if (e.Handled || ShouldYieldToInputSurface())
+        {
+            return;
+        }
+
         switch (action)
         {
-            case WindowShortcutAction.CloseSettings:
-                e.Handled = true;
-                viewModel.CloseSettingsCommand.Execute(null);
-                return;
             case WindowShortcutAction.OpenSettings:
                 e.Handled = true;
                 viewModel.OpenSettingsCommand.Execute(null);
@@ -226,7 +245,7 @@ public partial class MainWindow : Window
                 return;
         }
 
-        if (viewModel.IsSettingsOpen || e.Handled || !viewModel.IsEditing)
+        if (!viewModel.IsEditing)
         {
             return;
         }
@@ -237,11 +256,37 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 viewModel.CancelEditorCommand.Execute(null);
                 break;
-            case Key.Enter when !viewModel.Editor.IsCapturingKey:
+            case Key.Enter:
                 e.Handled = true;
                 viewModel.CommitEditorCommand.Execute(null);
                 break;
         }
+    }
+
+    /// <summary>
+    /// True when the key belongs to an input surface rather than to the window: a text field
+    /// holds focus, or a dropdown is open. The dropdown is scanned window-wide because its
+    /// popup is a separate visual tree, so a walk up from the focused element cannot reach
+    /// the ComboBox from inside the popup.
+    /// </summary>
+    private bool ShouldYieldToInputSurface()
+    {
+        if (this.GetVisualDescendants().OfType<ComboBox>().Any(combo => combo.IsDropDownOpen))
+        {
+            return true;
+        }
+
+        for (var current = FocusManager?.GetFocusedElement() as Visual;
+            current is not null;
+            current = current.GetVisualParent())
+        {
+            if (current is TextBox)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnPreviewTick(object? sender, EventArgs e)

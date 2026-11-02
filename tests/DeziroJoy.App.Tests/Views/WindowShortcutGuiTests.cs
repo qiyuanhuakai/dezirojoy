@@ -2,8 +2,14 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views;
+using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Views;
@@ -62,6 +68,65 @@ public sealed class WindowShortcutGuiTests : IDisposable
 
         Press(window, Key.OemComma, RawInputModifiers.Control, PhysicalKey.Comma);
 
+        Assert.False(viewModel.IsSettingsOpen);
+    }
+
+    [AvaloniaFact]
+    public void A_Key_Consumed_By_A_Control_Does_Not_Trigger_The_Global_Shortcut()
+    {
+        var (window, viewModel) = BuildWindow(_directory);
+        var tabs = window.FindControl<TabControl>("MainTabs")!;
+
+        // The window still sees the event because its handler is registered
+        // handledEventsToo, but a control that consumed the key first owns it.
+        window.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, args) => args.Handled = true,
+            RoutingStrategies.Tunnel);
+
+        Press(window, Key.D2, RawInputModifiers.Control, PhysicalKey.Digit2);
+        Assert.Equal(0, tabs.SelectedIndex);
+
+        Press(window, Key.OemComma, RawInputModifiers.Control, PhysicalKey.Comma);
+        Assert.False(viewModel.IsSettingsOpen);
+    }
+
+    [AvaloniaFact]
+    public void A_Focused_TextBox_Suppresses_The_Global_Shortcut()
+    {
+        var (window, viewModel) = BuildWindow(_directory);
+        var tabs = window.FindControl<TabControl>("MainTabs")!;
+
+        var textBox = new TextBox();
+        ((Panel)window.Content!).Children.Add(textBox);
+        textBox.Focus();
+        Assert.True(textBox.IsFocused, "the text box must hold focus for this case");
+
+        Press(window, Key.D2, RawInputModifiers.Control, PhysicalKey.Digit2);
+        Assert.Equal(0, tabs.SelectedIndex);
+
+        Press(window, Key.OemComma, RawInputModifiers.Control, PhysicalKey.Comma);
+        Assert.False(viewModel.IsSettingsOpen);
+    }
+
+    [AvaloniaFact]
+    public void An_Open_Dropdown_Suppresses_The_Global_Shortcut()
+    {
+        var (window, viewModel) = BuildWindow(_directory);
+        var tabs = window.FindControl<TabControl>("MainTabs")!;
+
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.A));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var combo = window.GetLogicalDescendants().OfType<MappingEditorPanel>().First()
+            .FindControl<ComboBox>("TargetKindCombo")!;
+        combo.IsDropDownOpen = true;
+
+        Press(window, Key.D2, RawInputModifiers.Control, PhysicalKey.Digit2);
+        Assert.Equal(0, tabs.SelectedIndex);
+
+        Press(window, Key.OemComma, RawInputModifiers.Control, PhysicalKey.Comma);
         Assert.False(viewModel.IsSettingsOpen);
     }
 
