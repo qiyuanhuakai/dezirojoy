@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace DeziroJoy.App.Ipc;
@@ -19,11 +22,18 @@ public sealed partial class DaemonServer
     /// until the peer disconnects. A disconnect only ends this loop - it never stops the
     /// engine, releases the mutex or touches the daemon's state.
     /// </summary>
-    public async Task ServeConnectionAsync(Stream stream, CancellationToken cancellationToken = default)
+    public Task ServeConnectionAsync(Stream stream, CancellationToken cancellationToken = default)
+        => ServeConnectionAsync(stream, peerSessionId: null, cancellationToken);
+
+    public async Task ServeConnectionAsync(
+        Stream stream,
+        int? peerSessionId,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
         var connection = new Connection(stream);
+        var handshakeAccepted = false;
         lock (_connectionsGate)
         {
             _connections.Add(connection);
@@ -44,6 +54,44 @@ public sealed partial class DaemonServer
                 }
 
                 var request = IpcSerializer.Deserialize(Encoding.UTF8.GetString(frame));
+                if (!handshakeAccepted)
+                {
+                    if (request is not HelloMessage hello)
+                    {
+                        await connection.SendAsync(
+                            new ErrorMessage(string.Empty, "handshake-required", "send a valid hello before any control request"),
+                            cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+
+                    if (ResolvePeerSessionId(stream, peerSessionId) is { } actualSessionId)
+                    {
+                        hello = hello with { SessionId = actualSessionId };
+                    }
+                    else if (OperatingSystem.IsWindows() && stream is NamedPipeServerStream)
+                    {
+                        hello = hello with { SessionId = -1 };
+                    }
+
+                    var helloResponse = await ProcessAsync(hello, connection.Id).ConfigureAwait(false);
+                    await connection.SendAsync(helloResponse, cancellationToken).ConfigureAwait(false);
+                    if (helloResponse is not HelloAckMessage { Accepted: true })
+                    {
+                        return;
+                    }
+
+                    handshakeAccepted = true;
+                    continue;
+                }
+
+                if (request is HelloMessage)
+                {
+                    await connection.SendAsync(
+                        new ErrorMessage(string.Empty, "already-handshaken", "a connection can perform only one hello"),
+                        cancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
                 var response = await ProcessAsync(request, connection.Id).ConfigureAwait(false);
                 await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
             }
@@ -59,6 +107,38 @@ public sealed partial class DaemonServer
             connection.Dispose();
         }
     }
+
+    private static int? ResolvePeerSessionId(Stream stream, int? peerSessionId)
+    {
+        if (peerSessionId.HasValue)
+        {
+            return peerSessionId;
+        }
+
+        if (!OperatingSystem.IsWindows() || stream is not NamedPipeServerStream pipe)
+        {
+            return null;
+        }
+
+        if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out var processId))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var client = System.Diagnostics.Process.GetProcessById(checked((int)processId));
+            return client.SessionId;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint processId);
 
     /// <summary>
     /// One client connection. Writes are serialised by a semaphore so a push raised on

@@ -506,6 +506,55 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Transport_Refuses_Control_Before_An_Accepted_Hello()
+    {
+        var (server, _, host) = CreateRunning();
+        var stream = new ScriptedStream();
+        stream.Script(new StartMessage("req-start", 0));
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, host.StartCalls);
+        Assert.Contains("handshake-required", stream.WrittenText());
+    }
+
+    [Fact]
+    public async Task Transport_Closes_After_A_Rejected_Hello()
+    {
+        var (server, _, host) = CreateRunning();
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage("gui-1", IpcContract.ProtocolVersion + 1, "client-1", IpcSession.Current));
+        stream.Script(new StartMessage("req-start", 0));
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, host.StartCalls);
+        Assert.Contains("hello-ack", stream.WrittenText());
+        Assert.DoesNotContain("mutation-ack", stream.WrittenText());
+    }
+
+    [Fact]
+    public async Task Transport_Uses_The_Peer_Session_Not_The_Declared_Session()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Windows session identity is Windows-only.");
+            return;
+        }
+
+        var (server, _, _) = CreateRunning();
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
+
+        await server.ServeConnectionAsync(
+            stream,
+            peerSessionId: IpcSession.Current + 1,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("\"Accepted\":false", stream.WrittenText());
+    }
+
+    [Fact]
     public async Task A_Second_Daemon_Cannot_Take_The_Injection_Slot_From_The_First()
     {
         var (server, _, host) = CreateRunning();
