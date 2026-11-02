@@ -49,7 +49,11 @@
         <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
             <controls:MappingRowBorder Classes="card mappingRow" Padding="0" Margin="0,0,0,6">
                 <Grid>
-                    <Border CornerRadius="{DynamicResource CornerRadiusXl}"
+                    <!-- The tint bleeds one pixel past its slot on every side. The row's card
+                         border insets its children, so without the bleed a selected row would
+                         read as a tint floating inside a hairline rather than one full-bleed
+                         surface; the radius stays concentric with the card's. -->
+                    <Border CornerRadius="{DynamicResource CornerRadiusXl}" Margin="-1"
                             Background="{DynamicResource RowSelectedBrush}"
                             Opacity="{Binding IsVisible, RelativeSource={RelativeSource Self}, Converter={StaticResource RowTintFade}}">
                         <!-- The tint fades in rather than snapping on. Its opacity follows its own

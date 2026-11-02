@@ -1,4 +1,6 @@
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -27,6 +29,12 @@ public sealed class MappingRowBorder : Border
     {
         // The row is an activation target, not a label: the keyboard must be able to reach it.
         Focusable = true;
+        Transitions = [new BrushTransition
+        {
+            Property = BackgroundProperty,
+            Duration = TimeSpan.FromMilliseconds(150),
+            Easing = new CubicEaseOut(),
+        }];
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)

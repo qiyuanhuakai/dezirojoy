@@ -236,10 +236,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     /// Which process actually injects mapped input, named together with its integrity
-    /// level. The GUI owns the <see cref="EngineHost"/> through <see cref="EngineComposition"/>
-    /// and that host's output sink calls SendInput inside this process, so the injector is
-    /// always the main window - never the resident daemon, whose scheduled-task run level
-    /// says nothing about what this window injects.
+    /// level. Daemon mode reads the daemon's authoritative snapshot; otherwise the local
+    /// <see cref="EngineHost"/> owned through <see cref="EngineComposition"/> injects.
     /// </summary>
     public string InjectorDescription => _daemonRequired
         ? DaemonSnapshot is { } daemon
