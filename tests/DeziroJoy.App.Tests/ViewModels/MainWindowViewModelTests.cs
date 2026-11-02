@@ -423,4 +423,135 @@ public class MainWindowViewModelTests
 
         Assert.Equal(1234f, vm.MouseSensitivity.MaxSpeed);
     }
+
+    // ---- Row gesture summaries -------------------------------------------
+    //
+    // A row is the complete summary of the three gestures a mapping carries (DESIGN 4.3.8):
+    // the click is the mapping's own target, the double-click and the long-press are the
+    // two gestures a button can carry on top of it. 已关闭, 无功能 and the legacy
+    // repeat-click are three different states and must never read the same.
+
+    private static MappingRowViewModel RowOf(MappingEntry entry)
+        => new(entry, _ => { }, _ => { }, (_, _) => { });
+
+    [Fact]
+    public void A_Row_Summarizes_The_Click_As_Its_Target_With_Both_Gestures_Off()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // B carries the default B -> Enter mapping and no gestures at all.
+        var row = vm.Mappings.Single(r => r.Entry.Source == new ButtonBinding(GamepadButton.B));
+
+        Assert.Equal("Enter", row.ClickText);
+        Assert.Equal("已关闭", row.DoubleClickText);
+        Assert.Equal("已关闭", row.LongPressText);
+    }
+
+    [Fact]
+    public void A_Stick_Row_Summarizes_Its_Target_With_No_Gesture_Lines()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // Gestures live on the button binding, so a stick row has none to summarize.
+        var row = vm.Mappings.Single(r => r.Entry.Source is StickBinding { Stick: GamepadStick.Left });
+
+        Assert.Equal("滚轮滚动", row.ClickText);
+        Assert.Equal("已关闭", row.DoubleClickText);
+        Assert.Equal("已关闭", row.LongPressText);
+    }
+
+    [Fact]
+    public void A_Legacy_Gesture_Row_Shows_Repeat_Click_On_Both_Gesture_Lines()
+    {
+        // The shape every profile written before gesture actions existed has: the windows
+        // are set, both actions are null, so each gesture re-fires the click.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B)
+            {
+                Gesture = new ButtonGesture { DoubleClickWindow = 0.25f, LongPressThreshold = 0.50f },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        });
+
+        Assert.Equal("Enter", row.ClickText);
+        Assert.Equal("重复单击的功能", row.DoubleClickText);
+        Assert.Equal("重复单击的功能", row.LongPressText);
+    }
+
+    [Fact]
+    public void A_Disabled_Mapping_Row_Shows_Closed_On_Its_Click_Line()
+    {
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B),
+            Target = new KeyPressTarget(GamepadKey.Enter),
+            Enabled = false,
+        });
+
+        Assert.Equal("已关闭", row.ClickText);
+    }
+
+    [Fact]
+    public void A_None_Target_Click_Line_Shows_No_Function()
+    {
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.B),
+            Target = new NoneTarget(),
+        });
+
+        Assert.Equal("无功能", row.ClickText);
+    }
+
+    [Fact]
+    public void Gesture_Lines_Distinguish_An_Own_Target_From_No_Function_And_Off()
+    {
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.A)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = 0.25f,
+                    DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+                    LongPressThreshold = 0.50f,
+                    LongPressAction = new NoneTarget(),
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Escape),
+        });
+
+        Assert.Equal("Esc", row.ClickText);
+        Assert.Equal("Space", row.DoubleClickText);
+        Assert.Equal("无功能", row.LongPressText);
+    }
+
+    [Fact]
+    public void Click_Repeat_Closes_The_Long_Press_Line()
+    {
+        // Repeat and the long-press are mutually exclusive and the repeat wins, so the row
+        // must not advertise a long-press that never fires.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X)
+            {
+                Gesture = new ButtonGesture
+                {
+                    ClickRepeatInterval = 0.10f,
+                    LongPressThreshold = 0.50f,
+                },
+            },
+            Target = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C),
+        });
+
+        Assert.Equal("Ctrl + C", row.ClickText);
+        Assert.Equal("已关闭", row.LongPressText);
+    }
 }
