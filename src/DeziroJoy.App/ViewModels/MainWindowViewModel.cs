@@ -159,6 +159,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private StateSnapshot? _daemonSnapshot;
 
+    private long _profileBaselineRevision = -1;
+    private string? _profileDaemonInstanceId;
+
     [ObservableProperty]
     private ControllerRuntime? _activeController;
 
@@ -507,6 +510,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         IsEditing = false;
         _editingEntry = null;
+        if (_daemon is not null && DaemonSnapshot is { } snapshot)
+        {
+            AdoptDaemonProfile(snapshot);
+        }
     }
 
     [RelayCommand]
@@ -1041,6 +1048,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_daemon is not null)
         {
+            if (_profileBaselineRevision != _daemon.Revision
+                || _profileDaemonInstanceId != _daemon.DaemonInstanceId)
+            {
+                SetTransferError("配置已在后台更新；请取消当前编辑并重新加载后再提交。");
+                return false;
+            }
+
             try
             {
                 var result = await _daemon.ApplyAsync(
@@ -1052,6 +1066,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     ReportMutationFailure(result, "应用配置");
                     return false;
                 }
+
+                _profileBaselineRevision = result.Revision;
+                _profileDaemonInstanceId = _daemon.DaemonInstanceId;
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
             {
@@ -1101,12 +1118,48 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsMappingEnabled = snapshot.MappingEnabled;
         _mappingEnabledRequested = snapshot.MappingEnabled;
         MappingOwner = snapshot.Running ? MappingOwner.ResidentDaemon : MappingOwner.None;
+        AdoptDaemonProfile(snapshot);
         if (!string.IsNullOrWhiteSpace(snapshot.LastError))
         {
             SetTransferError(snapshot.LastError);
         }
 
         RefreshStatus();
+    }
+
+    private void AdoptDaemonProfile(StateSnapshot snapshot)
+    {
+        if (IsEditing)
+        {
+            return;
+        }
+
+        var instanceId = _daemon?.DaemonInstanceId;
+        if (snapshot.Revision == _profileBaselineRevision && instanceId == _profileDaemonInstanceId)
+        {
+            return;
+        }
+
+        GamepadProfile? profile = null;
+        if (!string.IsNullOrWhiteSpace(snapshot.ProfileJson))
+        {
+            try
+            {
+                profile = ProfileSerializer.Deserialize(snapshot.ProfileJson);
+            }
+            catch (System.Text.Json.JsonException exception)
+            {
+                SetTransferError($"守护进程配置无法解析：{exception.Message}");
+                return;
+            }
+        }
+
+        _profileBaselineRevision = snapshot.Revision;
+        _profileDaemonInstanceId = instanceId;
+        if (profile is not null)
+        {
+            ApplyProfileLocally(profile);
+        }
     }
 
     private void OnDaemonDisconnected()

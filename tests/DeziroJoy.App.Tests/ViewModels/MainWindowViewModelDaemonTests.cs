@@ -63,6 +63,42 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task A_Newer_Daemon_Revision_Rejects_A_Stale_Draft_And_Rebases_After_Cancel()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+        var original = new GamepadProfile { Name = "Original", Mappings = [] };
+        Assert.True(await viewModel.ApplyProfile(original));
+
+        viewModel.AddMappingCommand.Execute(null);
+        var external = new GamepadProfile { Name = "External", Mappings = [] };
+        var externalAck = Assert.IsType<MutationAckMessage>(
+            await context.Server.ProcessAsync(new ApplyConfigurationMessage(
+                "external", 1, external.Name, ProfileSerializer.Serialize(external))));
+        Assert.True(externalAck.Accepted);
+        await WaitForDaemonRevision(viewModel, 2);
+
+        Assert.Equal(2, viewModel.DaemonSnapshot!.Revision);
+        Assert.Equal("Original", viewModel.ActiveProfile!.Name);
+        Assert.True(viewModel.IsEditing);
+
+        var applied = await viewModel.ApplyProfile(original with { Name = "Stale" });
+
+        Assert.False(applied);
+        Assert.Equal("Original", viewModel.ActiveProfile.Name);
+        var authoritative = Assert.IsType<StateChangedMessage>(
+            await context.Server.ProcessAsync(new GetStateMessage("verify")));
+        Assert.Equal(2, authoritative.Snapshot.Revision);
+        Assert.Equal("External", authoritative.Snapshot.ProfileName);
+        Assert.Contains("重新", viewModel.TransferMessage);
+
+        viewModel.CancelEditorCommand.Execute(null);
+
+        Assert.False(viewModel.IsEditing);
+        Assert.Equal("External", viewModel.ActiveProfile.Name);
+    }
+
+    [Fact]
     public async Task Disposing_The_ViewModel_Does_Not_Stop_The_Resident_Mapping()
     {
         var context = await CreateDaemonViewModel();
@@ -118,7 +154,31 @@ public sealed class MainWindowViewModelDaemonTests
         Assert.False(viewModel.IsTransferError);
     }
 
-    private static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost DaemonHost, ServerChannel Channel)> CreateDaemonViewModel()
+    private static async Task WaitForDaemonRevision(MainWindowViewModel viewModel, long revision)
+    {
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.DaemonSnapshot)
+                && viewModel.DaemonSnapshot?.Revision == revision)
+            {
+                received.TrySetResult();
+            }
+        }
+
+        viewModel.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            OnPropertyChanged(viewModel, new System.ComponentModel.PropertyChangedEventArgs(nameof(MainWindowViewModel.DaemonSnapshot)));
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            viewModel.PropertyChanged -= OnPropertyChanged;
+        }
+    }
+
+    private static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost DaemonHost, ServerChannel Channel, DaemonServer Server)> CreateDaemonViewModel()
     {
         var daemonHost = new FakeDaemonHost();
         var store = new InMemoryProfileStore();
@@ -139,7 +199,7 @@ public sealed class MainWindowViewModelDaemonTests
             store,
             daemon: controller,
             daemonRequired: true);
-        return (viewModel, daemonHost, channel);
+        return (viewModel, daemonHost, channel, server);
     }
 
     private sealed class ServerEndpoint(ServerChannel channel) : IDaemonEndpoint

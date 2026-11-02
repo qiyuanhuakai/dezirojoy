@@ -80,6 +80,8 @@ public sealed class DaemonController : IAsyncDisposable
 
     public StateSnapshot? Snapshot { get; private set; }
 
+    public string? DaemonInstanceId => _daemonInstanceId;
+
     public long Revision { get; private set; }
 
     public string? LastError { get; private set; }
