@@ -730,31 +730,70 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public void SelectSource(InputBinding source)
     {
         SelectedSource = source;
-        SelectedMapping = Mappings.FirstOrDefault(row => row.Entry.Source == source);
+        SelectedMapping = Mappings.FirstOrDefault(row => SamePhysicalSource(row.Entry.Source, source));
     }
 
     /// <summary>
     /// Opens the mapping settings for one source, exactly as clicking that element on the model
     /// does: an element that already has a mapping loads it (so confirming replaces it instead
-    /// of adding a second entry for the same source), and a fresh one is armed anew. The
-    /// matching row is selected so the list side of the link highlights too; an element with no
-    /// mapping selects nothing.
+    /// of adding a second entry for the same element), and a fresh one is armed anew. Identity
+    /// is physical - see <see cref="SamePhysicalSource"/> - so an element reopens its mapping
+    /// after a gesture or a direction was configured on it. The matching row is selected so
+    /// the list side of the link highlights too; an element with no mapping selects nothing.
     /// </summary>
     public void OpenEditorForSource(InputBinding source)
     {
         SelectedSource = source;
-        SelectedMapping = Mappings.FirstOrDefault(row => row.Entry.Source == source);
 
-        if (ActiveProfile?.Mappings.FirstOrDefault(m => m.Source == source) is { } existing
-            && Mappings.FirstOrDefault(row => row.Entry == existing) is { } row)
+        // Read the selection before it is overwritten below: when one element carries several
+        // mappings, the row the user already picked is the one that reopens.
+        var entry = ExistingMappingFor(source, SelectedMapping);
+
+        if (entry is not null && Mappings.FirstOrDefault(row => row.Entry == entry) is { } row)
         {
+            SelectedMapping = row;
             EditMapping(row);
             return;
         }
 
+        SelectedMapping = null;
         AddMapping();
         Editor.LoadSource(source);
     }
+
+    /// <summary>
+    /// The mapping a click on one physical element reopens, or null when that element has no
+    /// mapping yet. When one element carries several mappings - a stick with a direction per
+    /// mapping - the row the user already selected wins; otherwise the first in profile order
+    /// does, so the choice never depends on hash or dictionary order.
+    /// </summary>
+    private MappingEntry? ExistingMappingFor(InputBinding source, MappingRowViewModel? selected)
+    {
+        if (ActiveProfile is not { } profile)
+        {
+            return null;
+        }
+
+        var matches = profile.Mappings
+            .Where(mapping => SamePhysicalSource(mapping.Source, source))
+            .ToList();
+
+        return matches.FirstOrDefault(mapping => selected is not null && mapping.Id == selected.Entry.Id)
+            ?? matches.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// True when two bindings name the same physical element. A gesture or a direction is
+    /// configuration ON the element, not part of its identity: a button stays the same button
+    /// once a double-click is configured on it, and a stick stays the same stick once it is
+    /// pointed at one direction.
+    /// </summary>
+    private static bool SamePhysicalSource(InputBinding left, InputBinding right) => (left, right) switch
+    {
+        (ButtonBinding a, ButtonBinding b) => a.Button == b.Button && a.Code == b.Code,
+        (StickBinding a, StickBinding b) => a.Stick == b.Stick,
+        _ => false,
+    };
 
     /// <summary>
     /// Routes one gamepad sample to the editor's capture and to navigation, in that order, so
