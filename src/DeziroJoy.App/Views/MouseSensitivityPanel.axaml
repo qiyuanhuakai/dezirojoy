@@ -110,6 +110,36 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="90" />
                     </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="水平增益" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="ScaleXSlider" Minimum="0.1" Maximum="4" TickFrequency="0.1"
+                            Value="{Binding ScaleX, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding ScaleX, StringFormat='{}{0:F2}×'}" />
+                </Grid>
+                <TextBlock x:Name="ScaleXHint" Classes="hint" Margin="150,0,0,14"
+                           Text="1 为原始速度，0 关闭左右移动" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="垂直增益" VerticalAlignment="Center" Margin="0" />
+                    <Slider Grid.Column="1" x:Name="ScaleYSlider" Minimum="0.1" Maximum="4" TickFrequency="0.1"
+                            Value="{Binding ScaleY, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="{Binding ScaleY, StringFormat='{}{0:F2}×'}" />
+                </Grid>
+                <TextBlock x:Name="ScaleYHint" Classes="hint" Margin="150,0,0,14"
+                           Text="1 为原始速度，0 关闭上下移动" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准模式倍率" VerticalAlignment="Center" Margin="0" />
                     <Slider Grid.Column="1" x:Name="PrecisionScaleSlider" Minimum="0.05" Maximum="1" TickFrequency="0.05"
                             Value="{Binding PrecisionScale, Mode=TwoWay}" VerticalAlignment="Center" />
@@ -132,6 +162,26 @@
                 </Grid>
                 <TextBlock x:Name="PrecisionButtonHint" Classes="hint" Margin="150,0,0,14"
                            Text="{Binding PrecisionButtonHint}" />
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准模式" VerticalAlignment="Center" Margin="0" />
+                    <ComboBox Grid.Column="1" x:Name="PrecisionModeCombo" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding PrecisionModeOptions}"
+                              SelectedItem="{Binding SelectedPrecisionModeOption, Mode=TwoWay}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PrecisionModeOption">
+                                <TextBlock Text="{Binding Label}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+                <TextBlock x:Name="PrecisionModeHint" Classes="hint" Margin="150,0,0,14"
+                           Text="触发方式随当前映射一起保存" />
 
                 <CheckBox x:Name="InvertYBox" Content="垂直反转" IsChecked="{Binding InvertY, Mode=TwoWay}" />
                 <TextBlock x:Name="InvertYHint" Classes="hint" Margin="0,4,0,0"
