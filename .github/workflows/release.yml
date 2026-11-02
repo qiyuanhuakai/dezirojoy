@@ -179,57 +179,59 @@ jobs:
           cat > body.md <<'NOTES'
           ## DeziroJoy vVERSION (alpha preview)
 
-          首个公开预览版。功能已完整实现，但尚未在真实手柄上做过充分验证，
-          欢迎按 [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
+          本版集中修正界面交互、手势与灵敏度配置持久化，以及面向管理员权限目标的
+          常驻提权注入。仍属 alpha 预览版，欢迎按 [QA 清单](docs/QA-CHECKLIST.md)
+          测试并反馈问题。
 
           ### 本版包含
 
-          - 手柄 → 鼠标 / 键盘映射：单键、组合键（Ctrl+C 等）、鼠标按键
-          - 摇杆 → 鼠标移动 / 滚轮滚动
-          - 内置默认配置（自动识别 Xbox / DualShock / 通用布局）：左摇杆滚轮、
-            右摇杆鼠标、十字键方向键、B → Enter、A → Esc、X → Ctrl+C、Y → Ctrl+V
-          - 现代化鼠标速度控制：物理单位 px/s（与 DPI / 分辨率解耦）、径向死区、
-            4 种响应曲线、指数平滑、亚像素累积、精准模式（按住左摇杆临时降速）、
-            面板内实时校准预览
-          - 按设备持久化配置；深色界面 + 实时手柄可视化器
+          - 右上角独立设置、浅色/深色主题、最大化/还原、可完全收起并恢复的左右侧栏，
+            以及 Ctrl+1/2/3 与 Ctrl+, 快捷键
+          - 响应式放大的手柄模型、模型与映射行双向联动、键盘焦点和悬浮反馈
+          - 单击、双击、长按三个同等手势槽位：均可选择单键、组合键或无功能；
+            长按重复间隔与精准键 Hold/Toggle 模式可持久化
+          - 鼠标与滚轮灵敏度、方向、曲线和精准模式设置；配置保存、重载与导入/导出
+          - 常驻提权 daemon 作为真实注入状态权威，GUI 通过同用户、同会话的版本化
+            命名管道控制；区分暂停映射与编辑器临时挂起，断线后状态可对账
 
-           ### 下载
+          ### 下载
 
-           | 文件 | 平台 | 说明 |
-           | --- | --- | --- |
-           | `DeziroJoy-vVERSION-win-x64.zip` | Windows | 自包含，解压即用（无需安装 .NET），Intel / AMD 64 位 |
-           | `DeziroJoy-vVERSION-win-arm64.zip` | Windows | 同上，ARM64（如骁龙笔记本） |
-           | `DeziroJoy-vVERSION-linux-x64.zip` | Linux | 自包含，解压即用，Intel / AMD 64 位 |
-           | `DeziroJoy-vVERSION-linux-arm64.zip` | Linux | 同上，ARM64（如树莓派） |
-           | `*.sha256` | — | SHA256 校验和 |
+          | 文件 | 平台 | 说明 |
+          | --- | --- | --- |
+          | `DeziroJoy-PACKAGEVERSION-win-x64.zip` | Windows | 自包含，解压即用（无需安装 .NET），Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-win-arm64.zip` | Windows | 同上，ARM64（如骁龙笔记本） |
+          | `DeziroJoy-PACKAGEVERSION-linux-x64.zip` | Linux | 自包含，解压即用，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-linux-arm64.zip` | Linux | 同上，ARM64（如树莓派） |
+          | `*.sha256` | — | SHA256 校验和 |
 
-           Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，
-           桌面发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要
-           `evdev`；注入鼠标键盘需要 `/dev/uinput` 可写，若不可写应用会明确报告，
-           不会静默失效。
+          Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，
+          桌面发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要
+          `evdev`；注入鼠标键盘需要 `/dev/uinput` 可写，若不可写应用会明确报告，
+          不会静默失效。
 
-           ### 已知限制
+          ### 已知限制
 
-           - Windows 上输入读取走 XInput，只能看到 Xbox 布局的标准按键；
-             超出该布局的按键（部分第三方手柄的额外宏键）不会被识别。
-           - XInput 无法提供稳定硬件 ID，Windows 上配置按 XInput 槽位（#1-#4）
-             保存；两个手柄互换插槽时，配置随槽位而非硬件走。Linux 上 evdev
-             提供稳定设备路径，按硬件保存。
-           - 常驻服务使用 Windows 计划任务的“登录时”触发器，而非开机启动：
-             登录前进程运行在会话 0，无法向用户桌面注入输入。
-           - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入
-             输入，且失败时错误码不指明源于 UIPI。需提权运行，或安装常驻服务。
-
+          - Windows 上输入读取走 XInput，只能看到 Xbox 布局的标准按键；
+            超出该布局的按键（部分第三方手柄的额外宏键）不会被识别。
+          - XInput 无法提供稳定硬件 ID，Windows 上配置按 XInput 槽位（#1-#4）
+            保存；两个手柄互换插槽时，配置随槽位而非硬件走。Linux 上 evdev
+            提供稳定设备路径，按硬件保存。
+          - 常驻服务使用 Windows 计划任务的“登录时”触发器，而非开机启动：
+            登录前进程运行在会话 0，无法向用户桌面注入输入。
+          - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入
+            输入，且失败时错误码不指明源于 UIPI。请使用提权常驻服务。
 
           ### 质量门禁
 
-          221 个自动化测试全绿（含 headless GUI 测试），Windows 与 Ubuntu 双平台 CI 通过。
+          全部自动化测试通过（含 headless GUI、IPC 生命周期与并发回归），
+          Windows 与 Ubuntu 双平台 CI 通过。发布前另完成真实 Windows 管理员目标
+          注入复验与 Linux 桌面交互复验。
           人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
 
           NOTES
-          sed -i "s/vVERSION/$VERSION/g" body.md
+          sed -i "s/vVERSION/$VERSION/g; s/PACKAGEVERSION/${VERSION#v}/g" body.md
           echo '```' >> body.md
           if git describe --tags --abbrev=0 HEAD^ 2>/dev/null; then
             git log --oneline "$(git describe --tags --abbrev=0 HEAD^)..HEAD" >> body.md
