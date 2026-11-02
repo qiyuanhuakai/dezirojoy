@@ -111,7 +111,7 @@
                         <ColumnDefinition Width="90" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="水平增益" VerticalAlignment="Center" Margin="0" />
-                    <Slider Grid.Column="1" x:Name="ScaleXSlider" Minimum="0.1" Maximum="4" TickFrequency="0.1"
+                    <Slider Grid.Column="1" x:Name="ScaleXSlider" Minimum="0" Maximum="4" TickFrequency="0.1"
                             Value="{Binding ScaleX, Mode=TwoWay}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                Text="{Binding ScaleX, StringFormat='{}{0:F2}×'}" />
@@ -126,7 +126,7 @@
                         <ColumnDefinition Width="90" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="垂直增益" VerticalAlignment="Center" Margin="0" />
-                    <Slider Grid.Column="1" x:Name="ScaleYSlider" Minimum="0.1" Maximum="4" TickFrequency="0.1"
+                    <Slider Grid.Column="1" x:Name="ScaleYSlider" Minimum="0" Maximum="4" TickFrequency="0.1"
                             Value="{Binding ScaleY, Mode=TwoWay}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                Text="{Binding ScaleY, StringFormat='{}{0:F2}×'}" />

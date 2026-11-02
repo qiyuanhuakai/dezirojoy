@@ -134,6 +134,19 @@ public class MouseStickProcessorTests
     }
 
     [Fact]
+    public void Zero_Scale_Disables_That_Axis_Only()
+    {
+        var settings = Raw(640f) with { ScaleX = 0f, ScaleY = 2f };
+        var processor = new MouseStickProcessor(settings);
+
+        var (dx, _) = processor.Update(1f, 0f, precisionActive: false, ExactTick);
+        var (_, dy) = processor.Update(0f, 1f, precisionActive: false, ExactTick);
+
+        Assert.Equal(0, dx);
+        Assert.Equal(20, dy);
+    }
+
+    [Fact]
     public void NaN_Deflection_Is_Treated_As_Center()
     {
         var processor = new MouseStickProcessor(Raw(1000f));

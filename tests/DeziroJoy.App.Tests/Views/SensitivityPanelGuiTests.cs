@@ -85,9 +85,11 @@ public sealed class SensitivityPanelGuiTests
         var scaleX = panel.FindControl<Slider>("ScaleXSlider")!;
         var scaleY = panel.FindControl<Slider>("ScaleYSlider")!;
 
-        Assert.Equal(0.1d, scaleX.Minimum);
+        // The hint text under each slider promises "0 关闭左右/上下移动", so the slider
+        // has to reach exactly 0; a 0.1 floor made that promise unreachable.
+        Assert.Equal(0d, scaleX.Minimum);
         Assert.Equal(4.0d, scaleX.Maximum);
-        Assert.Equal(0.1d, scaleY.Minimum);
+        Assert.Equal(0d, scaleY.Minimum);
         Assert.Equal(4.0d, scaleY.Maximum);
 
         scaleX.Value = 1.25;
@@ -104,6 +106,30 @@ public sealed class SensitivityPanelGuiTests
         loaded.LoadFrom(settings);
         Assert.Equal(1.25f, loaded.ScaleX);
         Assert.Equal(0.75f, loaded.ScaleY);
+    }
+
+    [AvaloniaFact]
+    public void ScaleSliders_Reach_Exactly_Zero_And_Round_Trip_It()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var panel = MouseSensitivityPanelOf(window);
+        var scaleX = panel.FindControl<Slider>("ScaleXSlider")!;
+        var scaleY = panel.FindControl<Slider>("ScaleYSlider")!;
+
+        scaleX.Value = 0d;
+        scaleY.Value = 0d;
+
+        Assert.Equal(0f, viewModel.MouseSensitivity.ScaleX);
+        Assert.Equal(0f, viewModel.MouseSensitivity.ScaleY);
+
+        var settings = viewModel.MouseSensitivity.BuildSettings();
+        Assert.Equal(0f, settings.ScaleX);
+        Assert.Equal(0f, settings.ScaleY);
+
+        var loaded = new MouseSensitivityViewModel();
+        loaded.LoadFrom(settings);
+        Assert.Equal(0f, loaded.ScaleX);
+        Assert.Equal(0f, loaded.ScaleY);
     }
 
     [AvaloniaFact]
