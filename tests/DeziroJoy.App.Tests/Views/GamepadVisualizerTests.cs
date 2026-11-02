@@ -203,6 +203,33 @@ public sealed class GamepadVisualizerTests
     }
 
     [AvaloniaFact]
+    public void Every_Shape_Has_A_Working_Rectangular_Hit_Fallback()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var model = Model(window);
+
+        foreach (var (name, _) in Elements)
+        {
+            var element = model.FindControl<Control>(name)!;
+            if (element is not Ellipse)
+            {
+                continue;
+            }
+
+            Control? fallback = element.Parent is Canvas { Background: not null } canvas
+                && Equals(canvas.Tag, element.Tag)
+                    ? canvas
+                    : model.FindControl<Border>($"{name}Hit");
+            Assert.NotNull(fallback);
+
+            Click(fallback, window);
+            Assert.True(viewModel.IsEditing, $"{name}: its fallback hit surface must open the editor");
+            window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+            Assert.False(viewModel.IsEditing);
+        }
+    }
+
+    [AvaloniaFact]
     public void Repeated_Clicks_Keep_Hitting_The_Same_Element()
     {
         var (window, viewModel, host, provider) = BuildWindow();

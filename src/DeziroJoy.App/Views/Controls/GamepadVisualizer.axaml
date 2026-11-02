@@ -148,6 +148,8 @@
                  </Border.Transitions>
              </Border>
 
+             <Border x:Name="LeftStickPadHit" Canvas.Left="80" Canvas.Top="68" Width="100" Height="100"
+                     Background="Transparent" Tag="Stick:Left" />
              <Ellipse x:Name="LeftStickPad" Classes="padHit" Canvas.Left="80" Canvas.Top="68" Width="100" Height="100"
                       Fill="{DynamicResource StickPadBrush}"
                       PointerPressed="OnElementPressed" Tag="Stick:Left" ToolTip.Tip="左摇杆">
@@ -161,6 +163,8 @@
                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
             <Ellipse x:Name="LeftStickThumb" Canvas.Left="107" Canvas.Top="95" Width="46" Height="46"
                      Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
+             <Border x:Name="LeftStickClickHit" Canvas.Left="121" Canvas.Top="186" Width="18" Height="18"
+                     Background="Transparent" Tag="Button:LeftStick" />
              <Ellipse x:Name="LeftStickClick" Classes="padHit" Canvas.Left="121" Canvas.Top="186" Width="18" Height="18"
                       Fill="{Binding IsLeftStickPressed, Converter={StaticResource PadBrush}}"
                       PointerPressed="OnElementPressed" Tag="Button:LeftStick" ToolTip.Tip="左摇杆按下">
@@ -171,6 +175,8 @@
                  </Ellipse.Transitions>
              </Ellipse>
 
+             <Border x:Name="RightStickPadHit" Canvas.Left="440" Canvas.Top="160" Width="100" Height="100"
+                     Background="Transparent" Tag="Stick:Right" />
              <Ellipse x:Name="RightStickPad" Classes="padHit" Canvas.Left="440" Canvas.Top="160" Width="100" Height="100"
                       Fill="{DynamicResource StickPadBrush}"
                       PointerPressed="OnElementPressed" Tag="Stick:Right" ToolTip.Tip="右摇杆">
@@ -184,6 +190,8 @@
                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
             <Ellipse x:Name="RightStickThumb" Canvas.Left="467" Canvas.Top="187" Width="46" Height="46"
                      Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
+             <Border x:Name="RightStickClickHit" Canvas.Left="481" Canvas.Top="272" Width="18" Height="18"
+                     Background="Transparent" Tag="Button:RightStick" />
              <Ellipse x:Name="RightStickClick" Classes="padHit" Canvas.Left="481" Canvas.Top="272" Width="18" Height="18"
                       Fill="{Binding IsRightStickPressed, Converter={StaticResource PadBrush}}"
                       PointerPressed="OnElementPressed" Tag="Button:RightStick" ToolTip.Tip="右摇杆按下">
@@ -236,7 +244,7 @@
             <!-- Each face button and its letter share one panel. A Shape cannot hold a child in
                  Avalonia, so the only way to keep the two together is a shared parent: the
                  button moves, the letter moves with it, and neither can drift out of centre. -->
-            <Canvas Canvas.Left="373" Canvas.Top="55" Width="34" Height="34">
+            <Canvas Canvas.Left="373" Canvas.Top="55" Width="34" Height="34" Background="Transparent" Tag="Button:Y">
                 <Ellipse x:Name="ButtonY" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsYPressed, Converter={StaticResource PadBrush}}"
                          PointerPressed="OnElementPressed" Tag="Button:Y">
@@ -250,7 +258,7 @@
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
-            <Canvas Canvas.Left="351" Canvas.Top="99" Width="34" Height="34">
+            <Canvas Canvas.Left="351" Canvas.Top="99" Width="34" Height="34" Background="Transparent" Tag="Button:X">
                 <Ellipse x:Name="ButtonX" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsXPressed, Converter={StaticResource PadBrush}}"
                          PointerPressed="OnElementPressed" Tag="Button:X">
@@ -264,7 +272,7 @@
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
-            <Canvas Canvas.Left="395" Canvas.Top="99" Width="34" Height="34">
+            <Canvas Canvas.Left="395" Canvas.Top="99" Width="34" Height="34" Background="Transparent" Tag="Button:B">
                 <Ellipse x:Name="ButtonB" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsBPressed, Converter={StaticResource PadBrush}}"
                          PointerPressed="OnElementPressed" Tag="Button:B">
@@ -278,7 +286,7 @@
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center"
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
-            <Canvas Canvas.Left="373" Canvas.Top="143" Width="34" Height="34">
+            <Canvas Canvas.Left="373" Canvas.Top="143" Width="34" Height="34" Background="Transparent" Tag="Button:A">
                 <Ellipse x:Name="ButtonA" Classes="padHit" Width="34" Height="34"
                          Fill="{Binding IsAPressed, Converter={StaticResource PadBrush}}"
                          PointerPressed="OnElementPressed" Tag="Button:A">
@@ -293,6 +301,8 @@
                            VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
 
+              <Border x:Name="BackButtonHit" Canvas.Left="263" Canvas.Top="80" Width="18" Height="18"
+                      Background="Transparent" Tag="Button:Back" />
               <Ellipse x:Name="BackButton" Classes="padHit" Canvas.Left="263" Canvas.Top="80" Width="18" Height="18"
                        Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
                        ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back">
@@ -302,6 +312,8 @@
                       </Transitions>
                   </Ellipse.Transitions>
               </Ellipse>
+              <Border x:Name="GuideButtonHit" Canvas.Left="291" Canvas.Top="80" Width="18" Height="18"
+                      Background="Transparent" Tag="Button:Guide" />
               <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="291" Canvas.Top="80" Width="18" Height="18"
                        Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}"
                        ToolTip.Tip="主页键 Guide" PointerPressed="OnElementPressed" Tag="Button:Guide">
@@ -311,6 +323,8 @@
                       </Transitions>
                   </Ellipse.Transitions>
               </Ellipse>
+              <Border x:Name="StartButtonHit" Canvas.Left="319" Canvas.Top="80" Width="18" Height="18"
+                      Background="Transparent" Tag="Button:Start" />
               <Ellipse x:Name="StartButton" Classes="padHit" Canvas.Left="319" Canvas.Top="80" Width="18" Height="18"
                        Fill="{Binding IsStartPressed, Converter={StaticResource PadBrush}}"
                        ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start">
