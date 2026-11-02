@@ -306,7 +306,7 @@ public static class DaemonHost
         var security = new PipeSecurity();
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(userSid),
-            PipeAccessRights.ReadWrite,
+            PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,
             AccessControlType.Allow));
         return security;
     }

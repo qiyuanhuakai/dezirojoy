@@ -299,7 +299,8 @@ GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `Engin
 
 ### 4.6 安全边界
 
-- **同用户 ACL**：创建管道时只授予当前用户 SID 的 ReadWrite，不用绑定完整性级别的
+- **同用户 ACL**：创建管道时只授予当前用户 SID 的 ReadWrite 与 CreateNewInstance
+  （后者允许同一用户创建后续管道实例；Windows 会自动补 Synchronize），不用绑定完整性级别的
   `CurrentUserOnly`；同一用户的普通 GUI 与提权守护进程均可连接，其他用户不可写。
 - **同会话验证**：任何控制消息之前必须完成握手，拒绝后立即断开；Windows 上通过
   `GetNamedPipeClientProcessId` 取得真实对端 PID/SessionId，不信任客户端自报的会话字段。

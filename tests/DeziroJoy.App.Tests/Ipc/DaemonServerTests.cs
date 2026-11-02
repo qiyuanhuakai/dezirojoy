@@ -723,7 +723,11 @@ public class DaemonServerTests
 
         var rule = Assert.Single(rules);
         Assert.Equal(sid, rule.IdentityReference);
-        Assert.Equal(System.IO.Pipes.PipeAccessRights.ReadWrite, rule.PipeAccessRights);
+        Assert.Equal(
+            System.IO.Pipes.PipeAccessRights.ReadWrite
+                | System.IO.Pipes.PipeAccessRights.CreateNewInstance
+                | System.IO.Pipes.PipeAccessRights.Synchronize,
+            rule.PipeAccessRights);
         Assert.Equal(System.Security.AccessControl.AccessControlType.Allow, rule.AccessControlType);
     }
 
