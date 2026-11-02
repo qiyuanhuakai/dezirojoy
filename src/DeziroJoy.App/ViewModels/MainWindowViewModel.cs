@@ -200,6 +200,52 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty]
     private bool _isSettingsOpen;
 
+    /// <summary>
+    /// True while physical pad navigation and capture are in scope: the window is visible and
+    /// active and the mapping tab is selected. The view owns that knowledge and feeds it here
+    /// through <see cref="SetPhysicalInputScope"/>; the default is true so a view model driven
+    /// without a window keeps its established behaviour.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isPhysicalInputInScope = true;
+
+    /// <summary>
+    /// Called by the view when the window's visibility, activation or selected tab changes.
+    /// Leaving scope stops capture, forgets the held edges and releases this connection's
+    /// editor suspension lease; reentry resets the edges again and restores the lease when a
+    /// draft is still open on the mapping tab.
+    /// </summary>
+    public void SetPhysicalInputScope(bool inScope) => IsPhysicalInputInScope = inScope;
+
+    partial void OnIsPhysicalInputInScopeChanged(bool value)
+    {
+        if (!value)
+        {
+            // Leaving scope: an armed capture must stand down, and the held edges are
+            // forgotten so a button held across the boundary is never read as a press on
+            // reentry.
+            Editor.EndKeyboardCapture();
+            Editor.IsCapturingButton = false;
+            ResetNavigationBaseline();
+        }
+
+        // The editor lease is this connection's: releasing it here is what lets the daemon
+        // (or the local engine) inject again while no window is presenting, and taking it
+        // back on reentry keeps the retained draft hijacking the pad. A discarded draft
+        // never re-arms it.
+        ApplyEditorLease();
+    }
+
+    /// <summary>Forgets the navigation baseline so the next sample starts from a clean slate.</summary>
+    private void ResetNavigationBaseline()
+    {
+        _navigationDeviceId = null;
+        _navigationButtons = default;
+        _navigationExtra.Clear();
+        _navigationLeftDeflected = false;
+        _navigationRightDeflected = false;
+    }
+
     [RelayCommand]
     private void OpenSettings() => IsSettingsOpen = true;
 
@@ -317,13 +363,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // The editor hijacks the pad: while a mapping is open, physical presses navigate the
         // editor instead of being injected, so the engine must not dispatch. Sampling continues
         // either way - navigation works with the engine running or stopped.
+        ApplyEditorLease();
+    }
+
+    /// <summary>
+    /// Takes or releases this connection's editor suspension lease. The lease is held exactly
+    /// while a draft is open AND physical input is in scope, so leaving the mapping tab,
+    /// deactivating the window or destroying it hands the pad straight back to the injector -
+    /// whichever side owns it, the resident daemon or the local engine on Linux. Transitions
+    /// go through the daemon's own mutation gate, so they are serialized with every other
+    /// mutation this connection makes.
+    /// </summary>
+    private void ApplyEditorLease()
+    {
+        var suspended = IsEditing && IsPhysicalInputInScope;
+
         if (_daemon is not null)
         {
-            _ = SetEditorInjectionSuspended(value);
+            _ = SetEditorInjectionSuspended(suspended);
         }
         else if (!_daemonRequired)
         {
-            _host.SetInjectionSuspended(value);
+            _host.SetInjectionSuspended(suspended);
         }
     }
 
@@ -803,10 +864,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>
     /// Routes one gamepad sample to the editor's capture and to navigation, in that order, so
     /// the two never fight over the same press: a press consumed by capture must not also
-    /// navigate.
+    /// navigate. Both are scoped to a visible, active mapping tab, so out of scope the sample
+    /// only feeds the visualizer.
     /// </summary>
     private void Navigate(IGamepadState state)
     {
+        if (!IsPhysicalInputInScope)
+        {
+            // Out of scope the pad belongs to the injector, not to this window: nothing is
+            // selected and nothing is captured. The editor's capture baseline is still
+            // tracked, so arming capture after the user comes back never fires on a button
+            // they are already holding.
+            Editor.CaptureGamepadSample(state);
+            return;
+        }
+
         if (IsEditing)
         {
             // Keyboard capture owns the input while it is armed. A gamepad button is not a
@@ -1205,8 +1277,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             TransferMessage = string.Empty;
             IsTransferError = false;
-            if (IsEditing)
+            if (IsEditing && IsPhysicalInputInScope)
             {
+                // Reconnect lease recovery: the draft survived the disconnect, so the lease
+                // is taken back - but only while the pad is still in scope.
                 await SetEditorInjectionSuspended(true);
             }
 

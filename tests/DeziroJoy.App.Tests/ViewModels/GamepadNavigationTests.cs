@@ -435,4 +435,145 @@ public sealed class GamepadNavigationTests
         Assert.False(vm.IsEditing);
         Assert.Empty(sink.Calls);
     }
+
+    [Fact]
+    public void Out_Of_Scope_A_Press_Neither_Selects_Nor_Captures()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        vm.SetPhysicalInputScope(false);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+
+        Assert.Null(vm.SelectedSource);
+        Assert.False(vm.IsEditing);
+    }
+
+    [Fact]
+    public void Reentry_Resets_The_Held_Edges()
+    {
+        var (vm, host, provider, _) = CreateHost();
+
+        // The pad is already holding B when the first sample arrives: that is the baseline.
+        Connect(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+        Assert.Null(vm.SelectedSource);
+
+        vm.SetPhysicalInputScope(false);
+        vm.SetPhysicalInputScope(true);
+
+        // B is still held across the boundary: reentry makes it the new baseline, so it is
+        // not read as a press.
+        Sample(vm, host);
+        Assert.Null(vm.SelectedSource);
+
+        SetState(provider);
+        Sample(vm, host);
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+
+        Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
+    }
+
+    [Fact]
+    public void Leaving_Scope_Stops_Capture_But_Keeps_The_Draft()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
+        vm.Editor.SelectedKey = GamepadKey.Space;
+        vm.Editor.IsCapturingKey = true;
+
+        vm.SetPhysicalInputScope(false);
+
+        Assert.False(vm.Editor.IsCapturingKey, "leaving scope must stop the armed capture");
+        Assert.True(vm.IsEditing, "leaving scope must keep the uncommitted draft");
+        Assert.Equal(GamepadKey.Space, vm.Editor.SelectedKey);
+    }
+
+    [Fact]
+    public void Leaving_Scope_Releases_The_Editor_Lease_And_Reentry_Restores_It()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
+        Assert.True(vm.Host.IsInjectionSuspended, "the open editor holds the pad");
+
+        vm.SetPhysicalInputScope(false);
+        Assert.False(vm.Host.IsInjectionSuspended, "leaving scope releases this connection's lease");
+
+        vm.SetPhysicalInputScope(true);
+        Assert.True(vm.Host.IsInjectionSuspended, "reentry restores the lease for the retained draft");
+    }
+
+    [Fact]
+    public void Closing_The_Editor_While_Out_Of_Scope_Leaves_The_Lease_Released()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
+
+        vm.SetPhysicalInputScope(false);
+        vm.CancelEditorCommand.Execute(null);
+
+        Assert.False(vm.IsEditing);
+        Assert.False(vm.Host.IsInjectionSuspended, "a discarded draft must not re-arm the lease");
+    }
+
+    [Fact]
+    public void Out_Of_Scope_Highlighting_Still_Tracks_The_Pad()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        vm.SetPhysicalInputScope(false);
+
+        // Only navigation and capture are scoped: the visualizer keeps reflecting the pad so
+        // the model stays live the moment the user comes back.
+        SetState(provider, GamepadButtonMask.A | GamepadButtonMask.DPadUp, 0.5f, -0.5f);
+        Sample(vm, host);
+
+        Assert.True(vm.Visualizer.IsAPressed);
+        Assert.True(vm.Visualizer.IsDPadUpPressed);
+        Assert.Null(vm.SelectedSource);
+    }
+
+    [Fact]
+    public void A_Button_Held_While_Out_Of_Scope_Is_Not_Captured_On_Reentry()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+
+        // The pad holds B while the window is out of scope - the ordinary case for a GUI left
+        // open behind a game.
+        SetState(provider, GamepadButtonMask.B);
+        vm.SetPhysicalInputScope(false);
+        Sample(vm, host);
+
+        vm.SetPhysicalInputScope(true);
+        Sample(vm, host);
+
+        Click(vm, new ButtonBinding(GamepadButton.B));
+        vm.Editor.IsCapturingButton = true;
+        Sample(vm, host);
+
+        Assert.True(vm.Editor.IsCapturingButton, "a button held before capture was armed must be ignored");
+    }
 }

@@ -50,6 +50,54 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task Leaving_Scope_Releases_Only_This_Connections_Editor_Lease()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+
+        var suspended = WaitForSuspension(context.DaemonHost, true);
+        viewModel.AddMappingCommand.Execute(null);
+        await suspended;
+        Assert.True(viewModel.IsEditing);
+
+        var released = WaitForSuspension(context.DaemonHost, false);
+        viewModel.SetPhysicalInputScope(false);
+        await released;
+
+        Assert.True(context.DaemonHost.IsRunning, "leaving scope must not stop the resident mapping");
+        Assert.True(context.DaemonHost.IsMappingEnabled, "leaving scope must not touch the user's pause");
+        Assert.Equal(0, context.DaemonHost.StopCalls);
+
+        var restored = WaitForSuspension(context.DaemonHost, true);
+        viewModel.SetPhysicalInputScope(true);
+        await restored;
+
+        Assert.True(context.DaemonHost.IsInjectionSuspended, "reentry restores the lease for the retained draft");
+    }
+
+    [Fact]
+    public async Task Closing_The_Editor_While_Out_Of_Scope_Leaves_The_Lease_Released()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+
+        var suspended = WaitForSuspension(context.DaemonHost, true);
+        viewModel.AddMappingCommand.Execute(null);
+        await suspended;
+
+        var released = WaitForSuspension(context.DaemonHost, false);
+        viewModel.SetPhysicalInputScope(false);
+        await released;
+
+        viewModel.CancelEditorCommand.Execute(null);
+
+        Assert.False(viewModel.IsEditing);
+        Assert.False(context.DaemonHost.IsInjectionSuspended, "a discarded draft must not re-arm the lease");
+    }
+
+    [Fact]
     public async Task ApplyProfile_Waits_For_The_Daemons_Acceptance()
     {
         var context = await CreateDaemonViewModel();

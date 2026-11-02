@@ -34,6 +34,22 @@ public partial class MainWindow : Window
 
     private TimeSpan _lastPreviewTime;
 
+    private EngineHost? _host;
+
+    /// <summary>
+    /// Bumped when this window detaches. Host callbacks carry the generation they were posted
+    /// under and drop themselves when it no longer matches, so a sample that was in flight
+    /// when the window closed never reaches the destroyed visual tree.
+    /// </summary>
+    private int _generation;
+
+    /// <summary>
+    /// Whether the platform currently considers this window active. Seeded from
+    /// <see cref="Window.IsActive"/> when the window opens and kept in step by the
+    /// Activated/Deactivated events, so a window shown without focus starts out of scope.
+    /// </summary>
+    private bool _windowActive;
+
     public MainWindow()
         : this(CreateRuntime())
     {
@@ -126,6 +142,8 @@ public partial class MainWindow : Window
 
     private void Wire(EngineHost host)
     {
+        _host = host;
+
         _previewTimer.Tick += OnPreviewTick;
         _syncTimer.Tick += OnSyncTick;
         _previewClock.Start();
@@ -135,11 +153,8 @@ public partial class MainWindow : Window
 
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
-        host.Sampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplySample(args));
-
-        // The engine-stopped counterpart: the host polls without ticking or injecting, so
-        // highlighting and pad-driven navigation keep working while the mapping loop is off.
-        host.PresenceSampled += (_, args) => Dispatcher.UIThread.Post(() => ViewModel.ApplyPresenceSample(args));
+        host.Sampled += OnHostSampled;
+        host.PresenceSampled += OnHostPresenceSampled;
 
         if (this.FindControl<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
         {
@@ -151,12 +166,113 @@ public partial class MainWindow : Window
         // settings surface has focus, and so a gamepad-only user never needs the mouse.
         AddHandler(KeyDownEvent, OnSettingsKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
 
-        Closed += (_, _) =>
+        // Physical pad input is scoped to a visible, active mapping tab, and the window is
+        // the only thing that knows about all three.
+        if (this.FindControl<TabControl>("MainTabs") is { } tabs)
         {
-            _previewTimer.Stop();
-            _syncTimer.Stop();
-            host.Stop();
+            tabs.SelectionChanged += (_, _) => UpdatePhysicalInputScope();
+        }
+
+        Opened += (_, _) =>
+        {
+            _windowActive = IsActive;
+            UpdatePhysicalInputScope();
         };
+
+        Activated += (_, _) =>
+        {
+            _windowActive = true;
+            UpdatePhysicalInputScope();
+        };
+
+        Deactivated += (_, _) =>
+        {
+            _windowActive = false;
+            UpdatePhysicalInputScope();
+        };
+
+        Closed += OnClosed;
+    }
+
+    private void OnHostSampled(object? sender, ControllerSampledEventArgs args)
+    {
+        var generation = Volatile.Read(ref _generation);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (generation != Volatile.Read(ref _generation))
+            {
+                return;
+            }
+
+            ViewModel.ApplySample(args);
+        });
+    }
+
+    private void OnHostPresenceSampled(object? sender, ControllerSampledEventArgs args)
+    {
+        var generation = Volatile.Read(ref _generation);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (generation != Volatile.Read(ref _generation))
+            {
+                return;
+            }
+
+            ViewModel.ApplyPresenceSample(args);
+        });
+    }
+
+    /// <summary>
+    /// Releases everything this window attached: both timers, both host sampling
+    /// subscriptions, the view-model listener, the visualizer and the key handler. The
+    /// runtime is deliberately NOT stopped here - the window is a presentation resource, and
+    /// the engine (the Windows daemon or the Linux local one) keeps mapping with no window
+    /// open. Shutdown belongs to the application lifetime and the tray's 退出 item.
+    /// </summary>
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        // Invalidate anything already queued before detaching, so an in-flight sample cannot
+        // reach the destroyed window.
+        Interlocked.Increment(ref _generation);
+
+        _previewTimer.Stop();
+        _syncTimer.Stop();
+        _previewTimer.Tick -= OnPreviewTick;
+        _syncTimer.Tick -= OnSyncTick;
+
+        if (_host is { } host)
+        {
+            host.Sampled -= OnHostSampled;
+            host.PresenceSampled -= OnHostPresenceSampled;
+            _host = null;
+        }
+
+        ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+
+        if (this.FindControl<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
+        {
+            visualizer.ElementClicked -= OnGamepadElementClicked;
+        }
+
+        RemoveHandler(KeyDownEvent, OnSettingsKeyDown);
+
+        // The window is gone: physical input is out of scope until a new window shows.
+        ViewModel.SetPhysicalInputScope(false);
+    }
+
+    /// <summary>
+    /// Physical pad input is in scope only while this window is visible and active and the
+    /// mapping tab is selected. Recomputed on every signal that can change one of the three,
+    /// so a hide, a deactivation or a tab leave takes effect immediately.
+    /// </summary>
+    private void UpdatePhysicalInputScope()
+    {
+        var mappingTabSelected = this.FindControl<TabControl>("MainTabs") is not { } tabs
+            || tabs.SelectedIndex == 0;
+
+        ViewModel.SetPhysicalInputScope(IsVisible && _windowActive && mappingTabSelected);
     }
 
     /// <summary>
@@ -173,8 +289,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        var generation = Volatile.Read(ref _generation);
+
         Dispatcher.UIThread.Post(() =>
         {
+            if (generation != Volatile.Read(ref _generation))
+            {
+                return;
+            }
+
             if (this.FindControl<Border>("EditorPanel") is { IsVisible: true } panel)
             {
                 panel.BringIntoView();
