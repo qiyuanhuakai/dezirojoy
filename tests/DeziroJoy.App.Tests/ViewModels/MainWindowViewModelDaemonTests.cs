@@ -91,7 +91,7 @@ public sealed class MainWindowViewModelDaemonTests
             await context.Server.ProcessAsync(new GetStateMessage("verify")));
         Assert.Equal(2, authoritative.Snapshot.Revision);
         Assert.Equal("External", authoritative.Snapshot.ProfileName);
-        Assert.Contains("重新", viewModel.TransferMessage);
+        Assert.True(viewModel.IsTransferError);
 
         viewModel.CancelEditorCommand.Execute(null);
 
