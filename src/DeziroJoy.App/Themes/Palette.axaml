@@ -121,7 +121,7 @@
             <SolidColorBrush x:Key="CaptionGlyphBrush" Color="#D0D0D0" />
             <SolidColorBrush x:Key="BadgeTextBrush" Color="#B9B9B9" />
             <SolidColorBrush x:Key="OverlayTextBrush" Color="#D6D6D6" />
-            <SolidColorBrush x:Key="PadLabelBrush" Color="#CFCFCF" />
+            <SolidColorBrush x:Key="PadLabelBrush" Color="#F0F0F0" />
             <SolidColorBrush x:Key="AccentForegroundBrush" Color="#101010" />
             <SolidColorBrush x:Key="DangerForegroundBrush" Color="#D0D0D0" />
 
@@ -134,14 +134,25 @@
             <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
 
             <!-- Gamepad visualizer -->
-            <SolidColorBrush x:Key="PadBodyBrush" Color="#1F1F1F" />
-            <SolidColorBrush x:Key="StickPadBrush" Color="#262626" />
-            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="PadBodyBrush" Color="#2A2A2A" />
+            <SolidColorBrush x:Key="StickPadBrush" Color="#333333" />
+            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#3F3F3F" />
             <SolidColorBrush x:Key="StickRingBrush" Color="#4A4A4A" />
             <SolidColorBrush x:Key="StickThumbBrush" Color="#D8D8D8" />
-            <SolidColorBrush x:Key="DpadCenterBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="DpadCenterBrush" Color="#383838" />
             <SolidColorBrush x:Key="PadIdleBrush" Color="#3A3A3A" />
             <SolidColorBrush x:Key="PadPressedBrush" Color="#4CC2FF" />
+            <!--
+                The redrawn silhouette's own surfaces. DESIGN.md 4.6 asks for a deliberate
+                luminance ladder in the dark theme so no part of the pad sinks into the
+                background: the wells are the deepest step (a recess the stick sits in), the
+                grips a step above them, the body the mid step, the key caps the brightest
+                neutral, and the body's outline one step above the body again.
+            -->
+            <SolidColorBrush x:Key="PadWellBrush" Color="#1C1C1C" />
+            <SolidColorBrush x:Key="PadGripBrush" Color="#242424" />
+            <SolidColorBrush x:Key="PadCapBrush" Color="#444444" />
+            <SolidColorBrush x:Key="PadBodyStrokeBrush" Color="#3A3A3A" />
             <!-- The pad body's drop shadow: what makes it read as a raised surface rather than
                  a flat shape pasted on the card. -->
             <DropShadowEffect x:Key="PadShadowEffect" Color="#000000" Opacity="0.5"
@@ -212,19 +223,25 @@
             <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
 
             <!--
-                Gamepad visualizer. The silhouette becomes a light grey shape on
-                the white status panel; the thumb and the pad labels invert to
-                dark so they stay the most prominent marks, and the idle pad
-                elements darken enough to read as distinct shapes.
+                Gamepad visualizer. The silhouette becomes a soft light grey shape on the
+                white status panel; the thumb and the pad labels invert to dark so they stay
+                the most prominent marks, and the idle pad elements darken enough to read as
+                distinct shapes. The body is deliberately NOT white: DESIGN.md 4.6 asks the
+                light theme to stay soft, so the body sits a clear step below the card and
+                the wells a further step below the body.
             -->
-            <SolidColorBrush x:Key="PadBodyBrush" Color="#E9EDF1" />
-            <SolidColorBrush x:Key="StickPadBrush" Color="#DCE1E6" />
+            <SolidColorBrush x:Key="PadBodyBrush" Color="#E4E8EC" />
+            <SolidColorBrush x:Key="StickPadBrush" Color="#D3D9DF" />
             <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#AFB8C1" />
             <SolidColorBrush x:Key="StickRingBrush" Color="#AEB6BE" />
             <SolidColorBrush x:Key="StickThumbBrush" Color="#57606A" />
-            <SolidColorBrush x:Key="DpadCenterBrush" Color="#D2D8DE" />
+            <SolidColorBrush x:Key="DpadCenterBrush" Color="#CBD2D9" />
             <SolidColorBrush x:Key="PadIdleBrush" Color="#BFC7CF" />
             <SolidColorBrush x:Key="PadPressedBrush" Color="#0A6FBF" />
+            <SolidColorBrush x:Key="PadWellBrush" Color="#D8DEE4" />
+            <SolidColorBrush x:Key="PadGripBrush" Color="#EEF1F4" />
+            <SolidColorBrush x:Key="PadCapBrush" Color="#F2F5F7" />
+            <SolidColorBrush x:Key="PadBodyStrokeBrush" Color="#C3CBD3" />
             <!-- The pad body's drop shadow: what makes it read as a raised surface rather than
                  a flat shape pasted on the card. Softer and cooler than the dark theme's, because
                  a shadow on white has to stay subtle to avoid looking like dirt. -->
@@ -269,7 +286,7 @@
             <SolidColorBrush x:Key="CaptionGlyphBrush" Color="#D0D0D0" />
             <SolidColorBrush x:Key="BadgeTextBrush" Color="#B9B9B9" />
             <SolidColorBrush x:Key="OverlayTextBrush" Color="#D6D6D6" />
-            <SolidColorBrush x:Key="PadLabelBrush" Color="#CFCFCF" />
+            <SolidColorBrush x:Key="PadLabelBrush" Color="#F0F0F0" />
             <SolidColorBrush x:Key="AccentForegroundBrush" Color="#101010" />
             <SolidColorBrush x:Key="DangerForegroundBrush" Color="#D0D0D0" />
 
@@ -282,14 +299,18 @@
             <SolidColorBrush x:Key="DangerBrush" Color="#C42B1C" />
 
             <!-- Gamepad visualizer -->
-            <SolidColorBrush x:Key="PadBodyBrush" Color="#1F1F1F" />
-            <SolidColorBrush x:Key="StickPadBrush" Color="#262626" />
-            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#3A3A3A" />
+            <SolidColorBrush x:Key="PadBodyBrush" Color="#2A2A2A" />
+            <SolidColorBrush x:Key="StickPadBrush" Color="#333333" />
+            <SolidColorBrush x:Key="StickPadStrokeBrush" Color="#3F3F3F" />
             <SolidColorBrush x:Key="StickRingBrush" Color="#4A4A4A" />
             <SolidColorBrush x:Key="StickThumbBrush" Color="#D8D8D8" />
-            <SolidColorBrush x:Key="DpadCenterBrush" Color="#2E2E2E" />
+            <SolidColorBrush x:Key="DpadCenterBrush" Color="#383838" />
             <SolidColorBrush x:Key="PadIdleBrush" Color="#3A3A3A" />
             <SolidColorBrush x:Key="PadPressedBrush" Color="#4CC2FF" />
+            <SolidColorBrush x:Key="PadWellBrush" Color="#1C1C1C" />
+            <SolidColorBrush x:Key="PadGripBrush" Color="#242424" />
+            <SolidColorBrush x:Key="PadCapBrush" Color="#444444" />
+            <SolidColorBrush x:Key="PadBodyStrokeBrush" Color="#3A3A3A" />
             <!-- The pad body's drop shadow: what makes it read as a raised surface rather than
                  a flat shape pasted on the card. -->
             <DropShadowEffect x:Key="PadShadowEffect" Color="#000000" Opacity="0.5"

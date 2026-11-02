@@ -228,8 +228,7 @@ public sealed class MotionEnrichmentTests
     // ---- Reduced-motion posture ---------------------------------------------
 
     [AvaloniaFact]
-    public void New_Motion_Never_Moves_A_Surface_So_It_Stays_Reduced_Motion_Safe()
-    {
+    public void New_Motion_Never_Moves_A_Surface_So_It_Stays_Reduced_Motion_Safe()    {
         // Avalonia 12.1.4 exposes no prefers-reduced-motion API (PlatformSettings carries only
         // colour values and hotkeys; the feature is open issue #19405), so the design rule is:
         // the NEW hover/press/outline motion must not translate or scale anything. Only colour,
@@ -256,6 +255,49 @@ public sealed class MotionEnrichmentTests
             foreach (var doubleTransition in transitions.OfType<DoubleTransition>())
             {
                 Assert.NotEqual(Visual.RenderTransformProperty, doubleTransition.Property);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The redrawn silhouette adds new shapes (the D-pad tray, the grips, the shoulder
+    /// caps). DESIGN.md 4.6 allows only Brush and Opacity transitions on the model, so every
+    /// transition anywhere under the visualizer must be one of those two - a Width, Height,
+    /// Margin or RenderTransform transition would shift the hit targets the mapping editor
+    /// depends on.
+    /// </summary>
+    [AvaloniaFact]
+    public void Every_Transition_Under_The_Model_Is_A_Brush_Or_Opacity_Fade()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var visualizer = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
+
+        var transitioned = visualizer.GetVisualDescendants()
+            .Where(element => element.Transitions is { Count: > 0 })
+            .ToList();
+
+        Assert.NotEmpty(transitioned);
+
+        foreach (var element in transitioned)
+        {
+            foreach (var transition in element.Transitions!)
+            {
+                var allowed = transition switch
+                {
+                    BrushTransition => true,
+                    DoubleTransition doubleTransition =>
+                        doubleTransition.Property == Visual.OpacityProperty,
+                    _ => false,
+                };
+
+                Assert.True(allowed,
+                    $"{element.GetType().Name} '{element.Name}' carries a " +
+                    $"{transition.GetType().Name}, which DESIGN.md 4.6 forbids on the model");
             }
         }
     }

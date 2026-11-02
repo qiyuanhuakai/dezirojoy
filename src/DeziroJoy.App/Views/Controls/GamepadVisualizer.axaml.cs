@@ -23,11 +23,11 @@ public partial class GamepadVisualizer : UserControl
 
     private const double LeftThumbBaseX = 107.0;
 
-    private const double LeftThumbBaseY = 95.0;
+    private const double LeftThumbBaseY = 139.0;
 
     private const double RightThumbBaseX = 467.0;
 
-    private const double RightThumbBaseY = 187.0;
+    private const double RightThumbBaseY = 203.0;
 
     private Ellipse? _leftThumb;
 

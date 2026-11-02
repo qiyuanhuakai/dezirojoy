@@ -104,20 +104,21 @@ public sealed class ControlsGuiTests
         var leftThumb = control.FindControl<Ellipse>("LeftStickThumb")!;
         var rightThumb = control.FindControl<Ellipse>("RightStickThumb")!;
 
-        // The enlarged model's stick pads are 100 wide with 46 thumbs, so the rest position
+        // The redrawn model's stick pads are 100 wide with 46 thumbs, so the rest position
         // is each pad's centre minus half the thumb, and the travel is what keeps the thumb
-        // inside the pad at full deflection.
+        // inside the pad at full deflection. The pads sit lower than the baseline's because
+        // the reference geometry puts the left stick below the shoulder line.
         Assert.Equal(107d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(95d, Canvas.GetTop(leftThumb));
+        Assert.Equal(139d, Canvas.GetTop(leftThumb));
         Assert.Equal(467d, Canvas.GetLeft(rightThumb));
-        Assert.Equal(187d, Canvas.GetTop(rightThumb));
+        Assert.Equal(203d, Canvas.GetTop(rightThumb));
 
         viewModel.Update(GamepadState.Create(default, 1f, -1f, -0.5f, 0.5f));
 
         Assert.Equal(133d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(121d, Canvas.GetTop(leftThumb));
+        Assert.Equal(165d, Canvas.GetTop(leftThumb));
         Assert.Equal(454d, Canvas.GetLeft(rightThumb));
-        Assert.Equal(174d, Canvas.GetTop(rightThumb));
+        Assert.Equal(190d, Canvas.GetTop(rightThumb));
     }
 
     [AvaloniaFact]
@@ -134,13 +135,13 @@ public sealed class ControlsGuiTests
         // bug: adding instead of subtracting mirrored the preview against the physical stick.
         viewModel.Update(GamepadState.Create(default, 0f, 1f, 0f, 1f));
 
-        Assert.Equal(69d, Canvas.GetTop(leftThumb));
-        Assert.Equal(161d, Canvas.GetTop(rightThumb));
+        Assert.Equal(113d, Canvas.GetTop(leftThumb));
+        Assert.Equal(177d, Canvas.GetTop(rightThumb));
 
         viewModel.Update(GamepadState.Create(default, 0f, -1f, 0f, -1f));
 
-        Assert.Equal(121d, Canvas.GetTop(leftThumb));
-        Assert.Equal(213d, Canvas.GetTop(rightThumb));
+        Assert.Equal(165d, Canvas.GetTop(leftThumb));
+        Assert.Equal(229d, Canvas.GetTop(rightThumb));
 
         // Horizontal is unambiguous on every platform: pushing right is a larger Canvas.Left.
         viewModel.Update(GamepadState.Create(default, 1f, 0f, 1f, 0f));
@@ -185,7 +186,7 @@ public sealed class ControlsGuiTests
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var body = control.FindControl<Rectangle>("PadBody")!;
+            var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
 
             // A flat fill with a 1px stroke reads as a sticker; a shadow makes it a raised surface.
             Assert.IsType<DropShadowEffect>(body.Effect);

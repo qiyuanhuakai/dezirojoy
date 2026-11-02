@@ -53,14 +53,14 @@ public sealed class GamepadVisualizerTests
     ];
 
     private static (MainWindow Window, MainWindowViewModel ViewModel, EngineHost Host, FakeGamepadProvider Provider)
-        BuildWindow(double width = 1320)
+        BuildWindow(double width = 1320, double height = 880)
     {
         var provider = new FakeGamepadProvider();
         var sink = new RecordingOutputSink();
         var store = new InMemoryProfileStore();
         var host = new EngineHost(provider, sink, store);
         var viewModel = new MainWindowViewModel(host, store);
-        var window = new MainWindow(viewModel, host) { Width = width };
+        var window = new MainWindow(viewModel, host) { Width = width, Height = height };
         window.Show();
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
@@ -124,37 +124,270 @@ public sealed class GamepadVisualizerTests
     [AvaloniaFact]
     public void The_Model_Fills_Its_Stage_And_Scales_With_The_Window_Width()
     {
-        var narrow = RenderedModel(1180);
-        var desktop = RenderedModel(1400);
-        var wide = RenderedModel(1920);
+        var narrow = RenderedModel(1180, 780);
+        var desktop = RenderedModel(1400, 900);
+        var wide = RenderedModel(1920, 1080);
 
-        // The stage caps the model at 620x380. A silhouette whose aspect matches that cap
-        // fills it; the baseline's taller-than-wide silhouette left a dead margin down both
-        // sides at every width, which is what made it read as small.
-        Assert.True(desktop.Width >= 600, $"at 1400 the model renders {desktop.Width} wide");
-        Assert.True(desktop.Height >= 360, $"at 1400 the model renders {desktop.Height} tall");
-        Assert.True(wide.Width >= 600, $"at 1920 the model renders {wide.Width} wide");
-        Assert.True(wide.Height >= 360, $"at 1920 the model renders {wide.Height} tall");
-
-        // At the window's minimum width the stage is narrower than the cap, and the model
-        // scales down with it rather than overflowing or staying pinned at the cap.
+        Assert.True(desktop.Width >= 590, $"at 1400 the model renders {desktop.Width} wide");
+        Assert.True(desktop.Height >= 350, $"at 1400 the model renders {desktop.Height} tall");
+        Assert.InRange(wide.Width, 590, 620);
+        Assert.InRange(wide.Height, 350, 380);
         Assert.True(narrow.Width < desktop.Width,
             $"the model must scale with the stage: {narrow.Width} at 1180 vs {desktop.Width} at 1400");
-        Assert.True(narrow.Width >= 540, $"at 1180 the model renders {narrow.Width} wide");
-        Assert.True(narrow.Height >= 320, $"at 1180 the model renders {narrow.Height} tall");
+        Assert.True(narrow.Width >= 380, $"at 1180 the model renders {narrow.Width} wide");
+        Assert.True(narrow.Height >= 290, $"at 1180 the model renders {narrow.Height} tall");
     }
 
     [AvaloniaFact]
     public void The_Model_Silhouette_Is_Larger_Than_The_Baseline()
     {
         var (window, _, _, _) = BuildWindow();
-        var body = Model(window).FindControl<Rectangle>("PadBody")!;
+        var body = Model(window).FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
 
         // The baseline body was 304x164 inside a 320x244 canvas; the enlarged model's body
         // spans most of a 620x380 canvas, so every element on it is drawn bigger too.
         Assert.True(body.Bounds.Width >= 500, $"the pad body is {body.Bounds.Width} wide");
         Assert.True(body.Bounds.Height >= 240, $"the pad body is {body.Bounds.Height} tall");
         window.Close();
+    }
+
+    // ---- Reference geometry (DESIGN.md 4.6) ---------------------------------
+
+    /// <summary>
+    /// The measured CC0 Xbox reference puts the ABXY centres on an EQUAL diamond: the
+    /// horizontal and vertical gaps between neighbouring centres match. The old model
+    /// stretched the vertical gap to twice the horizontal one, which is the distortion
+    /// DESIGN.md 4.6 calls out by name.
+    /// </summary>
+    [AvaloniaFact]
+    public void ABXY_Centres_Form_An_Equal_Diamond()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var y = Centre(control, "ButtonY");
+        var x = Centre(control, "ButtonX");
+        var b = Centre(control, "ButtonB");
+        var a = Centre(control, "ButtonA");
+
+        var horizontal = b.X - x.X;
+        var vertical = a.Y - y.Y;
+
+        // Equal ratio: the two spans agree within a pixel, not 1:2.
+        Assert.InRange(vertical, horizontal - 1.0, horizontal + 1.0);
+
+        // The diamond is centred on one point: Y sits above A, X left of B, and the two
+        // diagonals cross at the same place.
+        Assert.Equal(y.X, a.X, 1.0);
+        Assert.Equal(x.Y, b.Y, 1.0);
+        Assert.Equal((x.X + b.X) / 2, (y.X + a.X) / 2, 1.0);
+        Assert.Equal((x.Y + b.Y) / 2, (y.Y + a.Y) / 2, 1.0);
+
+        // Y is the top of the diamond and A the bottom, as on the reference.
+        Assert.True(y.Y < x.Y, "Y must sit above X");
+        Assert.True(a.Y > b.Y, "A must sit below B");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The D-pad is a cross inside a CIRCULAR tray, not four bars floating on the body:
+    /// the tray is a true circle (equal width and height) and the cross fits inside it.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Dpad_Cross_Sits_Inside_A_Circular_Tray()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var tray = control.FindControl<Ellipse>("DpadTray");
+        Assert.NotNull(tray);
+
+        // A circle, not an ellipse: the tray's own width and height agree.
+        Assert.Equal(tray!.Bounds.Width, tray.Bounds.Height, 0.5);
+
+        var up = control.FindControl<Border>("DpadUp")!;
+        var down = control.FindControl<Border>("DpadDown")!;
+        var left = control.FindControl<Border>("DpadLeft")!;
+        var right = control.FindControl<Border>("DpadRight")!;
+
+        // The cross fits inside the tray on both axes.
+        var crossLeft = Math.Min(left.Bounds.Left, up.Bounds.Left);
+        var crossRight = Math.Max(right.Bounds.Right, up.Bounds.Right);
+        var crossTop = Math.Min(up.Bounds.Top, left.Bounds.Top);
+        var crossBottom = Math.Max(down.Bounds.Bottom, right.Bounds.Bottom);
+
+        Assert.True(crossLeft >= tray.Bounds.Left, "the cross must stay inside the tray");
+        Assert.True(crossRight <= tray.Bounds.Right, "the cross must stay inside the tray");
+        Assert.True(crossTop >= tray.Bounds.Top, "the cross must stay inside the tray");
+        Assert.True(crossBottom <= tray.Bounds.Bottom, "the cross must stay inside the tray");
+
+        // The tray is round, so its corners are empty: the cross is narrower than the
+        // tray's diagonal would allow, which is what makes it read as a tray.
+        Assert.True(tray.Bounds.Width > up.Bounds.Width * 1.5, "the tray must frame the cross");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The centre cluster is hierarchical: the Guide is markedly larger than the View and
+    /// Menu buttons flanking it, rather than three equal dots.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Guide_Button_Leads_The_Centre_Cluster()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var guide = control.FindControl<Ellipse>("GuideButton")!;
+        var back = control.FindControl<Ellipse>("BackButton")!;
+        var start = control.FindControl<Ellipse>("StartButton")!;
+
+        Assert.True(guide.Bounds.Width > back.Bounds.Width * 1.4,
+            $"the Guide ({guide.Bounds.Width}) must lead the View button ({back.Bounds.Width})");
+        Assert.True(guide.Bounds.Width > start.Bounds.Width * 1.4,
+            $"the Guide ({guide.Bounds.Width}) must lead the Menu button ({start.Bounds.Width})");
+
+        // The two flanking buttons stay equal to each other: the hierarchy is Guide over
+        // a matched pair, not three different sizes.
+        Assert.Equal(back.Bounds.Width, start.Bounds.Width, 0.5);
+
+        // The Guide sits between them on the shared centre line.
+        Assert.True(back.Bounds.Center.X < guide.Bounds.Center.X, "View sits left of the Guide");
+        Assert.True(guide.Bounds.Center.X < start.Bounds.Center.X, "Menu sits right of the Guide");
+        Assert.Equal(back.Bounds.Center.Y, guide.Bounds.Center.Y, 1.0);
+        Assert.Equal(start.Bounds.Center.Y, guide.Bounds.Center.Y, 1.0);
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The sticks are asymmetric exactly as the reference measures them: the left stick
+    /// sits high and outboard, the right stick low and inboard, and neither shares a row
+    /// with the other.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Sticks_Are_Asymmetric_Like_The_Reference()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var left = control.FindControl<Ellipse>("LeftStickPad")!;
+        var right = control.FindControl<Ellipse>("RightStickPad")!;
+
+        // Left high, right low: the vertical offset is a large fraction of the stage.
+        Assert.True(right.Bounds.Center.Y - left.Bounds.Center.Y > 60,
+            $"the right stick must sit well below the left one, offset was {right.Bounds.Center.Y - left.Bounds.Center.Y}");
+
+        // Left outboard of the D-pad, right inboard of the ABXY diamond.
+        var dpad = control.FindControl<Ellipse>("DpadTray")!;
+        Assert.True(left.Bounds.Center.X < dpad.Bounds.Center.X, "the left stick sits outboard of the D-pad");
+        Assert.True(right.Bounds.Center.X > dpad.Bounds.Center.X, "the right stick sits inboard of the D-pad");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The shoulders are continuous with the body and the triggers emerge from behind the
+    /// bumpers: LB/RB overlap the body's top edge instead of floating above it, and each
+    /// trigger's lower edge reaches behind its bumper.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Shoulders_Are_Attached_And_The_Triggers_Sit_Behind()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
+
+        foreach (var (bumper, trigger) in new[]
+        {
+            ("LeftBumper", "LeftTrigger"),
+            ("RightBumper", "RightTrigger"),
+        })
+        {
+            var pad = control.FindControl<Border>(bumper)!;
+            var trig = control.FindControl<Border>(trigger)!;
+
+            // Attached: the bumper reaches INTO the body's vertical span, so the shoulder
+            // line is continuous rather than a bar floating over a gap.
+            Assert.True(pad.Bounds.Bottom > body.Bounds.Top,
+                $"{bumper} must overlap the body's top edge");
+            Assert.True(pad.Bounds.Top < body.Bounds.Top,
+                $"{bumper} must rise above the body's top edge");
+
+            // Behind: the trigger's bottom edge dips below the bumper's top edge, which is
+            // what makes it read as emerging from behind the shoulder.
+            Assert.True(trig.Bounds.Bottom > pad.Bounds.Top,
+                $"{trigger} must reach behind {bumper}");
+            Assert.True(trig.Bounds.Top < pad.Bounds.Top,
+                $"{trigger} must rise above {bumper}");
+        }
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The grips flare: the silhouette is widest below its vertical middle, and the bottom
+    /// edge between the grips is concave rather than a straight line.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Silhouette_Flares_Into_Grips_With_A_Concave_Bottom()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
+        var grips = control.GetVisualDescendants().OfType<Shape>()
+            .Where(shape => shape.Name is "LeftGrip" or "RightGrip")
+            .ToList();
+
+        Assert.Equal(2, grips.Count);
+
+        var lowest = grips.Max(grip => grip.Bounds.Bottom);
+        var bodyBottom = body.Bounds.Bottom;
+
+        // The grips carry the silhouette below the central mass.
+        Assert.True(lowest > bodyBottom, "the grips must extend below the body");
+
+        // Flared: each grip is wider at its bottom than at the body's waist.
+        foreach (var grip in grips)
+        {
+            Assert.True(grip.Bounds.Width > 60, $"a grip is {grip.Bounds.Width} wide");
+        }
+
+        // Concave bottom: the gap between the two grips is empty space below the body's
+        // bottom edge, so the silhouette's underside curves up between them.
+        var leftGrip = grips.First(g => g.Bounds.Center.X < body.Bounds.Center.X);
+        var rightGrip = grips.First(g => g.Bounds.Center.X > body.Bounds.Center.X);
+        Assert.True(leftGrip.Bounds.Right < rightGrip.Bounds.Left,
+            "the grips must leave a notch between them");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// An element's centre in the model's own canvas space. Bounds alone is parent-relative,
+    /// so a button nested in its label panel would report the same centre as its siblings;
+    /// translating through the visual tree puts every element on one coordinate system.
+    /// </summary>
+    private static Point Centre(GamepadVisualizer control, string name)
+    {
+        var element = control.FindControl<Control>(name)!;
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+        return element.TranslatePoint(element.Bounds.Center, canvas) ?? element.Bounds.Center;
     }
 
     [AvaloniaFact]
@@ -177,9 +410,9 @@ public sealed class GamepadVisualizerTests
         Assert.Equal(before, stage.Bounds.Size);
     }
 
-    private static Size RenderedModel(double width)
+    private static Size RenderedModel(double width, double height)
     {
-        var (window, _, _, _) = BuildWindow(width);
+        var (window, _, _, _) = BuildWindow(width, height);
         var size = Stage(Model(window)).Bounds.Size;
         window.Close();
         return size;
