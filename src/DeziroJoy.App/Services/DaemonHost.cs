@@ -26,6 +26,8 @@ public static class DaemonHost
     /// <summary>Poll interval of the mapping loop; matches the GUI's engine cadence.</summary>
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromMilliseconds(2);
 
+    internal const string DaemonInstanceMutexName = @"Global\DeziroJoy.Daemon";
+
     /// <summary>
     /// Runs the daemon until SIGINT, SIGTERM or SIGHUP arrives, then stops the engine and
     /// exits. Every supported termination path exits from its own handler, so this method
@@ -38,6 +40,35 @@ public static class DaemonHost
     /// (section 4.7).
     /// </summary>
     public static int Run()
+    {
+        using var instance = new Mutex(initiallyOwned: false, DaemonInstanceMutexName);
+        bool ownsInstance;
+        try
+        {
+            ownsInstance = instance.WaitOne(TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            ownsInstance = true;
+        }
+
+        if (!ownsInstance)
+        {
+            Console.WriteLine("[DeziroJoy] another daemon owns the instance slot; exiting without competing.");
+            return 0;
+        }
+
+        try
+        {
+            return RunOwned();
+        }
+        finally
+        {
+            instance.ReleaseMutex();
+        }
+    }
+
+    private static int RunOwned()
     {
         if (IsAnotherDaemonListening())
         {
@@ -187,19 +218,28 @@ public static class DaemonHost
     /// GUI. A client disconnect ends only that client's loop; the engine and the injection
     /// mutex are untouched, which is what makes the daemon resident.
     /// </summary>
-    private static async Task ServePipeAsync(DaemonServer daemon, CancellationToken cancellationToken)
+    internal static async Task ServePipeAsync(
+        DaemonServer daemon,
+        CancellationToken cancellationToken,
+        string? pipeName = null)
     {
+        pipeName ??= IpcContract.PipeName;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                var server = CreateMappingPipe();
-
-                await using (server)
+                var server = CreateMappingPipe(pipeName);
+                try
                 {
                     await server.WaitForConnectionAsync(cancellationToken);
-                    await daemon.ServeConnectionAsync(server, cancellationToken);
                 }
+                catch
+                {
+                    await server.DisposeAsync();
+                    throw;
+                }
+
+                _ = ServeConnectedClientAsync(daemon, server, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -214,14 +254,35 @@ public static class DaemonHost
         }
     }
 
-    private static NamedPipeServerStream CreateMappingPipe()
+    private static async Task ServeConnectedClientAsync(
+        DaemonServer daemon,
+        NamedPipeServerStream server,
+        CancellationToken cancellationToken)
+    {
+        await using (server)
+        {
+            try
+            {
+                await daemon.ServeConnectionAsync(server, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine($"[DeziroJoy] mapping client error: {exception.Message}");
+            }
+        }
+    }
+
+    private static NamedPipeServerStream CreateMappingPipe(string pipeName)
     {
         if (!OperatingSystem.IsWindows())
         {
             return new NamedPipeServerStream(
-                IpcContract.PipeName,
+                pipeName,
                 PipeDirection.InOut,
-                1,
+                NamedPipeServerStream.MaxAllowedServerInstances,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
         }
@@ -229,9 +290,9 @@ public static class DaemonHost
         var userSid = WindowsIdentity.GetCurrent().User?.Value
             ?? throw new InvalidOperationException("the current Windows token has no user SID");
         return NamedPipeServerStreamAcl.Create(
-            IpcContract.PipeName,
+            pipeName,
             PipeDirection.InOut,
-            1,
+            NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous,
             0,

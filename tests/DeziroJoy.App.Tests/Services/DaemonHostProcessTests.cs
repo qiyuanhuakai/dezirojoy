@@ -52,6 +52,23 @@ public class DaemonHostProcessTests
         Assert.True(started, $"daemon never reported startup. Output:\n{Snapshot(output)}");
         Assert.Contains("devices detected: 0", Snapshot(output));
 
+        using (var second = StartDaemon(executable))
+        {
+            try
+            {
+                var secondExited = await WaitForExitAsync(second, TimeSpan.FromSeconds(15));
+                Assert.True(secondExited, "a second daemon must exit instead of competing");
+                Assert.Equal(0, second.ExitCode);
+            }
+            finally
+            {
+                if (!second.HasExited)
+                {
+                    second.Kill(entireProcessTree: true);
+                }
+            }
+        }
+
         SendSignal(process, "TERM");
 
         var exited = await WaitForExitAsync(process, TimeSpan.FromSeconds(15));
