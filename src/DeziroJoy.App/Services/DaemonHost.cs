@@ -62,8 +62,6 @@ public static class DaemonHost
             composition.ProfileStore,
             stateStore);
 
-        Console.WriteLine(BuildStartupSummary(composition, DefaultInterval));
-
         // Resume the mapping the user last asked for before the pipe opens, so a GUI that
         // never connects still gets the persisted configuration.
         daemon.ResumeDesiredState();
@@ -100,6 +98,10 @@ public static class DaemonHost
             terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => ShutdownAndExit());
             hangup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, _ => ShutdownAndExit());
         }
+
+        // StartupCompleteMarker also means termination handlers are installed: clients and
+        // process tests may signal us as soon as they observe it without racing registration.
+        Console.WriteLine(BuildStartupSummary(composition, DefaultInterval));
 
         // Park the main thread; a signal handler does the real shutdown.
         Thread.Sleep(Timeout.Infinite);
