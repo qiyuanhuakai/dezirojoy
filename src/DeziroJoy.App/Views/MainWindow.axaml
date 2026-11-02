@@ -48,11 +48,6 @@
              button - only the enable toggle and delete remain. -->
         <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
             <controls:MappingRowBorder Classes="card mappingRow" Padding="0" Margin="0,0,0,6">
-                <controls:MappingRowBorder.Transitions>
-                    <Transitions>
-                        <BrushTransition Property="Background" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
-                    </Transitions>
-                </controls:MappingRowBorder.Transitions>
                 <Grid>
                     <Border CornerRadius="{DynamicResource CornerRadiusXl}"
                             Background="{DynamicResource RowSelectedBrush}"
@@ -105,7 +100,10 @@
     </Window.Resources>
 
     <Window.Styles>
-        <Style Selector="Border.card">
+        <!-- :is(Border), not Border: a bare type selector matches the exact type only, and a
+             mapping row is a MappingRowBorder - a derived Border - so "Border.card" never
+             reached it and the rows rendered without their card chrome at all. -->
+        <Style Selector=":is(Border).card">
             <Setter Property="Background" Value="{DynamicResource CardBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
@@ -120,7 +118,23 @@
              lights up under the cursor. The fade is inlined on the element rather than set from
              this style: a Transitions setter does not reach a derived Border, so the style
              alone would leave the hover snapping on. -->
-        <Style Selector="Border.mappingRow:pointerover">
+        <Style Selector=":is(Border).mappingRow:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <!-- The row is a tab stop, so keyboard focus rings it in the accent - the same ink
+             the model's focused elements wear, so the two surfaces agree. Only the border
+             brush changes: the row keeps one box in every state, so focusing it never shifts
+             its content the way thickening the border would. -->
+        <Style Selector=":is(Border).mappingRow:focus">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Keyboard activation mirrors the pointer: while Enter/Space is held the row takes
+             the same wash the pointer's hover gives it. The class is set from the
+             code-behind, because a Border never receives the :pressed pseudo-class on its
+             own - only PressedMixin controls such as Button do. -->
+        <Style Selector=":is(Border).mappingRow.pressed">
             <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
         </Style>
 
@@ -521,12 +535,28 @@
 
                         <!-- The model stage. No card wraps the model: it is the surface itself,
                              enlarged and centred by default. While a mapping is being edited it
-                             lifts, clearing room for the card that slides in below it. -->
-                        <StackPanel Grid.Row="0" MaxWidth="620" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
-                            <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
-                                       Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
-                            <Viewbox Stretch="Uniform" MaxHeight="380" MaxWidth="620" HorizontalAlignment="Center" Margin="0,12,0,0">
+                             lifts, clearing room for the card that slides in below it.
+
+                             The stage is split so the title and the instructions own a header
+                             row and the model owns the rest. The lift is a render transform,
+                             so it moves the model without re-laying anything out - which also
+                             means nothing but reserved space stops it from carrying the
+                             shoulder buttons up over the header text. The model row therefore
+                             reserves an inset equal to the lift (EditorLift, -44): at full
+                             lift the model's top lands exactly on its own row's top edge, so
+                             the header stays clear while the editor is open. -->
+                        <Grid Grid.Row="0" MaxWidth="620" HorizontalAlignment="Center">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0">
+                                <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
+                                <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
+                                           Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
+                            </StackPanel>
+                            <Viewbox Grid.Row="1" Stretch="Uniform" MaxHeight="380" MaxWidth="620"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,44,0,0">
                                 <Viewbox.RenderTransform>
                                     <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
                                         <TranslateTransform.Transitions>
@@ -538,7 +568,7 @@
                                 </Viewbox.RenderTransform>
                                 <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}" />
                             </Viewbox>
-                        </StackPanel>
+                        </Grid>
 
                         <!-- The editor card is a FIXED frame, not a child of a scroll region:
                              only its body scrolls, so the card's border, background and rounded
