@@ -176,8 +176,12 @@
 
                 <!-- What the slot does beyond a target. 无功能 is explicit for every slot; the
                      legacy repeat-the-click state stays reachable for the two gestures without
-                     standing in the way. -->
-                <StackPanel Margin="0,12,0,0" IsEnabled="{Binding ActiveTargetEditable}">
+                     standing in the way. This row is gated on the gesture resolving alone, not
+                     on ActiveTargetEditable: checking 无功能 disables the target parameters
+                     above, and gating this row the same way would disable the very box that
+                     takes 无功能 back. A gesture that is 已关闭 has no function to choose yet,
+                     so the row waits for 启用手势, exactly as the parameters do. -->
+                <StackPanel Margin="0,12,0,0" IsEnabled="{Binding ActiveGestureEnabled}">
                     <CheckBox x:Name="ActiveNoneBox" Content="无功能（不触发任何操作）"
                               IsChecked="{Binding ActiveIsNone, Mode=TwoWay}" />
                     <CheckBox x:Name="ActiveRepeatBox" Content="重复单击的功能（沿用单击的目标）"

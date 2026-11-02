@@ -251,6 +251,103 @@ public sealed class GestureEditorGuiTests
     }
 
     [AvaloniaFact]
+    public void None_Is_Reversible_On_Every_Slot_Through_The_Shared_Editor()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        foreach (var (tab, isGesture) in new[]
+        {
+            ("GestureClickTab", false),
+            ("GestureDoubleClickTab", true),
+            ("GestureLongPressTab", true),
+        })
+        {
+            SelectTab(window, viewModel, tab);
+
+            if (isGesture)
+            {
+                Click(EditorPanelOf(window).FindControl<CheckBox>("ActiveGestureEnabledBox")!, window);
+            }
+
+            var noneBox = EditorPanelOf(window).FindControl<CheckBox>("ActiveNoneBox")!;
+
+            // 无功能 first: the slot resolves and emits nothing.
+            Click(noneBox, window);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(viewModel.Editor.ActiveSlot.IsNone);
+            Assert.IsType<NoneTarget>(viewModel.Editor.ActiveSlot.BuildTarget());
+
+            // Choosing it must not disable the box that takes it back: only the target
+            // parameters go dark, so the way out of 无功能 is the same box that led in.
+            Assert.True(
+                noneBox.IsEffectivelyEnabled,
+                "checking 无功能 must not disable the None selector itself");
+
+            Click(noneBox, window);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.False(viewModel.Editor.ActiveSlot.IsNone);
+
+            // A real target of the slot's own, and back to 无功能 through the same box.
+            ChooseTargetKind(window, MappingTargetKind.KeyPress);
+            ChooseKey(window, GamepadKey.Space);
+            Assert.Equal(new KeyPressTarget(GamepadKey.Space), viewModel.Editor.ActiveSlot.BuildTarget());
+
+            Click(noneBox, window);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(viewModel.Editor.ActiveSlot.IsNone);
+            Assert.IsType<NoneTarget>(viewModel.Editor.ActiveSlot.BuildTarget());
+        }
+    }
+
+    [AvaloniaFact]
+    public void A_Reopened_Saved_None_Keeps_The_Selector_Live()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        // Save a mapping whose own target is 无功能.
+        SelectTab(window, viewModel, "GestureClickTab");
+        Click(EditorPanelOf(window).FindControl<CheckBox>("ActiveNoneBox")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        // Reopen the saved mapping: the click comes back 无功能, and the box that says so is
+        // live - a saved None is a choice the user can still take back, not a one-way door.
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        var noneBox = EditorPanelOf(window).FindControl<CheckBox>("ActiveNoneBox")!;
+        Assert.True(viewModel.Editor.ClickSlot.IsNone);
+        Assert.True(noneBox.IsChecked);
+        Assert.True(noneBox.IsEffectivelyEnabled, "a reopened 无功能 must stay reversible");
+
+        Click(noneBox, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.Editor.ClickSlot.IsNone);
+
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        ChooseKey(window, GamepadKey.Space);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), viewModel.Editor.BuildTarget());
+
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+
+        var committed = viewModel.ActiveProfile!.Mappings
+            .First(mapping => mapping.Source is ButtonBinding { Button: GamepadButton.A });
+
+        Assert.Equal(new KeyPressTarget(GamepadKey.Space), committed.Target);
+    }
+
+    [AvaloniaFact]
     public void Switching_Tabs_Preserves_Each_Slots_Draft()
     {
         var (window, viewModel) = OpenEditorOn("ButtonA");
