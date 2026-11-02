@@ -190,10 +190,17 @@ public sealed class DaemonController : IAsyncDisposable
         }
     }
 
-    public Task<MutationResult> ApplyAsync(string profileName, string profileJson, CancellationToken cancellationToken)
+    public Task<MutationResult> ApplyAsync(
+        string profileName,
+        string profileJson,
+        long expectedRevision,
+        string expectedDaemonInstanceId,
+        CancellationToken cancellationToken)
         => MutateAsync(
-            requestId => new ApplyConfigurationMessage(requestId, Revision, profileName, profileJson),
-            cancellationToken);
+            requestId => new ApplyConfigurationMessage(requestId, expectedRevision, profileName, profileJson),
+            cancellationToken,
+            expectedRevision,
+            expectedDaemonInstanceId);
 
     public Task<MutationResult> StartAsync(CancellationToken cancellationToken)
         => MutateAsync(requestId => new StartMessage(requestId, Revision), cancellationToken);
@@ -209,13 +216,25 @@ public sealed class DaemonController : IAsyncDisposable
 
     private async Task<MutationResult> MutateAsync(
         Func<string, IpcMessage> build,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long? expectedRevision = null,
+        string? expectedDaemonInstanceId = null)
     {
         EnsureConnected();
+        if (!MatchesMutationBaseline(expectedRevision, expectedDaemonInstanceId))
+        {
+            return MutationBaselineConflict();
+        }
+
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureConnected();
+            if (!MatchesMutationBaseline(expectedRevision, expectedDaemonInstanceId))
+            {
+                return MutationBaselineConflict();
+            }
+
             var requestId = NextRequestId();
             var completion = RegisterPending(requestId);
 
@@ -247,6 +266,17 @@ public sealed class DaemonController : IAsyncDisposable
             _mutationGate.Release();
         }
     }
+
+    private bool MatchesMutationBaseline(long? expectedRevision, string? expectedDaemonInstanceId)
+        => (!expectedRevision.HasValue || Revision == expectedRevision.Value)
+            && (expectedDaemonInstanceId is null
+                || string.Equals(_daemonInstanceId, expectedDaemonInstanceId, StringComparison.Ordinal));
+
+    private MutationResult MutationBaselineConflict()
+        => MutationResult.Refused(
+            Revision,
+            IpcErrorCodes.RevisionMismatch,
+            "the daemon configuration changed before the edit was sent");
 
     private MutationResult Settle(MutationAckMessage ack)
     {

@@ -40,7 +40,7 @@ public sealed class DaemonControllerTests
             _ => null,
         };
 
-        var applied = await controller.ApplyAsync("Arena", "{}", TestContext.Current.CancellationToken);
+        var applied = await controller.ApplyAsync("Arena", "{}", controller.Revision, controller.DaemonInstanceId!, TestContext.Current.CancellationToken);
         var started = await controller.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(MutationOutcome.Accepted, applied.Outcome);
@@ -59,7 +59,7 @@ public sealed class DaemonControllerTests
             ? new MutationAckMessage(apply.RequestId, false, 7, 4, IpcErrorCodes.RevisionMismatch, "stale")
             : null;
 
-        var result = await controller.ApplyAsync("Arena", "{}", TestContext.Current.CancellationToken);
+        var result = await controller.ApplyAsync("Arena", "{}", controller.Revision, controller.DaemonInstanceId!, TestContext.Current.CancellationToken);
 
         Assert.Equal(MutationOutcome.Refused, result.Outcome);
         Assert.Equal(IpcErrorCodes.RevisionMismatch, result.ErrorCode);
@@ -75,7 +75,7 @@ public sealed class DaemonControllerTests
         await ConnectAsync(controller);
         endpoint.Channel.OnSend = null;
 
-        var applyTask = controller.ApplyAsync("Arena", "{}", TestContext.Current.CancellationToken);
+        var applyTask = controller.ApplyAsync("Arena", "{}", controller.Revision, controller.DaemonInstanceId!, TestContext.Current.CancellationToken);
         var startTask = controller.StartAsync(TestContext.Current.CancellationToken);
         var apply = await endpoint.Channel.WaitForSendAsync<ApplyConfigurationMessage>(TestContext.Current.CancellationToken);
 
@@ -90,6 +90,48 @@ public sealed class DaemonControllerTests
     }
 
     [Fact]
+    public async Task A_Queued_Apply_Keeps_Its_Original_Revision_And_Is_Not_Sent_After_A_Conflict()
+    {
+        var endpoint = new FakeEndpoint();
+        await using var controller = new DaemonController(endpoint);
+        await ConnectAsync(controller);
+        endpoint.Channel.OnSend = message => message switch
+        {
+            ApplyConfigurationMessage apply => new MutationAckMessage(apply.RequestId, true, 1, 2),
+            _ => null,
+        };
+
+        var firstMutation = controller.SetMappingEnabledAsync(false, TestContext.Current.CancellationToken);
+        var firstRequest = await endpoint.Channel.WaitForSendAsync<SetMappingEnabledMessage>(
+            TestContext.Current.CancellationToken);
+        var applyTask = controller.ApplyAsync("Stale", "{}", 0, "daemon-1", TestContext.Current.CancellationToken);
+
+        var externalRevision = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.SnapshotChanged += snapshot =>
+        {
+            if (snapshot.Revision == 1)
+            {
+                externalRevision.TrySetResult();
+            }
+        };
+        endpoint.Channel.Push(State("daemon-1", 1, revision: 1));
+        await externalRevision.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+
+        endpoint.Channel.Push(new MutationAckMessage(firstRequest.RequestId, true, 1, 2));
+        var result = await applyTask;
+
+        Assert.Equal(MutationOutcome.Refused, result.Outcome);
+        Assert.Equal(IpcErrorCodes.RevisionMismatch, result.ErrorCode);
+        Assert.DoesNotContain(endpoint.Channel.Sent, message => message is ApplyConfigurationMessage);
+        Assert.Equal(MutationOutcome.Accepted, (await firstMutation).Outcome);
+
+        var fromOldDaemon = await controller.ApplyAsync(
+            "Stale", "{}", 1, "daemon-old", TestContext.Current.CancellationToken);
+        Assert.Equal(MutationOutcome.Refused, fromOldDaemon.Outcome);
+        Assert.DoesNotContain(endpoint.Channel.Sent, message => message is ApplyConfigurationMessage);
+    }
+
+    [Fact]
     public async Task Disconnect_During_A_Mutation_Returns_Unknown_Without_Replaying_Or_Stopping()
     {
         var endpoint = new FakeEndpoint();
@@ -97,7 +139,7 @@ public sealed class DaemonControllerTests
         await ConnectAsync(controller);
         endpoint.Channel.OnSend = null;
 
-        var mutation = controller.ApplyAsync("Arena", "{}", TestContext.Current.CancellationToken);
+        var mutation = controller.ApplyAsync("Arena", "{}", controller.Revision, controller.DaemonInstanceId!, TestContext.Current.CancellationToken);
         await endpoint.Channel.WaitForSendAsync<ApplyConfigurationMessage>(TestContext.Current.CancellationToken);
         endpoint.Channel.Close();
         var result = await mutation;
@@ -182,8 +224,8 @@ public sealed class DaemonControllerTests
         Assert.Equal(DaemonConnectionState.Connected, controller.State);
     }
 
-    private static StateChangedMessage State(string instanceId, long sequence, string? requestId = null)
-        => new(instanceId, new StateSnapshot(sequence, 0, false, true, 4242, "high", "Default", null, 0, 0, false), requestId);
+    private static StateChangedMessage State(string instanceId, long sequence, string? requestId = null, long revision = 0)
+        => new(instanceId, new StateSnapshot(sequence, revision, false, true, 4242, "high", "Default", null, 0, 0, false), requestId);
 
     private sealed class FakeEndpoint : IDaemonEndpoint
     {

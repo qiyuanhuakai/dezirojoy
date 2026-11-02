@@ -36,6 +36,8 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public bool IsInjectionSuspended { get; private set; }
 
+    public event Action<bool>? InjectionSuspensionChanged;
+
     public bool HasController { get; set; }
 
     public int InjectorPid { get; set; } = 4242;
@@ -81,7 +83,11 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public void SetMappingEnabled(bool enabled) => IsMappingEnabled = enabled;
 
-    public void SetInjectionSuspended(bool suspended) => IsInjectionSuspended = suspended;
+    public void SetInjectionSuspended(bool suspended)
+    {
+        IsInjectionSuspended = suspended;
+        InjectionSuspensionChanged?.Invoke(suspended);
+    }
 
     public void Reload(string deviceId, GamepadProfile profile)
     {

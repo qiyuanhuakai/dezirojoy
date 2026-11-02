@@ -1046,8 +1046,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_daemon is not null)
         {
-            if (_profileBaselineRevision != _daemon.Revision
-                || _profileDaemonInstanceId != _daemon.DaemonInstanceId)
+            var expectedRevision = _profileBaselineRevision;
+            var expectedInstanceId = _profileDaemonInstanceId;
+            if (expectedInstanceId is null
+                || expectedRevision != _daemon.Revision
+                || expectedInstanceId != _daemon.DaemonInstanceId)
             {
                 SetTransferError("配置已在后台更新；请取消当前编辑并重新加载后再提交。");
                 return false;
@@ -1058,6 +1061,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 var result = await _daemon.ApplyAsync(
                     updated.Name,
                     ProfileSerializer.Serialize(updated),
+                    expectedRevision,
+                    expectedInstanceId,
                     _lifetime.Token);
                 if (result.Outcome != MutationOutcome.Accepted)
                 {
@@ -1200,6 +1205,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             TransferMessage = string.Empty;
             IsTransferError = false;
+            if (IsEditing)
+            {
+                await SetEditorInjectionSuspended(true);
+            }
+
             RefreshStatus();
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)

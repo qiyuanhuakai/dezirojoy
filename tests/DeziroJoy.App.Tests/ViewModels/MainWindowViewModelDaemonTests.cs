@@ -1,3 +1,4 @@
+using System.IO.Pipes;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.Tests.Ipc;
@@ -154,6 +155,94 @@ public sealed class MainWindowViewModelDaemonTests
         Assert.False(viewModel.IsTransferError);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reconnect_Restores_An_Open_Editor_Lease_Without_Changing_Mapping_Pause(bool restartDaemon)
+    {
+        var pipeName = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var clock = new FakeClock();
+        var daemonHost = new FakeDaemonHost();
+        var server = new DaemonServer(daemonHost, new InMemoryProfileStore(), new DaemonStateStore(statePath), clock);
+        var serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var acceptTask = DaemonHost.ServePipeAsync(server, serverCancellation.Token, pipeName);
+        var endpoint = new PipeEndpoint(pipeName);
+        await using var controller = new DaemonController(endpoint);
+
+        try
+        {
+            await controller.ConnectAsync(TestContext.Current.CancellationToken);
+            var presentation = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), new InMemoryProfileStore());
+            await using var viewModel = new MainWindowViewModel(presentation, new InMemoryProfileStore(), daemon: controller, daemonRequired: true);
+            await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+
+            var suspended = WaitForSuspension(daemonHost, true);
+            viewModel.AddMappingCommand.Execute(null);
+            await suspended;
+            Assert.True(viewModel.IsEditing);
+
+            var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            controller.Disconnected += () => disconnected.TrySetResult();
+            var released = WaitForSuspension(daemonHost, false);
+            await endpoint.LastChannel!.DisposeAsync();
+            await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await released;
+
+            Assert.False(daemonHost.IsInjectionSuspended);
+            Assert.True(daemonHost.IsRunning);
+            Assert.True(daemonHost.IsMappingEnabled);
+
+            if (restartDaemon)
+            {
+                await serverCancellation.CancelAsync();
+                await acceptTask;
+                serverCancellation.Dispose();
+                clock.Advance(TimeSpan.FromSeconds(1));
+                daemonHost = new FakeDaemonHost();
+                daemonHost.Start();
+                server = new DaemonServer(daemonHost, new InMemoryProfileStore(), new DaemonStateStore(statePath), clock);
+                serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+                acceptTask = DaemonHost.ServePipeAsync(server, serverCancellation.Token, pipeName);
+            }
+
+            await viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+
+            Assert.True(daemonHost.IsInjectionSuspended);
+            Assert.True(daemonHost.IsRunning);
+            Assert.True(daemonHost.IsMappingEnabled);
+        }
+        finally
+        {
+            await serverCancellation.CancelAsync();
+            await acceptTask;
+            serverCancellation.Dispose();
+        }
+    }
+
+    private static async Task WaitForSuspension(FakeDaemonHost host, bool expected)
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(bool suspended)
+        {
+            if (suspended == expected)
+            {
+                changed.TrySetResult();
+            }
+        }
+
+        host.InjectionSuspensionChanged += OnChanged;
+        try
+        {
+            OnChanged(host.IsInjectionSuspended);
+            await changed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            host.InjectionSuspensionChanged -= OnChanged;
+        }
+    }
+
     private static async Task WaitForDaemonRevision(MainWindowViewModel viewModel, long revision)
     {
         var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -200,6 +289,29 @@ public sealed class MainWindowViewModelDaemonTests
             daemon: controller,
             daemonRequired: true);
         return (viewModel, daemonHost, channel, server);
+    }
+
+    private sealed class PipeEndpoint(string pipeName) : IDaemonEndpoint
+    {
+        public NamedPipeDaemonChannel? LastChannel { get; private set; }
+
+        public Task<bool> EnsureReadyAsync(bool allowLaunch, CancellationToken cancellationToken) => Task.FromResult(true);
+
+        public async Task<IDaemonChannel> OpenChannelAsync(CancellationToken cancellationToken)
+        {
+            var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            try
+            {
+                await pipe.ConnectAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                LastChannel = new NamedPipeDaemonChannel(pipe);
+                return LastChannel;
+            }
+            catch
+            {
+                await pipe.DisposeAsync();
+                throw;
+            }
+        }
     }
 
     private sealed class ServerEndpoint(ServerChannel channel) : IDaemonEndpoint
