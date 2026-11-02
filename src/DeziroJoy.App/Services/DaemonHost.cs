@@ -1,5 +1,8 @@
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Platform.Windows.Output;
@@ -190,12 +193,7 @@ public static class DaemonHost
         {
             try
             {
-                var server = new NamedPipeServerStream(
-                    IpcContract.PipeName,
-                    PipeDirection.InOut,
-                    maxNumberOfServerInstances: 1,
-                    PipeTransmissionMode.Byte,
-                    MappingPipeOptions(OperatingSystem.IsWindows()));
+                var server = CreateMappingPipe();
 
                 await using (server)
                 {
@@ -216,8 +214,41 @@ public static class DaemonHost
         }
     }
 
-    internal static PipeOptions MappingPipeOptions(bool isWindows)
-        => PipeOptions.Asynchronous | (isWindows ? PipeOptions.CurrentUserOnly : PipeOptions.None);
+    private static NamedPipeServerStream CreateMappingPipe()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new NamedPipeServerStream(
+                IpcContract.PipeName,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous);
+        }
+
+        var userSid = WindowsIdentity.GetCurrent().User?.Value
+            ?? throw new InvalidOperationException("the current Windows token has no user SID");
+        return NamedPipeServerStreamAcl.Create(
+            IpcContract.PipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            0,
+            0,
+            CreateMappingPipeSecurity(userSid));
+    }
+
+    [SupportedOSPlatform("windows")]
+    internal static PipeSecurity CreateMappingPipeSecurity(string userSid)
+    {
+        var security = new PipeSecurity();
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(userSid),
+            PipeAccessRights.ReadWrite,
+            AccessControlType.Allow));
+        return security;
+    }
 
     /// <summary>
     /// True when another daemon already answers on the mapping pipe. The pipe, not the mutex,

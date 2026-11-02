@@ -577,15 +577,25 @@ public class DaemonServerTests
     }
 
     [Fact]
-    public void The_Windows_Pipe_Is_Restricted_To_The_Current_User()
+    public void The_Windows_Pipe_Acl_Shares_The_Current_User_Across_Integrity_Levels()
     {
-        var windows = DaemonHost.MappingPipeOptions(true);
-        var otherPlatforms = DaemonHost.MappingPipeOptions(false);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("PipeSecurity is Windows-only.");
+            return;
+        }
 
-        Assert.True(windows.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
-        Assert.False(otherPlatforms.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
-        Assert.True(windows.HasFlag(System.IO.Pipes.PipeOptions.Asynchronous));
-        Assert.True(otherPlatforms.HasFlag(System.IO.Pipes.PipeOptions.Asynchronous));
+        var sid = new System.Security.Principal.SecurityIdentifier("S-1-5-21-1-2-3-1000");
+        var security = DaemonHost.CreateMappingPipeSecurity(sid.Value);
+        var rules = security
+            .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.IO.Pipes.PipeAccessRule>()
+            .ToArray();
+
+        var rule = Assert.Single(rules);
+        Assert.Equal(sid, rule.IdentityReference);
+        Assert.Equal(System.IO.Pipes.PipeAccessRights.ReadWrite, rule.PipeAccessRights);
+        Assert.Equal(System.Security.AccessControl.AccessControlType.Allow, rule.AccessControlType);
     }
 
     [Fact]
