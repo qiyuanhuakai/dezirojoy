@@ -28,6 +28,7 @@ internal sealed class FakeClock : IClock
 internal sealed class FakeDaemonHost : IDaemonHost
 {
     private readonly List<string> _deviceIds = [];
+    private readonly Dictionary<string, GamepadProfile> _profiles = new(StringComparer.Ordinal);
 
     public bool IsRunning { get; private set; }
 
@@ -56,6 +57,8 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public IReadOnlyList<string> ConnectedDeviceIds => _deviceIds;
 
+    public GamepadProfile? GetProfile(string deviceId) => _profiles.GetValueOrDefault(deviceId);
+
     public void AddDevice(string deviceId) => _deviceIds.Add(deviceId);
 
     public void Start()
@@ -80,7 +83,11 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public void SetInjectionSuspended(bool suspended) => IsInjectionSuspended = suspended;
 
-    public void Reload(string deviceId, GamepadProfile profile) => ReloadedDevices.Add(deviceId);
+    public void Reload(string deviceId, GamepadProfile profile)
+    {
+        ReloadedDevices.Add(deviceId);
+        _profiles[deviceId] = profile;
+    }
 }
 
 /// <summary>
@@ -264,6 +271,46 @@ public class DaemonServerTests
         Assert.Equal("Arena Shooter", persisted.ProfileName);
         Assert.Equal(profileJson, persisted.ProfileJson);
         Assert.Equal(1, persisted.Revision);
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-state")));
+        Assert.Equal(profileJson, snapshot.Snapshot.ProfileJson);
+    }
+
+    [Fact]
+    public async Task Apply_Reloads_Only_The_Profiles_Target_Device()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        var profile = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Second",
+            DeviceId = "pad-2",
+        };
+
+        await server.ProcessAsync(new ApplyConfigurationMessage(
+            "req-1", 0, "Second", ProfileSerializer.Serialize(profile)));
+
+        Assert.Equal(["pad-2"], host.ReloadedDevices);
+    }
+
+    [Fact]
+    public async Task Snapshot_Reads_The_Host_Profile_Before_The_First_Ipc_Apply()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        host.Reload("pad-1", DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Host profile",
+            DeviceId = "pad-1",
+        });
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-state")));
+
+        Assert.Equal("Host profile", snapshot.Snapshot.ProfileName);
+        Assert.Contains("Host profile", snapshot.Snapshot.ProfileJson);
     }
 
     [Fact]

@@ -159,7 +159,11 @@ public sealed record StateSnapshot(
     string? LastError,
     long InjectedEvents,
     long BlockedEvents,
-    bool HasController);
+    bool HasController)
+{
+    /// <summary>The active profile body at <see cref="Revision"/>, used to rebase GUI drafts.</summary>
+    public string? ProfileJson { get; init; }
+}
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>
 public enum SnapshotDisposition

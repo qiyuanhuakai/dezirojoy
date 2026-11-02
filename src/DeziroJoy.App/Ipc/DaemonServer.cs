@@ -164,7 +164,10 @@ public sealed partial class DaemonServer
 
     private StateChangedMessage HandleGetState(GetStateMessage getState)
     {
-        return new StateChangedMessage(DaemonInstanceId, BuildSnapshot(), getState.RequestId);
+        lock (_sync)
+        {
+            return new StateChangedMessage(DaemonInstanceId, BuildSnapshot(), getState.RequestId);
+        }
     }
 
     private MutationAckMessage HandleApply(ApplyConfigurationMessage apply)
@@ -198,10 +201,7 @@ public sealed partial class DaemonServer
             }
 
             _profileStore.Save(profile);
-            foreach (var deviceId in _host.ConnectedDeviceIds)
-            {
-                _host.Reload(deviceId, profile);
-            }
+            ReloadTargetDevice(profile);
 
             _profileName = apply.ProfileName;
             _profileJson = apply.ProfileJson;
@@ -210,6 +210,18 @@ public sealed partial class DaemonServer
             PublishStateChange();
 
             return new MutationAckMessage(apply.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    private void ReloadTargetDevice(GamepadProfile profile)
+    {
+        var connected = _host.ConnectedDeviceIds;
+        var target = string.IsNullOrWhiteSpace(profile.DeviceId)
+            ? (connected.Count > 0 ? connected[0] : null)
+            : profile.DeviceId;
+        if (target is not null && connected.Contains(target, StringComparer.Ordinal))
+        {
+            _host.Reload(target, profile);
         }
     }
 
@@ -382,16 +394,33 @@ public sealed partial class DaemonServer
         PublishToConnections(message);
     }
 
-    private StateSnapshot BuildSnapshot() => new(
-        Sequence: _sequence,
-        Revision: _revision,
-        Running: _host.IsRunning,
-        MappingEnabled: _host.IsMappingEnabled,
-        InjectorPid: _host.InjectorPid,
-        InjectorIntegrity: _host.InjectorIntegrity,
-        ProfileName: _profileName,
-        LastError: _lastError,
-        InjectedEvents: _host.InjectedEvents,
-        BlockedEvents: _host.BlockedEvents,
-        HasController: _host.HasController);
+    private StateSnapshot BuildSnapshot()
+    {
+        var profileName = _profileName;
+        var profileJson = _profileJson;
+        var connected = _host.ConnectedDeviceIds;
+        if (string.IsNullOrEmpty(profileJson)
+            && connected.Count > 0
+            && _host.GetProfile(connected[0]) is { } profile)
+        {
+            profileName = profile.Name;
+            profileJson = ProfileSerializer.Serialize(profile);
+        }
+
+        return new StateSnapshot(
+            Sequence: _sequence,
+            Revision: _revision,
+            Running: _host.IsRunning,
+            MappingEnabled: _host.IsMappingEnabled,
+            InjectorPid: _host.InjectorPid,
+            InjectorIntegrity: _host.InjectorIntegrity,
+            ProfileName: profileName,
+            LastError: _lastError,
+            InjectedEvents: _host.InjectedEvents,
+            BlockedEvents: _host.BlockedEvents,
+            HasController: _host.HasController)
+        {
+            ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
+        };
+    }
 }

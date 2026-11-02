@@ -37,6 +37,8 @@ public interface IDaemonHost
 
     IReadOnlyList<string> ConnectedDeviceIds { get; }
 
+    GamepadProfile? GetProfile(string deviceId);
+
     /// <summary>
     /// Starts the mapping loop, acquiring the injection mutex. Throws
     /// <see cref="InjectionAlreadyActiveException"/> when another process holds the slot.

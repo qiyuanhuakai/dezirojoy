@@ -362,6 +362,10 @@ public static class DaemonHost
         public IReadOnlyList<string> ConnectedDeviceIds
             => _composition.Host.Controllers.Select(runtime => runtime.Descriptor.DeviceId).ToList();
 
+        public GamepadProfile? GetProfile(string deviceId)
+            => _composition.Host.Controllers.SingleOrDefault(
+                runtime => string.Equals(runtime.Descriptor.DeviceId, deviceId, StringComparison.Ordinal))?.Profile;
+
         public void Start() => _composition.Host.Start(DaemonHost.DefaultInterval);
 
         public void StopMapping() => _composition.Host.Stop();

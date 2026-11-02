@@ -25,10 +25,7 @@ public sealed partial class DaemonServer
                 {
                     var profile = ProfileSerializer.Deserialize(_restored.ProfileJson);
                     _profileStore.Save(profile);
-                    foreach (var deviceId in _host.ConnectedDeviceIds)
-                    {
-                        _host.Reload(deviceId, profile);
-                    }
+                    ReloadTargetDevice(profile);
                 }
                 catch (JsonException)
                 {
