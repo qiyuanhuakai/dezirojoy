@@ -99,33 +99,33 @@ public sealed class EngineHost : IDisposable
     /// <summary>Advances every connected controller by one tick.</summary>
     public void TickOnce(TimeSpan delta)
     {
-        var connected = _provider.GetConnected();
-        var present = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var descriptor in connected)
-        {
-            present.Add(descriptor.DeviceId);
-
-            var runtime = EnsureRuntime(descriptor);
-
-            var state = _provider.Poll(descriptor.DeviceId);
-            if (state is null)
-            {
-                // Transient read failure: keep the runtime, try again next tick.
-                continue;
-            }
-
-            if (IsMappingEnabled && !_injectionSuspended)
-            {
-                var commands = runtime.Engine.Tick(state, (float)delta.TotalSeconds);
-                runtime.Dispatcher.DispatchAll(commands);
-            }
-
-            Sampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
-        }
-
         lock (_sync)
         {
+            var connected = _provider.GetConnected();
+            var present = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var descriptor in connected)
+            {
+                present.Add(descriptor.DeviceId);
+
+                var runtime = EnsureRuntime(descriptor);
+
+                var state = _provider.Poll(descriptor.DeviceId);
+                if (state is null)
+                {
+                    // Transient read failure: keep the runtime, try again next tick.
+                    continue;
+                }
+
+                if (IsMappingEnabled && !_injectionSuspended)
+                {
+                    var commands = runtime.Engine.Tick(state, (float)delta.TotalSeconds);
+                    runtime.Dispatcher.DispatchAll(commands);
+                }
+
+                Sampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
+            }
+
             ReconcileAbsence(present, DeviceAbsenceGraceTicks);
         }
     }
@@ -139,36 +139,39 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void RefreshPresence()
     {
-        var connected = _provider.GetConnected();
-        var present = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var descriptor in connected)
-        {
-            present.Add(descriptor.DeviceId);
-            EnsureRuntime(descriptor);
-        }
-
         lock (_sync)
         {
+            var connected = _provider.GetConnected();
+            var present = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var descriptor in connected)
+            {
+                present.Add(descriptor.DeviceId);
+                EnsureRuntime(descriptor);
+            }
+
             ReconcileAbsence(present, graceTicks: 0);
         }
     }
 
     public void SetMappingEnabled(bool enabled)
     {
-        if (IsMappingEnabled == enabled)
+        lock (_sync)
         {
-            return;
-        }
-
-        IsMappingEnabled = enabled;
-
-        if (!enabled)
-        {
-            foreach (var runtime in Controllers)
+            if (IsMappingEnabled == enabled)
             {
-                runtime.Engine.Reset();
-                runtime.Dispatcher.ReleaseAll();
+                return;
+            }
+
+            IsMappingEnabled = enabled;
+
+            if (!enabled)
+            {
+                foreach (var runtime in _runtimes.Values)
+                {
+                    runtime.Engine.Reset();
+                    runtime.Dispatcher.ReleaseAll();
+                }
             }
         }
     }
@@ -189,19 +192,22 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void SetInjectionSuspended(bool suspended)
     {
-        if (_injectionSuspended == suspended)
+        lock (_sync)
         {
-            return;
-        }
-
-        _injectionSuspended = suspended;
-
-        if (suspended)
-        {
-            foreach (var runtime in Controllers)
+            if (_injectionSuspended == suspended)
             {
-                runtime.Engine.Reset();
-                runtime.Dispatcher.ReleaseAll();
+                return;
+            }
+
+            _injectionSuspended = suspended;
+
+            if (suspended)
+            {
+                foreach (var runtime in _runtimes.Values)
+                {
+                    runtime.Engine.Reset();
+                    runtime.Dispatcher.ReleaseAll();
+                }
             }
         }
     }
@@ -215,27 +221,27 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void SamplePresence()
     {
-        var connected = _provider.GetConnected();
-        var present = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var descriptor in connected)
-        {
-            present.Add(descriptor.DeviceId);
-
-            var runtime = EnsureRuntime(descriptor);
-
-            var state = _provider.Poll(descriptor.DeviceId);
-            if (state is null)
-            {
-                // Transient read failure: keep the runtime, try again next sample.
-                continue;
-            }
-
-            PresenceSampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
-        }
-
         lock (_sync)
         {
+            var connected = _provider.GetConnected();
+            var present = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var descriptor in connected)
+            {
+                present.Add(descriptor.DeviceId);
+
+                var runtime = EnsureRuntime(descriptor);
+
+                var state = _provider.Poll(descriptor.DeviceId);
+                if (state is null)
+                {
+                    // Transient read failure: keep the runtime, try again next sample.
+                    continue;
+                }
+
+                PresenceSampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
+            }
+
             ReconcileAbsence(present, graceTicks: 0);
         }
     }
@@ -255,10 +261,12 @@ public sealed class EngineHost : IDisposable
     /// <summary>Persists the active profile of a device.</summary>
     public void SaveProfile(string deviceId)
     {
-        var runtime = Controllers.SingleOrDefault(r => string.Equals(r.Descriptor.DeviceId, deviceId, StringComparison.Ordinal));
-        if (runtime is not null)
+        lock (_sync)
         {
-            _profileStore.Save(runtime.Profile);
+            if (_runtimes.TryGetValue(deviceId, out var runtime))
+            {
+                _profileStore.Save(runtime.Profile);
+            }
         }
     }
 
@@ -357,10 +365,13 @@ public sealed class EngineHost : IDisposable
         _thread?.Join(TimeSpan.FromSeconds(2));
         _thread = null;
 
-        foreach (var runtime in Controllers)
+        lock (_sync)
         {
-            runtime.Engine.Reset();
-            runtime.Dispatcher.ReleaseAll();
+            foreach (var runtime in _runtimes.Values)
+            {
+                runtime.Engine.Reset();
+                runtime.Dispatcher.ReleaseAll();
+            }
         }
     }
 

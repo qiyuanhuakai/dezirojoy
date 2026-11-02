@@ -441,6 +441,73 @@ public class EngineHostTests
         Assert.Contains("down:Enter", sink.Calls);
     }
 
+    [Fact]
+    public async Task Mapping_Mutations_Wait_For_An_In_Flight_Tick()
+    {
+        var changed = new GamepadProfile { Name = "changed", DeviceId = "xinput:0", Mappings = [] };
+        var mutations = new Action<EngineHost>[]
+        {
+            host => host.Reload("xinput:0", changed),
+            host => host.SetMappingEnabled(false),
+            host => host.SetInjectionSuspended(true),
+        };
+
+        foreach (var mutation in mutations)
+        {
+            var provider = new BlockingProvider();
+            using var host = new EngineHost(provider, new RecordingOutputSink(), new InMemoryProfileStore());
+            host.StartManual();
+            var tick = Task.Run(() => host.TickOnce(Tick), TestContext.Current.CancellationToken);
+            await provider.PollEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+            var mutationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var mutationTask = Task.Run(() =>
+            {
+                mutationStarted.SetResult();
+                mutation(host);
+            }, TestContext.Current.CancellationToken);
+            await mutationStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await Task.Yield();
+
+            try
+            {
+                Assert.False(mutationTask.IsCompleted, "a mutation ran inside the in-flight tick");
+            }
+            finally
+            {
+                provider.ReleasePoll();
+            }
+
+            await Task.WhenAll(tick, mutationTask).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+    }
+
+    private sealed class BlockingProvider : IGamepadProvider
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        private int _pollCount;
+
+        public TaskCompletionSource PollEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<GamepadDescriptor> GetConnected()
+            => [new GamepadDescriptor("xinput:0", "Xbox Wireless Controller")];
+
+        public IGamepadState? Poll(string deviceId)
+        {
+            PollEntered.TrySetResult();
+            if (Interlocked.Exchange(ref _pollCount, 1) == 0)
+            {
+                _release.Wait(TestContext.Current.CancellationToken);
+            }
+
+            return GamepadState.Neutral;
+        }
+
+        public void ReleasePoll() => _release.Set();
+
+        public void Dispose() => _release.Dispose();
+    }
+
     private sealed class InMemoryProfileStore : IProfileStore
     {
         private readonly Dictionary<string, GamepadProfile> _profiles = [];
