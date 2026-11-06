@@ -24,6 +24,7 @@ public sealed class ThemeTokenTests
         "AccentForegroundBrush", "DangerForegroundBrush", "AccentBrush", "AccentHoverBrush",
         "AccentPressedBrush", "ConnectedBrush", "IdleDotBrush", "DangerBrush",
         "PadBodyBrush", "StickPadBrush", "StickPadStrokeBrush", "StickRingBrush",
+        "StickAccentRingBrush",
         "StickThumbBrush", "DpadCenterBrush", "PadIdleBrush", "PadPressedBrush",
         "PadWellBrush", "PadCapBrush", "PadBodyStrokeBrush",
     ];
@@ -78,7 +79,7 @@ public sealed class ThemeTokenTests
             ["CaptionGlyphBrush"] = Color.FromRgb(0xD0, 0xD0, 0xD0),
             ["BadgeTextBrush"] = Color.FromRgb(0xB9, 0xB9, 0xB9),
             ["OverlayTextBrush"] = Color.FromRgb(0xD6, 0xD6, 0xD6),
-            ["PadLabelBrush"] = Color.FromRgb(0xF0, 0xF0, 0xF0),
+            ["PadLabelBrush"] = Color.FromRgb(0x9A, 0x9A, 0x9A),
             ["AccentForegroundBrush"] = Color.FromRgb(0x10, 0x10, 0x10),
             ["DangerForegroundBrush"] = Color.FromRgb(0xD0, 0xD0, 0xD0),
             ["AccentBrush"] = Color.FromRgb(0x4C, 0xC2, 0xFF),
@@ -87,17 +88,18 @@ public sealed class ThemeTokenTests
             ["ConnectedBrush"] = Color.FromRgb(0x3F, 0xB9, 0x50),
             ["IdleDotBrush"] = Color.FromRgb(0x6E, 0x76, 0x81),
             ["DangerBrush"] = Color.FromRgb(0xC4, 0x2B, 0x1C),
-            ["PadBodyBrush"] = Color.FromRgb(0x2A, 0x2A, 0x2A),
-            ["StickPadBrush"] = Color.FromRgb(0x33, 0x33, 0x33),
-            ["StickPadStrokeBrush"] = Color.FromRgb(0x3F, 0x3F, 0x3F),
-            ["StickRingBrush"] = Color.FromRgb(0x4A, 0x4A, 0x4A),
-            ["StickThumbBrush"] = Color.FromRgb(0x8F, 0x8F, 0x8F),
-            ["DpadCenterBrush"] = Color.FromRgb(0x38, 0x38, 0x38),
-            ["PadIdleBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
+            ["PadBodyBrush"] = Color.FromRgb(0xEC, 0xEA, 0xE3),
+            ["StickPadBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
+            ["StickPadStrokeBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
+            ["StickRingBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
+            ["StickAccentRingBrush"] = Color.FromRgb(0xFF, 0x8A, 0x1E),
+            ["StickThumbBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
+            ["DpadCenterBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
+            ["PadIdleBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
             ["PadPressedBrush"] = Color.FromRgb(0x4C, 0xC2, 0xFF),
-            ["PadWellBrush"] = Color.FromRgb(0x1C, 0x1C, 0x1C),
-            ["PadCapBrush"] = Color.FromRgb(0x44, 0x44, 0x44),
-            ["PadBodyStrokeBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
+            ["PadWellBrush"] = Color.FromRgb(0xDC, 0xD8, 0xCE),
+            ["PadCapBrush"] = Color.FromRgb(0x1C, 0x1C, 0x1C),
+            ["PadBodyStrokeBrush"] = Color.FromRgb(0xC9, 0xC6, 0xBD),
         };
 
         Assert.Equal(TokenKeys.Length, expected.Count);
@@ -136,7 +138,7 @@ public sealed class ThemeTokenTests
             ["CaptionGlyphBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
             ["BadgeTextBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
             ["OverlayTextBrush"] = Color.FromRgb(0x1F, 0x23, 0x28),
-            ["PadLabelBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
+            ["PadLabelBrush"] = Color.FromRgb(0x9A, 0x9A, 0x9A),
             ["AccentForegroundBrush"] = Color.FromRgb(0xFF, 0xFF, 0xFF),
             ["DangerForegroundBrush"] = Color.FromRgb(0xFF, 0xFF, 0xFF),
             ["AccentBrush"] = Color.FromRgb(0x0A, 0x6F, 0xBF),
@@ -145,17 +147,18 @@ public sealed class ThemeTokenTests
             ["ConnectedBrush"] = Color.FromRgb(0x1A, 0x7F, 0x37),
             ["IdleDotBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
             ["DangerBrush"] = Color.FromRgb(0xC4, 0x2B, 0x1C),
-            ["PadBodyBrush"] = Color.FromRgb(0xE4, 0xE8, 0xEC),
-            ["StickPadBrush"] = Color.FromRgb(0xD3, 0xD9, 0xDF),
-            ["StickPadStrokeBrush"] = Color.FromRgb(0xAF, 0xB8, 0xC1),
-            ["StickRingBrush"] = Color.FromRgb(0xAE, 0xB6, 0xBE),
-            ["StickThumbBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
-            ["DpadCenterBrush"] = Color.FromRgb(0xCB, 0xD2, 0xD9),
-            ["PadIdleBrush"] = Color.FromRgb(0xBF, 0xC7, 0xCF),
+            ["PadBodyBrush"] = Color.FromRgb(0xF4, 0xF2, 0xEC),
+            ["StickPadBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
+            ["StickPadStrokeBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
+            ["StickRingBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
+            ["StickAccentRingBrush"] = Color.FromRgb(0xFF, 0x8A, 0x1E),
+            ["StickThumbBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
+            ["DpadCenterBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
+            ["PadIdleBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
             ["PadPressedBrush"] = Color.FromRgb(0x0A, 0x6F, 0xBF),
-            ["PadWellBrush"] = Color.FromRgb(0xD8, 0xDE, 0xE4),
-            ["PadCapBrush"] = Color.FromRgb(0xF2, 0xF5, 0xF7),
-            ["PadBodyStrokeBrush"] = Color.FromRgb(0xC3, 0xCB, 0xD3),
+            ["PadWellBrush"] = Color.FromRgb(0xDC, 0xD8, 0xCE),
+            ["PadCapBrush"] = Color.FromRgb(0x1C, 0x1C, 0x1C),
+            ["PadBodyStrokeBrush"] = Color.FromRgb(0xC9, 0xC6, 0xBD),
         };
 
         Assert.Equal(TokenKeys.Length, expected.Count);
@@ -177,51 +180,40 @@ public sealed class ThemeTokenTests
     }
 
     /// <summary>
-    /// DESIGN.md 4.6: in the dark theme the body, wells, caps and labels must form a
-    /// deliberate luminance ladder, so no part of the pad sinks into the background. The
-    /// old palette had the body only one step off the card, which is exactly the "暗色对比
-    /// 不足" gap the ledger records.
+    /// The redrawn model is a WHITE controller, so the dark theme is no longer a grey
+    /// ladder: the body is an off-white shell and every piece of hardware on it is
+    /// near-black. This pins that shell/hardware contrast instead of the old dim-to-bright
+    /// ladder the near-black slab used to need.
     /// </summary>
     [AvaloniaFact]
-    public void Dark_Pad_Tokens_Form_A_Deliberate_Luminance_Ladder()
+    public void Dark_Pad_Is_An_Off_White_Shell_With_Black_Hardware()
     {
-        // Ordered dimmest to brightest, each a distinct step.
-        var ladder = new[]
-        {
-            "PadWellBrush",
-            "PadBodyBrush",
-            "PadIdleBrush",
-            "PadCapBrush",
-            "StickRingBrush",
-            "StickThumbBrush",
-            "PadLabelBrush",
-        };
+        // The shell is off-white: bright in the dark theme.
+        var body = Luminance(ColorOf(Resolve("PadBodyBrush", ThemeVariant.Dark)));
+        Assert.True(body > 0.6, $"the off-white shell must read as bright, luminance was {body}");
 
-        var previous = -1.0;
-        foreach (var key in ladder)
+        // The shell clears the near-black card it sits on by a wide margin.
+        var card = Luminance(ColorOf(Resolve("CardBrush", ThemeVariant.Dark)));
+        Assert.True(body - card > 0.3,
+            $"the off-white shell must stand off the dark card, delta was {body - card}");
+
+        // Every piece of hardware sits far below the shell: black controls on an off-white body.
+        var hardware = new[]
+        {
+            "PadIdleBrush", "StickPadBrush", "DpadCenterBrush", "PadCapBrush", "StickThumbBrush",
+        };
+        foreach (var key in hardware)
         {
             var luminance = Luminance(ColorOf(Resolve(key, ThemeVariant.Dark)));
-            Assert.True(luminance > previous,
-                $"{key} must be brighter than the token before it in the ladder");
-            previous = luminance;
+            Assert.True(body - luminance > 0.5,
+                $"{key} must contrast with the off-white shell, delta was {body - luminance}");
         }
-
-        // The body must clear the card it sits on by a visible step, not a near-miss.
-        var body = Luminance(ColorOf(Resolve("PadBodyBrush", ThemeVariant.Dark)));
-        var card = Luminance(ColorOf(Resolve("CardBrush", ThemeVariant.Dark)));
-        Assert.True(body - card > 0.01,
-            $"the pad body must sit clearly above the card, delta was {body - card}");
-
-        // The caps must clear the body, so a pressed key reads as raised rather than flat.
-        var cap = Luminance(ColorOf(Resolve("PadCapBrush", ThemeVariant.Dark)));
-        Assert.True(cap - body > 0.01,
-            $"the key caps must sit clearly above the body, delta was {cap - body}");
     }
 
     /// <summary>
-    /// DESIGN.md 4.6: the light theme stays soft rather than stark white. The pad body is a
-    /// light grey that is clearly darker than the white card, so the silhouette reads as a
-    /// surface instead of a hole punched in the panel.
+    /// DESIGN.md 4.6: the light theme stays soft rather than stark white. The pad body is an
+    /// off-white shell clearly below the white card, so the silhouette reads as a surface
+    /// instead of a hole punched in the panel, and the wells sit just below it as a recess.
     /// </summary>
     [AvaloniaFact]
     public void Light_Pad_Tokens_Stay_Soft_Rather_Than_Stark_White()
@@ -232,12 +224,9 @@ public sealed class ThemeTokenTests
         Assert.True(card - body > 0.05,
             $"the light pad body must stay clearly softer than the white card, delta was {card - body}");
 
-        // The wells sit below the body and the caps above it, so the light theme keeps the
-        // same deliberate ladder the dark one does.
+        // The wells sit below the body, so the light theme keeps a soft recessed step.
         var well = Luminance(ColorOf(Resolve("PadWellBrush", ThemeVariant.Light)));
-        var cap = Luminance(ColorOf(Resolve("PadCapBrush", ThemeVariant.Light)));
         Assert.True(well < body, "the light wells must sit below the body");
-        Assert.True(cap > body, "the light caps must sit above the body");
     }
 
     /// <summary>

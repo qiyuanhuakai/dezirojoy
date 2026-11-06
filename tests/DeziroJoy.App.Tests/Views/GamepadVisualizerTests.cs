@@ -119,6 +119,17 @@ public sealed class GamepadVisualizerTests
         return ColorOf(value as IBrush);
     }
 
+    private static double Luminance(Color color)
+    {
+        double Channel(byte value)
+        {
+            var srgb = value / 255.0;
+            return srgb <= 0.03928 ? srgb / 12.92 : Math.Pow((srgb + 0.055) / 1.055, 2.4);
+        }
+
+        return (0.2126 * Channel(color.R)) + (0.7152 * Channel(color.G)) + (0.0722 * Channel(color.B));
+    }
+
     // ---- Responsive bounds -------------------------------------------------
 
     [AvaloniaFact]
@@ -193,49 +204,30 @@ public sealed class GamepadVisualizerTests
     }
 
     /// <summary>
-    /// The D-pad is a cross inside a CIRCULAR tray, not four bars floating on the body:
-    /// the tray is a true circle (equal width and height) and the cross fits inside it.
+    /// The D-pad is a cross sitting DIRECTLY on the off-white body with NO circular tray:
+    /// the photo reference draws the cross flat on the shell, so the recessed tray the old
+    /// model framed it in is gone and only the centre hub survives as a true circle.
     /// </summary>
     [AvaloniaFact]
-    public void The_Dpad_Cross_Sits_Inside_A_Circular_Tray()
+    public void The_Dpad_Cross_Sits_Directly_On_The_Body_With_No_Tray()
     {
         var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
         var window = new Window { Content = control, Width = 700, Height = 460 };
         window.Show();
         window.UpdateLayout();
 
-        var tray = control.FindControl<Ellipse>("DpadTray");
-        Assert.NotNull(tray);
+        Assert.Null(control.FindControl<Ellipse>("DpadTray"));
 
-        // A circle, not an ellipse: the tray's own width and height agree.
-        Assert.Equal(tray!.Bounds.Width, tray.Bounds.Height, 0.5);
-
-        var up = control.FindControl<Border>("DpadUp")!;
-        var down = control.FindControl<Border>("DpadDown")!;
-        var left = control.FindControl<Border>("DpadLeft")!;
-        var right = control.FindControl<Border>("DpadRight")!;
-
-        // The cross fits inside the tray on both axes.
-        var crossLeft = Math.Min(left.Bounds.Left, up.Bounds.Left);
-        var crossRight = Math.Max(right.Bounds.Right, up.Bounds.Right);
-        var crossTop = Math.Min(up.Bounds.Top, left.Bounds.Top);
-        var crossBottom = Math.Max(down.Bounds.Bottom, right.Bounds.Bottom);
-
-        Assert.True(crossLeft >= tray.Bounds.Left, "the cross must stay inside the tray");
-        Assert.True(crossRight <= tray.Bounds.Right, "the cross must stay inside the tray");
-        Assert.True(crossTop >= tray.Bounds.Top, "the cross must stay inside the tray");
-        Assert.True(crossBottom <= tray.Bounds.Bottom, "the cross must stay inside the tray");
-
-        // The tray is round, so its corners are empty: the cross is narrower than the
-        // tray's diagonal would allow, which is what makes it read as a tray.
-        Assert.True(tray.Bounds.Width > up.Bounds.Width * 1.5, "the tray must frame the cross");
+        var centre = control.FindControl<Ellipse>("DpadCenter");
+        Assert.NotNull(centre);
+        Assert.Equal(centre!.Bounds.Width, centre.Bounds.Height, 0.5);
 
         window.Close();
     }
 
     /// <summary>
-    /// The centre cluster is hierarchical: the Guide is markedly larger than the View and
-    /// Menu buttons flanking it, rather than three equal dots.
+    /// The centre cluster is hierarchical: the round Guide is markedly larger than the slim
+    /// View and Menu capsules flanking it, rather than three equal dots.
     /// </summary>
     [AvaloniaFact]
     public void The_Guide_Button_Leads_The_Centre_Cluster()
@@ -245,18 +237,22 @@ public sealed class GamepadVisualizerTests
         window.Show();
         window.UpdateLayout();
 
+        // View and Menu are slim capsules now, so they resolve as Control rather than Ellipse.
         var guide = control.FindControl<Ellipse>("GuideButton")!;
-        var back = control.FindControl<Ellipse>("BackButton")!;
-        var start = control.FindControl<Ellipse>("StartButton")!;
+        var back = control.FindControl<Control>("BackButton")!;
+        var start = control.FindControl<Control>("StartButton")!;
 
-        Assert.True(guide.Bounds.Width > back.Bounds.Width * 1.4,
-            $"the Guide ({guide.Bounds.Width}) must lead the View button ({back.Bounds.Width})");
-        Assert.True(guide.Bounds.Width > start.Bounds.Width * 1.4,
-            $"the Guide ({guide.Bounds.Width}) must lead the Menu button ({start.Bounds.Width})");
+        // The Guide is a full round button; the flanking capsules are slim, so the Guide's
+        // diameter leads each capsule's thickness rather than three equal dots.
+        Assert.True(guide.Bounds.Height > back.Bounds.Height * 1.4,
+            $"the Guide ({guide.Bounds.Height}) must lead the View button ({back.Bounds.Height})");
+        Assert.True(guide.Bounds.Height > start.Bounds.Height * 1.4,
+            $"the Guide ({guide.Bounds.Height}) must lead the Menu button ({start.Bounds.Height})");
 
-        // The two flanking buttons stay equal to each other: the hierarchy is Guide over
+        // The two flanking capsules stay equal to each other: the hierarchy is Guide over
         // a matched pair, not three different sizes.
         Assert.Equal(back.Bounds.Width, start.Bounds.Width, 0.5);
+        Assert.Equal(back.Bounds.Height, start.Bounds.Height, 0.5);
 
         // The Guide sits between them on the shared centre line.
         Assert.True(back.Bounds.Center.X < guide.Bounds.Center.X, "View sits left of the Guide");
@@ -288,7 +284,7 @@ public sealed class GamepadVisualizerTests
             $"the right stick must sit well below the left one, offset was {right.Bounds.Center.Y - left.Bounds.Center.Y}");
 
         // Left outboard of the D-pad, right inboard of the ABXY diamond.
-        var dpad = control.FindControl<Ellipse>("DpadTray")!;
+        var dpad = control.FindControl<Ellipse>("DpadCenter")!;
         Assert.True(left.Bounds.Center.X < dpad.Bounds.Center.X, "the left stick sits outboard of the D-pad");
         Assert.True(right.Bounds.Center.X > dpad.Bounds.Center.X, "the right stick sits inboard of the D-pad");
 
@@ -668,6 +664,196 @@ public sealed class GamepadVisualizerTests
                 candidate => candidate.Property == property);
             Assert.InRange(transition.Duration, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(300));
         }
+
+        window.Close();
+    }
+
+    // ---- Photo-fidelity redraw (white GameSir Nova reference) --------------
+
+    /// <summary>
+    /// The redrawn model is a WHITE controller: the body is an off-white shell in BOTH
+    /// themes, not the near-black slab the old palette drew, and in the dark theme that
+    /// off-white shell stands clearly off the near-black card it sits on.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Body_Is_An_Off_White_Shell_In_Both_Variants()
+    {
+        foreach (var variant in new[] { ThemeVariant.Dark, ThemeVariant.Light })
+        {
+            var body = Token(variant, "PadBodyBrush");
+            Assert.True(Luminance(body) > 0.6,
+                $"the body must read as off-white under {variant}, luminance was {Luminance(body)}");
+        }
+
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var fill = ColorOf(control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!.Fill);
+        Assert.True(Luminance(fill) > 0.6, $"the PadBody fill must be off-white, got #{fill}");
+
+        var darkBody = Luminance(Token(ThemeVariant.Dark, "PadBodyBrush"));
+        var darkCard = Luminance(Token(ThemeVariant.Dark, "CardBrush"));
+        Assert.True(darkBody - darkCard > 0.3,
+            $"the off-white body must stand off the dark card, delta was {darkBody - darkCard}");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The face controls are near-black hardware on the off-white shell: every ABXY, D-pad
+    /// and shoulder cap sits well below mid-grey and clears the body by a wide contrast step.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Face_Controls_Are_Near_Black_Against_The_Off_White_Body()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var buttonA = control.FindControl<Ellipse>("ButtonA")!;
+        var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
+
+        var idle = ColorOf(buttonA.Fill);
+        Assert.True(idle.R <= 0x28 && idle.G <= 0x28 && idle.B <= 0x28,
+            $"the face controls must read as near-black, got #{idle}");
+
+        var delta = Luminance(ColorOf(body.Fill)) - Luminance(idle);
+        Assert.True(delta > 0.5,
+            $"the face controls must contrast with the off-white body, delta was {delta}");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The stick caps are black and each sits inside a prominent ORANGE ring: the ring is
+    /// solid (no dash array), at least 5px thick, drawn inside the pad and clearing the
+    /// thumb's radius so the cap never touches it.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Stick_Caps_Are_Black_With_A_Prominent_Orange_Ring()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        foreach (var (padName, ringName, thumbName) in new[]
+        {
+            ("LeftStickPad", "LeftStickRing", "LeftStickThumb"),
+            ("RightStickPad", "RightStickRing", "RightStickThumb"),
+        })
+        {
+            var pad = control.FindControl<Ellipse>(padName)!;
+            var ring = control.FindControl<Ellipse>(ringName)!;
+            var thumb = control.FindControl<Ellipse>(thumbName)!;
+
+            var cap = ColorOf(thumb.Fill);
+            Assert.True(cap.R <= 0x28 && cap.G <= 0x28 && cap.B <= 0x28,
+                $"{thumbName} must be a black cap, got #{cap}");
+
+            var accent = Token(ring.ActualThemeVariant, "StickAccentRingBrush");
+            AssertColor(accent, ColorOf(ring.Stroke), $"{ringName} must wear the orange accent ring");
+            Assert.True(ring.StrokeThickness >= 5,
+                $"{ringName} must be a prominent ring, thickness was {ring.StrokeThickness}");
+            Assert.True(ring.StrokeDashArray is null || ring.StrokeDashArray.Count == 0,
+                $"{ringName} must be a solid ring, not dashed");
+
+            Assert.True(ring.Bounds.Left >= pad.Bounds.Left && ring.Bounds.Right <= pad.Bounds.Right,
+                $"{ringName} must sit inside {padName}");
+            Assert.True(ring.Bounds.Top >= pad.Bounds.Top && ring.Bounds.Bottom <= pad.Bounds.Bottom,
+                $"{ringName} must sit inside {padName}");
+
+            var ringInner = ring.Bounds.Width / 2 - ring.StrokeThickness / 2;
+            var thumbRadius = thumb.Bounds.Width / 2;
+            Assert.True(ringInner > thumbRadius,
+                $"{ringName} must clear the thumb radius, inner {ringInner} vs thumb {thumbRadius}");
+        }
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// View and Menu are slim capsules rather than round dots: each is a Border whose
+    /// corners are rounded to a full half-height and whose width exceeds its height.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_View_And_Menu_Buttons_Are_Slim_Capsules()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        foreach (var name in new[] { "BackButton", "StartButton" })
+        {
+            var capsule = control.FindControl<Border>(name);
+            Assert.NotNull(capsule);
+
+            Assert.Equal(capsule!.Height / 2, capsule.CornerRadius.TopLeft, 0.5);
+            Assert.True(capsule.Width > capsule.Height,
+                $"{name} must be a slim capsule, {capsule.Width}x{capsule.Height}");
+        }
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The Guide is a round button ringed by a blue accent: a sibling GuideRing ellipse
+    /// wears the app accent at a readable thickness, never eats a click, and is declared
+    /// before the Guide so it draws behind it.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Guide_Button_Is_Round_With_A_Blue_Accent_Ring()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var guide = control.FindControl<Ellipse>("GuideButton");
+        Assert.NotNull(guide);
+
+        var ring = control.FindControl<Ellipse>("GuideRing");
+        Assert.NotNull(ring);
+
+        Assert.Same(guide!.Parent, ring!.Parent);
+        var siblings = ((Panel)guide.Parent!).Children;
+        Assert.True(siblings.IndexOf(ring) < siblings.IndexOf(guide),
+            "the GuideRing must be declared before the GuideButton so it sits behind it");
+
+        var accent = Token(guide.ActualThemeVariant, "AccentBrush");
+        AssertColor(accent, ColorOf(ring.Stroke), "the GuideRing must wear the accent");
+        Assert.True(ring.StrokeThickness >= 2,
+            $"the GuideRing must be prominent, thickness was {ring.StrokeThickness}");
+        Assert.False(ring.IsHitTestVisible, "the GuideRing must never eat a click meant for the Guide");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// No GameSir wordmark or brand text appears anywhere on the model: the redraw copies
+    /// the reference's SHAPE, never its logo.
+    /// </summary>
+    [AvaloniaFact]
+    public void No_Brand_Wordmark_Appears_Anywhere_On_The_Model()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+        var brands = canvas.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .Where(t => !string.IsNullOrEmpty(t.Text)
+                && t.Text.Contains("GameSir", StringComparison.OrdinalIgnoreCase))
+            .Select(t => t.Text)
+            .ToList();
+
+        Assert.Empty(brands);
 
         window.Close();
     }

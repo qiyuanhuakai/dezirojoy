@@ -20,9 +20,9 @@ public sealed class ControlsGuiTests
         => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
 
     // PadIdleBrush / PadPressedBrush per variant, straight from Themes/Palette.axaml.
-    private static readonly Color DarkIdle = Color.FromRgb(0x3A, 0x3A, 0x3A);
+    private static readonly Color DarkIdle = Color.FromRgb(0x16, 0x16, 0x16);
     private static readonly Color DarkPressed = Color.FromRgb(0x4C, 0xC2, 0xFF);
-    private static readonly Color LightIdle = Color.FromRgb(0xBF, 0xC7, 0xCF);
+    private static readonly Color LightIdle = Color.FromRgb(0x16, 0x16, 0x16);
     private static readonly Color LightPressed = Color.FromRgb(0x0A, 0x6F, 0xBF);
 
     private static void UnderTheme(ThemeVariant variant, Action body)
