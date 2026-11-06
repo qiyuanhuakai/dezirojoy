@@ -161,6 +161,14 @@ public sealed class GuiActivationServerTests
     }
 
     [Fact]
+    public void The_Connect_Timeout_Covers_The_Winner_Startup_Window()
+    {
+        Assert.True(
+            GuiActivationOptions.Default.ConnectTimeout >= TimeSpan.FromSeconds(15),
+            "a second launch must be able to wait for the first GUI to finish starting");
+    }
+
+    [Fact]
     public void The_Activation_Channel_Is_Separate_From_The_Daemon_Mapping_Channel()
     {
         var identity = GuiInstanceIdentity.ForCurrentProcess();

@@ -67,7 +67,7 @@ public sealed record GuiShowAck(int Version, bool Accepted, string? Reason = nul
 public sealed class GuiActivationOptions
 {
     public static GuiActivationOptions Default { get; } = new(
-        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(15),
         TimeSpan.FromSeconds(10));
 
     public GuiActivationOptions(TimeSpan connectTimeout, TimeSpan ackTimeout)
