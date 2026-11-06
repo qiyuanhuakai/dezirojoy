@@ -81,8 +81,24 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 tray.Dispose();
-                viewModel.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                composition.Dispose();
+
+                // The runtime teardown awaits the daemon pipe closing down, and this handler
+                // runs on the UI thread. Waiting for it here deadlocks: the UI thread is the
+                // very thread the await needs, so the process never reaches its exit. Hand the
+                // teardown to the thread pool instead and let the UI thread finish shutting
+                // down. The daemon is a separate process, so nothing of the mapping is lost by
+                // not waiting for the disconnect.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await viewModel.DisposeAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        composition.Dispose();
+                    }
+                });
             };
         }
 
