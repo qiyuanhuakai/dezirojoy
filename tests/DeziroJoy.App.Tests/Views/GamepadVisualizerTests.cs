@@ -460,6 +460,52 @@ public sealed class GamepadVisualizerTests
         window.Close();
     }
 
+    [AvaloniaFact]
+    public void The_Shell_Reads_As_One_Symmetric_Shape_Not_A_Warped_One()
+    {
+        var shell = Flatten(ShellOutline());
+        var minX = shell.Min(point => point.X);
+        var maxX = shell.Max(point => point.X);
+        var maxY = shell.Max(point => point.Y);
+
+        var worst = 0.0;
+        var worstY = 0.0;
+
+        for (var y = 20.0; y <= maxY - 10.0; y += 10.0)
+        {
+            double? left = null;
+            var right = minX;
+
+            for (var x = minX; x <= maxX; x += 0.5)
+            {
+                if (!Contains(shell, new Point(x, y)))
+                {
+                    continue;
+                }
+
+                left ??= x;
+                right = x;
+            }
+
+            if (left is null)
+            {
+                continue;
+            }
+
+            var drift = Math.Abs((left.Value - minX) - (maxX - right));
+
+            if (drift > worst)
+            {
+                worst = drift;
+                worstY = y;
+            }
+        }
+
+        Assert.True(worst <= 2.0,
+            $"the shell silhouette drifts {worst:0.#}px off its own mirror at y={worstY:0.#}, " +
+            "which reads as a warped pad rather than one continuous shape");
+    }
+
     private static IEnumerable<Control> InteractiveElements(GamepadVisualizer control)
     {
         var canvas = control.FindControl<Canvas>("PadCanvas")!;

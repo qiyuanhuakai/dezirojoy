@@ -117,22 +117,24 @@
         <Canvas x:Name="PadCanvas" Opacity="{Binding IsConnected, Converter={StaticResource ConnectedOpacity}}">
 
             <!--
-                The silhouette is one continuous path: the central mass, the shoulder line and
-                both flared grips share the same outline, so no seam can appear between the
-                shapes, and the underside stays concave between the grips.
+                The silhouette is one continuous path, and its two halves are exact mirrors of
+                each other about the canvas centre: the shoulder flare, the grip swell and the
+                concave underside are the same curve read from either side. An earlier revision
+                drew the left half by hand and it drifted tens of pixels off the right, which
+                read as a warped pad; a regression test now pins the mirror.
             -->
             <Path x:Name="PadBody" Canvas.Left="40" Canvas.Top="34" Width="540" Height="306"
                   Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource PadBodyStrokeBrush}"
                   StrokeThickness="1" Effect="{DynamicResource PadShadowEffect}"
                   Data="M 110,16 C 120,2 145,0 170,4
                         C 220,12 320,12 370,4 C 395,0 420,2 430,16
-                        C 458,42 474,90 496,150 L 532,248
+                        C 458,42 474,90 514,150 L 532,248
                         C 540,278 535,302 512,306 C 495,308 477,300 462,290
                         L 422,284 C 392,278 362,273 332,273
-                        C 302,273 272,279 242,285 L 212,291
-                        C 186,297 156,299 131,295 C 106,291 84,295 68,299
-                        C 48,302 32,301 26,293 C 12,271 14,220 18,150
-                        C 10,90 24,45 110,16 Z" />
+                        C 302,273 272,279 270,285 C 268,279 238,273 208,273
+                        C 178,273 148,278 118,284 L 78,290
+                        C 63,300 45,308 28,306 C 5,302 0,278 8,248
+                        L 26,150 C 66,90 82,42 110,16 Z" />
 
             <!--
                 LT/RT emerge from BEHIND the shoulder line: each trigger's lower edge dips
