@@ -90,6 +90,11 @@ public sealed class TrayService : IDisposable
 
         EnsureWindow();
 
+        // Installing the tray is the app's startup, so the first window must actually be
+        // shown: building it without showing leaves the process holding the whole runtime in
+        // memory with nothing on screen, which reads as a stuck render process.
+        ShowMainWindow();
+
         var icon = new TrayIcon
         {
             Icon = LoadIcon(),

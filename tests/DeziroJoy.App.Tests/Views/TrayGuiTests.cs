@@ -79,7 +79,6 @@ public sealed class TrayGuiTests : IDisposable
         var window = created!;
 
         lifetime.MainWindow = window;
-        window.Show();
         Dispatcher.UIThread.RunJobs();
 
         return new TrayFixture(tray, window, host, lifetime, themes, viewModel, provider, () => created!);
@@ -108,6 +107,32 @@ public sealed class TrayGuiTests : IDisposable
 
     private static void Click(NativeMenuItem item)
         => ((INativeMenuItemExporterEventsImplBridge)item).RaiseClicked();
+
+    [AvaloniaFact]
+    public void Installing_The_Tray_Shows_The_First_Window()
+    {
+        var themes = new ThemeService(_directory);
+        var lifetime = new ClassicDesktopStyleApplicationLifetime();
+        var store = new InMemoryProfileStore();
+        var provider = new FakeGamepadProvider();
+        var host = new EngineHost(provider, new NullOutputSink(), store);
+        var viewModel = new MainWindowViewModel(host, store);
+
+        MainWindow? created = null;
+        var tray = new TrayService(_application, lifetime, themes, () =>
+        {
+            created = new MainWindow(viewModel, host, themes);
+            return created;
+        });
+
+        tray.Install();
+        Dispatcher.UIThread.RunJobs();
+
+        var window = created!;
+
+        Assert.True(window.IsVisible,
+            "installing the tray must show the first window, or the process starts and holds the whole runtime in memory with no window on screen");
+    }
 
     [AvaloniaFact]
     public void Installing_The_Tray_Twice_Still_Leaves_Exactly_One_Icon()
