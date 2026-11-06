@@ -312,6 +312,26 @@ public sealed class SettingsPanelGuiTests : IDisposable
         => buttons.Single(button => button.Name == name);
 
     [AvaloniaFact]
+    public void The_Settings_Surface_No_Longer_Carries_The_Leader_Card()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+
+        var panel = PanelOf(window);
+
+        // The leader card moved to the mapping page (LeaderMappingGuiTests pins it there),
+        // so the settings surface keeps the profile, appearance, input and service cards only.
+        Assert.Null(panel.FindControl<ComboBox>("LeaderButtonCombo"));
+        Assert.Null(panel.FindControl<ComboBox>("LeaderModeCombo"));
+        Assert.Null(panel.FindControl<Button>("LeaderSwitchButton"));
+        Assert.DoesNotContain(
+            panel.GetVisualDescendants().OfType<TextBlock>(),
+            text => text.Text == "Leader 键");
+    }
+
+    [AvaloniaFact]
     public void Opening_The_Settings_Surface_Does_Not_Recreate_View_Models_Or_Lose_Editor_State()
     {
         var (window, viewModel, host, provider) = BuildWindow();

@@ -344,6 +344,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// The button counterpart of pressing the leader key: swaps between the device's own
+    /// profile and the stored alternate, so both configurations are reachable from the
+    /// mapping page without a pad in hand.
+    /// </summary>
+    [RelayCommand]
+    private Task ToggleLeaderSlot()
+        => SwapLeaderSlotAsync(ActiveLeaderSlot == LeaderSlot.Primary ? LeaderSlot.Alternate : LeaderSlot.Primary);
+
     partial void OnIsPhysicalInputInScopeChanged(bool value)
     {
         if (!value)

@@ -29,6 +29,7 @@
         <conv:RowSelectedConverter x:Key="RowSelected" />
         <conv:BoolToRowHeightConverter x:Key="EditorRowHeight" />
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
+        <conv:LeaderButtonLabelConverter x:Key="LeaderButtonLabel" />
 
         <!-- Motion targets for the mapping surface. Each drives one animated property, so the
              animation lives in a DoubleTransition on the target and these only say where the
@@ -659,17 +660,72 @@
             <Border Grid.Column="4" x:Name="RightPanel" MinWidth="0"
                     Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}"
                     BorderThickness="1,0,0,0" Padding="12">
-                <Grid RowDefinitions="Auto,*">
+                <Grid RowDefinitions="Auto,Auto,*">
                     <StackPanel Grid.Row="0">
                         <TextBlock Classes="cardTitle" Text="按键配置" />
                         <TextBlock Classes="hint" Margin="0,4,0,0"
                                    Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
                     </StackPanel>
+
+                    <!-- Pinned above the list so the second configuration is reachable
+                         without opening settings. The mode combo binds SelectedValue through
+                         SelectedValueBinding, never SelectedItem: writing the option record
+                         back to the enum property threw an InvalidCastException. -->
+                    <Border Grid.Row="1" Classes="card" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="Leader 键" />
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="Leader 按键" VerticalAlignment="Center" Margin="0" />
+                                <ComboBox Grid.Column="1" x:Name="LeaderButtonCombo" HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding LeaderButtonOptions}"
+                                          SelectedItem="{Binding LeaderButton, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Converter={StaticResource LeaderButtonLabel}}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="切换方式" VerticalAlignment="Center" Margin="0" />
+                                <ComboBox Grid.Column="1" x:Name="LeaderModeCombo" HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding LeaderModeOptions}"
+                                          SelectedValue="{Binding LeaderMode, Mode=TwoWay}">
+                                    <ComboBox.SelectedValueBinding>
+                                        <Binding Path="Value" />
+                                    </ComboBox.SelectedValueBinding>
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:LeaderModeOption">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <TextBlock Classes="hint" Margin="0,6,0,0"
+                                       Text="按下切换：每按一次在两套配置间轮换。按住切换：按住期间使用第二套配置。" />
+                            <Button Classes="ghost" Content="把当前配置存为第二套" HorizontalAlignment="Stretch" Margin="0,12,0,0"
+                                    Command="{Binding SaveCurrentAsLeaderAlternateCommand}" />
+                            <Button x:Name="LeaderSwitchButton" Classes="ghost" Content="切换到另一套配置"
+                                    HorizontalAlignment="Stretch" Margin="0,8,0,0"
+                                    Command="{ReflectionBinding DataContext.ToggleLeaderSlotCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+                            <TextBlock x:Name="LeaderSlotReadout" Classes="readout" Margin="0,8,0,0"
+                                       Text="{Binding LeaderSlotLabel}" />
+                        </StackPanel>
+                    </Border>
+
                     <!-- The scroll content reserves a 16px gutter on the right: the vertical
                          scrollbar is an overlay that paints over the content's edge rather
                          than taking layout space, so without the gutter it would sit on top
                          of the rows' delete buttons (DESIGN 4.3.8). -->
-                    <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer Grid.Row="2" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
                         <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding Mappings}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>

@@ -103,6 +103,39 @@ public sealed class LeaderKeyTests
     }
 
     [Fact]
+    public async Task Holding_The_Leader_Swaps_Only_While_Held()
+    {
+        var settings = Settings();
+        var (vm, host, provider, store, _) = CreateHost(settings);
+        await using var _ = vm;
+
+        var primary = new GamepadProfile { Name = "Primary", DeviceId = DeviceId, Mappings = [] };
+        var alternate = new GamepadProfile { Name = "Alternate", DeviceId = DeviceId, Mappings = [] };
+
+        store.Save(primary);
+        vm.SaveLeaderAlternate(alternate);
+        settings.SetLeader(GamepadButton.Guide, LeaderMode.Hold);
+
+        Connect(provider);
+        Sample(vm, host);
+
+        Assert.Equal("Primary", vm.ActiveProfile!.Name);
+        Assert.Equal(LeaderSlot.Primary, vm.ActiveLeaderSlot);
+
+        Press(provider, GamepadButtonMask.Guide);
+        Sample(vm, host);
+
+        Assert.Equal("Alternate", vm.ActiveProfile!.Name);
+        Assert.Equal(LeaderSlot.Alternate, vm.ActiveLeaderSlot);
+
+        Press(provider, default);
+        Sample(vm, host);
+
+        Assert.Equal("Primary", vm.ActiveProfile!.Name);
+        Assert.Equal(LeaderSlot.Primary, vm.ActiveLeaderSlot);
+    }
+
+    [Fact]
     public async Task Without_A_Leader_Button_Nothing_Swaps()
     {
         var settings = Settings();
