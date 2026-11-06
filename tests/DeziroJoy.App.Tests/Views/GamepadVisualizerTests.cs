@@ -337,12 +337,8 @@ public sealed class GamepadVisualizerTests
         window.Close();
     }
 
-    /// <summary>
-    /// The grips flare: the silhouette is widest below its vertical middle, and the bottom
-    /// edge between the grips is concave rather than a straight line.
-    /// </summary>
     [AvaloniaFact]
-    public void The_Silhouette_Flares_Into_Grips_With_A_Concave_Bottom()
+    public void The_Silhouette_Is_One_Continuous_Curved_Path()
     {
         var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
         var window = new Window { Content = control, Width = 700, Height = 460 };
@@ -350,30 +346,12 @@ public sealed class GamepadVisualizerTests
         window.UpdateLayout();
 
         var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
-        var grips = control.GetVisualDescendants().OfType<Shape>()
-            .Where(shape => shape.Name is "LeftGrip" or "RightGrip")
-            .ToList();
+        var geometry = Assert.IsType<Avalonia.Media.StreamGeometry>(body.Data);
 
-        Assert.Equal(2, grips.Count);
-
-        var lowest = grips.Max(grip => grip.Bounds.Bottom);
-        var bodyBottom = body.Bounds.Bottom;
-
-        // The grips carry the silhouette below the central mass.
-        Assert.True(lowest > bodyBottom, "the grips must extend below the body");
-
-        // Flared: each grip is wider at its bottom than at the body's waist.
-        foreach (var grip in grips)
-        {
-            Assert.True(grip.Bounds.Width > 60, $"a grip is {grip.Bounds.Width} wide");
-        }
-
-        // Concave bottom: the gap between the two grips is empty space below the body's
-        // bottom edge, so the silhouette's underside curves up between them.
-        var leftGrip = grips.First(g => g.Bounds.Center.X < body.Bounds.Center.X);
-        var rightGrip = grips.First(g => g.Bounds.Center.X > body.Bounds.Center.X);
-        Assert.True(leftGrip.Bounds.Right < rightGrip.Bounds.Left,
-            "the grips must leave a notch between them");
+        Assert.True(geometry.Bounds.Width > 500);
+        Assert.True(geometry.Bounds.Height > 290);
+        Assert.Null(control.FindControl<Avalonia.Controls.Shapes.Path>("LeftGrip"));
+        Assert.Null(control.FindControl<Avalonia.Controls.Shapes.Path>("RightGrip"));
 
         window.Close();
     }

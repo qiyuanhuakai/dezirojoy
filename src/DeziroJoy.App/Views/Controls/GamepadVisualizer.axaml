@@ -117,52 +117,28 @@
         <Canvas x:Name="PadCanvas" Opacity="{Binding IsConnected, Converter={StaticResource ConnectedOpacity}}">
 
             <!--
-                The silhouette, drawn back to front so each layer overlaps the one behind it
-                and the union reads as one body:
-
-                  PadBody      the central mass, from the shoulder line down to the waist
-                  LeftGrip     the lower-left flare, carrying the body below its own bottom
-                  RightGrip    the mirrored lower-right flare
-                  LeftShoulder the upper-left shoulder cap, continuous with the body's top
-                  RightShoulder the mirrored upper-right cap
-
-                The grips leave a notch between them, so the underside is concave rather than
-                a straight edge, and each grip is wider at its bottom than at the waist.
+                The silhouette is one continuous path: the central mass, the shoulder line and
+                both flared grips share the same outline, so no seam can appear between the
+                shapes, and the underside stays concave between the grips.
             -->
-            <Path x:Name="PadBody" Canvas.Left="60" Canvas.Top="86" Width="500" Height="240"
+            <Path x:Name="PadBody" Canvas.Left="40" Canvas.Top="34" Width="540" Height="306"
                   Fill="{DynamicResource PadBodyBrush}" Stroke="{DynamicResource PadBodyStrokeBrush}"
                   StrokeThickness="1" Effect="{DynamicResource PadShadowEffect}"
-                  Data="M 64,4 C 28,8 10,28 2,58 L 0,162
-                        C 0,194 24,224 54,232 C 90,240 120,224 148,206
-                        C 178,186 212,182 250,188 C 288,182 322,186 352,206
-                        C 380,224 410,240 446,232 C 476,224 500,194 500,162
-                        L 498,58 C 490,28 472,8 436,4 C 392,0 368,8 332,14
-                        C 300,20 200,20 168,14 C 132,8 108,0 64,4 Z" />
-
-            <Path x:Name="LeftGrip" Canvas.Left="32" Canvas.Top="232" Width="160" Height="116"
-                  Fill="{DynamicResource PadGripBrush}" IsHitTestVisible="False"
-                  Data="M 160,24 C 134,4 96,0 66,10 C 34,22 12,50 4,80
-                        C 0,96 4,110 20,116 C 48,116 82,106 106,82
-                        C 132,56 150,38 160,24 Z" />
-            <Path x:Name="RightGrip" Canvas.Left="428" Canvas.Top="232" Width="160" Height="116"
-                  Fill="{DynamicResource PadGripBrush}" IsHitTestVisible="False"
-                  Data="M 0,24 C 26,4 64,0 94,10 C 126,22 148,50 156,80
-                        C 160,96 156,110 140,116 C 112,116 78,106 54,82
-                        C 28,56 10,38 0,24 Z" />
-
-            <Path x:Name="LeftShoulder" Canvas.Left="60" Canvas.Top="52" Width="188" Height="60"
-                  Fill="{DynamicResource PadBodyBrush}" IsHitTestVisible="False"
-                  Data="M 34,60 C 34,32 52,14 82,10 C 118,5 158,5 188,12 L 188,60 Z" />
-            <Path x:Name="RightShoulder" Canvas.Left="372" Canvas.Top="52" Width="188" Height="60"
-                  Fill="{DynamicResource PadBodyBrush}" IsHitTestVisible="False"
-                  Data="M 154,60 C 154,32 136,14 106,10 C 70,5 30,5 0,12 L 0,60 Z" />
+                  Data="M 110,16 C 120,2 145,0 170,4
+                        C 220,12 320,12 370,4 C 395,0 420,2 430,16
+                        C 452,42 462,86 480,136 L 518,238
+                        C 528,266 516,294 494,300 C 470,306 448,282 424,254
+                        L 386,214 C 362,190 336,180 310,186
+                        C 282,192 258,192 230,186 C 204,180 178,190 154,214
+                        L 116,254 C 92,282 70,306 46,300 C 24,294 12,266 22,238
+                        L 60,136 C 78,86 88,42 110,16 Z" />
 
             <!--
                 LT/RT emerge from BEHIND the shoulder line: each trigger's lower edge dips
                 below its bumper's top edge, so the bumper reads as the near surface and the
                 trigger as the one reaching out from behind it.
             -->
-            <Border x:Name="LeftTrigger" Classes="padHit" Canvas.Left="96" Canvas.Top="16" Width="92" Height="46"
+            <Border x:Name="LeftTrigger" Classes="padHit" Canvas.Left="112" Canvas.Top="10" Width="112" Height="36"
                     CornerRadius="18" Background="{Binding IsLeftTriggerPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="左扳机 LT" PointerPressed="OnElementPressed" Tag="Button:LeftTrigger">
                 <Border.Transitions>
@@ -171,7 +147,7 @@
                     </Transitions>
                 </Border.Transitions>
             </Border>
-            <Border x:Name="RightTrigger" Classes="padHit" Canvas.Left="432" Canvas.Top="16" Width="92" Height="46"
+            <Border x:Name="RightTrigger" Classes="padHit" Canvas.Left="396" Canvas.Top="10" Width="112" Height="36"
                     CornerRadius="18" Background="{Binding IsRightTriggerPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="右扳机 RT" PointerPressed="OnElementPressed" Tag="Button:RightTrigger">
                 <Border.Transitions>
@@ -183,7 +159,7 @@
 
             <!-- LB/RB sit ON the shoulder line: each overlaps the body's top edge, so the
                  shoulder is continuous with the body instead of a bar floating over a gap. -->
-            <Border x:Name="LeftBumper" Classes="padHit" Canvas.Left="84" Canvas.Top="58" Width="116" Height="34"
+            <Border x:Name="LeftBumper" Classes="padHit" Canvas.Left="100" Canvas.Top="28" Width="136" Height="28"
                     CornerRadius="14" Background="{Binding IsLeftBumperPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="左肩键 LB" PointerPressed="OnElementPressed" Tag="Button:LeftBumper">
                 <Border.Transitions>
@@ -192,7 +168,7 @@
                     </Transitions>
                 </Border.Transitions>
             </Border>
-            <Border x:Name="RightBumper" Classes="padHit" Canvas.Left="420" Canvas.Top="58" Width="116" Height="34"
+            <Border x:Name="RightBumper" Classes="padHit" Canvas.Left="384" Canvas.Top="28" Width="136" Height="28"
                     CornerRadius="14" Background="{Binding IsRightBumperPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="右肩键 RB" PointerPressed="OnElementPressed" Tag="Button:RightBumper">
                 <Border.Transitions>

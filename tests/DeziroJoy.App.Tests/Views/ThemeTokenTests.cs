@@ -25,7 +25,7 @@ public sealed class ThemeTokenTests
         "AccentPressedBrush", "ConnectedBrush", "IdleDotBrush", "DangerBrush",
         "PadBodyBrush", "StickPadBrush", "StickPadStrokeBrush", "StickRingBrush",
         "StickThumbBrush", "DpadCenterBrush", "PadIdleBrush", "PadPressedBrush",
-        "PadWellBrush", "PadCapBrush", "PadGripBrush", "PadBodyStrokeBrush",
+        "PadWellBrush", "PadCapBrush", "PadBodyStrokeBrush",
     ];
 
     private static Color ColorOf(object? resource)
@@ -91,13 +91,12 @@ public sealed class ThemeTokenTests
             ["StickPadBrush"] = Color.FromRgb(0x33, 0x33, 0x33),
             ["StickPadStrokeBrush"] = Color.FromRgb(0x3F, 0x3F, 0x3F),
             ["StickRingBrush"] = Color.FromRgb(0x4A, 0x4A, 0x4A),
-            ["StickThumbBrush"] = Color.FromRgb(0xD8, 0xD8, 0xD8),
+            ["StickThumbBrush"] = Color.FromRgb(0x8F, 0x8F, 0x8F),
             ["DpadCenterBrush"] = Color.FromRgb(0x38, 0x38, 0x38),
             ["PadIdleBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
             ["PadPressedBrush"] = Color.FromRgb(0x4C, 0xC2, 0xFF),
             ["PadWellBrush"] = Color.FromRgb(0x1C, 0x1C, 0x1C),
             ["PadCapBrush"] = Color.FromRgb(0x44, 0x44, 0x44),
-            ["PadGripBrush"] = Color.FromRgb(0x24, 0x24, 0x24),
             ["PadBodyStrokeBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
         };
 
@@ -156,7 +155,6 @@ public sealed class ThemeTokenTests
             ["PadPressedBrush"] = Color.FromRgb(0x0A, 0x6F, 0xBF),
             ["PadWellBrush"] = Color.FromRgb(0xD8, 0xDE, 0xE4),
             ["PadCapBrush"] = Color.FromRgb(0xF2, 0xF5, 0xF7),
-            ["PadGripBrush"] = Color.FromRgb(0xEE, 0xF1, 0xF4),
             ["PadBodyStrokeBrush"] = Color.FromRgb(0xC3, 0xCB, 0xD3),
         };
 
@@ -191,7 +189,6 @@ public sealed class ThemeTokenTests
         var ladder = new[]
         {
             "PadWellBrush",
-            "PadGripBrush",
             "PadBodyBrush",
             "PadIdleBrush",
             "PadCapBrush",
