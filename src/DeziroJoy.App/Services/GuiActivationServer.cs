@@ -151,16 +151,29 @@ public sealed class GuiActivationServer : IDisposable
     private readonly GuiInstanceIdentity _identity;
     private readonly GuiActivationOptions _options;
     private readonly CancellationTokenSource _lifetime = new();
-    private readonly Task _acceptLoop;
+    private readonly object _serveGate = new();
+    private Task? _acceptLoop;
     private bool _disposed;
 
     public GuiActivationServer(GuiInstanceIdentity identity, GuiActivationOptions? options = null)
+        : this(identity, options, autoStart: true)
+    {
+    }
+
+    private GuiActivationServer(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions? options,
+        bool autoStart)
     {
         ArgumentNullException.ThrowIfNull(identity);
 
         _identity = identity;
         _options = options ?? GuiActivationOptions.Default;
-        _acceptLoop = Task.Run(AcceptLoopAsync, CancellationToken.None);
+
+        if (autoStart)
+        {
+            BeginServing();
+        }
     }
 
     /// <summary>
@@ -178,9 +191,27 @@ public sealed class GuiActivationServer : IDisposable
 
     internal static GuiActivationServer StartActive(GuiInstanceIdentity identity)
     {
-        var server = new GuiActivationServer(identity);
+        var server = new GuiActivationServer(identity, null, autoStart: false);
         ActiveInstance = server;
         return server;
+    }
+
+    /// <summary>
+    /// Starts accepting activation connections. Called once the GUI can actually answer a Show
+    /// request, so a launch arriving while the runtime and window are still being built waits
+    /// for the live listener instead of being refused.
+    /// </summary>
+    public void BeginServing()
+    {
+        lock (_serveGate)
+        {
+            if (_disposed || _acceptLoop is not null)
+            {
+                return;
+            }
+
+            _acceptLoop = Task.Run(AcceptLoopAsync, CancellationToken.None);
+        }
     }
 
     public void Dispose()
@@ -199,13 +230,16 @@ public sealed class GuiActivationServer : IDisposable
 
         _lifetime.Cancel();
 
-        try
+        if (_acceptLoop is { } acceptLoop)
         {
-            _acceptLoop.Wait(TimeSpan.FromSeconds(2));
-        }
-        catch (Exception exception) when (exception is AggregateException or OperationCanceledException)
-        {
-            // The loop is best-effort; a wedged accept must not block process exit.
+            try
+            {
+                acceptLoop.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception exception) when (exception is AggregateException or OperationCanceledException)
+            {
+                // The loop is best-effort; a wedged accept must not block process exit.
+            }
         }
 
         _lifetime.Dispose();

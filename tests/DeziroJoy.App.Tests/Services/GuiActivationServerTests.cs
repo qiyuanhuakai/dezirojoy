@@ -87,6 +87,31 @@ public sealed class GuiActivationServerTests
     }
 
     [Fact]
+    public async Task The_Activation_Channel_Does_Not_Answer_Before_The_Window_Is_Ready()
+    {
+        var identity = NewIdentity();
+
+        using var server = GuiActivationServer.StartActive(identity);
+
+        await using var early = new NamedPipeClientStream(
+            ".",
+            identity.PipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+            await early.ConnectAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken));
+
+        server.ShowRequested += () => Task.CompletedTask;
+        server.BeginServing();
+
+        await using var ready = await ConnectAsync(identity);
+        var ack = await RoundTripAsync(ready, new GuiShowRequest(GuiActivationContract.ProtocolVersion));
+
+        Assert.True(ack.Accepted, $"the show was refused after the GUI became ready: {ack.Reason}");
+    }
+
+    [Fact]
     public async Task A_Show_Request_With_No_Window_To_Restore_Is_Refused_Not_Hung()
     {
         var identity = NewIdentity();

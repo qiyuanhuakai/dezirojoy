@@ -62,6 +62,8 @@ public partial class App : Application
             {
                 activation.ShowRequested += ()
                     => Dispatcher.UIThread.InvokeAsync(tray.ShowMainWindow).GetTask();
+
+                activation.BeginServing();
             }
 
             tray.Install();
