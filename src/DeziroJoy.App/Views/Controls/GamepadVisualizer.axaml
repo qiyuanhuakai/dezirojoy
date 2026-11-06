@@ -23,8 +23,8 @@
         concave underside, the shoulders are continuous with the body, LB/RB sit on the
         shoulder line with LT/RT emerging from behind them, the left stick is high and
         outboard while the right stick is low and inboard, ABXY is an equal diamond, the
-        D-pad is a cross inside a circular tray, and the centre cluster is a large Guide
-        flanked by smaller View and Menu buttons.
+        D-pad is a cross sitting directly on the shell with no tray, and the centre cluster
+        is a round Guide with an accent ring flanked by slim View and Menu capsules.
 
         Rounded bars (triggers, bumpers, dpad arms) are Borders rather than Rectangles:
         Avalonia does not hit-test a Rectangle that has RadiusX/RadiusY set, so a rounded
@@ -180,8 +180,8 @@
 
             <!--
                 The left stick: high and outboard, in a recessed well. The well is the
-                darker step of the dark-theme ladder, the ring marks the cap's travel, and
-                the thumb rides the sampled axes.
+                deeper step below the off-white shell, the orange ring marks the cap's
+                travel, and the thumb rides the sampled axes.
             -->
             <Ellipse x:Name="LeftStickWell" Canvas.Left="80" Canvas.Top="112" Width="100" Height="100"
                      Fill="{DynamicResource PadWellBrush}" Stroke="{DynamicResource StickPadStrokeBrush}"
@@ -198,9 +198,9 @@
                 </Ellipse.Transitions>
             </Ellipse>
             <Ellipse x:Name="LeftStickRing" Canvas.Left="100" Canvas.Top="132" Width="60" Height="60"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
+                     Stroke="{DynamicResource StickAccentRingBrush}" StrokeThickness="6" IsHitTestVisible="False" />
             <Ellipse x:Name="LeftStickThumb" Canvas.Left="107" Canvas.Top="139" Width="46" Height="46"
-                     Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
+                     Fill="{DynamicResource PadCapBrush}" IsHitTestVisible="False" />
             <Border x:Name="LeftStickClickHit" Canvas.Left="121" Canvas.Top="222" Width="18" Height="18"
                     Background="Transparent" Tag="Button:LeftStick" />
             <Ellipse x:Name="LeftStickClick" Classes="padHit" Canvas.Left="121" Canvas.Top="222" Width="18" Height="18"
@@ -232,9 +232,9 @@
                 </Ellipse.Transitions>
             </Ellipse>
             <Ellipse x:Name="RightStickRing" Canvas.Left="460" Canvas.Top="196" Width="60" Height="60"
-                     Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1" StrokeDashArray="2,2" IsHitTestVisible="False" />
+                     Stroke="{DynamicResource StickAccentRingBrush}" StrokeThickness="6" IsHitTestVisible="False" />
             <Ellipse x:Name="RightStickThumb" Canvas.Left="467" Canvas.Top="203" Width="46" Height="46"
-                     Fill="{DynamicResource StickThumbBrush}" IsHitTestVisible="False" />
+                     Fill="{DynamicResource PadCapBrush}" IsHitTestVisible="False" />
             <Border x:Name="RightStickClickHit" Canvas.Left="481" Canvas.Top="286" Width="18" Height="18"
                     Background="Transparent" Tag="Button:RightStick" />
             <Ellipse x:Name="RightStickClick" Classes="padHit" Canvas.Left="481" Canvas.Top="286" Width="18" Height="18"
@@ -248,13 +248,10 @@
             </Ellipse>
 
             <!--
-                The D-pad: a cross inside a circular tray. The tray is the recessed well the
-                cross sits in, so the four arms read as one raised cross rather than four
-                separate bars floating on the body.
+                The D-pad: a cross sitting DIRECTLY on the off-white shell with no circular
+                tray - the photo reference draws it flat on the body, so only the centre hub
+                survives as a true circle.
             -->
-            <Ellipse x:Name="DpadTray" Canvas.Left="196" Canvas.Top="198" Width="104" Height="104"
-                     Fill="{DynamicResource PadWellBrush}" Stroke="{DynamicResource StickPadStrokeBrush}"
-                     StrokeThickness="1" IsHitTestVisible="False" />
             <Border x:Name="DpadUp" Classes="padHit" Canvas.Left="234" Canvas.Top="204" Width="28" Height="46"
                     CornerRadius="4" Background="{Binding IsDPadUpPressed, Converter={StaticResource PadBrush}}"
                     PointerPressed="OnElementPressed" Tag="Button:DPadUp" ToolTip.Tip="十字键 上">
@@ -359,22 +356,28 @@
             </Canvas>
 
             <!--
-                The centre cluster is hierarchical: a large Guide flanked by the smaller View
-                and Menu buttons on the shared centre line, rather than three equal dots.
+                The centre cluster is hierarchical: a round Guide ringed in the app accent,
+                flanked by the slim View and Menu capsules on the shared centre line, rather
+                than three equal dots.
             -->
             <Border x:Name="BackButtonHit" Canvas.Left="252" Canvas.Top="96" Width="18" Height="18"
                     Background="Transparent" Tag="Button:Back" />
-            <Ellipse x:Name="BackButton" Classes="padHit" Canvas.Left="252" Canvas.Top="96" Width="18" Height="18"
-                     Fill="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
-                     ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back">
-                <Ellipse.Transitions>
+            <Border x:Name="BackButton" Classes="padHit" Canvas.Left="252" Canvas.Top="98" Width="34" Height="14"
+                    CornerRadius="7" Background="{DynamicResource PadIdleBrush}"
+                    ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back">
+                <Border.Transitions>
                     <Transitions>
-                        <BrushTransition Property="Stroke" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                        <BrushTransition Property="BorderBrush" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
                     </Transitions>
-                </Ellipse.Transitions>
-            </Ellipse>
+                </Border.Transitions>
+            </Border>
             <Border x:Name="GuideButtonHit" Canvas.Left="278" Canvas.Top="90" Width="30" Height="30"
                     Background="Transparent" Tag="Button:Guide" />
+            <!-- The Guide's accent ring: declared before the Guide so it draws behind it, and
+                 hit-test invisible so it can never eat a click meant for the button. -->
+            <Ellipse x:Name="GuideRing" Canvas.Left="275" Canvas.Top="87" Width="36" Height="36"
+                     Fill="Transparent" Stroke="{DynamicResource AccentBrush}" StrokeThickness="3"
+                     IsHitTestVisible="False" />
             <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="278" Canvas.Top="90" Width="30" Height="30"
                      Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}"
                      ToolTip.Tip="主页键 Guide" PointerPressed="OnElementPressed" Tag="Button:Guide">
@@ -386,15 +389,15 @@
             </Ellipse>
             <Border x:Name="StartButtonHit" Canvas.Left="316" Canvas.Top="96" Width="18" Height="18"
                     Background="Transparent" Tag="Button:Start" />
-            <Ellipse x:Name="StartButton" Classes="padHit" Canvas.Left="316" Canvas.Top="96" Width="18" Height="18"
-                     Fill="{Binding IsStartPressed, Converter={StaticResource PadBrush}}"
-                     ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start">
-                <Ellipse.Transitions>
+            <Border x:Name="StartButton" Classes="padHit" Canvas.Left="316" Canvas.Top="98" Width="34" Height="14"
+                    CornerRadius="7" Background="{DynamicResource PadIdleBrush}"
+                    ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start">
+                <Border.Transitions>
                     <Transitions>
-                        <BrushTransition Property="Stroke" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                        <BrushTransition Property="BorderBrush" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
                     </Transitions>
-                </Ellipse.Transitions>
-            </Ellipse>
+                </Border.Transitions>
+            </Border>
 
             <!-- Unmapped evdev codes, drawn as pills under the pad body. -->
             <ItemsControl x:Name="ExtraButtonsHost" Canvas.Left="60" Canvas.Top="352" Width="500"

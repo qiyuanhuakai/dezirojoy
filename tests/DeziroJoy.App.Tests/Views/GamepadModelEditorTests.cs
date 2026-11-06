@@ -532,7 +532,7 @@ public sealed class GamepadModelEditorTests
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
 
-        var back = Model(window).FindControl<Shape>("BackButton")!;
+        var back = Model(window).FindControl<Border>("BackButton")!;
 
         // The model outline follows the selected mapping ROW, not the selected source: the
         // default profile leaves Back unmapped, so selecting it outlines nothing.
@@ -541,7 +541,7 @@ public sealed class GamepadModelEditorTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.Null(viewModel.SelectedMapping);
-        Assert.Equal(1d, back.StrokeThickness);
+        Assert.Equal(new Thickness(1), back.BorderThickness);
     }
 
     [AvaloniaFact]

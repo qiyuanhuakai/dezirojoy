@@ -165,6 +165,7 @@ public sealed class MappingSurfaceTests
         var highlighted = visualizer
             .GetVisualDescendants()
             .OfType<Shape>()
+            .Where(shape => shape.IsHitTestVisible)
             .Count(shape => shape.Stroke is ISolidColorBrush solid && solid.Color == accent);
 
         Assert.Equal(1, highlighted);
