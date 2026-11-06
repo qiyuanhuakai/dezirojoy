@@ -445,7 +445,7 @@ public partial class MainWindow : Window
     /// </summary>
     internal void UpdatePreviewLiveness()
     {
-        var live = ViewModel.Host.IsRunning && ViewModel.HasController;
+        var live = ViewModel.IsEngineRunning && ViewModel.HasController;
 
         ViewModel.MouseSensitivity.IsLive = live;
         ViewModel.ScrollSensitivity.IsLive = live;

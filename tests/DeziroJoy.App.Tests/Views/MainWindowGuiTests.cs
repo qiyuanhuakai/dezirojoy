@@ -55,6 +55,29 @@ public sealed class MainWindowGuiTests
         return (window, viewModel, host, provider);
     }
 
+    [AvaloniaFact]
+    public void Preview_Sweeps_While_The_Engine_Runs_Without_The_Local_Host()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Assert.True(viewModel.HasController);
+        Assert.False(host.IsRunning);
+
+        viewModel.IsEngineRunning = true;
+        window.UpdatePreviewLiveness();
+        Assert.True(
+            viewModel.MouseSensitivity.IsLive,
+            "the engine running in the daemon must keep the mouse preview sweeping");
+        Assert.True(viewModel.ScrollSensitivity.IsLive);
+
+        viewModel.IsEngineRunning = false;
+        window.UpdatePreviewLiveness();
+        Assert.False(viewModel.MouseSensitivity.IsLive, "stopping the engine must rest the preview");
+        Assert.False(viewModel.ScrollSensitivity.IsLive);
+    }
+
     private static Color ColorOf(IBrush? brush)
         => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
 
