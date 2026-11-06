@@ -353,6 +353,51 @@ public sealed class GamepadVisualizerTests
     }
 
     [AvaloniaFact]
+    public void The_Underside_Sweeps_Down_Into_A_Concave_Waist_Between_The_Grips()
+    {
+        var shell = Flatten(ShellOutline());
+
+        // The underside must keep descending from the waist centre out to each grip: a
+        // silhouette whose lower edge runs flat across the middle reads as a blob, not a pad.
+        var centre = BottomEdgeAt(shell, 270);
+        var mid = BottomEdgeAt(shell, 424);
+        var grip = BottomEdgeAt(shell, 500);
+
+        Assert.True(mid > centre + 6.0,
+            $"the underside at x=424 ({mid:0.#}) must sit well below the waist centre ({centre:0.#})");
+        Assert.True(grip > mid,
+            $"the grip bottom ({grip:0.#}) must sit below the underside ({mid:0.#})");
+        Assert.True(grip - centre >= 24.0,
+            $"the waist must rise at least 24px above the grip bottoms, was {grip - centre:0.#}");
+    }
+
+    [AvaloniaFact]
+    public void The_Shoulder_Top_Reaches_Out_Over_The_Bumper_Capsules()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var shell = Flatten(ShellOutline());
+        var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
+        var bumper = control.FindControl<Border>("LeftBumper")!;
+
+        // The capsule's outer end in the shell's own space.
+        var outer = new Point(
+            bumper.Bounds.Left - body.Bounds.Left + 8,
+            bumper.Bounds.Bottom - body.Bounds.Top);
+
+        // The body's top edge at the capsule's outer end must sit at or above the capsule's
+        // own bottom: a shoulder that stops short leaves the capsule's outer end hanging.
+        var top = TopEdgeAt(shell, outer.X);
+        Assert.True(top <= outer.Y,
+            $"the shoulder top at x={outer.X:0.#} is y={top:0.#}, but the capsule's bottom is y={outer.Y:0.#} - the outer end hangs");
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
     public void The_Silhouette_Is_One_Continuous_Curved_Path()
     {
         var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
@@ -613,6 +658,33 @@ public sealed class GamepadVisualizerTests
         }
 
         return inside;
+    }
+
+    private static double BottomEdgeAt(List<Point> shell, double x)
+    {
+        var bottom = 0.0;
+        for (var y = 0.0; y <= 320.0; y += 0.5)
+        {
+            if (Contains(shell, new Point(x, y)))
+            {
+                bottom = y;
+            }
+        }
+
+        return bottom;
+    }
+
+    private static double TopEdgeAt(List<Point> shell, double x)
+    {
+        for (var y = 0.0; y <= 320.0; y += 0.5)
+        {
+            if (Contains(shell, new Point(x, y)))
+            {
+                return y;
+            }
+        }
+
+        return 320.0;
     }
 
     // ---- Repeated click hit-testing ----------------------------------------
