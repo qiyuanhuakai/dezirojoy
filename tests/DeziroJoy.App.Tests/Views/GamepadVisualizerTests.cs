@@ -73,6 +73,24 @@ public sealed class GamepadVisualizerTests
         provider.SetState(DeviceId, GamepadState.Create(buttons, 0f, 0f, 0f, 0f));
     }
 
+    [AvaloniaFact]
+    public void The_Physical_Back_And_Menu_Press_Still_Lights_The_Capsules_Up()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider, GamepadButtonMask.Back | GamepadButtonMask.Start);
+        SampleHelper.Sample(viewModel, host);
+
+        var back = Model(window).FindControl<Border>("BackButton")!;
+        var menu = Model(window).FindControl<Border>("StartButton")!;
+
+        var variant = back.ActualThemeVariant;
+        AssertColor(Token(variant, "PadPressedBrush"), ColorOf(back.Background),
+            "the Back capsule must show the pressed token while the controller holds it");
+        AssertColor(Token(variant, "PadPressedBrush"), ColorOf(menu.Background),
+            "the Menu capsule must show the pressed token while the controller holds it");
+    }
+
     private static GamepadVisualizer Model(Window window)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
 

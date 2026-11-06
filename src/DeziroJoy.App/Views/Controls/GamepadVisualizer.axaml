@@ -363,7 +363,7 @@
             <Border x:Name="BackButtonHit" Canvas.Left="252" Canvas.Top="96" Width="18" Height="18"
                     Background="Transparent" Tag="Button:Back" />
             <Border x:Name="BackButton" Classes="padHit" Canvas.Left="252" Canvas.Top="98" Width="34" Height="14"
-                    CornerRadius="7" Background="{DynamicResource PadIdleBrush}"
+                    CornerRadius="7" Background="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back">
                 <Border.Transitions>
                     <Transitions>
@@ -390,7 +390,7 @@
             <Border x:Name="StartButtonHit" Canvas.Left="316" Canvas.Top="96" Width="18" Height="18"
                     Background="Transparent" Tag="Button:Start" />
             <Border x:Name="StartButton" Classes="padHit" Canvas.Left="316" Canvas.Top="98" Width="34" Height="14"
-                    CornerRadius="7" Background="{DynamicResource PadIdleBrush}"
+                    CornerRadius="7" Background="{Binding IsStartPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start">
                 <Border.Transitions>
                     <Transitions>
