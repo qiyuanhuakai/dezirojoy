@@ -60,6 +60,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly bool _daemonRequired;
 
+    private readonly ThemeService? _settings;
+
     private readonly SynchronizationContext? _uiContext;
 
     private readonly CancellationTokenSource _lifetime = new();
@@ -96,11 +98,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IProfileStore profileStore,
         IElevationService? elevationService = null,
         DaemonController? daemon = null,
-        bool daemonRequired = false)
+        bool daemonRequired = false,
+        ThemeService? settings = null)
     {
         _host = host;
         _daemon = daemon;
         _daemonRequired = daemonRequired || daemon is not null;
+        _settings = settings;
         _uiContext = SynchronizationContext.Current;
         _profileStore = profileStore;
         _elevationService = elevationService ?? new ElevationService();
@@ -216,6 +220,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// draft is still open on the mapping tab.
     /// </summary>
     public void SetPhysicalInputScope(bool inScope) => IsPhysicalInputInScope = inScope;
+
+    /// <summary>
+    /// Whether gamepad presses may drive the UI at all. The setting lives in the persisted
+    /// app preferences and defaults to on, so a view model built without them behaves as
+    /// before.
+    /// </summary>
+    public bool GamepadNavigationEnabled
+    {
+        get => _settings?.GamepadNavigationEnabled ?? true;
+        set => SetGamepadNavigationEnabled(value);
+    }
+
+    /// <summary>Turns gamepad-driven navigation off or on and persists the choice.</summary>
+    public void SetGamepadNavigationEnabled(bool enabled) => _settings?.SetGamepadNavigation(enabled);
 
     partial void OnIsPhysicalInputInScopeChanged(bool value)
     {
@@ -869,7 +887,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private void Navigate(IGamepadState state)
     {
-        if (!IsPhysicalInputInScope)
+        // With the setting off the pad stops driving the UI entirely: it still highlights the
+        // model and still feeds the mapping editor, but it never navigates and never opens
+        // the editor on its own.
+        if (!IsPhysicalInputInScope || !GamepadNavigationEnabled)
         {
             // Out of scope the pad belongs to the injector, not to this window: nothing is
             // selected and nothing is captured. The editor's capture baseline is still

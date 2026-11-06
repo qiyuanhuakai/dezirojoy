@@ -6,11 +6,10 @@ using Avalonia.Styling;
 namespace DeziroJoy.App.Services;
 
 /// <summary>
-/// Owns the light/dark preference. Reads the persisted choice, applies it to
-/// <see cref="Application.Current"/> at runtime, and writes it back on toggle.
-/// The preference lives in <c>settings.json</c> beside the profile store
-/// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux); a missing or
-/// corrupt file falls back to <see cref="ThemeVariant.Dark"/>.
+/// Owns the persisted app preferences in <c>settings.json</c> beside the profile store
+/// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
+/// choice and whether the gamepad may drive the UI. A missing or corrupt file
+/// falls back to the documented defaults rather than throwing.
 /// </summary>
 /// <remarks>
 /// The variant is applied from code rather than declared on the Application
@@ -28,6 +27,7 @@ public sealed class ThemeService
     };
 
     private readonly string _settingsPath;
+    private AppSettings _settings = new();
 
     public ThemeService(string? directory = null)
     {
@@ -48,46 +48,46 @@ public sealed class ThemeService
     /// <summary>Raised whenever the applied variant changes, so every entry point can resync.</summary>
     public event Action<ThemeVariant>? Changed;
 
+    /// <summary>Raised whenever the gamepad-navigation preference changes.</summary>
+    public event Action<bool>? GamepadNavigationChanged;
+
     public bool IsLight => Current == ThemeVariant.Light;
 
     /// <summary>
-    /// Reads the persisted preference. Any unreadable, malformed or unknown
-    /// value degrades to <see cref="ThemeVariant.Dark"/> rather than throwing.
+    /// Whether gamepad presses may drive the UI. Off means the pad only highlights the
+    /// model and feeds the mapping editor; it never navigates and never opens the editor.
+    /// </summary>
+    public bool GamepadNavigationEnabled => _settings.GamepadNavigationEnabled;
+
+    /// <summary>
+    /// Reads the persisted preferences. Any unreadable, malformed or unknown
+    /// value degrades to the documented default rather than throwing.
     /// </summary>
     public ThemeVariant Load()
     {
         try
         {
-            if (!File.Exists(_settingsPath))
+            if (File.Exists(_settingsPath))
             {
-                return ThemeVariant.Dark;
+                _settings = JsonSerializer.Deserialize<AppSettings>(
+                    File.ReadAllText(_settingsPath), SerializerOptions) ?? new AppSettings();
             }
-
-            var settings = JsonSerializer.Deserialize<AppSettings>(
-                File.ReadAllText(_settingsPath), SerializerOptions);
-
-            return settings?.Theme ?? ThemeVariant.Dark;
         }
         catch (JsonException)
         {
-            return ThemeVariant.Dark;
         }
         catch (IOException)
         {
-            return ThemeVariant.Dark;
         }
+
+        return _settings.Theme ?? ThemeVariant.Dark;
     }
 
-    /// <summary>
-    /// Writes the preference. A read-only or unwritable settings directory must
-    /// not take the app down, so IO failures are swallowed.
-    /// </summary>
-    public void Save(ThemeVariant variant)
+    private void Save()
     {
         try
         {
-            var json = JsonSerializer.Serialize(new AppSettings { Theme = variant }, SerializerOptions);
-            File.WriteAllText(_settingsPath, json);
+            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_settings, SerializerOptions));
         }
         catch (IOException)
         {
@@ -95,6 +95,29 @@ public sealed class ThemeService
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    /// <summary>
+    /// Writes the preferences. A read-only or unwritable settings directory must
+    /// not take the app down, so IO failures are swallowed.
+    /// </summary>
+    public void Save(ThemeVariant variant)
+    {
+        _settings = _settings with { Theme = variant };
+        Save();
+    }
+
+    /// <summary>Turns gamepad-driven navigation on or off and persists it.</summary>
+    public void SetGamepadNavigation(bool enabled)
+    {
+        if (_settings.GamepadNavigationEnabled == enabled)
+        {
+            return;
+        }
+
+        _settings = _settings with { GamepadNavigationEnabled = enabled };
+        Save();
+        GamepadNavigationChanged?.Invoke(enabled);
     }
 
     /// <summary>
@@ -132,9 +155,11 @@ public sealed class ThemeService
         Save(next);
     }
 
-    private sealed class AppSettings
+    private sealed record AppSettings
     {
         public ThemeVariant? Theme { get; init; }
+
+        public bool GamepadNavigationEnabled { get; init; } = true;
     }
 
     /// <summary>

@@ -20,13 +20,14 @@ public sealed class GamepadNavigationTests
 
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1.0 / 64.0);
 
-    private static (MainWindowViewModel Vm, EngineHost Host, FakeGamepadProvider Provider, RecordingOutputSink Sink) CreateHost()
+    private static (MainWindowViewModel Vm, EngineHost Host, FakeGamepadProvider Provider, RecordingOutputSink Sink) CreateHost(
+        ThemeService? settings = null)
     {
         var provider = new FakeGamepadProvider();
         var sink = new RecordingOutputSink();
         var store = new InMemoryProfileStore();
         var host = new EngineHost(provider, sink, store);
-        var vm = new MainWindowViewModel(host, store);
+        var vm = new MainWindowViewModel(host, store, settings: settings);
 
         return (vm, host, provider, sink);
     }
@@ -450,6 +451,42 @@ public sealed class GamepadNavigationTests
 
         Assert.Null(vm.SelectedSource);
         Assert.False(vm.IsEditing);
+    }
+
+    [Fact]
+    public void Gamepad_Navigation_Off_A_Press_Neither_Selects_Nor_Opens_The_Editor()
+    {
+        var settings = new ThemeService(Path.Combine(Path.GetTempPath(), "dezirojoy-nav-off", Guid.NewGuid().ToString("N")));
+        var (vm, host, provider, sink) = CreateHost(settings);
+        vm.SetGamepadNavigationEnabled(false);
+        Connect(provider);
+        Sample(vm, host);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+
+        Assert.Null(vm.SelectedSource);
+        Assert.False(vm.IsEditing);
+
+        // The switch is about the pad driving the UI, not about the mapping: the profile's
+        // own injection must keep firing.
+        Assert.NotEmpty(sink.Calls);
+    }
+
+    [Fact]
+    public void Gamepad_Navigation_Off_Still_Highlights_The_Pressed_Element()
+    {
+        var settings = new ThemeService(Path.Combine(Path.GetTempPath(), "dezirojoy-nav-highlight", Guid.NewGuid().ToString("N")));
+        var (vm, host, provider, _) = CreateHost(settings);
+        vm.SetGamepadNavigationEnabled(false);
+        Connect(provider);
+        Sample(vm, host);
+
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+
+        Assert.True(vm.Visualizer.IsBPressed);
+        Assert.True(vm.Visualizer.IsConnected);
     }
 
     [Fact]

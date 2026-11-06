@@ -69,6 +69,16 @@
 
                     <Border Classes="card">
                         <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="手柄输入" />
+                            <CheckBox x:Name="GamepadNavigationBox" Content="允许手柄按键操作界面" Margin="0,12,0,0"
+                                      IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}" />
+                            <TextBlock Classes="hint" Margin="0,6,0,0"
+                                       Text="关闭后手柄不再切换选中项、不再打开映射编辑器；已保存的映射注入不受影响。" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
                             <TextBlock Classes="cardTitle" Text="注入状态" />
                             <TextBlock Classes="fieldLabel" Margin="0,10,0,0"
                                        Text="{Binding InjectorDescription}" />

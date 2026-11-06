@@ -64,12 +64,42 @@ public sealed class SettingsPanelGuiTests : IDisposable
         var sink = new RecordingOutputSink();
         var store = new InMemoryProfileStore();
         var host = new EngineHost(provider, sink, store);
-        var viewModel = new MainWindowViewModel(host, store);
-        var window = new MainWindow(viewModel, host, new ThemeService(_directory));
+        var themes = new ThemeService(_directory);
+        var viewModel = new MainWindowViewModel(host, store, settings: themes);
+        var window = new MainWindow(viewModel, host, themes);
 
         window.Show();
 
         return (window, viewModel, host, provider);
+    }
+
+    [AvaloniaFact]
+    public void Turning_Gamepad_Hijack_Off_Persists_And_Gates_Navigation()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+        var toggle = window.FindControl<SettingsPanel>("SettingsPanelHost")!
+            .FindControl<CheckBox>("GamepadNavigationBox")!;
+
+        Assert.True(viewModel.GamepadNavigationEnabled);
+        Assert.True(toggle.IsChecked);
+
+        toggle.IsChecked = false;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.GamepadNavigationEnabled);
+
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.False(reloaded.GamepadNavigationEnabled);
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        provider.SetState(DeviceId, GamepadState.Create(GamepadButtonMask.B, 0f, 0f, 0f, 0f));
+        SampleHelper.Sample(viewModel, host);
+
+        Assert.Null(viewModel.SelectedSource);
+        Assert.False(viewModel.IsEditing);
     }
 
     private static void ConnectPad(FakeGamepadProvider provider)

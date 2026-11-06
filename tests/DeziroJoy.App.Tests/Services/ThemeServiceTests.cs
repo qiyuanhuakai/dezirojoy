@@ -97,6 +97,41 @@ public sealed class ThemeServiceTests : IDisposable
     }
 
     [Fact]
+    public void A_Missing_Settings_File_Leaves_Gamepad_Navigation_Enabled()
+    {
+        var service = Service(_directory);
+        service.Load();
+
+        Assert.True(service.GamepadNavigationEnabled);
+    }
+
+    [Fact]
+    public void Disabling_Gamepad_Navigation_Round_Trips_And_Keeps_The_Theme()
+    {
+        var service = Service(_directory);
+
+        service.Save(ThemeVariant.Light);
+        service.SetGamepadNavigation(false);
+
+        var reloaded = Service(_directory);
+        reloaded.Load();
+
+        Assert.False(reloaded.GamepadNavigationEnabled);
+        Assert.Equal(ThemeVariant.Light, reloaded.Load());
+    }
+
+    [Fact]
+    public void A_Corrupt_Settings_File_Leaves_Gamepad_Navigation_Enabled()
+    {
+        File.WriteAllText(Path.Combine(_directory, "settings.json"), "{ not json");
+
+        var service = Service(_directory);
+
+        Assert.Equal(ThemeVariant.Dark, service.Load());
+        Assert.True(service.GamepadNavigationEnabled);
+    }
+
+    [Fact]
     public void The_Default_Directory_Matches_The_Profile_Store_Convention()
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
