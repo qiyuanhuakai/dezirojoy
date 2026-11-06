@@ -1844,4 +1844,34 @@ public class MappingEditorViewModelTests
         Assert.False(editor.ClickRepeatEnabled);
         Assert.Equal(ButtonGesture.DefaultClickRepeatInterval, editor.ClickRepeatIntervalSeconds, precision: 5);
     }
+
+    [Fact]
+    public void Loading_A_MouseMove_Mapping_Notifies_ActivePrecisionButton_And_The_Switcher_Refreshes_It()
+    {
+        var entry = new MappingEntry
+        {
+            Source = new StickBinding(GamepadStick.Left),
+            Target = new MouseMoveTarget(
+                new MouseStickSettings { PrecisionButton = GamepadButton.RightStick }),
+        };
+
+        var editor = new MappingEditorViewModel();
+        var notified = new List<string>();
+        editor.PropertyChanged += (_, e) => notified.Add(e.PropertyName!);
+
+        editor.LoadFrom(entry);
+
+        Assert.Equal(GamepadButton.RightStick, editor.ActivePrecisionButton);
+        Assert.Contains(nameof(MappingEditorViewModel.ActivePrecisionButton), notified);
+
+        notified.Clear();
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+
+        Assert.Contains(nameof(MappingEditorViewModel.ActivePrecisionButton), notified);
+
+        notified.Clear();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+
+        Assert.Contains(nameof(MappingEditorViewModel.ActivePrecisionButton), notified);
+    }
 }

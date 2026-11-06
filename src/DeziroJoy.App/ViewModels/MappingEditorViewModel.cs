@@ -1255,6 +1255,7 @@ public partial class MappingEditorViewModel : ObservableObject
                 break;
             case nameof(GestureSlotEditor.MouseSettings):
                 OnPropertyChanged(nameof(MouseSettings));
+                OnPropertyChanged(nameof(ActivePrecisionButton));
                 break;
             case nameof(GestureSlotEditor.ScrollSettings):
                 OnPropertyChanged(nameof(ScrollSettings));
@@ -1319,6 +1320,7 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveModifierWin));
         OnPropertyChanged(nameof(ActiveSelectedMouseButton));
         OnPropertyChanged(nameof(ActiveMouseSettings));
+        OnPropertyChanged(nameof(ActivePrecisionButton));
         OnPropertyChanged(nameof(ActiveScrollSettings));
         OnPropertyChanged(nameof(ActiveIsNone));
         OnPropertyChanged(nameof(ActiveRepeatsClick));
