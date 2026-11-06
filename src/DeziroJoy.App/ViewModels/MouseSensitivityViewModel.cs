@@ -76,16 +76,11 @@ public partial class MouseSensitivityViewModel : ObservableObject
     private GamepadButton _precisionButton = GamepadButton.LeftStick;
 
     /// <summary>
-    /// The precision key as the selector shows it. An alias over <see cref="PrecisionButton"/>:
-    /// the settings round-trip stays in one place, and the picker binds a selection-shaped
-    /// name. Assigning it changes what <see cref="BuildSettings"/> produces, and a load or
-    /// reset moves the selection with it.
+    /// The precision key as the panel reports it. The key is chosen on the mapping surface
+    /// because it belongs to the mapping, so this is a read-only label over
+    /// <see cref="PrecisionButton"/> rather than a selection the panel can change.
     /// </summary>
-    public GamepadButton SelectedPrecisionButton
-    {
-        get => PrecisionButton;
-        set => PrecisionButton = value;
-    }
+    public string PrecisionButtonLabel => MappingDescriptions.Button(PrecisionButton);
 
     [ObservableProperty]
     private double _previewX = PreviewCenter;
@@ -143,7 +138,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
     public string InvertYHint { get; } = MappingDescriptions.MouseInvertY();
 
     public string PrecisionButtonHint { get; } =
-        "用于临时降速的按键，默认左摇杆按下。每个映射独立保存，改这里只影响当前编辑的映射。";
+        "精准按键在映射界面为每个映射单独设置；这里只显示当前鼠标映射使用哪一个。";
 
     /// <summary>
     /// Every button the precision key can be bound to. <see cref="GamepadButton.Extra"/> is
@@ -187,7 +182,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
     partial void OnInvertYChanged(bool value) => ApplySettings();
 
     partial void OnPrecisionButtonChanged(GamepadButton value)
-        => OnPropertyChanged(nameof(SelectedPrecisionButton));
+        => OnPropertyChanged(nameof(PrecisionButtonLabel));
 
     public MouseStickSettings BuildSettings() => new()
     {

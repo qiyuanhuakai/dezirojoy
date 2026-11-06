@@ -393,36 +393,45 @@ public sealed class MappingSurfaceTests
         Assert.Equal((CornerRadius)buttonToken!, primary.CornerRadius);
     }
 
-    // ---- Precision key selector --------------------------------------------
+    // ---- Precision key lives on the mapping surface -------------------------
 
     [AvaloniaFact]
-    public void The_Precision_Key_Selector_Changes_The_Setting_It_Produces()
+    public void The_Mapping_Editor_Owns_The_Precision_Key()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Click(ModelElement(window, "LeftStickPad"), window);
+        Assert.True(viewModel.Editor.SourceIsStick);
+
+        var editor = EditorPanelOf(window);
+        editor.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.MouseMove;
+
+        var combo = editor.FindControl<ComboBox>("EditorPrecisionButtonCombo")!;
+        Assert.Same(viewModel.Editor.PrecisionButtonOptions, combo.ItemsSource);
+
+        combo.SelectedItem = GamepadButton.RightBumper;
+
+        Assert.Equal(GamepadButton.RightBumper, viewModel.Editor.ActiveMouseSettings.PrecisionButton);
+    }
+
+    [AvaloniaFact]
+    public void The_Mouse_Panel_Only_Reports_The_Precision_Key()
     {
         var (window, viewModel, _, _) = BuildWindow();
 
         var mousePanel = MouseSensitivityPanelOf(window);
-        var combo = mousePanel.FindControl<ComboBox>("PrecisionButtonCombo")!;
-        var hint = mousePanel.FindControl<TextBlock>("PrecisionButtonHint")!;
+        Assert.Null(mousePanel.FindControl<ComboBox>("PrecisionButtonCombo"));
 
-        // The selector offers exactly the buttons the engine can read a precision state
-        // from, starts on the key the settings carry, and reuses the panel's own copy.
-        Assert.Same(viewModel.MouseSensitivity.PrecisionButtonOptions, combo.ItemsSource);
-        Assert.Equal(GamepadButton.LeftStick, combo.SelectedItem);
-        Assert.Equal(viewModel.MouseSensitivity.PrecisionButtonHint, hint.Text);
+        var report = mousePanel.FindControl<TextBlock>("PrecisionButtonReport")!;
+        Assert.Equal(MappingDescriptions.Button(GamepadButton.LeftStick), report.Text);
 
-        combo.SelectedItem = GamepadButton.RightBumper;
-
-        Assert.Equal(GamepadButton.RightBumper, viewModel.MouseSensitivity.SelectedPrecisionButton);
-        Assert.Equal(GamepadButton.RightBumper, viewModel.MouseSensitivity.BuildSettings().PrecisionButton);
-
-        // And back the other way: a profile loaded into the panel must show up in the
-        // selector, or the user cannot see which key a saved mapping actually uses.
-        viewModel.MouseSensitivity.LoadFrom(
-            new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
+        viewModel.MouseSensitivity.LoadFrom(new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(GamepadButton.LeftTrigger, combo.SelectedItem);
+        Assert.Equal(MappingDescriptions.Button(GamepadButton.LeftTrigger), report.Text);
     }
 
     // ---- Key picker: headers are sections, options are key caps -------------

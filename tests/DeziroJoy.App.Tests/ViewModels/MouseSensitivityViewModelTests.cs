@@ -82,51 +82,38 @@ public class MouseSensitivityViewModelTests
     }
 
     [Fact]
-    public void Selecting_A_Precision_Button_Changes_What_BuildSettings_Produces()
-    {
-        var vm = new MouseSensitivityViewModel();
-
-        vm.SelectedPrecisionButton = GamepadButton.RightBumper;
-
-        Assert.Equal(GamepadButton.RightBumper, vm.BuildSettings().PrecisionButton);
-    }
-
-    [Fact]
-    public void LoadFrom_Restores_The_Selected_Precision_Button()
+    public void LoadFrom_Restores_The_Reported_Precision_Button()
     {
         var vm = new MouseSensitivityViewModel();
 
         vm.LoadFrom(new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
 
-        Assert.Equal(GamepadButton.LeftTrigger, vm.SelectedPrecisionButton);
+        Assert.Equal(GamepadButton.LeftTrigger, vm.PrecisionButton);
+        Assert.Equal(MappingDescriptions.Button(GamepadButton.LeftTrigger), vm.PrecisionButtonLabel);
     }
 
     [Fact]
-    public void Reset_Restores_The_Default_Selected_Precision_Button()
+    public void Reset_Restores_The_Default_Reported_Precision_Button()
     {
-        var vm = new MouseSensitivityViewModel { SelectedPrecisionButton = GamepadButton.RightBumper };
+        var vm = new MouseSensitivityViewModel { PrecisionButton = GamepadButton.RightBumper };
 
         vm.Reset();
 
-        Assert.Equal(GamepadButton.LeftStick, vm.SelectedPrecisionButton);
+        Assert.Equal(GamepadButton.LeftStick, vm.PrecisionButton);
+        Assert.Equal(MappingDescriptions.Button(GamepadButton.LeftStick), vm.PrecisionButtonLabel);
     }
 
     [Fact]
-    public void The_Selected_Precision_Button_Notifies_In_Both_Directions()
+    public void The_Reported_Precision_Button_Notifies_When_The_Loaded_Key_Changes()
     {
         var vm = new MouseSensitivityViewModel();
         var notified = new List<string>();
         vm.PropertyChanged += (_, e) => notified.Add(e.PropertyName!);
 
-        vm.SelectedPrecisionButton = GamepadButton.RightBumper;
+        vm.LoadFrom(new MouseStickSettings { PrecisionButton = GamepadButton.LeftTrigger });
 
-        Assert.Contains(nameof(MouseSensitivityViewModel.SelectedPrecisionButton), notified);
-
-        notified.Clear();
-        vm.PrecisionButton = GamepadButton.LeftTrigger;
-
-        Assert.Contains(nameof(MouseSensitivityViewModel.SelectedPrecisionButton), notified);
-        Assert.Equal(GamepadButton.LeftTrigger, vm.SelectedPrecisionButton);
+        Assert.Contains(nameof(MouseSensitivityViewModel.PrecisionButtonLabel), notified);
+        Assert.Contains(nameof(MouseSensitivityViewModel.PrecisionButton), notified);
     }
 
     [Fact]

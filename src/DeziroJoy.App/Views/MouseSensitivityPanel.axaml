@@ -156,9 +156,10 @@
                         <ColumnDefinition Width="90" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准按键" VerticalAlignment="Center" Margin="0" />
-                    <ComboBox Grid.Column="1" x:Name="PrecisionButtonCombo" Classes="enumCombo" HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding PrecisionButtonOptions}"
-                              SelectedItem="{Binding SelectedPrecisionButton, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="1" x:Name="PrecisionButtonReport" Classes="readout" VerticalAlignment="Center"
+                               Text="{Binding PrecisionButtonLabel}" />
+                    <TextBlock Grid.Column="2" Classes="hint" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="映射界面设置" />
                 </Grid>
                 <TextBlock x:Name="PrecisionButtonHint" Classes="hint" Margin="150,0,0,14"
                            Text="{Binding PrecisionButtonHint}" />

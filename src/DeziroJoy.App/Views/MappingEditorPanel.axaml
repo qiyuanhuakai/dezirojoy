@@ -366,6 +366,19 @@
                         <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                    Text="{Binding ActiveMouseSettings.ResponseTime, StringFormat='{}{0:F2}'}" />
                     </Grid>
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="90" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准按键" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="EditorPrecisionButtonCombo" Classes="enumCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding PrecisionButtonOptions}"
+                                  SelectedItem="{Binding ActivePrecisionButton, Mode=TwoWay}" />
+                    </Grid>
+                    <TextBlock Classes="hint" Margin="150,4,0,0"
+                               Text="按住该键时鼠标按精准倍率降速；每个映射独立保存。" />
                 </StackPanel>
 
                 <StackPanel x:Name="WheelRow" IsEnabled="{Binding ActiveTargetEditable}"

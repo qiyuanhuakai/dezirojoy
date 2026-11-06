@@ -206,6 +206,24 @@ public partial class MappingEditorViewModel : ObservableObject
         set => ActiveSlot.MouseSettings = value;
     }
 
+    /// <summary>
+    /// The precision key of the active slot's mouse mapping. The key belongs to the mapping,
+    /// so it is chosen here rather than on the sensitivity panel, which only reports it.
+    /// </summary>
+    public GamepadButton ActivePrecisionButton
+    {
+        get => ActiveSlot.MouseSettings.PrecisionButton;
+        set
+        {
+            ActiveSlot.MouseSettings = ActiveSlot.MouseSettings with { PrecisionButton = value };
+            NotifyActiveSlotChanged();
+        }
+    }
+
+    /// <summary>Every button the precision key can be bound to.</summary>
+    public IReadOnlyList<GamepadButton> PrecisionButtonOptions { get; } =
+        Enum.GetValues<GamepadButton>().Where(button => button != GamepadButton.Extra).ToArray();
+
     /// <summary>The active slot's stick-to-wheel settings.</summary>
     public ScrollStickSettings ActiveScrollSettings
     {
