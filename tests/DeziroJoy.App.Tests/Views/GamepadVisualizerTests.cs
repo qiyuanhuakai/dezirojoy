@@ -1,3 +1,4 @@
+using System.IO;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Controls;
@@ -408,6 +409,164 @@ public sealed class GamepadVisualizerTests
         var size = Stage(Model(window)).Bounds.Size;
         window.Close();
         return size;
+    }
+
+    // ---- Shell containment --------------------------------------------------
+
+    [AvaloniaFact]
+    public void Every_Interactive_Element_Sits_Inside_The_Shell_Silhouette()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+        var shell = Flatten(ShellOutline());
+
+        Point ToShell(Point canvasPoint) =>
+            new(canvasPoint.X - body.Bounds.Left, canvasPoint.Y - body.Bounds.Top);
+
+        var outside = new List<string>();
+        foreach (var element in InteractiveElements(control))
+        {
+            var bounds = element.Bounds;
+            var topLeft = element.TranslatePoint(new Point(0, 0), canvas) ?? default;
+            var bottomRight = element.TranslatePoint(new Point(bounds.Width, bounds.Height), canvas) ?? default;
+            var canvasBounds = new Rect(topLeft, bottomRight);
+
+            var probes = new[]
+            {
+                canvasBounds.Center,
+                new Point(canvasBounds.Left, canvasBounds.Center.Y),
+                new Point(canvasBounds.Right, canvasBounds.Center.Y),
+                new Point(canvasBounds.Center.X, canvasBounds.Top),
+                new Point(canvasBounds.Center.X, canvasBounds.Bottom),
+            };
+
+            foreach (var probe in probes)
+            {
+                if (!Contains(shell, ToShell(probe)))
+                {
+                    outside.Add($"{element.Name} ({probe.X:0.#},{probe.Y:0.#})");
+                }
+            }
+        }
+
+        Assert.True(outside.Count == 0,
+            "these elements spill outside the shell silhouette: " + string.Join(", ", outside));
+
+        window.Close();
+    }
+
+    private static IEnumerable<Control> InteractiveElements(GamepadVisualizer control)
+    {
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+
+        return canvas
+            .GetVisualDescendants()
+            .OfType<Control>()
+            .Where(element =>
+                (element.Classes.Contains("padHit") || element.Name is { } name && name.EndsWith("Hit", StringComparison.Ordinal))
+                && element.Name is not ("LeftTrigger" or "RightTrigger" or "LeftBumper" or "RightBumper"))
+            .Distinct();
+    }
+
+    private static PathGeometry ShellOutline()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(System.IO.Path.Combine(directory.FullName, "DeziroJoy.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+
+        var axaml = File.ReadAllText(System.IO.Path.Combine(
+            directory!.FullName, "src", "DeziroJoy.App", "Views", "Controls", "GamepadVisualizer.axaml"));
+        var match = System.Text.RegularExpressions.Regex.Match(
+            axaml, "<Path x:Name=\"PadBody\"[^>]*?Data=\"([^\"]+)\"");
+
+        return PathGeometry.Parse(match.Groups[1].Value);
+    }
+
+    private static List<Point> Flatten(PathGeometry geometry)
+    {
+        var polygon = new List<Point>();
+
+        foreach (var figure in geometry.Figures ?? [])
+        {
+            var current = figure.StartPoint;
+
+            foreach (var segment in figure.Segments ?? [])
+            {
+                switch (segment)
+                {
+                    case Avalonia.Media.BezierSegment bezier:
+                        for (var step = 1; step <= 24; step++)
+                        {
+                            polygon.Add(Cubic(current, bezier.Point1, bezier.Point2, bezier.Point3, step / 24.0));
+                        }
+
+                        current = bezier.Point3;
+                        break;
+
+                    case Avalonia.Media.QuadraticBezierSegment quadratic:
+                        for (var step = 1; step <= 24; step++)
+                        {
+                            polygon.Add(Quadratic(current, quadratic.Point1, quadratic.Point2, step / 24.0));
+                        }
+
+                        current = quadratic.Point2;
+                        break;
+
+                    case Avalonia.Media.LineSegment line:
+                        polygon.Add(line.Point);
+                        current = line.Point;
+                        break;
+                }
+            }
+        }
+
+        return polygon;
+    }
+
+    private static Point Cubic(Point from, Point first, Point second, Point to, double t)
+    {
+        var u = 1 - t;
+        return new Point(
+            (u * u * u * from.X) + (3 * u * u * t * first.X) + (3 * u * t * t * second.X) + (t * t * t * to.X),
+            (u * u * u * from.Y) + (3 * u * u * t * first.Y) + (3 * u * t * t * second.Y) + (t * t * t * to.Y));
+    }
+
+    private static Point Quadratic(Point from, Point control, Point to, double t)
+    {
+        var u = 1 - t;
+        return new Point(
+            (u * u * from.X) + (2 * u * t * control.X) + (t * t * to.X),
+            (u * u * from.Y) + (2 * u * t * control.Y) + (t * t * to.Y));
+    }
+
+    private static bool Contains(List<Point> polygon, Point point)
+    {
+        var inside = false;
+        var j = polygon.Count - 1;
+
+        for (var i = 0; i < polygon.Count; j = i++)
+        {
+            var a = polygon[i];
+            var b = polygon[j];
+
+            if ((a.Y > point.Y) != (b.Y > point.Y)
+                && point.X < ((b.X - a.X) * (point.Y - a.Y) / (b.Y - a.Y)) + a.X)
+            {
+                inside = !inside;
+            }
+        }
+
+        return inside;
     }
 
     // ---- Repeated click hit-testing ----------------------------------------
