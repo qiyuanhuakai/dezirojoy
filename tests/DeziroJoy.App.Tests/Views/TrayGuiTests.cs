@@ -15,13 +15,12 @@ namespace DeziroJoy.App.Tests.Views;
 /// <summary>
 /// The window is a releasable presentation resource, not the owner of the app. Closing or
 /// minimizing to the tray DESTROYS the main window - timers, sampling subscriptions and pad
-/// navigation stop, the editor lease is released. What happens to the process then depends on
-/// where the engine lives: hosted in this process (Linux) the app stays resident and
-/// 显示主窗口 recreates a window from the retained state without losing the draft or stacking
-/// a second set of timers, while 退出 ends the GUI even when no window exists; hosted by the
-/// elevated daemon (Windows) the process is only a control surface, so a close or a minimize
-/// ends it instead of idling at full footprint. The Windows daemon and the Linux local engine
-/// keep mapping either way.
+/// navigation stop, the editor lease is released - while the app-level view model, runtime
+/// and tray keep running. The process stays resident in the tray on every platform, whether
+/// the engine runs in this process (Linux) or in the elevated daemon (Windows): the daemon
+/// keeps mapping either way, and the tray icon and its menu are the only way back to a
+/// window. 显示主窗口 recreates a window from the retained state without losing the draft or
+/// stacking a second set of timers, and 退出 ends the GUI even when no window exists.
 /// </summary>
 /// <remarks>
 /// Headless has no native tray surface — <c>CreateTrayIcon</c> returns null, so
@@ -61,6 +60,8 @@ public sealed class TrayGuiTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    // The engine's home no longer changes the close policy: a close or a minimize is a
+    // close-to-tray on every platform, so the flag only names the scenario a test describes.
     private TrayFixture BuildTray(bool engineRunsHere = true)
     {
         var themes = new ThemeService(_directory);
@@ -75,10 +76,7 @@ public sealed class TrayGuiTests : IDisposable
         {
             created = new MainWindow(viewModel, host, themes);
             return created;
-        })
-        {
-            EngineRunsInThisProcess = engineRunsHere,
-        };
+        });
 
         tray.Install();
         var window = created!;
@@ -192,23 +190,37 @@ public sealed class TrayGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Closing_The_Window_Ends_The_Gui_When_The_Daemon_Owns_The_Mapping()
+    public void Closing_The_Window_Keeps_The_Tray_Resident_When_The_Daemon_Owns_The_Mapping()
     {
         var fixture = BuildTray(engineRunsHere: false);
         var shutdownRequested = false;
         fixture.Tray.ExitRequested += () => shutdownRequested = true;
 
-        fixture.Window.Close();
+        var first = fixture.Window;
 
-        Assert.False(fixture.Window.IsVisible);
+        first.Close();
+
+        Assert.False(first.IsVisible,
+            "the close must still destroy the window and free its render resources");
         Dispatcher.UIThread.RunJobs();
 
-        Assert.True(shutdownRequested,
-            "when the elevated daemon owns the mapping the GUI has nothing left to hold, so closing the window must end the process instead of idling to the tray");
+        Assert.False(shutdownRequested,
+            "when the elevated daemon owns the mapping the GUI must stay resident in the tray: the icon and its menu are the only way back to the window, and the daemon keeps mapping either way");
+        Assert.NotNull(TrayIcon.GetIcons(_application));
+        Assert.Single(TrayIcon.GetIcons(_application)!);
+        Assert.Null(fixture.Lifetime.MainWindow);
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        var recreated = fixture.CurrentWindow();
+        Assert.NotSame(first, recreated);
+        Assert.Same(recreated, fixture.Lifetime.MainWindow);
+        Assert.True(recreated.IsVisible);
     }
 
     [AvaloniaFact]
-    public void Minimizing_Ends_The_Gui_When_The_Daemon_Owns_The_Mapping()
+    public void Minimizing_Keeps_The_Tray_Resident_When_The_Daemon_Owns_The_Mapping()
     {
         var fixture = BuildTray(engineRunsHere: false);
         var shutdownRequested = false;
@@ -217,9 +229,19 @@ public sealed class TrayGuiTests : IDisposable
         fixture.Window.WindowState = WindowState.Minimized;
         Dispatcher.UIThread.RunJobs();
 
-        Assert.False(fixture.Window.IsVisible);
-        Assert.True(shutdownRequested,
-            "minimizing must end the GUI too when the daemon owns the mapping, or the process idles at full footprint with no window");
+        Assert.False(fixture.Window.IsVisible, "minimizing to the tray must destroy the window");
+        Assert.False(shutdownRequested,
+            "minimizing must keep the GUI resident too when the daemon owns the mapping: the window is gone, the tray is not");
+        Assert.NotNull(TrayIcon.GetIcons(_application));
+        Assert.Single(TrayIcon.GetIcons(_application)!);
+        Assert.Null(fixture.Lifetime.MainWindow);
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        var recreated = fixture.CurrentWindow();
+        Assert.NotSame(fixture.Window, recreated);
+        Assert.True(recreated.IsVisible);
     }
 
     [AvaloniaFact]
@@ -405,6 +427,45 @@ public sealed class TrayGuiTests : IDisposable
         fixture.Tray.Dispose();
 
         Assert.Null(TrayIcon.GetIcons(_application));
+    }
+
+    /// <summary>
+    /// The 允许手柄操作 preference reaches the view model only through the injected
+    /// <see cref="ThemeService"/>: a view model built without one silently ignores the
+    /// setting, because the getter falls back to true and the setter has nothing to persist
+    /// through. This pins that seam - the getter is the service's value and the setter
+    /// persists through it - which is what the App.axaml.cs and CreateRuntime wiring rely
+    /// on; the end-to-end path through the real window is covered by
+    /// SettingsPanelGuiTests.Turning_Gamepad_Hijack_Off_Persists_And_Gates_Navigation.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Gamepad_Navigation_Setting_Reads_And_Writes_Through_The_Injected_ThemeService()
+    {
+        var settings = new ThemeService(_directory);
+        var store = new InMemoryProfileStore();
+        var host = new EngineHost(new FakeGamepadProvider(), new NullOutputSink(), store);
+        var viewModel = new MainWindowViewModel(host, store, settings: settings);
+
+        Assert.True(viewModel.GamepadNavigationEnabled);
+        Assert.True(settings.GamepadNavigationEnabled);
+
+        viewModel.GamepadNavigationEnabled = false;
+
+        Assert.False(viewModel.GamepadNavigationEnabled);
+        Assert.False(settings.GamepadNavigationEnabled);
+
+        // The choice is persisted, not just held in memory: a fresh service over the same
+        // directory reads it back.
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.False(reloaded.GamepadNavigationEnabled);
+
+        viewModel.GamepadNavigationEnabled = true;
+
+        var reEnabled = new ThemeService(_directory);
+        reEnabled.Load();
+        Assert.True(reEnabled.GamepadNavigationEnabled);
+        Assert.True(viewModel.GamepadNavigationEnabled);
     }
 
     /// <summary>

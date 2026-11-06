@@ -558,6 +558,8 @@ public partial class MainWindow : Window
             : new NullOutputSink();
         var host = new EngineHost(provider, sink, store);
 
-        return (new MainWindowViewModel(host, store), host);
+        // The design-time factory feeds the view model a settings service too, so the
+        // 允许手柄操作 preference behaves here exactly as it does in the running app.
+        return (new MainWindowViewModel(host, store, settings: new ThemeService()), host);
     }
 }
