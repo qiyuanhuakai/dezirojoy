@@ -23,7 +23,19 @@ public partial class MainWindow
     private void OnWindowOpened(object? sender, EventArgs e)
     {
         Opened -= OnWindowOpened;
+        RoundWindowCorners();
         WireProfileTransfer();
+    }
+
+    private void RoundWindowCorners()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        DeziroJoy.Platform.Windows.Windowing.WindowRounding.Apply(
+            TryGetPlatformHandle()?.Handle ?? IntPtr.Zero);
     }
 
     private void WireProfileTransfer()
