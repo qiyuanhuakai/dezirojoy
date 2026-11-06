@@ -20,6 +20,7 @@
     <UserControl.Resources>
         <conv:BoolNegationConverter x:Key="Not" />
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
+        <conv:LeaderButtonLabelConverter x:Key="LeaderButtonLabel" />
     </UserControl.Resources>
 
     <Border Background="{DynamicResource PanelBrush}"
@@ -74,6 +75,50 @@
                                       IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}" />
                             <TextBlock Classes="hint" Margin="0,6,0,0"
                                        Text="关闭后手柄不再切换选中项、不再打开映射编辑器；已保存的映射注入不受影响。" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="Leader 键" />
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="Leader 按键" VerticalAlignment="Center" Margin="0" />
+                                <ComboBox Grid.Column="1" x:Name="LeaderButtonCombo" HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding LeaderButtonOptions}"
+                                          SelectedItem="{Binding LeaderButton, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Converter={StaticResource LeaderButtonLabel}}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Classes="fieldLabel" Text="切换方式" VerticalAlignment="Center" Margin="0" />
+                                <ComboBox Grid.Column="1" x:Name="LeaderModeCombo" HorizontalAlignment="Stretch"
+                                          ItemsSource="{Binding LeaderModeOptions}"
+                                          SelectedItem="{Binding LeaderMode, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:LeaderModeOption">
+                                            <TextBlock Text="{Binding Label}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </Grid>
+                            <TextBlock Classes="hint" Margin="0,6,0,0"
+                                       Text="按下切换：每按一次在两套配置间轮换。按住切换：按住期间使用第二套配置。" />
+                            <Button Classes="secondary" Content="把当前配置存为第二套" HorizontalAlignment="Left" Margin="0,12,0,0"
+                                    Command="{Binding SaveCurrentAsLeaderAlternateCommand}" />
+                            <TextBlock Classes="hint" Margin="0,6,0,0"
+                                       Text="{Binding LeaderSlotLabel}" />
                         </StackPanel>
                     </Border>
 

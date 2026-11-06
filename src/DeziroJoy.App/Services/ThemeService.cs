@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Avalonia;
 using Avalonia.Styling;
+using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Input;
 
 namespace DeziroJoy.App.Services;
 
@@ -120,6 +122,19 @@ public sealed class ThemeService
         GamepadNavigationChanged?.Invoke(enabled);
     }
 
+    /// <summary>The button that swaps between the two leader profiles, or null when unset.</summary>
+    public GamepadButton? LeaderButton => _settings.LeaderButton;
+
+    /// <summary>Whether the leader key swaps on a press or only while held.</summary>
+    public LeaderMode LeaderMode => _settings.LeaderMode;
+
+    /// <summary>Configures the leader key and persists the choice.</summary>
+    public void SetLeader(GamepadButton? button, LeaderMode mode)
+    {
+        _settings = _settings with { LeaderButton = button, LeaderMode = mode };
+        Save();
+    }
+
     /// <summary>
     /// Applies <paramref name="variant"/> to the running application. Setting it
     /// on <see cref="Application"/> (never on a window) is what lets the change
@@ -160,6 +175,10 @@ public sealed class ThemeService
         public ThemeVariant? Theme { get; init; }
 
         public bool GamepadNavigationEnabled { get; init; } = true;
+
+        public GamepadButton? LeaderButton { get; init; }
+
+        public LeaderMode LeaderMode { get; init; } = LeaderMode.Press;
     }
 
     /// <summary>

@@ -235,6 +235,115 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Turns gamepad-driven navigation off or on and persists the choice.</summary>
     public void SetGamepadNavigationEnabled(bool enabled) => _settings?.SetGamepadNavigation(enabled);
 
+    /// <summary>Which of the two leader profiles the engine is currently running.</summary>
+    [ObservableProperty]
+    private LeaderSlot _activeLeaderSlot = LeaderSlot.Primary;
+
+    public string LeaderSlotLabel => ActiveLeaderSlot == LeaderSlot.Alternate
+        ? "当前生效：第二套配置"
+        : "当前生效：主配置";
+
+    partial void OnActiveLeaderSlotChanged(LeaderSlot value)
+        => OnPropertyChanged(nameof(LeaderSlotLabel));
+
+    /// <summary>Leader-key choices, starting with "not configured".</summary>
+    public IReadOnlyList<GamepadButton?> LeaderButtonOptions { get; } =
+        [null, .. Enum.GetValues<GamepadButton>().Where(button => button != GamepadButton.Extra)];
+
+    /// <summary>The configured leader button, or null when the leader key is off.</summary>
+    public GamepadButton? LeaderButton
+    {
+        get => _settings?.LeaderButton;
+        set => _settings?.SetLeader(value, LeaderMode);
+    }
+
+    /// <summary>Whether the leader key swaps on a press or only while held.</summary>
+    public LeaderMode LeaderMode
+    {
+        get => _settings?.LeaderMode ?? LeaderMode.Press;
+        set => _settings?.SetLeader(LeaderButton, value);
+    }
+
+    public IReadOnlyList<LeaderModeOption> LeaderModeOptions { get; } =
+        [new(LeaderMode.Press, "按下切换"), new(LeaderMode.Hold, "按住切换")];
+
+    /// <summary>Stores the profile in force right now as the leader alternate.</summary>
+    [RelayCommand]
+    private void SaveCurrentAsLeaderAlternate()
+    {
+        if (ActiveProfile is { } profile)
+        {
+            SaveLeaderAlternate(profile);
+        }
+    }
+
+    /// <summary>
+    /// Saves <paramref name="profile"/> as the alternate the leader key swaps to. It is stored
+    /// beside the device's own profile under a derived key, so the two never collide and the
+    /// alternate survives a restart; the real device id is restored when it is applied.
+    /// </summary>
+    public void SaveLeaderAlternate(GamepadProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        _profileStore.Save(profile with { DeviceId = LeaderKeyFor(profile.DeviceId) });
+    }
+
+    private static string LeaderKeyFor(string? deviceId)
+        => string.IsNullOrEmpty(deviceId) ? "leader-alternate" : $"leader-alternate:{deviceId}";
+
+    private void ApplyLeader(IGamepadState state)
+    {
+        var leader = _settings?.LeaderButton;
+
+        if (leader is not GamepadButton configured)
+        {
+            return;
+        }
+
+        if (_settings!.LeaderMode == LeaderMode.Hold)
+        {
+            var wanted = state.PressedButtons.Has(configured) ? LeaderSlot.Alternate : LeaderSlot.Primary;
+
+            if (wanted != ActiveLeaderSlot)
+            {
+                _ = SwapLeaderSlotAsync(wanted);
+            }
+
+            return;
+        }
+
+        var newlyPressed = state.PressedButtons & ~_navigationButtons;
+
+        if (newlyPressed.Has(configured))
+        {
+            _ = SwapLeaderSlotAsync(ActiveLeaderSlot == LeaderSlot.Primary ? LeaderSlot.Alternate : LeaderSlot.Primary);
+        }
+    }
+
+    private async Task SwapLeaderSlotAsync(LeaderSlot target)
+    {
+        if (ActiveController is null)
+        {
+            return;
+        }
+
+        var deviceId = ActiveController.Descriptor.DeviceId;
+        var profile = target == LeaderSlot.Alternate
+            ? _profileStore.Load(LeaderKeyFor(deviceId))
+            : _profileStore.Load(deviceId);
+
+        if (profile is null)
+        {
+            return;
+        }
+
+        if (await ApplyProfile(profile with { DeviceId = deviceId }))
+        {
+            ActiveLeaderSlot = target;
+        }
+    }
+
     partial void OnIsPhysicalInputInScopeChanged(bool value)
     {
         if (!value)
@@ -899,6 +1008,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             Editor.CaptureGamepadSample(state);
             return;
         }
+
+        ApplyLeader(state);
 
         if (IsEditing)
         {
