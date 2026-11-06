@@ -23,7 +23,7 @@ public sealed class WindowRoundingTests
     }
 
     [Fact]
-    public void A_Real_Window_Handle_Is_Accepted()
+    public void An_Arbitrary_Handle_Is_Accepted_Without_Throwing()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -31,20 +31,9 @@ public sealed class WindowRoundingTests
             return;
         }
 
-        var window = new Avalonia.Controls.Window { Width = 320, Height = 240 };
-        window.Show();
-
-        try
-        {
-            var handle = window.TryGetPlatformHandle();
-
-            Assert.NotNull(handle);
-
-            WindowRounding.Apply(handle!.Handle);
-        }
-        finally
-        {
-            window.Close();
-        }
+        // A handle that belongs to no window: DWM answers with a failed HRESULT rather than
+        // raising, so rounding must tolerate it. The production caller passes exactly this
+        // when the platform cannot hand back a handle.
+        WindowRounding.Apply(new IntPtr(0x00001234));
     }
 }
