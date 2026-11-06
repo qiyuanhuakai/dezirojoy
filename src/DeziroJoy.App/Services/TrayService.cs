@@ -248,9 +248,14 @@ public sealed class TrayService : IDisposable
         // With the daemon hosting the mapping this process is only a control surface, and a
         // control surface with no window is 250 MB of nothing the user asked for: it ends
         // here, the same way the tray's 退出 item does. The daemon keeps mapping either way.
+        //
+        // The exit is deferred for the same reason the minimize path defers its close: this
+        // runs inside the window's Closed dispatch, and asking the lifetime to shut down from
+        // in there is swallowed - measured on Windows, the window was destroyed and the
+        // process still sat at 235 MB twenty seconds later.
         if (!EngineRunsInThisProcess && !_exiting)
         {
-            Exit();
+            Dispatcher.UIThread.Post(Exit);
         }
     }
 

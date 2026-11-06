@@ -201,6 +201,8 @@ public sealed class TrayGuiTests : IDisposable
         fixture.Window.Close();
 
         Assert.False(fixture.Window.IsVisible);
+        Dispatcher.UIThread.RunJobs();
+
         Assert.True(shutdownRequested,
             "when the elevated daemon owns the mapping the GUI has nothing left to hold, so closing the window must end the process instead of idling to the tray");
     }
