@@ -13,13 +13,15 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// The tray is what makes the app resident, and the window is what it releases. Closing or
+/// The window is a releasable presentation resource, not the owner of the app. Closing or
 /// minimizing to the tray DESTROYS the main window - timers, sampling subscriptions and pad
-/// navigation stop, the editor lease is released - while the app-level view model, runtime
-/// and tray keep running. 显示主窗口 recreates a window from that retained state without
-/// losing the draft or stacking a second set of timers, and 退出 ends the GUI even when no
-/// window exists. The Windows daemon and the Linux local engine are none of this window's
-/// business: they keep mapping either way.
+/// navigation stop, the editor lease is released. What happens to the process then depends on
+/// where the engine lives: hosted in this process (Linux) the app stays resident and
+/// 显示主窗口 recreates a window from the retained state without losing the draft or stacking
+/// a second set of timers, while 退出 ends the GUI even when no window exists; hosted by the
+/// elevated daemon (Windows) the process is only a control surface, so a close or a minimize
+/// ends it instead of idling at full footprint. The Windows daemon and the Linux local engine
+/// keep mapping either way.
 /// </summary>
 /// <remarks>
 /// Headless has no native tray surface — <c>CreateTrayIcon</c> returns null, so
@@ -59,7 +61,7 @@ public sealed class TrayGuiTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private TrayFixture BuildTray()
+    private TrayFixture BuildTray(bool engineRunsHere = true)
     {
         var themes = new ThemeService(_directory);
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
@@ -73,7 +75,10 @@ public sealed class TrayGuiTests : IDisposable
         {
             created = new MainWindow(viewModel, host, themes);
             return created;
-        });
+        })
+        {
+            EngineRunsInThisProcess = engineRunsHere,
+        };
 
         tray.Install();
         var window = created!;
@@ -184,6 +189,49 @@ public sealed class TrayGuiTests : IDisposable
         // A window close must never end the app on its own: the window is a releasable
         // presentation resource, and only the tray's 退出 item (or the OS) shuts down.
         Assert.Equal(ShutdownMode.OnExplicitShutdown, fixture.Lifetime.ShutdownMode);
+    }
+
+    [AvaloniaFact]
+    public void Closing_The_Window_Ends_The_Gui_When_The_Daemon_Owns_The_Mapping()
+    {
+        var fixture = BuildTray(engineRunsHere: false);
+        var shutdownRequested = false;
+        fixture.Tray.ExitRequested += () => shutdownRequested = true;
+
+        fixture.Window.Close();
+
+        Assert.False(fixture.Window.IsVisible);
+        Assert.True(shutdownRequested,
+            "when the elevated daemon owns the mapping the GUI has nothing left to hold, so closing the window must end the process instead of idling to the tray");
+    }
+
+    [AvaloniaFact]
+    public void Minimizing_Ends_The_Gui_When_The_Daemon_Owns_The_Mapping()
+    {
+        var fixture = BuildTray(engineRunsHere: false);
+        var shutdownRequested = false;
+        fixture.Tray.ExitRequested += () => shutdownRequested = true;
+
+        fixture.Window.WindowState = WindowState.Minimized;
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(fixture.Window.IsVisible);
+        Assert.True(shutdownRequested,
+            "minimizing must end the GUI too when the daemon owns the mapping, or the process idles at full footprint with no window");
+    }
+
+    [AvaloniaFact]
+    public void Closing_The_Window_Only_Destroys_It_When_This_Process_Owns_The_Mapping()
+    {
+        var fixture = BuildTray(engineRunsHere: true);
+        var shutdownRequested = false;
+        fixture.Tray.ExitRequested += () => shutdownRequested = true;
+
+        fixture.Window.Close();
+
+        Assert.False(fixture.Window.IsVisible);
+        Assert.False(shutdownRequested,
+            "on Linux the engine runs inside this process, so a close must stay a close-to-tray or the mapping dies with the window");
     }
 
     [AvaloniaFact]

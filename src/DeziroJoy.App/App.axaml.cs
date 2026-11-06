@@ -52,8 +52,13 @@ public partial class App : Application
 
             // The tray owns the window lifecycle: the view model, the runtime and the tray
             // outlive every window generation, and the window itself is a releasable
-            // presentation resource built from them on demand.
-            var tray = new TrayService(this, desktop, themes, () => new MainWindow(viewModel, host, themes));
+            // presentation resource built from them on demand. The engine's home decides the
+            // close policy: hosted here (Linux) a close stays a close-to-tray, hosted by the
+            // daemon (Windows) a close ends this control surface and frees its memory.
+            var tray = new TrayService(this, desktop, themes, () => new MainWindow(viewModel, host, themes))
+            {
+                EngineRunsInThisProcess = runtime.Local is not null,
+            };
 
             // A second launch asked this GUI to show itself: answer by restoring the window.
             // The activation channel is Avalonia-free, so the restore is marshalled onto the

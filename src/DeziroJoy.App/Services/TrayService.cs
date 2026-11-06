@@ -8,12 +8,14 @@ using Avalonia.Threading;
 namespace DeziroJoy.App.Services;
 
 /// <summary>
-/// Owns the application-level tray icon and the window lifecycle that makes DeziroJoy
-/// resident. The window is a releasable presentation resource, not the owner of the app:
-/// closing or minimizing to the tray destroys it - timers, sampling subscriptions and pad
-/// navigation stop, the editor lease is released - while the app-level view model, runtime
-/// and tray keep running. 显示主窗口 builds a fresh window from that retained state, and
-/// 退出 ends the GUI even when no window exists.
+/// Owns the application-level tray icon and the window lifecycle. The window is a releasable
+/// presentation resource, not the owner of the app: closing or minimizing to the tray
+/// destroys it - timers, sampling subscriptions and pad navigation stop, the editor lease is
+/// released. What happens to the process then depends on where the engine lives. When this
+/// process hosts the engine (Linux) the app stays resident and 显示主窗口 builds a fresh
+/// window from that retained state; when the elevated daemon hosts it (Windows) this process
+/// is only a control surface, so it ends instead of idling at full footprint. 退出 ends the
+/// GUI either way, even when no window exists.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,12 +25,12 @@ namespace DeziroJoy.App.Services;
 /// service installs — exactly once, on the <see cref="Application"/> it is given.
 /// </para>
 /// <para>
-/// The policy: a window close never ends the app on its own
-/// (<see cref="ShutdownMode.OnExplicitShutdown"/>), so the mapping engine keeps running with
-/// no window open. Only the tray's 退出 item ends the process, and it does so by shutting the
-/// lifetime down: every window is force-closed first - so each detaches its timers and
-/// subscriptions - and the application's Exit handler then disposes the local runtime without
-/// stopping the Windows daemon.
+/// A window close never ends the process by itself
+/// (<see cref="ShutdownMode.OnExplicitShutdown"/>); the tray decides, through
+/// <see cref="EngineRunsInThisProcess"/>, whether that close is a close-to-tray or an exit.
+/// The exit path shuts the lifetime down: every window is force-closed first - so each
+/// detaches its timers and subscriptions - and the application's Exit handler then disposes
+/// the local runtime without stopping the Windows daemon.
 /// </para>
 /// </remarks>
 public sealed class TrayService : IDisposable
@@ -62,6 +64,15 @@ public sealed class TrayService : IDisposable
 
     /// <summary>True once the tray's 退出 item has been chosen.</summary>
     public bool IsExiting => _exiting;
+
+    /// <summary>
+    /// True when this process hosts the mapping engine itself, which is the Linux shape. Then
+    /// a window close must stay a close-to-tray, because ending the process would end the
+    /// mapping with it. False on Windows, where the elevated daemon hosts the engine and this
+    /// process is a pure control surface: with its window gone it holds nothing the user can
+    /// see, so closing or minimizing ends it instead of idling at full footprint.
+    /// </summary>
+    public bool EngineRunsInThisProcess { get; set; }
 
     /// <summary>
     /// Raised when the tray's 退出 item was chosen. The application answers it by shutting the
@@ -136,10 +147,10 @@ public sealed class TrayService : IDisposable
     }
 
     /// <summary>
-    /// Ends the GUI from the tray. The window is destroyed first so its timers and
-    /// subscriptions detach, then the shutdown is requested - which force-closes any
-    /// remaining window and raises the lifetime's Exit, where the application disposes the
-    /// runtime. Works with no window at all: the tray outlives every window generation.
+    /// Ends the GUI, from the tray's 退出 item or from a window close when the daemon hosts
+    /// the engine. Any remaining window is closed first so its timers and subscriptions
+    /// detach, then the shutdown is requested - which raises the lifetime's Exit, where the
+    /// application disposes the runtime. Works with no window at all.
     /// </summary>
     public void Exit()
     {
@@ -233,6 +244,14 @@ public sealed class TrayService : IDisposable
         // The window released its presentation resources; the app, the view model, the
         // runtime and this tray all outlive it.
         _window = null;
+
+        // With the daemon hosting the mapping this process is only a control surface, and a
+        // control surface with no window is 250 MB of nothing the user asked for: it ends
+        // here, the same way the tray's 退出 item does. The daemon keeps mapping either way.
+        if (!EngineRunsInThisProcess && !_exiting)
+        {
+            Exit();
+        }
     }
 
     private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
