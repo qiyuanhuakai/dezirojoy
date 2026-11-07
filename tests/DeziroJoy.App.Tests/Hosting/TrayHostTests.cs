@@ -93,7 +93,7 @@ public sealed class TrayHostTests : IDisposable
     [AvaloniaFact]
     public void Showing_The_Main_Window_Starts_The_Render_Process_And_Retires_The_Tray()
     {
-        var fixture = BuildTray();
+        var fixture = BuildTray(daemonReachable: true);
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
@@ -106,7 +106,98 @@ public sealed class TrayHostTests : IDisposable
 
         // A live window owns the instance lock, so the tray retires itself after handing the
         // window over: the user's ruling is that no tray process exists while a GUI window does.
+        // The retirement now waits for the injected poll to answer, which is the proof the
+        // render won the lock and put its window up.
+        Assert.Equal(1, fixture.Polls);
         Assert.Single(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void The_Show_Route_Releases_The_Instance_Before_It_Spawns_The_Render()
+    {
+        // The render arbitrates the instance lock exactly once with no retry, so a tray still
+        // holding the lock when the render starts makes the render lose, ask this tray to show
+        // itself and exit with no window at all. The release therefore precedes the spawn.
+        var fixture = BuildTray(daemonReachable: true);
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(["release", "spawn-render", "poll", "shutdown"], fixture.Order);
+    }
+
+    [AvaloniaFact]
+    public void The_Show_Route_Retires_Only_After_The_Render_Answers()
+    {
+        // Retiring at spawn time is the silent failure: the render is still arbitrating the
+        // lock the tray has not released yet, so it exits with no GUI. The tray stays resident
+        // until the render proves its window is up.
+        var answers = new Queue<bool>([false, false, true]);
+        var fixture = BuildTray(
+            daemonReachable: true,
+            showPoll: (_, _, _) => Task.FromResult(answers.Dequeue()),
+            pollDelay: () => Task.CompletedTask);
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(
+            ["release", "spawn-render", "poll", "delay", "poll", "delay", "poll", "shutdown"],
+            fixture.Order);
+        Assert.Single(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void The_Show_Route_Stops_Polling_When_The_Render_Exits()
+    {
+        // A render that died mid-poll can never answer, so the route must stop polling and
+        // retire instead of spinning out its whole budget on a dead child.
+        FakeProcessHandle? handle = null;
+        var fixture = BuildTray(
+            daemonReachable: true,
+            showPoll: static (_, _, _) => Task.FromResult(false),
+            pollDelay: () =>
+            {
+                handle!.RaiseExited();
+                return Task.CompletedTask;
+            });
+        handle = fixture.Render;
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, fixture.Polls);
+        Assert.Single(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void The_Show_Route_Gives_Up_After_The_Bounded_Budget()
+    {
+        // A render that never answers must not hold the tray open forever. A zero budget is
+        // exhausted by the first failed pass, which makes the bound deterministic without a
+        // real clock: exactly one attempt, then retire.
+        var fixture = BuildTray(
+            daemonReachable: true,
+            showPoll: static (_, _, _) => Task.FromResult(false),
+            pollDelay: static () => Task.CompletedTask,
+            pollBudget: TimeSpan.Zero);
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, fixture.Polls);
+        Assert.Single(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void The_Show_Route_Spawns_Exactly_One_Render_Process()
+    {
+        var fixture = BuildTray(daemonReachable: true);
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, fixture.Launcher.Started.Count(start => start.Info.Arguments.Contains("--gui")));
     }
 
     [AvaloniaFact]
@@ -146,8 +237,10 @@ public sealed class TrayHostTests : IDisposable
             new ThemeService(_directory),
             daemon,
             render,
-            shutdown: () => shutdownRequested = true);
-        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, [], new List<int>()));
+            shutdown: () => shutdownRequested = true,
+            showPoll: static (_, _, _) => Task.FromResult(true),
+            pollDelay: static () => Task.CompletedTask);
+        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, [], new List<int>(), []));
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
@@ -249,7 +342,10 @@ public sealed class TrayHostTests : IDisposable
         // The launch seam hands back nothing: the daemon never came up. The tray must stay
         // resident anyway and try again on the next menu action - and it must never fall back
         // to hosting an engine of its own.
-        var fixture = BuildTray(daemonLaunchesSucceed: false);
+        var fixture = BuildTray(
+            daemonLaunchesSucceed: false,
+            showPoll: static (_, _, _) => Task.FromResult(true),
+            pollDelay: static () => Task.CompletedTask);
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
@@ -289,16 +385,31 @@ public sealed class TrayHostTests : IDisposable
         Assert.Null(TrayIcon.GetIcons(_application));
     }
 
-    private TrayFixture BuildTray(bool daemonLaunchesSucceed = true)
+    /// <summary>
+    /// Builds a tray whose show route is driven through injectable seams: the instance release,
+    /// the render-answer poll, the poll pause and the poll budget are all supplied here, and
+    /// every call is recorded on <see cref="TrayFixture.Order"/>. No test therefore touches a
+    /// real pipe, a real process or a real clock.
+    /// </summary>
+    private TrayFixture BuildTray(
+        bool daemonLaunchesSucceed = true,
+        bool daemonReachable = false,
+        Action? releaseInstance = null,
+        Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>>? showPoll = null,
+        Func<Task>? pollDelay = null,
+        TimeSpan? pollBudget = null)
     {
+        var order = new List<string>();
         var launcher = new FakeLauncher
         {
             Daemon = daemonLaunchesSucceed ? new FakeProcessHandle() : null,
             Render = new FakeProcessHandle(),
+            OnLaunch = info => order.Add(
+                info.Arguments.Contains("--gui", StringComparison.Ordinal) ? "spawn-render" : "spawn-daemon"),
         };
         var elevation = new FakeElevation();
 
-        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => false, () => false);
+        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => false, () => daemonReachable);
         var shows = new List<string>();
         var render = new RenderSupervisor(launcher.Start, () => shows.Add("show"));
 
@@ -311,9 +422,39 @@ public sealed class TrayHostTests : IDisposable
             themes,
             daemon,
             render,
-            shutdown: () => shutdowns.Add(shutdowns.Count + 1));
+            shutdown: () =>
+            {
+                order.Add("shutdown");
+                shutdowns.Add(shutdowns.Count + 1);
+            },
+            releaseInstance: () =>
+            {
+                order.Add("release");
+                releaseInstance?.Invoke();
+            },
+            showPoll: (identity, options, cancellationToken) =>
+            {
+                order.Add("poll");
+                return showPoll is null
+                    ? Task.FromResult(true)
+                    : showPoll(identity, options, cancellationToken);
+            },
+            pollDelay: () =>
+            {
+                order.Add("delay");
+                return pollDelay is null ? Task.CompletedTask : pollDelay();
+            },
+            pollBudget: pollBudget);
 
-        var fixture = new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, shows, shutdowns);
+        var fixture = new TrayFixture(
+            tray,
+            lifetime,
+            launcher,
+            launcher.Daemon!,
+            launcher.Render!,
+            shows,
+            shutdowns,
+            order);
         _fixtures.Add(fixture);
 
         return fixture;
@@ -347,6 +488,26 @@ public sealed class TrayHostTests : IDisposable
 
     private sealed class TrayFixture : IDisposable
     {
+        public TrayFixture(
+            TrayService tray,
+            ClassicDesktopStyleApplicationLifetime lifetime,
+            FakeLauncher launcher,
+            FakeProcessHandle daemon,
+            FakeProcessHandle render,
+            List<string> shows,
+            List<int> shutdowns,
+            List<string> order)
+        {
+            Tray = tray;
+            Lifetime = lifetime;
+            Launcher = launcher;
+            Daemon = daemon;
+            Render = render;
+            Shows = shows;
+            Shutdowns = shutdowns;
+            Order = order;
+        }
+
         public TrayService Tray { get; }
 
         public ClassicDesktopStyleApplicationLifetime Lifetime { get; }
@@ -359,25 +520,18 @@ public sealed class TrayHostTests : IDisposable
 
         public List<string> Shows { get; }
 
-        public TrayFixture(
-            TrayService tray,
-            ClassicDesktopStyleApplicationLifetime lifetime,
-            FakeLauncher launcher,
-            FakeProcessHandle daemon,
-            FakeProcessHandle render,
-            List<string> shows,
-            List<int> shutdowns)
-        {
-            Tray = tray;
-            Lifetime = lifetime;
-            Launcher = launcher;
-            Daemon = daemon;
-            Render = render;
-            Shows = shows;
-            Shutdowns = shutdowns;
-        }
-
         public List<int> Shutdowns { get; }
+
+        /// <summary>
+        /// Every show-route call in the order it happened: release, spawn-render, poll, delay,
+        /// shutdown. The sequence is what the fix is about, so it is recorded rather than
+        /// inferred from side effects.
+        /// </summary>
+        public List<string> Order { get; }
+
+        public int Polls => Order.Count(entry => entry == "poll");
+
+        public int Delays => Order.Count(entry => entry == "delay");
 
         public void Dispose() => Tray.Dispose();
     }
@@ -390,10 +544,14 @@ public sealed class TrayHostTests : IDisposable
 
         public List<(ProcessStartInfo Info, FakeProcessHandle? Handle)> Started { get; } = [];
 
+        /// <summary>Called as each process is launched, so a test can record spawn order.</summary>
+        public Action<ProcessStartInfo>? OnLaunch { get; init; }
+
         public FakeProcessHandle? Start(ProcessStartInfo info)
         {
             var handle = info.Arguments.Contains("--daemon", StringComparison.Ordinal) ? Daemon : Render;
             Started.Add((info, handle));
+            OnLaunch?.Invoke(info);
             return handle;
         }
     }

@@ -346,6 +346,25 @@ internal static class TrayHost
     /// <summary>True once this process is the tray rather than a render process.</summary>
     internal static bool IsTrayProcess { get; private set; }
 
+    /// <summary>Pause between render-answer polls while the show route waits for the window.</summary>
+    private static readonly TimeSpan ShowPollPause = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// How long the show route gives the render to answer before the tray retires anyway. The
+    /// render has to win the instance lock, build its window and start serving, which is a
+    /// startup-scale wait, not a spin.
+    /// </summary>
+    private static readonly TimeSpan ShowPollBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Releases the instance lease and the activation channel, set by <see cref="Run"/> for the
+    /// life of the tray process. The show route calls it before it spawns the render, because
+    /// the render arbitrates the lock exactly once with no retry - a tray still holding it makes
+    /// the render lose, ask this tray to show itself and exit with no GUI. Null in tests, which
+    /// install a tray without a real lease.
+    /// </summary>
+    private static Action? _releaseInstance;
+
     /// <summary>
     /// The default entry point. The tray wins the instance lock, so a second launch reaches it
     /// over the activation pipe instead of starting a second tray.
@@ -393,12 +412,30 @@ internal static class TrayHost
 
         // The lease and the activation channel are held for the whole life of the tray: the
         // lock is what makes this the one tray, and the channel is how a second launch asks it
-        // to show a window.
-        using var lease = arbitration.Lease!;
-        using var activation = GuiActivationServer.StartActive(identity);
+        // to show a window. They are lifted out of using statements because the show route
+        // releases them before it spawns the render: the render arbitrates the lock exactly
+        // once with no retry, so a tray still holding it makes the render lose and exit with
+        // no GUI at all.
+        var lease = arbitration.Lease!;
+        var activation = GuiActivationServer.StartActive(identity);
+        _releaseInstance = () =>
+        {
+            activation.Dispose();
+            lease.Dispose();
+        };
 
-        Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(Array.Empty<string>());
-        return 0;
+        try
+        {
+            Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(Array.Empty<string>());
+            return 0;
+        }
+        finally
+        {
+            // Idempotent by construction: the show route may already have released both, and a
+            // double dispose is exactly what the guards in each type exist to absorb.
+            _releaseInstance?.Invoke();
+            _releaseInstance = null;
+        }
     }
 
     internal static TrayService InstallTray(
@@ -410,7 +447,8 @@ internal static class TrayHost
             new ThemeService(),
             new DaemonSupervisor(),
             new RenderSupervisor(showLive: ShowLiveRenderProcess),
-            GuiActivationServer.ActiveInstance);
+            GuiActivationServer.ActiveInstance,
+            releaseInstance: _releaseInstance);
 
     internal static TrayService InstallTray(
         Application application,
@@ -419,20 +457,60 @@ internal static class TrayHost
         DaemonSupervisor daemon,
         RenderSupervisor render,
         GuiActivationServer? activation = null,
-        Action? shutdown = null)
+        Action? shutdown = null,
+        Action? releaseInstance = null,
+        Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>>? showPoll = null,
+        Func<Task>? pollDelay = null,
+        TimeSpan? pollBudget = null)
     {
         themes.ApplyPersisted();
+
+        showPoll ??= static (identity, options, cancellationToken)
+            => GuiActivationClient.TryShowAsync(identity, options, cancellationToken);
+        pollDelay ??= static () => Task.Delay(ShowPollPause);
+        var budget = pollBudget ?? ShowPollBudget;
 
         var tray = new TrayService(
             application,
             lifetime,
             themes,
-            showMainWindow: () =>
+            showMainWindow: async void () =>
             {
                 // The daemon is started by the tray, never by the GUI, and a menu action is
                 // also the retry point for a daemon whose pipe never answered.
                 daemon.EnsureRunning();
+
+                // The instance lock and the activation channel are released BEFORE the render
+                // is spawned: the render arbitrates the lock exactly once with no retry, so a
+                // tray still holding it makes the render lose, ask this tray to show itself and
+                // exit with no window at all. Released first, the render wins the lock, takes
+                // the channel over and answers on the same pipe name.
+                releaseInstance?.Invoke();
+
                 render.Show();
+
+                // The render's NotifyWindowShown orders window-show before BeginServing, so an
+                // answer on the pipe is proof the window is up. The poll is bounded by the
+                // budget and also stops the moment the render dies, so the tray can neither
+                // hang on a dead child nor outlive a window that never came.
+                var identity = GuiInstanceIdentity.ForCurrentProcess();
+                var elapsed = Stopwatch.StartNew();
+
+                while (render.IsAlive)
+                {
+                    if (await showPoll(identity, GuiActivationOptions.Default, CancellationToken.None))
+                    {
+                        break;
+                    }
+
+                    if (elapsed.Elapsed >= budget)
+                    {
+                        break;
+                    }
+
+                    await pollDelay();
+                }
+
                 Retire(shutdown, lifetime);
             },
             exit: () =>
