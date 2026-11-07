@@ -1188,6 +1188,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (controllers.Count == 0)
         {
+            // In daemon mode the presentation host is a NoGamepadProvider seam that never
+            // sees the pad, so an empty local table is not evidence of absence: the daemon's
+            // snapshot owns presence. Clearing here would wipe the snapshot's verdict 300ms
+            // after it landed.
+            if (_daemon is not null)
+            {
+                return;
+            }
+
             // A pad that was here and is gone now is not the same as one never plugged in: the
             // wireless idle timer fires silently after 15 idle minutes and no public API can
             // prevent it, so "connect a gamepad" would be misleading for a pad that is asleep.
@@ -1221,6 +1230,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_daemonRequired && DaemonSnapshot is null)
         {
             StatusMessage = "提权守护进程不可用；未启用本地注入回退";
+            return;
+        }
+
+        // Daemon mode: the snapshot is the presence authority and the local presentation
+        // host never sees a pad either way, so its empty table says nothing here. A pad the
+        // daemon lost is worded exactly like a local disconnect.
+        if (_daemon is not null)
+        {
+            StatusMessage = HasController
+                ? "已连接手柄 · 由常驻守护进程映射"
+                : wasConnected
+                    ? "手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接"
+                    : "未检测到手柄，请连接手柄";
             return;
         }
 
@@ -1345,7 +1367,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             SetTransferError(snapshot.LastError);
         }
 
-        RefreshStatus();
+        // The daemon is the presence authority: the presentation host is a NoGamepadProvider
+        // seam that never sees the pad, so its empty table is not evidence of absence. A pad
+        // that was here and is gone now reads as asleep, worded exactly like a local
+        // disconnect.
+        var wasConnected = HasController;
+        HasController = snapshot.HasController;
+        Visualizer.SetConnected(snapshot.HasController);
+        RefreshStatus(wasConnected && !snapshot.HasController);
     }
 
     private void AdoptDaemonProfile(StateSnapshot snapshot)

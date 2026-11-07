@@ -177,6 +177,67 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task A_Daemon_Snapshot_With_A_Controller_Reports_Presence()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        context.DaemonHost.HasController = true;
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.HasController);
+        Assert.NotEqual("未检测到手柄，请连接手柄", viewModel.StatusMessage);
+    }
+
+    [Fact]
+    public async Task A_Daemon_Snapshot_Without_A_Controller_Reports_No_Gamepad()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        context.DaemonHost.HasController = false;
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.HasController);
+        Assert.Equal("未检测到手柄，请连接手柄", viewModel.StatusMessage);
+    }
+
+    [Fact]
+    public async Task The_Sync_Tick_Does_Not_Erase_Daemon_Presence()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        context.DaemonHost.HasController = true;
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+        Assert.True(viewModel.HasController);
+
+        viewModel.SyncControllers();
+
+        Assert.True(viewModel.HasController);
+        Assert.True(viewModel.Visualizer.IsConnected);
+    }
+
+    [Fact]
+    public async Task Losing_The_Controller_Through_The_Daemon_Reports_Asleep()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        context.DaemonHost.HasController = true;
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+        Assert.True(viewModel.HasController);
+
+        // The pause toggle publishes a snapshot without refreshing the status itself, so
+        // the wording the true->false transition produces is the one that survives.
+        context.DaemonHost.HasController = false;
+        await viewModel.ToggleMappingCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.HasController);
+        Assert.Equal("手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接", viewModel.StatusMessage);
+    }
+
+    [Fact]
     public async Task Reconnect_Runs_The_Full_Handshake_And_State_Read_Without_A_Local_Fallback()
     {
         var daemonHost = new FakeDaemonHost();
