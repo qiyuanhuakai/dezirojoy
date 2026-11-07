@@ -8,6 +8,7 @@ using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Platform;
 using Microsoft.Extensions.DependencyInjection;
+using System.Diagnostics;
 
 namespace DeziroJoy.App;
 
@@ -97,10 +98,10 @@ public partial class App : Application
 }
 
 /// <summary>
-/// The render process's window policy: the window IS the process. Closing it shuts the desktop
-/// lifetime down, which ends the process immediately - unsaved drafts are discarded by design,
-/// because the render process is stateless - while the tray and the daemon stay resident and
-/// keep mapping.
+/// The render process's window policy: the window IS the process. Closing it wakes the tray
+/// process first - the tray takes over the instance lock, the activation channel and the daemon
+/// supervision - and only then ends the lifetime. Unsaved drafts are discarded by design,
+/// because the render process is stateless, and the daemon keeps mapping across the handover.
 /// </summary>
 internal static class RenderProcess
 {
@@ -108,15 +109,31 @@ internal static class RenderProcess
         IClassicDesktopStyleApplicationLifetime lifetime,
         MainWindowViewModel viewModel,
         EngineHost host,
-        ThemeService themes)
+        ThemeService themes,
+        Func<ProcessStartInfo, bool>? spawnTray = null,
+        Action? shutdown = null)
     {
-        // The window is the process, so the lifetime ends with it: no explicit shutdown call,
-        // because a close must not have to be routed through anything to end the process.
-        lifetime.ShutdownMode = ShutdownMode.OnMainWindowClose;
+        spawnTray ??= static info =>
+        {
+            using var process = Process.Start(info);
+            return process is not null;
+        };
+
+        // The window owns the process. Closing it first wakes the tray - which takes over the
+        // instance lock, the activation channel and the daemon supervision - and only then
+        // ends the lifetime, so the daemon keeps mapping across the handover and no second
+        // GUI is ever constructed by the render process itself.
+        lifetime.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
         var window = new MainWindow(viewModel, host, themes);
         lifetime.MainWindow = window;
+        window.Closed += (_, _) =>
+        {
+            spawnTray(ProcessLauncher.TrayStartInfo());
+            (shutdown ?? (() => lifetime.Shutdown()))();
+        };
         window.Show();
+        DesktopLauncher.NotifyWindowShown();
 
         return window;
     }

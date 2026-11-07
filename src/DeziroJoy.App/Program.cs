@@ -1,7 +1,12 @@
 using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
 using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Windows.Elevation;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace DeziroJoy.App;
 
@@ -38,18 +43,15 @@ internal static class Program
             return UninstallAutostart();
         }
 
-        // The render process is reached only through its own flag: the tray spawns it on
-        // demand, and a direct launch is the development escape hatch. It never arbitrates the
-        // instance lock and never serves the activation channel - both belong to the tray.
-        if (HasFlag(args, "--gui"))
+        // The default entry is the render process: the window comes first, it owns the instance
+        // lock and the activation channel, and it starts the daemon. --tray is the handover
+        // entry a closing render process uses to wake the resident tray.
+        if (HasFlag(args, "--tray"))
         {
-            return DesktopLauncher.Launch(args);
+            return TrayHost.Run();
         }
 
-        // The default entry is the tray: a resident icon process that owns the instance lock,
-        // the activation channel, the theme and the two supervisors, and that starts the
-        // daemon on its own.
-        return TrayHost.Run();
+        return DesktopLauncher.Launch(args);
     }
 
     public static AppBuilder BuildAvaloniaApp()
@@ -194,18 +196,73 @@ internal static class Program
 }
 
 /// <summary>
-/// The render process. Isolated from <see cref="Program.Main"/> so the headless daemon never
-/// causes an Avalonia assembly to be loaded, and reached only through --gui: the tray spawns it
-/// on demand, so a direct launch is the development escape hatch.
+/// The render process. It arbitrates the instance lock, serves the activation channel, starts
+/// the daemon and shows the window. When the window closes it spawns the tray process first,
+/// so the lock, the channel and the daemon supervision hand over without a gap.
 /// </summary>
 internal static class DesktopLauncher
 {
+    private static GuiActivationServer? _activation;
+    private static bool _serving;
+
     public static int Launch(string[] args)
     {
-        // No instance arbitration and no activation server here: both belong to the tray, which
-        // is the process a second launch reaches. A render process started on its own would
-        // have nobody to ask and nothing to answer.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        var arbitration = GuiInstanceGuard
+            .ArbitrateAsync(identity, null, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        if (!arbitration.IsWinner)
+        {
+            // The loser already sent Show to the lock holder and must not construct a second GUI.
+            return arbitration.ExitCode;
+        }
+
+        using var lease = arbitration.Lease!;
+        using var activation = GuiActivationServer.StartActive(identity);
+        _activation = activation;
+
+        activation.ShowRequested += () =>
+        {
+            var window = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+            if (window is null)
+            {
+                return Task.CompletedTask;
+            }
+
+            Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (window.WindowState == WindowState.Minimized)
+                {
+                    window.WindowState = WindowState.Normal;
+                }
+
+                window.Activate();
+            });
+            return Task.CompletedTask;
+        };
+
+        // The daemon is the mapping authority from the first window on: the render process
+        // starts it (elevated on Windows) and supervises nothing else.
+        var daemon = new DaemonSupervisor();
+        daemon.EnsureRunning();
+
         Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+
+        _activation = null;
         return 0;
+    }
+
+    /// <summary>
+    /// Called once the render window is on screen: serving starts only then, so a Show arriving
+    /// during startup is answered by a live window instead of a half-built one.
+    /// </summary>
+    internal static void NotifyWindowShown()
+    {
+        if (!_serving)
+        {
+            _serving = true;
+            _activation?.BeginServing();
+        }
     }
 }

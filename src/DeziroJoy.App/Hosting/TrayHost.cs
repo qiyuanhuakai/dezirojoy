@@ -208,20 +208,35 @@ internal sealed class RenderSupervisor : IDisposable
     /// </summary>
     public void EnsureVisible()
     {
-        if (_disposed || IsAlive)
-        {
-            return;
+            if (_disposed || IsAlive)
+            {
+                return;
+            }
+
+            Spawn();
         }
 
-        Spawn();
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
+        /// <summary>
+        /// Ends the render process this supervisor spawned, as the tray's exit item does: the
+        /// window is the process, so killing the child is the whole cleanup. A render that
+        /// already exited on its own is a no-op.
+        /// </summary>
+        public void Stop()
         {
-            return;
+            if (_disposed || _render is not { } render)
+            {
+                return;
+            }
+
+            render.Kill(entireTree: true);
         }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
 
         _disposed = true;
 
@@ -275,16 +290,42 @@ internal static class TrayHost
     /// The default entry point. The tray wins the instance lock, so a second launch reaches it
     /// over the activation pipe instead of starting a second tray.
     /// </summary>
+    internal static GuiArbitration ArbitrateWithRetry(
+        GuiInstanceIdentity identity,
+        Func<GuiInstanceIdentity, CancellationToken, Task<GuiArbitration>>? arbitrate = null,
+        Func<CancellationToken, Task>? retryDelay = null,
+        int maxAttempts = 300)
+    {
+        arbitrate ??= static (id, ct) => GuiInstanceGuard.ArbitrateAsync(id, null, ct);
+        retryDelay ??= static ct => Task.Delay(100, ct);
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var arbitration = arbitrate(identity, CancellationToken.None).GetAwaiter().GetResult();
+            if (arbitration.IsWinner)
+            {
+                return arbitration;
+            }
+
+            if (attempt == maxAttempts - 1)
+            {
+                return arbitration;
+            }
+
+            retryDelay(CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        return GuiArbitration.Exit(1);
+    }
+
     public static int Run()
     {
         IsTrayProcess = true;
 
         var identity = GuiInstanceIdentity.ForCurrentProcess();
-        var arbitration = GuiInstanceGuard
-            .ArbitrateAsync(identity, cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
-
+        // This tray is spawned by a render process that is closing its window, so the lock is
+        // still held for a moment: waiting for the release is the contract, not an exit.
+        var arbitration = ArbitrateWithRetry(identity);
         if (!arbitration.IsWinner)
         {
             return arbitration.ExitCode;
@@ -332,11 +373,13 @@ internal static class TrayHost
                 // also the retry point for a daemon whose pipe never answered.
                 daemon.EnsureRunning();
                 render.Show();
+                Retire(shutdown, lifetime);
             },
             exit: () =>
             {
                 daemon.Stop();
-                (shutdown ?? (() => lifetime.Shutdown()))();
+                render.Stop();
+                Retire(shutdown, lifetime);
             });
 
         tray.Install();
@@ -346,6 +389,7 @@ internal static class TrayHost
             activation.ShowRequested += () =>
             {
                 render.EnsureVisible();
+                Retire(shutdown, lifetime);
                 return Task.CompletedTask;
             };
 
@@ -369,6 +413,13 @@ internal static class TrayHost
     }
 
     /// <summary>
+    /// A live window owns the instance lock, so the tray retires itself once it has handed the
+    /// window over: the user's ruling is that no tray process exists while a GUI window does.
+    /// </summary>
+    private static void Retire(Action? shutdown, IClassicDesktopStyleApplicationLifetime lifetime)
+        => (shutdown ?? (() => lifetime.Shutdown()))();
+
+    /// <summary>
     /// Sends a Show for a render process that is already alive. The tray owns the activation
     /// channel, so the request is written over that pipe exactly as a second launch would
     /// write it, and the channel routes it to the render supervisor.
@@ -390,6 +441,8 @@ internal static class ProcessLauncher
     internal static ProcessStartInfo DaemonStartInfo() => EntryStartInfo("--daemon");
 
     internal static ProcessStartInfo RenderStartInfo() => EntryStartInfo("--gui");
+
+    internal static ProcessStartInfo TrayStartInfo() => EntryStartInfo("--tray");
 
     internal static IProcessHandle? Start(ProcessStartInfo startInfo)
     {

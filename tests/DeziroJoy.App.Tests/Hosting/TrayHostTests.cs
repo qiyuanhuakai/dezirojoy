@@ -90,7 +90,7 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Showing_The_Main_Window_Starts_The_Render_Process_When_None_Is_Alive()
+    public void Showing_The_Main_Window_Starts_The_Render_Process_And_Retires_The_Tray()
     {
         var fixture = BuildTray();
 
@@ -102,21 +102,10 @@ public sealed class TrayHostTests : IDisposable
         Assert.Contains("--gui", render.Info.Arguments);
         Assert.False(render.Info.UseShellExecute, "the render process is a plain child, not a shell launch");
         Assert.Same(fixture.Render, render.Handle);
-    }
 
-    [AvaloniaFact]
-    public void A_Second_Show_Sends_Show_Instead_Of_Spawning_Another_Render_Process()
-    {
-        var fixture = BuildTray();
-
-        Click(Item("显示主窗口"));
-        Dispatcher.UIThread.RunJobs();
-
-        Click(Item("显示主窗口"));
-        Dispatcher.UIThread.RunJobs();
-
-        Assert.Equal(1, fixture.Launcher.Started.Count(start => start.Info.Arguments.Contains("--gui")));
-        Assert.Equal(["show"], fixture.Shows);
+        // A live window owns the instance lock, so the tray retires itself after handing the
+        // window over: the user's ruling is that no tray process exists while a GUI window does.
+        Assert.Single(fixture.Shutdowns);
     }
 
     [AvaloniaFact]
@@ -140,7 +129,7 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Exiting_From_The_Tray_Stops_The_Daemon_And_Shuts_The_Tray_Down()
+    public void Exiting_From_The_Tray_Stops_The_Daemon_Kills_The_Render_And_Shuts_Down()
     {
         // The shutdown is recorded rather than performed: Shutdown() on a lifetime reaches the
         // shared headless Application, which would take every later test's input with it.
@@ -157,7 +146,10 @@ public sealed class TrayHostTests : IDisposable
             daemon,
             render,
             shutdown: () => shutdownRequested = true);
-        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, []));
+        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, [], new List<int>()));
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
 
         Click(Item("退出"));
 
@@ -165,6 +157,8 @@ public sealed class TrayHostTests : IDisposable
         Assert.Equal(1, launcher.Daemon!.KillCalls);
         Assert.True(launcher.Daemon.EntireTree);
         Assert.Equal(1, launcher.Daemon.WaitCalls);
+        Assert.Equal(1, launcher.Render!.KillCalls);
+        Assert.True(launcher.Render.EntireTree);
         Assert.True(shutdownRequested);
     }
 
@@ -257,9 +251,16 @@ public sealed class TrayHostTests : IDisposable
 
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var themes = new ThemeService(_directory);
-        var tray = TrayHost.InstallTray(_application, lifetime, themes, daemon, render);
+        var shutdowns = new List<int>();
+        var tray = TrayHost.InstallTray(
+            _application,
+            lifetime,
+            themes,
+            daemon,
+            render,
+            shutdown: () => shutdowns.Add(shutdowns.Count + 1));
 
-        var fixture = new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, shows);
+        var fixture = new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, shows, shutdowns);
         _fixtures.Add(fixture);
 
         return fixture;
@@ -309,7 +310,8 @@ public sealed class TrayHostTests : IDisposable
             FakeLauncher launcher,
             FakeProcessHandle daemon,
             FakeProcessHandle render,
-            List<string> shows)
+            List<string> shows,
+            List<int> shutdowns)
         {
             Tray = tray;
             Lifetime = lifetime;
@@ -317,7 +319,10 @@ public sealed class TrayHostTests : IDisposable
             Daemon = daemon;
             Render = render;
             Shows = shows;
+            Shutdowns = shutdowns;
         }
+
+        public List<int> Shutdowns { get; }
 
         public void Dispose() => Tray.Dispose();
     }
@@ -379,6 +384,31 @@ public sealed class TrayHostTests : IDisposable
         public void Dispose()
         {
         }
+    }
+
+    [AvaloniaFact]
+    public void The_Tray_Host_Retries_The_Instance_Lock_Until_It_Is_Free()
+    {
+        // The render process spawns this tray while it still holds the lock: the tray must
+        // wait for the release instead of exiting like a plain second launch would.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        var attempts = 0;
+        GuiArbitration Arbitrate(GuiInstanceIdentity id, CancellationToken ct)
+        {
+            attempts++;
+            return attempts < 3
+                ? GuiArbitration.Exit(1)
+                : GuiArbitration.Winner(GuiInstanceLease.TryAcquire(id)!);
+        }
+        Func<GuiInstanceIdentity, CancellationToken, Task<GuiArbitration>> AsyncArbitrate =
+            (id, ct) => Task.FromResult(Arbitrate(id, ct));
+        Func<CancellationToken, Task> NoDelay = static _ => Task.CompletedTask;
+
+        var result = TrayHost.ArbitrateWithRetry(identity, AsyncArbitrate, NoDelay);
+
+        Assert.True(result.IsWinner);
+        Assert.Equal(3, attempts);
+        result.Lease!.Dispose();
     }
 
     private sealed class FakeElevation : IElevationService

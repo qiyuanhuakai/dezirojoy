@@ -9,6 +9,7 @@ using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
+using System.Diagnostics;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Views;
@@ -170,24 +171,34 @@ public sealed class MainWindowLifecycleTests
     }
 
     /// <summary>
-    /// The render process is stateless: the window IS the process. Closing it shuts the
-    /// desktop lifetime down, which ends the process immediately - unsaved drafts are
-    /// discarded by design - while the tray and the daemon stay resident and keep mapping.
+    /// The render process is stateless and the window owns it: closing the window spawns the
+    /// tray process (which takes over the instance lock, the activation channel and the daemon
+    /// supervision) and then shuts the lifetime down - unsaved drafts are discarded by design,
+    /// the daemon keeps mapping with no window open, and the tray is resident exactly for the
+    /// window-less stretches.
     /// </summary>
     [AvaloniaFact]
-    public void Closing_The_Window_Ends_The_Render_Process()
+    public void Closing_The_Window_Spawns_The_Tray_And_Ends_The_Render_Process()
     {
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var (_, viewModel, host, _) = BuildWindow();
+        var spawned = new List<ProcessStartInfo>();
+        var shutdowns = new List<int>();
+        bool SpawnTray(ProcessStartInfo info) { spawned.Add(info); return true; }
 
-        var window = RenderProcess.InstallWindow(lifetime, viewModel, host, null!);
+        var window = RenderProcess.InstallWindow(
+            lifetime, viewModel, host, null!, SpawnTray,
+            shutdown: () => shutdowns.Add(shutdowns.Count + 1));
 
-        Assert.Equal(ShutdownMode.OnMainWindowClose, lifetime.ShutdownMode);
-        Assert.Same(window, lifetime.MainWindow);
+        Assert.Equal(ShutdownMode.OnExplicitShutdown, lifetime.ShutdownMode);
+        Assert.Empty(spawned);
 
         window.Close();
         Dispatcher.UIThread.RunJobs();
 
+        Assert.Single(spawned);
+        Assert.Contains("--tray", spawned[0].Arguments, StringComparison.Ordinal);
+        Assert.Single(shutdowns);
         Assert.False(window.IsVisible, "the render process's window is gone with the process");
     }
 }

@@ -186,12 +186,12 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 - .NET 运行时 28 MB 地板不可压缩。
 - 应用自身 40 MB：程序集 + Inter 字体 + CommunityToolkit + 3 个 UserControl + 计时器 + DI 容器 + 轮询。
 
-### 这如何与常驻架构互相印证
+### 这如何与三进程架构互相印证
 
-若引擎与注入移入**无窗口的常驻进程**，该进程永不加载 Avalonia/Skia/字体栈，
-其 RSS 回落至 .NET 地板（约 30 MB）。GUI 进程则相反：它常驻托盘不退出，
-但窗口是可释放的呈现资源——关闭或最小化到托盘即销毁窗口，其计时器、采样
-订阅与渲染资源一并释放，UI 栈只在窗口存在时占用内存。
+若引擎与注入移入**无窗口的常驻守护进程**，该进程永不加载 Avalonia/Skia/字体栈，
+其 RSS 回落至 .NET 地板（约 30 MB）。托盘进程同样无窗口，只驻留图标与菜单。
+渲染进程是可释放的呈现资源——关闭窗口即结束进程，其计时器、采样订阅与渲染
+资源一并释放，UI 栈只在窗口存在时占用内存。
 
 这直接回答了用户的方案选择：**"大部分时间不显示前端窗口"不仅改善体验，也消除内存顾虑。**
 
@@ -208,22 +208,16 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `FileProfileStore`（Windows `%APPDATA%\DeziroJoy\profiles\`，Linux `~/.config/DeziroJoy/profiles/`），
   因此 GUI 从未打开过也能按既有配置映射。
 - GUI 的 Start / Stop / Apply 都是**期望状态命令**，不是"让 GUI 自己开始注入"。
-- **Windows 没有本地引擎回退。** GUI 连不上守护进程时不会退而在自己进程内跑引擎——
-  那正是 UIPI 静默丢弃注入的形态，假成功比失败更糟。
-- **Linux 保留本地引擎。** uinput 不受 UIPI 约束，GUI 进程内直接运行引擎仍是正确形态，
-  守护进程与管道是 Windows 提权需求的产物，不是 Linux 的必需品。
+- **没有本地引擎回退，任何平台。** GUI 连不上守护进程时不会退而在自己进程内跑引擎——
+  那正是 UIPI 静默丢弃注入的形态（Windows），也是渲染进程持有注入能力的形态（Linux）。
+  渲染进程在启动时拉起守护进程（Windows 提权、Linux 同用户），托盘只在无窗口时段监督它。
 
-### 4.2 GUI 的组合入口
+### 4.2 渲染进程的组合入口
 
-GUI 通过**新的 GUI 专用组合/工厂**取得运行时，**不共享 `EngineComposition`**。
-
-`EngineComposition`（`src/DeziroJoy.App/Services/EngineComposition.cs`）是本地引擎路径的
-单一装配点：它自己 new 出 `FileProfileStore`、`PlatformFactory.TryCreateProvider` 的 provider、
-`PlatformFactory.TryCreateSink` 的 sink 与 `EngineHost`。GUI 复用它就会连带取得一套真实的
-本地引擎和本地 sink，与"权威在守护进程"直接矛盾。
-
-因此 GUI 侧的组合入口只装配：管道客户端、状态镜像，以及一个**不注入**的呈现用宿主
-（存在性检测、可视化器高亮、编辑器劫持）。注入路径只存在于守护进程内。
+渲染进程（默认入口，由托盘在窗口关闭后按需拉起）**不共享 `EngineComposition`**：它只装配管道客户端、
+状态镜像，以及一个**不注入**的呈现用宿主——`NoGamepadProvider` + `NullOutputSink` 的
+`EngineHost`，存在性检测、可视化器高亮、编辑器劫持都走它，且从不启动。注入路径只存在于
+守护进程内；`EngineComposition` 退居库/测试能力，生产组合根不再构造它。
 
 ### 4.3 两个不同的内核对象
 
