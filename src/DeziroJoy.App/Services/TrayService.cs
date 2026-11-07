@@ -3,17 +3,14 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Avalonia.Threading;
 
 namespace DeziroJoy.App.Services;
 
 /// <summary>
-/// Owns the application-level tray icon and the window lifecycle that makes DeziroJoy
-/// resident. The window is a releasable presentation resource, not the owner of the app:
-/// closing or minimizing to the tray destroys it - timers, sampling subscriptions and pad
-/// navigation stop, the editor lease is released - while the app-level view model, runtime
-/// and tray keep running. 显示主窗口 builds a fresh window from that retained state, and
-/// 退出 ends the GUI even when no window exists.
+/// Owns the application-level tray icon and its menu for the tray process. The tray is a
+/// resident icon process: it owns no window and no engine. 显示主窗口 and 退出 are routed to
+/// the host through the actions this service is given - the host owns the render supervisor,
+/// the daemon supervisor and the process lifetime - so the tray only ever asks.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,12 +20,10 @@ namespace DeziroJoy.App.Services;
 /// service installs — exactly once, on the <see cref="Application"/> it is given.
 /// </para>
 /// <para>
-/// The policy: a window close never ends the app on its own
-/// (<see cref="ShutdownMode.OnExplicitShutdown"/>), so the mapping engine keeps running with
-/// no window open. Only the tray's 退出 item ends the process, and it does so by shutting the
-/// lifetime down: every window is force-closed first - so each detaches its timers and
-/// subscriptions - and the application's Exit handler then disposes the local runtime without
-/// stopping the Windows daemon.
+/// The policy: the tray has no window to close, so
+/// <see cref="ShutdownMode.OnExplicitShutdown"/> is what keeps it resident. Only the 退出 item
+/// ends the process, and it does so by asking the host, which stops the daemon first and then
+/// shuts the lifetime down.
 /// </para>
 /// </remarks>
 public sealed class TrayService : IDisposable
@@ -36,10 +31,10 @@ public sealed class TrayService : IDisposable
     private readonly Application _application;
     private readonly IClassicDesktopStyleApplicationLifetime _lifetime;
     private readonly ThemeService _themes;
-    private readonly Func<MainWindow> _createWindow;
+    private readonly Action _showMainWindow;
+    private readonly Action _exit;
 
     private TrayIcon? _trayIcon;
-    private Window? _window;
     private bool _exiting;
     private bool _disposed;
 
@@ -47,33 +42,28 @@ public sealed class TrayService : IDisposable
         Application application,
         IClassicDesktopStyleApplicationLifetime lifetime,
         ThemeService themes,
-        Func<MainWindow> createWindow)
+        Action showMainWindow,
+        Action exit)
     {
         ArgumentNullException.ThrowIfNull(application);
         ArgumentNullException.ThrowIfNull(lifetime);
         ArgumentNullException.ThrowIfNull(themes);
-        ArgumentNullException.ThrowIfNull(createWindow);
+        ArgumentNullException.ThrowIfNull(showMainWindow);
+        ArgumentNullException.ThrowIfNull(exit);
 
         _application = application;
         _lifetime = lifetime;
         _themes = themes;
-        _createWindow = createWindow;
+        _showMainWindow = showMainWindow;
+        _exit = exit;
     }
 
     /// <summary>True once the tray's 退出 item has been chosen.</summary>
     public bool IsExiting => _exiting;
 
     /// <summary>
-    /// Raised when the tray's 退出 item was chosen. The application answers it by shutting the
-    /// lifetime down, which force-closes any remaining window and raises Exit - where the
-    /// runtime is disposed. The tray only asks: it owns the window lifecycle, not the process.
-    /// </summary>
-    public event Action? ExitRequested;
-
-    /// <summary>
-    /// Builds the tray icon and the first window. Idempotent: the icon is constructed exactly
-    /// once no matter how many times this is called, and a window is only built when this
-    /// tray does not have one.
+    /// Builds the tray icon and its menu. Idempotent: the icon is constructed exactly once no
+    /// matter how many times this is called.
     /// </summary>
     public void Install()
     {
@@ -84,16 +74,9 @@ public sealed class TrayService : IDisposable
             return;
         }
 
-        // A window close must never end the app on its own any more; the tray's 退出 item is
-        // the only way out.
+        // The tray process has no window of its own, so nothing but an explicit request may
+        // end it.
         _lifetime.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-
-        EnsureWindow();
-
-        // Installing the tray is the app's startup, so the first window must actually be
-        // shown: building it without showing leaves the process holding the whole runtime in
-        // memory with nothing on screen, which reads as a stuck render process.
-        ShowMainWindow();
 
         var icon = new TrayIcon
         {
@@ -103,7 +86,7 @@ public sealed class TrayService : IDisposable
             Menu = BuildMenu(),
         };
 
-        // Left-clicking the tray icon restores the window, the same as the menu item.
+        // Left-clicking the tray icon shows the main window, the same as the menu item.
         icon.Clicked += (_, _) => ShowMainWindow();
 
         TrayIcon.SetIcons(_application, new TrayIcons { icon });
@@ -111,35 +94,14 @@ public sealed class TrayService : IDisposable
     }
 
     /// <summary>
-    /// Restores the window, building a new one when the last was destroyed. The new window is
-    /// created from the retained view model, host and themes, so the draft, the connection
-    /// state and the theme all carry over.
+    /// Asks the host to show the main window. The host answers by starting the render process
+    /// or by sending it a Show over the activation pipe; the tray itself never builds a window.
     /// </summary>
-    public void ShowMainWindow()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        EnsureWindow();
-
-        var window = _window!;
-
-        if (window.WindowState == WindowState.Minimized)
-        {
-            window.WindowState = WindowState.Normal;
-        }
-
-        window.Show();
-        window.Activate();
-    }
+    public void ShowMainWindow() => _showMainWindow();
 
     /// <summary>
-    /// Ends the GUI from the tray. The window is destroyed first so its timers and
-    /// subscriptions detach, then the shutdown is requested - which force-closes any
-    /// remaining window and raises the lifetime's Exit, where the application disposes the
-    /// runtime. Works with no window at all: the tray outlives every window generation.
+    /// Ends the tray from its menu. The host answers by stopping the daemon and shutting the
+    /// lifetime down; the tray only asks, and it asks exactly once.
     /// </summary>
     public void Exit()
     {
@@ -150,8 +112,7 @@ public sealed class TrayService : IDisposable
 
         _exiting = true;
 
-        _window?.Close();
-        ExitRequested?.Invoke();
+        _exit();
     }
 
     public void Dispose()
@@ -163,36 +124,10 @@ public sealed class TrayService : IDisposable
 
         _disposed = true;
 
-        if (_window is { } window)
-        {
-            window.Closed -= OnWindowClosed;
-            window.PropertyChanged -= OnWindowPropertyChanged;
-            _window = null;
-        }
-
         _trayIcon?.Dispose();
         _trayIcon = null;
 
         TrayIcon.SetIcons(_application, null);
-    }
-
-    /// <summary>Builds the first window when this tray does not have one yet.</summary>
-    private void EnsureWindow()
-    {
-        if (_window is not null)
-        {
-            return;
-        }
-
-        var window = _createWindow();
-
-        _window = window;
-        _lifetime.MainWindow = window;
-
-        // The window destroys itself on close and on minimize; the tray only hears about it
-        // so the next Show builds a fresh one instead of resurrecting a dead window.
-        window.Closed += OnWindowClosed;
-        window.PropertyChanged += OnWindowPropertyChanged;
     }
 
     private NativeMenu BuildMenu()
@@ -213,42 +148,6 @@ public sealed class TrayService : IDisposable
             new NativeMenuItemSeparator(),
             exit,
         };
-    }
-
-    private void OnWindowClosed(object? sender, EventArgs e)
-    {
-        if (_window is not { } window)
-        {
-            return;
-        }
-
-        window.Closed -= OnWindowClosed;
-        window.PropertyChanged -= OnWindowPropertyChanged;
-
-        if (ReferenceEquals(_lifetime.MainWindow, window))
-        {
-            _lifetime.MainWindow = null;
-        }
-
-        // The window released its presentation resources; the app, the view model, the
-        // runtime and this tray all outlive it.
-        _window = null;
-    }
-
-    private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
-    {
-        if (e.Property != Window.WindowStateProperty || _window is not { } window)
-        {
-            return;
-        }
-
-        if (window.WindowState == WindowState.Minimized)
-        {
-            // Minimizing to the tray releases the window exactly like closing does. The close
-            // is deferred: it runs from inside the window-state callback, and closing there
-            // would dispose the platform window while the setter is still using it.
-            Dispatcher.UIThread.Post(window.Close);
-        }
     }
 
     /// <summary>

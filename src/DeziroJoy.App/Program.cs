@@ -1,4 +1,5 @@
 using Avalonia;
+using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Windows.Elevation;
 
@@ -37,9 +38,18 @@ internal static class Program
             return UninstallAutostart();
         }
 
-        // Kept behind its own type so the JIT never has to resolve an Avalonia type while
-        // compiling Main: the daemon path then loads no Avalonia assembly at all.
-        return DesktopLauncher.Launch(args);
+        // The render process is reached only through its own flag: the tray spawns it on
+        // demand, and a direct launch is the development escape hatch. It never arbitrates the
+        // instance lock and never serves the activation channel - both belong to the tray.
+        if (HasFlag(args, "--gui"))
+        {
+            return DesktopLauncher.Launch(args);
+        }
+
+        // The default entry is the tray: a resident icon process that owns the instance lock,
+        // the activation channel, the theme and the two supervisors, and that starts the
+        // daemon on its own.
+        return TrayHost.Run();
     }
 
     public static AppBuilder BuildAvaloniaApp()
@@ -179,38 +189,22 @@ internal static class Program
         _ => "注册计划任务",
     };
 
-    private static bool IsDotNetHost(string executable)
+    internal static bool IsDotNetHost(string executable)
         => string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
-/// The Avalonia desktop lifetime. Isolated from <see cref="Program.Main"/> so the headless
-/// daemon never causes an Avalonia assembly to be loaded.
+/// The render process. Isolated from <see cref="Program.Main"/> so the headless daemon never
+/// causes an Avalonia assembly to be loaded, and reached only through --gui: the tray spawns it
+/// on demand, so a direct launch is the development escape hatch.
 /// </summary>
 internal static class DesktopLauncher
 {
     public static int Launch(string[] args)
     {
-        // GUI single-instance arbitration runs before any Avalonia or runtime construction:
-        // a second launch only asks the first GUI to show itself and then exits, so the loser
-        // never builds a window, an engine or a daemon controller. A launch that cannot reach
-        // the winner exits too - a failed activation is never a reason to start a second GUI.
-        var identity = GuiInstanceIdentity.ForCurrentProcess();
-        var arbitration = GuiInstanceGuard
-            .ArbitrateAsync(identity, cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
-
-        if (!arbitration.IsWinner)
-        {
-            return arbitration.ExitCode;
-        }
-
-        // This process is the one GUI: serve the activation channel for its whole life and
-        // hold the instance lease until the process ends.
-        using var lease = arbitration.Lease!;
-        using var activation = GuiActivationServer.StartActive(identity);
-
+        // No instance arbitration and no activation server here: both belong to the tray, which
+        // is the process a second launch reaches. A render process started on its own would
+        // have nobody to ask and nothing to answer.
         Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         return 0;
     }

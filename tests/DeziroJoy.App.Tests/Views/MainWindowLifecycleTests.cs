@@ -1,6 +1,7 @@
 using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
@@ -166,5 +167,27 @@ public sealed class MainWindowLifecycleTests
         RaiseActivated(second);
 
         Assert.True(viewModel.IsPhysicalInputInScope, "the new window must open with physical input in scope");
+    }
+
+    /// <summary>
+    /// The render process is stateless: the window IS the process. Closing it shuts the
+    /// desktop lifetime down, which ends the process immediately - unsaved drafts are
+    /// discarded by design - while the tray and the daemon stay resident and keep mapping.
+    /// </summary>
+    [AvaloniaFact]
+    public void Closing_The_Window_Ends_The_Render_Process()
+    {
+        var lifetime = new ClassicDesktopStyleApplicationLifetime();
+        var (_, viewModel, host, _) = BuildWindow();
+
+        var window = RenderProcess.InstallWindow(lifetime, viewModel, host, null!);
+
+        Assert.Equal(ShutdownMode.OnMainWindowClose, lifetime.ShutdownMode);
+        Assert.Same(window, lifetime.MainWindow);
+
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(window.IsVisible, "the render process's window is gone with the process");
     }
 }
