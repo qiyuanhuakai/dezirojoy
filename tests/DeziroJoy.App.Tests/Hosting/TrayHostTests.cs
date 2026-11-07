@@ -102,7 +102,7 @@ public sealed class TrayHostTests : IDisposable
 
         Assert.Contains("--gui", render.Info.Arguments);
         Assert.False(render.Info.UseShellExecute, "the render process is a plain child, not a shell launch");
-        Assert.Same(fixture.Render, render.Handle);
+        Assert.Same(fixture.RenderHandle, render.Handle);
 
         // A live window owns the instance lock, so the tray retires itself after handing the
         // window over: the user's ruling is that no tray process exists while a GUI window does.
@@ -124,6 +124,53 @@ public sealed class TrayHostTests : IDisposable
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(["release", "spawn-render", "poll", "shutdown"], fixture.Order);
+    }
+
+    [AvaloniaFact]
+    public async Task The_Handover_Helper_Releases_The_Instance_Before_It_Spawns_The_Render()
+    {
+        // Both show routes hand the instance over through one helper, so the release-before-spawn order (the render arbitrates the lock once with no retry) is written once instead of twice.
+        var fixture = BuildTray(daemonReachable: true);
+
+        await TrayHost.HandOverToRenderAsync(
+            fixture.Daemon,
+            fixture.Render,
+            () => fixture.Order.Add("release"),
+            (_, _, _) =>
+            {
+                fixture.Order.Add("poll");
+                return Task.FromResult(true);
+            },
+            static () => Task.CompletedTask,
+            TimeSpan.FromSeconds(10),
+            () => fixture.Order.Add("shutdown"),
+            fixture.Lifetime);
+
+        Assert.Equal(["release", "spawn-render", "poll", "shutdown"], fixture.Order);
+    }
+
+    [AvaloniaFact]
+    public async Task The_Handover_Helper_Gives_Up_After_The_Bounded_Budget()
+    {
+        var fixture = BuildTray(daemonReachable: true);
+
+        await TrayHost.HandOverToRenderAsync(
+            fixture.Daemon,
+            fixture.Render,
+            () => fixture.Order.Add("release"),
+            (_, _, _) =>
+            {
+                fixture.Order.Add("poll");
+                return Task.FromResult(false);
+            },
+            static () => Task.CompletedTask,
+            TimeSpan.Zero,
+            () => fixture.Order.Add("shutdown"),
+            fixture.Lifetime);
+
+        Assert.Equal(1, fixture.Polls);
+        Assert.Equal(0, fixture.Delays);
+        Assert.Contains("shutdown", fixture.Order);
     }
 
     [AvaloniaFact]
@@ -161,7 +208,7 @@ public sealed class TrayHostTests : IDisposable
                 handle!.RaiseExited();
                 return Task.CompletedTask;
             });
-        handle = fixture.Render;
+        handle = fixture.RenderHandle;
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
@@ -240,7 +287,7 @@ public sealed class TrayHostTests : IDisposable
             shutdown: () => shutdownRequested = true,
             showPoll: static (_, _, _) => Task.FromResult(true),
             pollDelay: static () => Task.CompletedTask);
-        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, launcher.Daemon!, launcher.Render!, [], new List<int>(), []));
+        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, daemon, render, launcher.Daemon!, launcher.Render!, [], new List<int>(), []));
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
@@ -450,6 +497,8 @@ public sealed class TrayHostTests : IDisposable
             tray,
             lifetime,
             launcher,
+            daemon,
+            render,
             launcher.Daemon!,
             launcher.Render!,
             shows,
@@ -492,8 +541,10 @@ public sealed class TrayHostTests : IDisposable
             TrayService tray,
             ClassicDesktopStyleApplicationLifetime lifetime,
             FakeLauncher launcher,
-            FakeProcessHandle daemon,
-            FakeProcessHandle render,
+            DaemonSupervisor daemon,
+            RenderSupervisor render,
+            FakeProcessHandle daemonHandle,
+            FakeProcessHandle renderHandle,
             List<string> shows,
             List<int> shutdowns,
             List<string> order)
@@ -503,6 +554,8 @@ public sealed class TrayHostTests : IDisposable
             Launcher = launcher;
             Daemon = daemon;
             Render = render;
+            DaemonHandle = daemonHandle;
+            RenderHandle = renderHandle;
             Shows = shows;
             Shutdowns = shutdowns;
             Order = order;
@@ -514,9 +567,13 @@ public sealed class TrayHostTests : IDisposable
 
         public FakeLauncher Launcher { get; }
 
-        public FakeProcessHandle Daemon { get; }
+        public DaemonSupervisor Daemon { get; }
 
-        public FakeProcessHandle Render { get; }
+        public RenderSupervisor Render { get; }
+
+        public FakeProcessHandle DaemonHandle { get; }
+
+        public FakeProcessHandle RenderHandle { get; }
 
         public List<string> Shows { get; }
 

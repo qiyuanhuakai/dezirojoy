@@ -262,25 +262,10 @@ internal sealed class RenderSupervisor : IDisposable
     }
 
     /// <summary>
-    /// What the activation channel answers a Show with: start a render process when none is
-    /// alive, and nothing when one already is. Deliberately not <see cref="Show"/> - routing a
-    /// pipe Show straight back into the pipe would loop.
+    /// Ends the render process this supervisor spawned, as the tray's exit item does: the
+    /// window is the process, so killing the child is the whole cleanup. A render that
+    /// already exited on its own is a no-op.
     /// </summary>
-    public void EnsureVisible()
-    {
-            if (_disposed || IsAlive)
-            {
-                return;
-            }
-
-            Spawn();
-        }
-
-        /// <summary>
-        /// Ends the render process this supervisor spawned, as the tray's exit item does: the
-        /// window is the process, so killing the child is the whole cleanup. A render that
-        /// already exited on its own is a no-op.
-        /// </summary>
         public void Stop()
         {
             if (_disposed || _render is not { } render)
@@ -474,45 +459,15 @@ internal static class TrayHost
             application,
             lifetime,
             themes,
-            showMainWindow: async void () =>
-            {
-                // The daemon is started by the tray, never by the GUI, and a menu action is
-                // also the retry point for a daemon whose pipe never answered.
-                daemon.EnsureRunning();
-
-                // The instance lock and the activation channel are released BEFORE the render
-                // is spawned: the render arbitrates the lock exactly once with no retry, so a
-                // tray still holding it makes the render lose, ask this tray to show itself and
-                // exit with no window at all. Released first, the render wins the lock, takes
-                // the channel over and answers on the same pipe name.
-                releaseInstance?.Invoke();
-
-                render.Show();
-
-                // The render's NotifyWindowShown orders window-show before BeginServing, so an
-                // answer on the pipe is proof the window is up. The poll is bounded by the
-                // budget and also stops the moment the render dies, so the tray can neither
-                // hang on a dead child nor outlive a window that never came.
-                var identity = GuiInstanceIdentity.ForCurrentProcess();
-                var elapsed = Stopwatch.StartNew();
-
-                while (render.IsAlive)
-                {
-                    if (await showPoll(identity, GuiActivationOptions.Default, CancellationToken.None))
-                    {
-                        break;
-                    }
-
-                    if (elapsed.Elapsed >= budget)
-                    {
-                        break;
-                    }
-
-                    await pollDelay();
-                }
-
-                Retire(shutdown, lifetime);
-            },
+            showMainWindow: async void () => await HandOverToRenderAsync(
+                daemon,
+                render,
+                releaseInstance,
+                showPoll,
+                pollDelay,
+                budget,
+                shutdown,
+                lifetime),
             exit: () =>
             {
                 daemon.Stop();
@@ -524,12 +479,15 @@ internal static class TrayHost
 
         if (activation is not null)
         {
-            activation.ShowRequested += () =>
-            {
-                render.EnsureVisible();
-                Retire(shutdown, lifetime);
-                return Task.CompletedTask;
-            };
+            activation.ShowRequested += () => HandOverToRenderAsync(
+                daemon,
+                render,
+                releaseInstance,
+                showPoll,
+                pollDelay,
+                budget,
+                shutdown,
+                lifetime);
 
             // Serving starts only once the tray can actually answer, so a launch arriving
             // while the supervisors are still being built waits for the live listener.
@@ -556,6 +514,57 @@ internal static class TrayHost
     /// </summary>
     private static void Retire(Action? shutdown, IClassicDesktopStyleApplicationLifetime lifetime)
         => (shutdown ?? (() => lifetime.Shutdown()))();
+
+    /// <summary>
+    /// The one handover from tray to render, shared by both show routes - the menu item and the
+    /// activation channel a second launch writes to - so the release-before-spawn order exists
+    /// once instead of twice. The instance lock and the activation pipe are released BEFORE the
+    /// render is spawned: the render arbitrates the lock exactly once with no retry, so a tray
+    /// still holding it makes the render lose, ask this tray to show itself and exit with no
+    /// window at all. The poll then waits for the render to answer on the same pipe name - an
+    /// answer is proof the window is up, because the render's NotifyWindowShown orders
+    /// window-show before BeginServing - and only then does the tray retire. The poll is bounded
+    /// by the budget and also stops the moment the render dies, so the tray can neither hang on
+    /// a dead child nor outlive a window that never came.
+    /// </summary>
+    internal static async Task HandOverToRenderAsync(
+        DaemonSupervisor daemon,
+        RenderSupervisor render,
+        Action? releaseInstance,
+        Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>> showPoll,
+        Func<Task> pollDelay,
+        TimeSpan budget,
+        Action? shutdown,
+        IClassicDesktopStyleApplicationLifetime lifetime)
+    {
+        // The daemon is started by the tray, never by the GUI, and a show route is also the
+        // retry point for a daemon whose pipe never answered.
+        daemon.EnsureRunning();
+
+        releaseInstance?.Invoke();
+
+        render.Show();
+
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        var elapsed = Stopwatch.StartNew();
+
+        while (render.IsAlive)
+        {
+            if (await showPoll(identity, GuiActivationOptions.Default, CancellationToken.None))
+            {
+                break;
+            }
+
+            if (elapsed.Elapsed >= budget)
+            {
+                break;
+            }
+
+            await pollDelay();
+        }
+
+        Retire(shutdown, lifetime);
+    }
 
     /// <summary>
     /// Sends a Show for a render process that is already alive. The tray owns the activation
