@@ -441,6 +441,98 @@ public class EngineHostTests
         Assert.Contains("down:Enter", sink.Calls);
     }
 
+    private static GamepadProfile LeaderProfile(LeaderSwitchMode switchMode, params GamepadButton[] buttons)
+        => new()
+        {
+            Name = "leader",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                .. buttons.Select(button => new MappingEntry
+                {
+                    Source = new ButtonBinding(button),
+                    Target = new SpecialKeyTarget(
+                        SpecialKeyKind.Leader,
+                        PrecisionMode.Toggle,
+                        switchMode,
+                        SlotA: 1,
+                        SlotB: 2),
+                }),
+            ],
+        };
+
+    [Fact]
+    public void A_Leader_Press_Edge_Raises_Preset_Switch_Requested_Once_Per_Tick()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LeaderProfile(LeaderSwitchMode.Press, GamepadButton.Back));
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var requested = new List<int>();
+        host.PresetSwitchRequested += (_, slot) => requested.Add(slot);
+
+        host.TickOnce(Tick);
+        Assert.Empty(requested);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+
+        Assert.Equal([2], requested);
+        Assert.Empty(sink.Calls);
+
+        // The button is still held: no new edge, so no second request.
+        host.TickOnce(Tick);
+        Assert.Equal([2], requested);
+    }
+
+    [Fact]
+    public void A_Hold_Leader_Raises_Preset_Switch_Requested_On_Both_Edges()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LeaderProfile(LeaderSwitchMode.Hold, GamepadButton.Back));
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var requested = new List<int>();
+        host.PresetSwitchRequested += (_, slot) => requested.Add(slot);
+
+        host.TickOnce(Tick);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2], requested);
+
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal([2, 1], requested);
+    }
+
+    [Fact]
+    public void Repeated_Switch_Requests_In_One_Tick_Raise_The_Event_Once()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LeaderProfile(LeaderSwitchMode.Press, GamepadButton.Back, GamepadButton.Start));
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var requested = new List<int>();
+        host.PresetSwitchRequested += (_, slot) => requested.Add(slot);
+
+        host.TickOnce(Tick);
+
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(GamepadButtonMask.Back | GamepadButtonMask.Start, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+
+        Assert.Equal([2], requested);
+    }
+
     [Fact]
     public async Task Mapping_Mutations_Wait_For_An_In_Flight_Tick()
     {

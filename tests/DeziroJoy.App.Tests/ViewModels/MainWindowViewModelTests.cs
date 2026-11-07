@@ -191,6 +191,93 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public void The_Active_Preset_Slot_Starts_At_One()
+    {
+        var (vm, _, _, _) = CreateHost();
+
+        Assert.Equal(1, vm.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task SwitchPresetSlot_Applies_The_Stored_Slot_Profile_Locally()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        var presets = new PresetStore(store);
+        presets.SaveSlot("xinput:0", 2, new GamepadProfile
+        {
+            Name = "第二套",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.A),
+                    Target = new KeyPressTarget(GamepadKey.Space),
+                },
+            ],
+        });
+
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+
+        Assert.Equal(2, vm.ActivePresetSlot);
+        Assert.Equal("第二套", vm.ActiveProfile!.Name);
+    }
+
+    [Fact]
+    public void A_Leader_Press_Through_The_Host_Switches_The_Active_Preset_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("xinput:0", 1, new GamepadProfile
+        {
+            Name = "主配置",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(
+                        SpecialKeyKind.Leader,
+                        PrecisionMode.Toggle,
+                        LeaderSwitchMode.Press,
+                        SlotA: 1,
+                        SlotB: 2),
+                },
+            ],
+        });
+        presets.SaveSlot("xinput:0", 2, new GamepadProfile
+        {
+            Name = "第二套",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.A),
+                    Target = new KeyPressTarget(GamepadKey.Space),
+                },
+            ],
+        });
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        SampleHelper.Sample(vm, host);
+
+        Assert.Equal(2, vm.ActivePresetSlot);
+        Assert.Equal("第二套", vm.ActiveProfile!.Name);
+    }
+
+    [Fact]
     public void Toggle_Engine_Starts_And_Stops_The_Host_Loop()
     {
         var (vm, host, provider, _) = CreateHost();

@@ -50,6 +50,24 @@ public sealed class DaemonControllerTests
     }
 
     [Fact]
+    public async Task SwitchPresetSlot_Sends_The_Message_And_Returns_The_Ack()
+    {
+        var endpoint = new FakeEndpoint();
+        await using var controller = new DaemonController(endpoint);
+        await ConnectAsync(controller);
+        endpoint.Channel.OnSend = message => message is SwitchPresetSlotMessage request
+            ? new MutationAckMessage(request.RequestId, true, 1, 1)
+            : null;
+
+        var result = await controller.SwitchPresetSlotAsync("pad-1", 2, TestContext.Current.CancellationToken);
+
+        Assert.Equal(MutationOutcome.Accepted, result.Outcome);
+        var sent = Assert.Single(endpoint.Channel.Sent.OfType<SwitchPresetSlotMessage>());
+        Assert.Equal("pad-1", sent.DeviceId);
+        Assert.Equal(2, sent.Slot);
+    }
+
+    [Fact]
     public async Task A_Revision_Conflict_Is_Refused_And_Never_Replayed()
     {
         var endpoint = new FakeEndpoint();

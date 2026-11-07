@@ -214,6 +214,9 @@ public sealed class DaemonController : IAsyncDisposable
     public Task<MutationResult> SetInjectionSuspendedAsync(bool suspended, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SetInjectionSuspendedMessage(requestId, suspended), cancellationToken);
 
+    public Task<MutationResult> SwitchPresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SwitchPresetSlotMessage(requestId, deviceId, slot), cancellationToken);
+
     private async Task<MutationResult> MutateAsync(
         Func<string, IpcMessage> build,
         CancellationToken cancellationToken,

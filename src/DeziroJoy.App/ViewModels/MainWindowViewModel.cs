@@ -72,6 +72,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly IProfileStore _profileStore;
 
+    private readonly PresetStore _presets;
+
     private readonly IElevationService _elevationService;
 
     private MappingEntry? _editingEntry;
@@ -107,6 +109,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _settings = settings;
         _uiContext = SynchronizationContext.Current;
         _profileStore = profileStore;
+        _presets = new PresetStore(_profileStore);
         _elevationService = elevationService ?? new ElevationService();
         Editor = new MappingEditorViewModel();
         MouseSensitivity = new MouseSensitivityViewModel();
@@ -128,6 +131,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 OnDaemonSnapshot(snapshot);
             }
         }
+
+        _host.PresetSwitchRequested += OnHostPresetSwitchRequested;
 
         RefreshStatus();
     }
@@ -352,6 +357,77 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private Task ToggleLeaderSlot()
         => SwapLeaderSlotAsync(ActiveLeaderSlot == LeaderSlot.Primary ? LeaderSlot.Alternate : LeaderSlot.Primary);
+
+    /// <summary>Which preset slot (1-4) is active for the device in scope.</summary>
+    [ObservableProperty]
+    private int _activePresetSlot = 1;
+
+    /// <summary>
+    /// The local engine asked to switch preset slot. In daemon mode the daemon owns the
+    /// switch and answers through its snapshots, so the presentation host's request is
+    /// ignored; locally the slot is applied right here, exactly like the command does.
+    /// </summary>
+    private void OnHostPresetSwitchRequested(object? sender, int slot)
+    {
+        if (_daemon is null)
+        {
+            ApplyPresetSlotLocally(slot);
+        }
+    }
+
+    /// <summary>
+    /// Switches the active preset slot. In daemon mode the daemon applies it and answers
+    /// through its snapshot; locally the slot's stored profile is loaded and reloaded into
+    /// the running engine, the same path the daemon takes.
+    /// </summary>
+    [RelayCommand]
+    private async Task SwitchPresetSlot(int slot)
+    {
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；配置槽位未切换。");
+            return;
+        }
+
+        if (_daemon is not null)
+        {
+            if (ActiveController is not { } controller)
+            {
+                return;
+            }
+
+            try
+            {
+                var result = await _daemon.SwitchPresetSlotAsync(
+                    controller.Descriptor.DeviceId, slot, _lifetime.Token);
+                ReportMutationFailure(result, "切换配置槽位");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            return;
+        }
+
+        ApplyPresetSlotLocally(slot);
+    }
+
+    private void ApplyPresetSlotLocally(int slot)
+    {
+        if (ActiveController is not { } controller)
+        {
+            return;
+        }
+
+        if (_presets.LoadSlot(controller.Descriptor.DeviceId, slot) is not { } profile)
+        {
+            return;
+        }
+
+        ApplyProfileLocally(profile);
+        ActivePresetSlot = slot;
+    }
 
     partial void OnIsPhysicalInputInScopeChanged(bool value)
     {
@@ -1333,6 +1409,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsEngineRunning = snapshot.Running;
         IsMappingEnabled = snapshot.MappingEnabled;
         _mappingEnabledRequested = snapshot.MappingEnabled;
+        ActivePresetSlot = snapshot.ActivePresetSlot;
         MappingOwner = snapshot.Running ? MappingOwner.ResidentDaemon : MappingOwner.None;
         AdoptDaemonProfile(snapshot);
         if (!string.IsNullOrWhiteSpace(snapshot.LastError))

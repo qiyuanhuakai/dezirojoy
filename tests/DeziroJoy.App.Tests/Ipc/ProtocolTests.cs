@@ -167,6 +167,20 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void SwitchPresetSlot_Round_Trips_The_Request_Device_And_Slot()
+    {
+        var message = new SwitchPresetSlotMessage("req-1", "pad-1", 2);
+
+        var restored = Assert.IsType<SwitchPresetSlotMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.Equal(message, restored);
+        Assert.Equal("pad-1", restored.DeviceId);
+        Assert.Equal(2, restored.Slot);
+        Assert.Contains("switch-preset-slot", IpcSerializer.Serialize(message));
+    }
+
+    [Fact]
     public void MutationAck_Echoes_The_Request_Id_Across_The_Wire()
     {
         var request = new ApplyConfigurationMessage("req-42", 7, "Xbox Default", ProfileJson());
@@ -221,6 +235,37 @@ public class ProtocolTests
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
         Assert.Equal(message, restored);
+    }
+
+    [Fact]
+    public void StateSnapshot_Defaults_The_Active_Preset_Slot_To_One()
+    {
+        var snapshot = new StateSnapshot(0, 0, false, false, 0, null, string.Empty, null, 0, 0, false);
+
+        Assert.Equal(1, snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public void StateChanged_Round_Trips_The_Active_Preset_Slot()
+    {
+        var message = new StateChangedMessage("daemon-instance-1", new StateSnapshot(
+            Sequence: 42,
+            Revision: 7,
+            Running: true,
+            MappingEnabled: true,
+            InjectorPid: 1234,
+            InjectorIntegrity: "high",
+            ProfileName: "Xbox Default",
+            LastError: null,
+            InjectedEvents: 1000,
+            BlockedEvents: 5,
+            HasController: true,
+            ActivePresetSlot: 3));
+
+        var restored = Assert.IsType<StateChangedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.Equal(3, restored.Snapshot.ActivePresetSlot);
     }
 
     [Fact]

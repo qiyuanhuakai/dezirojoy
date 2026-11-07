@@ -1,3 +1,4 @@
+using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Platform;
@@ -96,9 +97,21 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public event EventHandler<ControllerSampledEventArgs>? PresenceSampled;
 
+    /// <summary>
+    /// Raised after a tick's command loop when the engine asked to switch preset slot,
+    /// carrying the target slot. <see cref="Platform.CommandDispatcher"/> never injects a
+    /// <see cref="SwitchPresetCommand"/> - the host owns the switch - so this is how the
+    /// tick's request reaches it: at most one raise per tick, the first request in tick
+    /// order winning when one tick named several. The host holds no preset store; it only
+    /// defers the request to whoever listens.
+    /// </summary>
+    public event EventHandler<int>? PresetSwitchRequested;
+
     /// <summary>Advances every connected controller by one tick.</summary>
     public void TickOnce(TimeSpan delta)
     {
+        int? presetSwitch = null;
+
         lock (_sync)
         {
             var connected = _provider.GetConnected();
@@ -121,12 +134,20 @@ public sealed class EngineHost : IDisposable
                 {
                     var commands = runtime.Engine.Tick(state, (float)delta.TotalSeconds);
                     runtime.Dispatcher.DispatchAll(commands);
+                    presetSwitch ??= FirstPresetSwitch(commands);
                 }
 
                 Sampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
             }
 
             ReconcileAbsence(present, DeviceAbsenceGraceTicks);
+        }
+
+        // Raised after the tick's command loop completes and outside the lock: the host
+        // answers by reloading a device, which takes the same lock.
+        if (presetSwitch is int slot)
+        {
+            PresetSwitchRequested?.Invoke(this, slot);
         }
     }
 
@@ -432,6 +453,24 @@ public sealed class EngineHost : IDisposable
             // alike - by the thread that owns it.
             injection.Release();
         }
+    }
+
+    /// <summary>
+    /// The first preset switch a tick's commands ask for, or null when they ask for none.
+    /// A tick raises at most one request, so repeated commands for the same slot collapse
+    /// into one and the first in tick order wins when a tick named two different slots.
+    /// </summary>
+    private static int? FirstPresetSwitch(IReadOnlyList<InputCommand> commands)
+    {
+        foreach (var command in commands)
+        {
+            if (command is SwitchPresetCommand preset)
+            {
+                return preset.TargetSlot;
+            }
+        }
+
+        return null;
     }
 
     private ControllerRuntime EnsureRuntime(GamepadDescriptor descriptor)

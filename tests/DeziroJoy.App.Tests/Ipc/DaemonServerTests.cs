@@ -302,6 +302,116 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task SwitchPresetSlot_Loads_The_Slot_Profile_Reloads_Only_The_Target_Device_And_Bumps_The_Revision()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "主配置",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第二套",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += push => pushes.Add(push);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 2)));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal("req-1", ack.RequestId);
+        Assert.Equal(1, ack.Revision);
+        Assert.Equal(["pad-1"], host.ReloadedDevices);
+        Assert.Equal("第二套", host.GetProfile("pad-1")!.Name);
+
+        var push = Assert.Single(pushes);
+        Assert.Equal(2, push.Snapshot.ActivePresetSlot);
+        Assert.Equal(1, push.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task Every_Snapshot_Carries_The_Active_Preset_Slot_After_A_Switch()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "主配置",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第二套",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var before = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-before")));
+        Assert.Equal(1, before.Snapshot.ActivePresetSlot);
+
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-switch", "pad-1", 2));
+
+        var after = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-after")));
+        Assert.Equal(2, after.Snapshot.ActivePresetSlot);
+        Assert.Equal("第二套", after.Snapshot.ProfileName);
+    }
+
+    [Fact]
+    public async Task SwitchPresetSlot_Rejects_A_Slot_Outside_One_To_Four()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 5)));
+
+        Assert.Equal("req-1", error.RequestId);
+        Assert.False(string.IsNullOrWhiteSpace(error.ErrorCode));
+        Assert.Empty(host.ReloadedDevices);
+    }
+
+    [Fact]
+    public async Task SwitchPresetSlot_Rejects_A_Slot_With_No_Stored_Configuration()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 2)));
+
+        Assert.Equal("req-1", error.RequestId);
+        Assert.Equal("no-configuration", error.ErrorCode);
+        Assert.Equal("no configuration", error.Message);
+        Assert.Empty(host.ReloadedDevices);
+    }
+
+    [Fact]
+    public async Task Transport_Refuses_A_Preset_Slot_Switch_Before_An_Accepted_Hello()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        var stream = new ScriptedStream();
+        stream.Script(new SwitchPresetSlotMessage("req-switch", "pad-1", 2));
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        Assert.Contains("handshake-required", stream.WrittenText());
+        Assert.Empty(host.ReloadedDevices);
+    }
+
+    [Fact]
     public async Task Snapshot_Reads_The_Host_Profile_Before_The_First_Ipc_Apply()
     {
         var (server, _, host) = CreateRunning();

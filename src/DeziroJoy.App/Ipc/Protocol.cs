@@ -43,7 +43,7 @@ public static class IpcErrorCodes
 }
 
 /// <summary>
-/// One message on the mapping control channel. The union is closed: exactly the eleven
+/// One message on the mapping control channel. The union is closed: exactly the twelve
 /// messages of section 4.4, each carrying only the fields its own semantics need -
 /// there is no envelope that forces every field onto every message. The
 /// <c>kind</c> discriminator is written by the serializer, not by hand.
@@ -57,6 +57,7 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(StopMessage), "stop")]
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
+[JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
 [JsonDerivedType(typeof(MutationAckMessage), "mutation-ack")]
 [JsonDerivedType(typeof(StateChangedMessage), "state-changed")]
 [JsonDerivedType(typeof(ErrorMessage), "error")]
@@ -114,6 +115,14 @@ public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : 
 public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
 
 /// <summary>
+/// GUI to daemon: switch the active preset slot of one device. The daemon loads the
+/// slot's stored profile, swaps its in-memory active slot for that device and reloads
+/// only that device; a slot outside 1..4, or one holding no stored profile, is refused
+/// with an <see cref="ErrorMessage"/> instead of a mutation ack.
+/// </summary>
+public sealed record SwitchPresetSlotMessage(string RequestId, string DeviceId, int Slot) : IpcMessage;
+
+/// <summary>
 /// Daemon to GUI: a mutation has been settled. <see cref="RequestId"/> echoes the
 /// request it answers; on refusal <see cref="ErrorCode"/> says why,
 /// <see cref="ErrorMessage"/> is the human-readable form for the UI, and
@@ -145,8 +154,8 @@ public sealed record ErrorMessage(string RequestId, string ErrorCode, string Mes
 
 /// <summary>
 /// The complete daemon state, carried whole by every snapshot. The surface is small
-/// (running or not, the active revision, injector identity, injection counters), so a
-/// full snapshot is cheaper to get right than a delta.
+/// (running or not, the active revision, injector identity, injection counters, the
+/// active preset slot), so a full snapshot is cheaper to get right than a delta.
 /// </summary>
 public sealed record StateSnapshot(
     long Sequence,
@@ -159,7 +168,8 @@ public sealed record StateSnapshot(
     string? LastError,
     long InjectedEvents,
     long BlockedEvents,
-    bool HasController)
+    bool HasController,
+    int ActivePresetSlot = 1)
 {
     /// <summary>The active profile body at <see cref="Revision"/>, used to rebase GUI drafts.</summary>
     public string? ProfileJson { get; init; }

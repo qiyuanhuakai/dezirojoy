@@ -20,17 +20,22 @@ public sealed partial class DaemonServer
 {
     private readonly IDaemonHost _host;
     private readonly IProfileStore _profileStore;
+    private readonly PresetStore _presetStore;
     private readonly DaemonStateStore _stateStore;
     private const string DirectConnectionId = "direct";
+    private const string InvalidPresetSlotErrorCode = "invalid-slot";
+    private const string NoPresetConfigurationErrorCode = "no-configuration";
     private readonly Lock _sync = new();
     private readonly DaemonState? _restored;
     private readonly HashSet<string> _injectionSuspensions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _activePresetSlots = new(StringComparer.Ordinal);
 
     private long _revision;
     private long _sequence;
     private string _profileName = string.Empty;
     private string _profileJson = string.Empty;
     private string? _lastError;
+    private string? _snapshotDeviceId;
     private bool _desiredEnabled;
     private bool _injectionSuspended;
 
@@ -52,6 +57,7 @@ public sealed partial class DaemonServer
 
         _host = host;
         _profileStore = profileStore;
+        _presetStore = new PresetStore(profileStore);
         _stateStore = stateStore;
         DaemonInstanceId = $"daemon-{(clock ?? new SystemClock()).UtcNow.Ticks:x16}";
 
@@ -126,6 +132,9 @@ public sealed partial class DaemonServer
 
             case SetInjectionSuspendedMessage setSuspended:
                 return HandleSetInjectionSuspended(setSuspended, connectionId);
+
+            case SwitchPresetSlotMessage switchSlot:
+                return HandleSwitchPresetSlot(switchSlot);
 
             default:
                 // The union is closed and the deserializer rejects unknown kinds, so this is
@@ -202,6 +211,7 @@ public sealed partial class DaemonServer
 
             _profileStore.Save(profile);
             ReloadTargetDevice(profile);
+            _snapshotDeviceId = SnapshotDeviceFor(profile.DeviceId);
 
             _profileName = apply.ProfileName;
             _profileJson = apply.ProfileJson;
@@ -213,15 +223,70 @@ public sealed partial class DaemonServer
         }
     }
 
+    /// <summary>
+    /// The device a snapshot describes: the applied profile's own when it names one,
+    /// otherwise the first connected device - the same device <see cref="ReloadTargetDevice"/>
+    /// reloads and <see cref="BuildSnapshot"/> reads its fallback profile from.
+    /// </summary>
+    private string? SnapshotDeviceFor(string? profileDeviceId)
+    {
+        if (!string.IsNullOrWhiteSpace(profileDeviceId))
+        {
+            return profileDeviceId;
+        }
+
+        var connected = _host.ConnectedDeviceIds;
+        return connected.Count > 0 ? connected[0] : null;
+    }
+
     private void ReloadTargetDevice(GamepadProfile profile)
     {
-        var connected = _host.ConnectedDeviceIds;
-        var target = string.IsNullOrWhiteSpace(profile.DeviceId)
-            ? (connected.Count > 0 ? connected[0] : null)
-            : profile.DeviceId;
-        if (target is not null && connected.Contains(target, StringComparer.Ordinal))
+        if (SnapshotDeviceFor(profile.DeviceId) is { } target
+            && _host.ConnectedDeviceIds.Contains(target, StringComparer.Ordinal))
         {
             _host.Reload(target, profile);
+        }
+    }
+
+    /// <summary>
+    /// Switches one device's active preset slot: the slot's stored profile is loaded, the
+    /// in-memory active slot for that device is swapped, only that device is reloaded, and
+    /// the revision is bumped so every GUI sees the new slot. A slot outside 1..4 or one
+    /// holding no stored profile is refused without touching any state.
+    /// </summary>
+    private IpcMessage HandleSwitchPresetSlot(SwitchPresetSlotMessage request)
+    {
+        if (request.Slot is < PresetStore.MinSlot or > PresetStore.MaxSlot)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                InvalidPresetSlotErrorCode,
+                $"preset slots run from {PresetStore.MinSlot} to {PresetStore.MaxSlot}");
+        }
+
+        lock (_sync)
+        {
+            var profile = _presetStore.LoadSlot(request.DeviceId, request.Slot);
+            if (profile is null)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    NoPresetConfigurationErrorCode,
+                    "no configuration");
+            }
+
+            _activePresetSlots[request.DeviceId] = request.Slot;
+            _snapshotDeviceId = request.DeviceId;
+
+            if (_host.ConnectedDeviceIds.Contains(request.DeviceId, StringComparer.Ordinal))
+            {
+                _host.Reload(request.DeviceId, profile);
+            }
+
+            _revision++;
+            PublishStateChange();
+
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
         }
     }
 
@@ -418,9 +483,21 @@ public sealed partial class DaemonServer
             LastError: _lastError,
             InjectedEvents: _host.InjectedEvents,
             BlockedEvents: _host.BlockedEvents,
-            HasController: _host.HasController)
+            HasController: _host.HasController,
+            ActivePresetSlot: ActivePresetSlotFor(connected))
         {
             ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
         };
+    }
+
+    /// <summary>
+    /// The active preset slot the snapshot reports: the slot of the device the snapshot
+    /// describes, or 1 when no device is known. Slots are in-memory only - a restart
+    /// resumes every device at slot 1, exactly as an unmigrated profile reads.
+    /// </summary>
+    private int ActivePresetSlotFor(IReadOnlyList<string> connected)
+    {
+        var deviceId = _snapshotDeviceId ?? (connected.Count > 0 ? connected[0] : null);
+        return deviceId is null ? 1 : _activePresetSlots.GetValueOrDefault(deviceId, 1);
     }
 }
