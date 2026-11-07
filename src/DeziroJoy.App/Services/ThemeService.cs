@@ -122,16 +122,28 @@ public sealed class ThemeService
         GamepadNavigationChanged?.Invoke(enabled);
     }
 
-    /// <summary>The button that swaps between the two leader profiles, or null when unset.</summary>
-    public GamepadButton? LeaderButton => _settings.LeaderButton;
+    /// <summary>
+    /// The retired leader button, read for the one-shot migration into the preset slots
+    /// only. New saves never write it, so this is null on every settings file written
+    /// after the retirement.
+    /// </summary>
+    internal GamepadButton? LegacyLeaderButton => _settings.LeaderButton;
 
-    /// <summary>Whether the leader key swaps on a press or only while held.</summary>
-    public LeaderMode LeaderMode => _settings.LeaderMode;
+    /// <summary>The retired leader mode, read for the one-shot migration only.</summary>
+    internal LeaderMode LegacyLeaderMode => _settings.LeaderMode;
 
-    /// <summary>Configures the leader key and persists the choice.</summary>
-    public void SetLeader(GamepadButton? button, LeaderMode mode)
+    /// <summary>
+    /// Clears the retired leader settings and persists the change, so the migration runs
+    /// at most once per stored legacy entry.
+    /// </summary>
+    internal void ClearLegacyLeader()
     {
-        _settings = _settings with { LeaderButton = button, LeaderMode = mode };
+        if (_settings.LeaderButton is null && _settings.LeaderMode == LeaderMode.Press)
+        {
+            return;
+        }
+
+        _settings = _settings with { LeaderButton = null, LeaderMode = LeaderMode.Press };
         Save();
     }
 
@@ -176,8 +188,16 @@ public sealed class ThemeService
 
         public bool GamepadNavigationEnabled { get; init; } = true;
 
+        /// <summary>
+        /// The retired leader pair. Kept so an old settings.json still deserializes and can
+        /// be migrated, but never written again: the leader key is a preset-slot mapping now.
+        /// The condition is write-only, so a file written before the retirement still reads
+        /// back while every save after the migration drops the pair.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public GamepadButton? LeaderButton { get; init; }
 
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public LeaderMode LeaderMode { get; init; } = LeaderMode.Press;
     }
 

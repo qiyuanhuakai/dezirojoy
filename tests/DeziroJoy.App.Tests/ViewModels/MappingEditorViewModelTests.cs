@@ -189,7 +189,7 @@ public class MappingEditorViewModelTests
         Assert.Equal(
             [
                 MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
-                MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll,
+                MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll, MappingTargetKind.SpecialKey,
             ],
             editor.AvailableTargetKinds);
     }
@@ -204,7 +204,7 @@ public class MappingEditorViewModelTests
         Assert.Equal(
             [
                 MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
-                MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll,
+                MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll, MappingTargetKind.SpecialKey,
             ],
             editor.AvailableTargetKinds);
     }
@@ -921,7 +921,7 @@ public class MappingEditorViewModelTests
         foreach (var kind in new[]
         {
             MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
-            MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll,
+            MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll, MappingTargetKind.SpecialKey,
         })
         {
             var editor = new MappingEditorViewModel { TargetKind = kind, SelectedDirection = InputDirection.Up };
@@ -1873,5 +1873,111 @@ public class MappingEditorViewModelTests
         editor.SelectedGestureKind = GestureKind.LongPress;
 
         Assert.Contains(nameof(MappingEditorViewModel.ActivePrecisionButton), notified);
+    }
+
+    // ---- The special-key target ----------------------------------------------
+
+    [Fact]
+    public void The_Target_Kind_List_Offers_The_Special_Key()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Contains(MappingTargetKind.SpecialKey, editor.AvailableTargetKinds);
+    }
+
+    [Fact]
+    public void The_Special_Key_Options_Are_Labelled_In_Chinese()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Equal(["精准键", "Leader 键"], editor.SpecialKindOptions.Select(option => option.Label));
+        Assert.Equal(["按下切换", "按住切换"], editor.SpecialSwitchModeOptions.Select(option => option.Label));
+        Assert.Equal([1, 2, 3, 4], editor.SpecialSlotOptions);
+    }
+
+    [Fact]
+    public void A_Leader_Special_Key_Round_Trips_Through_The_Editor()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.ActiveSpecialPrecisionMode = PrecisionMode.Hold;
+        editor.ActiveSpecialSwitchMode = LeaderSwitchMode.Hold;
+        editor.ActiveSpecialSlotA = 3;
+        editor.ActiveSpecialSlotB = 4;
+
+        var target = Assert.IsType<SpecialKeyTarget>(editor.BuildEntry().Target);
+
+        Assert.Equal(SpecialKeyKind.Leader, target.Kind);
+        Assert.Equal(PrecisionMode.Hold, target.PrecisionMode);
+        Assert.Equal(LeaderSwitchMode.Hold, target.SwitchMode);
+        Assert.Equal(3, target.SlotA);
+        Assert.Equal(4, target.SlotB);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(editor.BuildEntry());
+
+        Assert.Equal(MappingTargetKind.SpecialKey, reloaded.ActiveTargetKind);
+        Assert.Equal(SpecialKeyKind.Leader, reloaded.ActiveSpecialKind);
+        Assert.Equal(PrecisionMode.Hold, reloaded.ActiveSpecialPrecisionMode);
+        Assert.Equal(LeaderSwitchMode.Hold, reloaded.ActiveSpecialSwitchMode);
+        Assert.Equal(3, reloaded.ActiveSpecialSlotA);
+        Assert.Equal(4, reloaded.ActiveSpecialSlotB);
+    }
+
+    [Fact]
+    public void A_Precision_Special_Key_Round_Trips_Its_Mode()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.LeftStick };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Precision;
+        editor.ActiveSpecialPrecisionMode = PrecisionMode.Toggle;
+
+        Assert.Equal(
+            new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Toggle),
+            editor.BuildEntry().Target);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(editor.BuildEntry());
+
+        Assert.Equal(MappingTargetKind.SpecialKey, reloaded.ActiveTargetKind);
+        Assert.Equal(SpecialKeyKind.Precision, reloaded.ActiveSpecialKind);
+        Assert.Equal(PrecisionMode.Toggle, reloaded.ActiveSpecialPrecisionMode);
+    }
+
+    [Fact]
+    public void Equal_Leader_Slots_Are_A_Conflict_And_Different_Ones_Are_Not()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.ActiveSpecialSlotA = 2;
+        editor.ActiveSpecialSlotB = 2;
+
+        Assert.True(editor.SpecialKeySlotConflict);
+
+        editor.ActiveSpecialSlotB = 3;
+
+        Assert.False(editor.SpecialKeySlotConflict);
+
+        // A precision key names no slots, so equal ones are not a conflict there.
+        editor.ActiveSpecialKind = SpecialKeyKind.Precision;
+        editor.ActiveSpecialSlotB = 2;
+
+        Assert.False(editor.SpecialKeySlotConflict);
+    }
+
+    [Fact]
+    public void The_Precision_Button_Readout_Names_The_Button_Semantically()
+    {
+        var editor = new MappingEditorViewModel();
+
+        editor.ActivePrecisionButton = GamepadButton.B;
+
+        Assert.Equal("B 键", editor.ActivePrecisionButtonLabel);
+
+        editor.ActivePrecisionButton = GamepadButton.LeftStick;
+
+        Assert.Equal("左摇杆按下", editor.ActivePrecisionButtonLabel);
     }
 }

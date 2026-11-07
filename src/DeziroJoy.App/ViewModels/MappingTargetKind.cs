@@ -7,4 +7,5 @@ public enum MappingTargetKind
     MouseButton,
     MouseMove,
     WheelScroll,
+    SpecialKey,
 }

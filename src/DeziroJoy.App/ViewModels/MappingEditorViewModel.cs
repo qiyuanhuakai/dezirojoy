@@ -16,6 +16,12 @@ namespace DeziroJoy.App.ViewModels;
 /// </summary>
 public sealed record GestureActionOption(string Label, MappingTarget? Target);
 
+/// <summary>A special-key sub-kind as the picker shows it: 精准键 or Leader 键.</summary>
+public sealed record SpecialKeyKindOption(SpecialKeyKind Value, string Label);
+
+/// <summary>A leader switch mode as the picker shows it: 按下切换 or 按住切换.</summary>
+public sealed record LeaderSwitchModeOption(LeaderSwitchMode Value, string Label);
+
 /// <summary>
 /// Editing surface for one mapping: pick the source (button or stick) and the target
 /// (single key, combo, mouse button, stick-to-mouse, stick-to-wheel).
@@ -38,7 +44,7 @@ public sealed record GestureActionOption(string Label, MappingTarget? Target);
 public partial class MappingEditorViewModel : ObservableObject
 {
     /// <summary>
-    /// Every target kind, for both source kinds. The engine honors all ten source x target
+    /// Every target kind, for both source kinds. The engine honors all source x target
     /// combinations, so narrowing the list per source would only hide mappings that work.
     /// </summary>
     private static readonly MappingTargetKind[] AllTargetKinds =
@@ -48,6 +54,7 @@ public partial class MappingEditorViewModel : ObservableObject
         MappingTargetKind.MouseButton,
         MappingTargetKind.MouseMove,
         MappingTargetKind.WheelScroll,
+        MappingTargetKind.SpecialKey,
     ];
 
     private readonly SortedSet<int> _extraButtonCodes = [];
@@ -224,6 +231,130 @@ public partial class MappingEditorViewModel : ObservableObject
     public IReadOnlyList<GamepadButton> PrecisionButtonOptions { get; } =
         Enum.GetValues<GamepadButton>().Where(button => button != GamepadButton.Extra).ToArray();
 
+    /// <summary>
+    /// The active slot's precision key as every readout names it. The key belongs to the
+    /// mapping, so the semantic label - never the raw enum name - is what the user reads.
+    /// </summary>
+    public string ActivePrecisionButtonLabel => MappingDescriptions.Button(ActivePrecisionButton);
+
+    /// <summary>The special-key sub-kinds, for the picker.</summary>
+    public IReadOnlyList<SpecialKeyKindOption> SpecialKindOptions { get; } =
+    [
+        new(SpecialKeyKind.Precision, "精准键"),
+        new(SpecialKeyKind.Leader, "Leader 键"),
+    ];
+
+    /// <summary>
+    /// The precision modes a 精准键 offers, labelled exactly as the existing precision UI
+    /// labels them, so the two surfaces never name the same mode differently.
+    /// </summary>
+    public IReadOnlyList<PrecisionModeOption> SpecialPrecisionModeOptions { get; } =
+    [
+        new(PrecisionMode.Hold, "一直按住才触发"),
+        new(PrecisionMode.Toggle, "按一下启用，再按一下取消"),
+    ];
+
+    /// <summary>The leader switch modes, for the picker.</summary>
+    public IReadOnlyList<LeaderSwitchModeOption> SpecialSwitchModeOptions { get; } =
+    [
+        new(LeaderSwitchMode.Press, "按下切换"),
+        new(LeaderSwitchMode.Hold, "按住切换"),
+    ];
+
+    /// <summary>The preset slots a leader key can flip between.</summary>
+    public IReadOnlyList<int> SpecialSlotOptions { get; } = [1, 2, 3, 4];
+
+    /// <summary>The active slot's special-key sub-kind.</summary>
+    public SpecialKeyKind ActiveSpecialKind
+    {
+        get => ActiveSlot.SpecialKind;
+        set => ActiveSlot.SpecialKind = value;
+    }
+
+    /// <summary>The active slot's special-key precision mode.</summary>
+    public PrecisionMode ActiveSpecialPrecisionMode
+    {
+        get => ActiveSlot.SpecialPrecisionMode;
+        set => ActiveSlot.SpecialPrecisionMode = value;
+    }
+
+    /// <summary>The active slot's leader switch mode.</summary>
+    public LeaderSwitchMode ActiveSpecialSwitchMode
+    {
+        get => ActiveSlot.SpecialSwitchMode;
+        set => ActiveSlot.SpecialSwitchMode = value;
+    }
+
+    /// <summary>The first of the two slots a leader key flips between.</summary>
+    public int ActiveSpecialSlotA
+    {
+        get => ActiveSlot.SpecialSlotA;
+        set => ActiveSlot.SpecialSlotA = value;
+    }
+
+    /// <summary>The second of the two slots a leader key flips between.</summary>
+    public int ActiveSpecialSlotB
+    {
+        get => ActiveSlot.SpecialSlotB;
+        set => ActiveSlot.SpecialSlotB = value;
+    }
+
+    /// <summary>The selected sub-kind picker row, kept in step with <see cref="ActiveSpecialKind"/>.</summary>
+    public SpecialKeyKindOption? ActiveSpecialKindOption
+    {
+        get => SpecialKindOptions.First(option => option.Value == ActiveSpecialKind);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveSpecialKind = value.Value;
+            }
+        }
+    }
+
+    /// <summary>The selected precision-mode picker row, kept in step with <see cref="ActiveSpecialPrecisionMode"/>.</summary>
+    public PrecisionModeOption? ActiveSpecialPrecisionModeOption
+    {
+        get => SpecialPrecisionModeOptions.First(option => option.Value == ActiveSpecialPrecisionMode);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveSpecialPrecisionMode = value.Value;
+            }
+        }
+    }
+
+    /// <summary>The selected switch-mode picker row, kept in step with <see cref="ActiveSpecialSwitchMode"/>.</summary>
+    public LeaderSwitchModeOption? ActiveSpecialSwitchModeOption
+    {
+        get => SpecialSwitchModeOptions.First(option => option.Value == ActiveSpecialSwitchMode);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveSpecialSwitchMode = value.Value;
+            }
+        }
+    }
+
+    /// <summary>True when the special-key editor offers the leader-only controls.</summary>
+    public bool ShowSpecialLeaderControls => ActiveTargetKind == MappingTargetKind.SpecialKey
+        && ActiveSpecialKind == SpecialKeyKind.Leader;
+
+    /// <summary>True when the special-key editor offers the precision controls.</summary>
+    public bool ShowSpecialPrecisionControls => ActiveTargetKind == MappingTargetKind.SpecialKey
+        && ActiveSpecialKind == SpecialKeyKind.Precision;
+
+    /// <summary>
+    /// True when a leader key names the same slot twice. Flipping between a slot and itself
+    /// is not a switch, so the editor refuses the commit and says why rather than writing a
+    /// mapping that can never do anything.
+    /// </summary>
+    public bool SpecialKeySlotConflict => ActiveTargetKind == MappingTargetKind.SpecialKey
+        && ActiveSpecialKind == SpecialKeyKind.Leader
+        && ActiveSpecialSlotA == ActiveSpecialSlotB;
+
     /// <summary>The active slot's stick-to-wheel settings.</summary>
     public ScrollStickSettings ActiveScrollSettings
     {
@@ -307,16 +438,27 @@ public partial class MappingEditorViewModel : ObservableObject
                 return $"{ActiveGestureName}：已关闭";
             }
 
+            var target = ActiveSlot.BuildTarget();
             var what = ActiveSlot.Function switch
             {
                 GestureSlotFunction.None => "无功能",
                 GestureSlotFunction.RepeatClick => "重复单击的功能",
-                _ => MappingDescriptions.Target(ActiveSlot.BuildTarget()),
+                _ => target is SpecialKeyTarget special
+                    ? SpecialKeyDescription(special)
+                    : MappingDescriptions.Target(target),
             };
 
             return ActiveGestureCanBeDisabled ? $"{ActiveGestureName}：{what}" : what;
         }
     }
+
+    /// <summary>
+    /// What a special key does, named the way its own picker names it. The Core record has
+    /// no description of its own, and its raw <c>ToString</c> would read as debug output in
+    /// the editor's header.
+    /// </summary>
+    private static string SpecialKeyDescription(SpecialKeyTarget target)
+        => target.Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
 
     /// <summary>
     /// The selected row of the categorized key list for the active slot. A category header is
@@ -792,9 +934,22 @@ public partial class MappingEditorViewModel : ObservableObject
     public string SourceDescription => MappingDescriptions.Source(BuildSource());
 
     /// <summary>What the chosen target does, e.g. "Ctrl + C", or 无功能 when the click does nothing.</summary>
-    public string TargetDescription => ClickIsNone
-        ? "无功能"
-        : MappingDescriptions.Target(BuildTarget());
+    public string TargetDescription
+    {
+        get
+        {
+            if (ClickIsNone)
+            {
+                return "无功能";
+            }
+
+            var target = BuildTarget();
+
+            return target is SpecialKeyTarget special
+                ? SpecialKeyDescription(special)
+                : MappingDescriptions.Target(target);
+        }
+    }
 
     /// <summary>
     /// The selected picker row. A category header is a label, not a choice, so assigning one
@@ -1260,6 +1415,13 @@ public partial class MappingEditorViewModel : ObservableObject
             case nameof(GestureSlotEditor.ScrollSettings):
                 OnPropertyChanged(nameof(ScrollSettings));
                 break;
+            case nameof(GestureSlotEditor.SpecialKind):
+            case nameof(GestureSlotEditor.SpecialPrecisionMode):
+            case nameof(GestureSlotEditor.SpecialSwitchMode):
+            case nameof(GestureSlotEditor.SpecialSlotA):
+            case nameof(GestureSlotEditor.SpecialSlotB):
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
             case nameof(GestureSlotEditor.IsNone):
             case nameof(GestureSlotEditor.Function):
                 OnPropertyChanged(nameof(ClickIsNone));
@@ -1321,7 +1483,19 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveSelectedMouseButton));
         OnPropertyChanged(nameof(ActiveMouseSettings));
         OnPropertyChanged(nameof(ActivePrecisionButton));
+        OnPropertyChanged(nameof(ActivePrecisionButtonLabel));
         OnPropertyChanged(nameof(ActiveScrollSettings));
+        OnPropertyChanged(nameof(ActiveSpecialKind));
+        OnPropertyChanged(nameof(ActiveSpecialKindOption));
+        OnPropertyChanged(nameof(ActiveSpecialPrecisionMode));
+        OnPropertyChanged(nameof(ActiveSpecialPrecisionModeOption));
+        OnPropertyChanged(nameof(ActiveSpecialSwitchMode));
+        OnPropertyChanged(nameof(ActiveSpecialSwitchModeOption));
+        OnPropertyChanged(nameof(ActiveSpecialSlotA));
+        OnPropertyChanged(nameof(ActiveSpecialSlotB));
+        OnPropertyChanged(nameof(ShowSpecialLeaderControls));
+        OnPropertyChanged(nameof(ShowSpecialPrecisionControls));
+        OnPropertyChanged(nameof(SpecialKeySlotConflict));
         OnPropertyChanged(nameof(ActiveIsNone));
         OnPropertyChanged(nameof(ActiveRepeatsClick));
         OnPropertyChanged(nameof(ActiveGestureEnabled));

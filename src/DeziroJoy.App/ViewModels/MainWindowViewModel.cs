@@ -134,6 +134,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         _host.PresetSwitchRequested += OnHostPresetSwitchRequested;
 
+        if (_settings?.LegacyLeaderButton is { } leaderButton)
+        {
+            _legacyLeaderButton = leaderButton;
+            _legacyLeaderMode = _settings.LegacyLeaderMode;
+            _legacyLeaderPending = true;
+        }
+
         RefreshStatus();
     }
 
@@ -240,123 +247,38 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Turns gamepad-driven navigation off or on and persists the choice.</summary>
     public void SetGamepadNavigationEnabled(bool enabled) => _settings?.SetGamepadNavigation(enabled);
 
-    /// <summary>Which of the two leader profiles the engine is currently running.</summary>
-    [ObservableProperty]
-    private LeaderSlot _activeLeaderSlot = LeaderSlot.Primary;
+    /// <summary>
+    /// The retired leader pair, captured at construction so the one-shot migration can run
+    /// against the device that activates. The decision is taken once per stored legacy
+    /// entry: the settings are cleared as the migration lands, so a view model constructed
+    /// again finds nothing to migrate.
+    /// </summary>
+    private GamepadButton? _legacyLeaderButton;
 
-    public string LeaderSlotLabel => ActiveLeaderSlot == LeaderSlot.Alternate
-        ? "当前生效：第二套配置"
-        : "当前生效：主配置";
+    private LeaderMode _legacyLeaderMode;
 
-    partial void OnActiveLeaderSlotChanged(LeaderSlot value)
-        => OnPropertyChanged(nameof(LeaderSlotLabel));
-
-    /// <summary>Leader-key choices, starting with "not configured".</summary>
-    public IReadOnlyList<GamepadButton?> LeaderButtonOptions { get; } =
-        [null, .. Enum.GetValues<GamepadButton>().Where(button => button != GamepadButton.Extra)];
-
-    /// <summary>The configured leader button, or null when the leader key is off.</summary>
-    public GamepadButton? LeaderButton
-    {
-        get => _settings?.LeaderButton;
-        set => _settings?.SetLeader(value, LeaderMode);
-    }
-
-    /// <summary>Whether the leader key swaps on a press or only while held.</summary>
-    public LeaderMode LeaderMode
-    {
-        get => _settings?.LeaderMode ?? LeaderMode.Press;
-        set => _settings?.SetLeader(LeaderButton, value);
-    }
-
-    public IReadOnlyList<LeaderModeOption> LeaderModeOptions { get; } =
-        [new(LeaderMode.Press, "按下切换"), new(LeaderMode.Hold, "按住切换")];
-
-    /// <summary>Stores the profile in force right now as the leader alternate.</summary>
-    [RelayCommand]
-    private void SaveCurrentAsLeaderAlternate()
-    {
-        if (ActiveProfile is { } profile)
-        {
-            SaveLeaderAlternate(profile);
-        }
-    }
+    private bool _legacyLeaderPending;
 
     /// <summary>
-    /// Saves <paramref name="profile"/> as the alternate the leader key swaps to. It is stored
-    /// beside the device's own profile under a derived key, so the two never collide and the
-    /// alternate survives a restart; the real device id is restored when it is applied.
+    /// Converts the retired leader pair into the preset slots: the alternate (or a clone of
+    /// the base profile) becomes slot 2 carrying one leader mapping that flips between
+    /// slots 1 and 2. The store keys name a device, so the migration waits for the first
+    /// controller to activate rather than running against no device at construction.
     /// </summary>
-    public void SaveLeaderAlternate(GamepadProfile profile)
+    private void MigrateLegacyLeader(string deviceId)
     {
-        ArgumentNullException.ThrowIfNull(profile);
+        if (!_legacyLeaderPending)
+        {
+            return;
+        }
 
-        _profileStore.Save(profile with { DeviceId = LeaderKeyFor(profile.DeviceId) });
+        _legacyLeaderPending = false;
+
+        var alternate = _profileStore.Load($"leader-alternate:{deviceId}");
+
+        _presets.MigrateLegacyLeader(deviceId, _legacyLeaderButton, _legacyLeaderMode, alternate);
+        _settings?.ClearLegacyLeader();
     }
-
-    private static string LeaderKeyFor(string? deviceId)
-        => string.IsNullOrEmpty(deviceId) ? "leader-alternate" : $"leader-alternate:{deviceId}";
-
-    private void ApplyLeader(IGamepadState state)
-    {
-        var leader = _settings?.LeaderButton;
-
-        if (leader is not GamepadButton configured)
-        {
-            return;
-        }
-
-        if (_settings!.LeaderMode == LeaderMode.Hold)
-        {
-            var wanted = state.PressedButtons.Has(configured) ? LeaderSlot.Alternate : LeaderSlot.Primary;
-
-            if (wanted != ActiveLeaderSlot)
-            {
-                _ = SwapLeaderSlotAsync(wanted);
-            }
-
-            return;
-        }
-
-        var newlyPressed = state.PressedButtons & ~_navigationButtons;
-
-        if (newlyPressed.Has(configured))
-        {
-            _ = SwapLeaderSlotAsync(ActiveLeaderSlot == LeaderSlot.Primary ? LeaderSlot.Alternate : LeaderSlot.Primary);
-        }
-    }
-
-    private async Task SwapLeaderSlotAsync(LeaderSlot target)
-    {
-        if (ActiveController is null)
-        {
-            return;
-        }
-
-        var deviceId = ActiveController.Descriptor.DeviceId;
-        var profile = target == LeaderSlot.Alternate
-            ? _profileStore.Load(LeaderKeyFor(deviceId))
-            : _profileStore.Load(deviceId);
-
-        if (profile is null)
-        {
-            return;
-        }
-
-        if (await ApplyProfile(profile with { DeviceId = deviceId }))
-        {
-            ActiveLeaderSlot = target;
-        }
-    }
-
-    /// <summary>
-    /// The button counterpart of pressing the leader key: swaps between the device's own
-    /// profile and the stored alternate, so both configurations are reachable from the
-    /// mapping page without a pad in hand.
-    /// </summary>
-    [RelayCommand]
-    private Task ToggleLeaderSlot()
-        => SwapLeaderSlotAsync(ActiveLeaderSlot == LeaderSlot.Primary ? LeaderSlot.Alternate : LeaderSlot.Primary);
 
     /// <summary>Which preset slot (1-4) is active for the device in scope.</summary>
     [ObservableProperty]
@@ -753,6 +675,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // A leader key whose two slots are the same is refused, and the editor's own hint
+        // beside the slot pickers says why - the same pattern the gesture exclusion uses.
+        if (Editor.SpecialKeySlotConflict)
+        {
+            return;
+        }
+
         var entry = Editor.BuildEntry();
         var mappings = ActiveProfile.Mappings.ToList();
 
@@ -1094,8 +1023,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        ApplyLeader(state);
-
         if (IsEditing)
         {
             // Keyboard capture owns the input while it is armed. A gamepad button is not a
@@ -1323,6 +1250,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         ReloadSensitivityPanels();
         RefreshMappings();
+        MigrateLegacyLeader(runtime.Descriptor.DeviceId);
     }
 
     internal async Task<bool> ApplyProfile(GamepadProfile updated)

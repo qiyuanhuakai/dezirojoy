@@ -641,4 +641,126 @@ public class MainWindowViewModelTests
         Assert.Equal("Ctrl + C", row.ClickText);
         Assert.Equal("已关闭", row.LongPressText);
     }
+
+    // ---- The legacy leader key is migrated into the preset slots -------------
+
+    [Fact]
+    public async Task A_Legacy_Leader_Button_Is_Migrated_Into_Preset_Slot_Two_And_The_Settings_Cleared()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "dezirojoy-leader-migration", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            // An old settings.json still carries the retired leader pair; it deserializes
+            // even though new saves never write it. The pair is stored numerically, the way
+            // the settings serializer has always written enums.
+            File.WriteAllText(
+                Path.Combine(directory, "settings.json"),
+                """{"Theme":"Dark","LeaderButton":10,"LeaderMode":1}""");
+
+            var provider = new FakeGamepadProvider();
+            var sink = new RecordingOutputSink();
+            var store = new InMemoryProfileStore();
+            var host = new EngineHost(provider, sink, store);
+            var settings = new ThemeService(directory);
+            settings.Load();
+
+            store.Save(new GamepadProfile
+            {
+                Name = "第二套",
+                DeviceId = "leader-alternate:xinput:0",
+                Layout = GamepadLayout.Xbox,
+                Mappings =
+                [
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.A),
+                        Target = new KeyPressTarget(GamepadKey.Space),
+                    },
+                ],
+            });
+
+            var vm = new MainWindowViewModel(host, store, settings: settings);
+            await using var _ = vm;
+
+            provider.Add("xinput:0", "Xbox Wireless Controller");
+            provider.SetState("xinput:0", GamepadState.Neutral);
+            SampleHelper.Sample(vm, host);
+
+            var presets = new PresetStore(store);
+            var slotTwo = presets.LoadSlot("xinput:0", 2);
+
+            Assert.NotNull(slotTwo);
+            Assert.Equal("第二套", slotTwo!.Name);
+            Assert.Contains(slotTwo.Mappings, mapping => mapping.Target is KeyPressTarget { Key: GamepadKey.Space });
+
+            Assert.Single(
+                slotTwo.Mappings,
+                mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+            var leader = slotTwo.Mappings.First(
+                mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+            var target = Assert.IsType<SpecialKeyTarget>(leader.Target);
+
+            Assert.Equal(new ButtonBinding(GamepadButton.Guide), leader.Source);
+            Assert.Equal(LeaderSwitchMode.Hold, target.SwitchMode);
+            Assert.Equal(1, target.SlotA);
+            Assert.Equal(2, target.SlotB);
+
+            // The legacy entry is consumed, so a fresh read of the same file agrees.
+            var reloaded = new ThemeService(directory);
+            reloaded.Load();
+
+            Assert.Null(reloaded.LegacyLeaderButton);
+
+            // A second construction migrates nothing: the slot keeps exactly one leader
+            // entry rather than gaining a duplicate.
+            var secondHost = new EngineHost(provider, sink, store);
+            var second = new MainWindowViewModel(secondHost, store, settings: reloaded);
+            await using var __ = second;
+
+            provider.SetState("xinput:0", GamepadState.Neutral);
+            SampleHelper.Sample(second, secondHost);
+
+            var slotTwoAgain = presets.LoadSlot("xinput:0", 2);
+
+            Assert.Single(
+                slotTwoAgain!.Mappings,
+                mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Without_A_Legacy_Leader_Button_Nothing_Is_Migrated()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "dezirojoy-leader-migration", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            var provider = new FakeGamepadProvider();
+            var sink = new RecordingOutputSink();
+            var store = new InMemoryProfileStore();
+            var host = new EngineHost(provider, sink, store);
+            var settings = new ThemeService(directory);
+            settings.Load();
+
+            var vm = new MainWindowViewModel(host, store, settings: settings);
+            await using var _ = vm;
+
+            provider.Add("xinput:0", "Xbox Wireless Controller");
+            provider.SetState("xinput:0", GamepadState.Neutral);
+            SampleHelper.Sample(vm, host);
+
+            Assert.Null(new PresetStore(store).LoadSlot("xinput:0", 2));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 }

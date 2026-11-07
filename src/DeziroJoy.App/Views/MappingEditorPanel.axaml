@@ -27,6 +27,7 @@
     <UserControl.Resources>
         <conv:BoolNegationConverter x:Key="Not" />
         <conv:TargetKindMatchConverter x:Key="KindMatch" />
+        <views:TargetKindLabelConverter x:Key="TargetKindLabel" />
     </UserControl.Resources>
 
     <UserControl.Styles>
@@ -132,6 +133,35 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="MinHeight" Value="32" />
         </Style>
+
+        <!-- A preset slot: a round, focusable button at least 32px tall. The active slot
+             wears the accent surface and the accent ink, so the state never rests on
+             colour alone - the label is emboldened with it. -->
+        <Style Selector="Button.presetSlot">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="MinWidth" Value="32" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="2,0,2,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Button.presetSlot:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.presetSlot.active">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </UserControl.Styles>
 
     <Grid RowDefinitions="Auto,*">
@@ -154,6 +184,24 @@
 
         <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
+
+                <!-- The floating preset picker. Four round slots at the panel's right edge,
+                     directly under the pad model: an overlay on the model column rather than
+                     a tab of its own. The active slot wears the accent; a click switches the
+                     device's active preset through the window view model, which loads that
+                     slot's profile. The slots sit clear of the model's hit targets, so the
+                     pad stays fully clickable while the picker is open. -->
+                <Border x:Name="PresetPickerRow" HorizontalAlignment="Right" Margin="0,0,0,12"
+                        Background="{DynamicResource SubtleBrush}"
+                        CornerRadius="{DynamicResource CornerRadiusMd}" Padding="6,2">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Classes="fieldLabel" Text="预设" VerticalAlignment="Center" Margin="4,0,10,0" />
+                        <Button x:Name="PresetSlot1Button" Classes="presetSlot" Content="1" Click="OnPresetSlotClick" />
+                        <Button x:Name="PresetSlot2Button" Classes="presetSlot" Content="2" Click="OnPresetSlotClick" />
+                        <Button x:Name="PresetSlot3Button" Classes="presetSlot" Content="3" Click="OnPresetSlotClick" />
+                        <Button x:Name="PresetSlot4Button" Classes="presetSlot" Content="4" Click="OnPresetSlotClick" />
+                    </StackPanel>
+                </Border>
 
                 <!-- The switcher. One segmented control where all three gestures are equally
                      reachable - the double-click and the long-press are peers of the click,
@@ -232,9 +280,18 @@
                 <WrapPanel IsEnabled="{Binding ActiveTargetEditable}">
                     <StackPanel Width="230" Margin="0,0,12,0">
                         <TextBlock Classes="fieldLabel" Text="类型" />
+                        <!-- The label comes from the panel's own converter rather than the
+                             shared enumCombo template: the shared one falls back to the raw
+                             enum name for 特殊键, the kind this panel adds. -->
                         <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
                                   ItemsSource="{Binding AvailableTargetKinds}"
-                                  SelectedItem="{Binding ActiveTargetKind, Mode=TwoWay}" />
+                                  SelectedItem="{Binding ActiveTargetKind, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={StaticResource TargetKindLabel}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                     </StackPanel>
                     <StackPanel x:Name="MouseTargetRow" Width="230"
                                 IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
@@ -408,6 +465,87 @@
                         <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                    Text="{Binding ActiveScrollSettings.DeadZone, StringFormat='{}{0:F2}'}" />
                     </Grid>
+                </StackPanel>
+
+                <!-- 特殊键. The sub-kind leads and only the controls that sub-kind reads
+                     follow: 精准键 carries its trigger mode, Leader 键 carries the switch
+                     mode and the two preset slots it flips between. Equal slots are refused
+                     with the same explanatory hint the gesture exclusion uses. -->
+                <StackPanel x:Name="SpecialKeyRow" Margin="0,12,0,0"
+                            IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=SpecialKey}">
+                    <TextBlock Classes="sectionLabel" Text="特殊键" />
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="子类型" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="SpecialKindCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding SpecialKindOptions}"
+                                  SelectedItem="{Binding ActiveSpecialKindOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SpecialKeyKindOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <Grid x:Name="SpecialPrecisionModeRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialPrecisionControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="触发方式" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="SpecialPrecisionModeCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding SpecialPrecisionModeOptions}"
+                                  SelectedItem="{Binding ActiveSpecialPrecisionModeOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:PrecisionModeOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <Grid x:Name="SpecialSwitchModeRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLeaderControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="切换方式" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="SpecialSwitchModeCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding SpecialSwitchModeOptions}"
+                                  SelectedItem="{Binding ActiveSpecialSwitchModeOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LeaderSwitchModeOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <Grid x:Name="SpecialSlotARow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLeaderControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="槽位 A" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="SpecialSlotACombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding SpecialSlotOptions}"
+                                  SelectedItem="{Binding ActiveSpecialSlotA, Mode=TwoWay}" />
+                    </Grid>
+                    <Grid x:Name="SpecialSlotBRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLeaderControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="槽位 B" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="SpecialSlotBCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding SpecialSlotOptions}"
+                                  SelectedItem="{Binding ActiveSpecialSlotB, Mode=TwoWay}" />
+                    </Grid>
+                    <TextBlock x:Name="SpecialSlotHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
+                               IsVisible="{Binding SpecialKeySlotConflict}"
+                               Text="Leader 键的两个槽位不能相同：请为槽位 A 与槽位 B 选择不同的预设，否则按下该键不会切换任何配置。" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

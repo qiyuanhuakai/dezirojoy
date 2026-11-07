@@ -333,13 +333,29 @@ public sealed class SettingsPanelGuiTests : IDisposable
 
         var panel = PanelOf(window);
 
-        // The leader card moved to the mapping page (LeaderMappingGuiTests pins it there),
-        // so the settings surface keeps the profile, appearance, input and service cards only.
+        // The leader key is retired: it became a preset-slot mapping edited on the mapping
+        // surface, so the settings surface keeps the profile, appearance, input and service
+        // cards only.
         Assert.Null(panel.FindControl<ComboBox>("LeaderButtonCombo"));
         Assert.Null(panel.FindControl<ComboBox>("LeaderModeCombo"));
         Assert.Null(panel.FindControl<Button>("LeaderSwitchButton"));
         Assert.DoesNotContain(
             panel.GetVisualDescendants().OfType<TextBlock>(),
+            text => text.Text == "Leader 键");
+    }
+
+    [AvaloniaFact]
+    public void The_Leader_Key_Is_Retired_From_The_Whole_Window()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        Assert.Null(window.FindControl<ComboBox>("LeaderButtonCombo"));
+        Assert.Null(window.FindControl<ComboBox>("LeaderModeCombo"));
+        Assert.Null(window.FindControl<Button>("LeaderSwitchButton"));
+        Assert.Null(window.FindControl<TextBlock>("LeaderSlotReadout"));
+        Assert.DoesNotContain(
+            window.GetVisualDescendants().OfType<TextBlock>(),
             text => text.Text == "Leader 键");
     }
 

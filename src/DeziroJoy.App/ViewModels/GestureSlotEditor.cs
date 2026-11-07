@@ -62,6 +62,26 @@ public partial class GestureSlotEditor : ObservableObject
     private ScrollStickSettings _scrollSettings = new();
 
     /// <summary>
+    /// Which special behavior a <see cref="MappingTargetKind.SpecialKey"/> target triggers.
+    /// The defaults are the Core record's own, so a freshly chosen special key builds the
+    /// same target a profile written with the defaults carries.
+    /// </summary>
+    [ObservableProperty]
+    private SpecialKeyKind _specialKind = SpecialKeyKind.Precision;
+
+    [ObservableProperty]
+    private PrecisionMode _specialPrecisionMode = PrecisionMode.Toggle;
+
+    [ObservableProperty]
+    private LeaderSwitchMode _specialSwitchMode = LeaderSwitchMode.Press;
+
+    [ObservableProperty]
+    private int _specialSlotA = 1;
+
+    [ObservableProperty]
+    private int _specialSlotB = 2;
+
+    /// <summary>
     /// Which of the three states the slot is in. Editing any target field gives the slot a
     /// function of its own, so a slot that was re-firing the click becomes a real target.
     /// </summary>
@@ -124,6 +144,12 @@ public partial class GestureSlotEditor : ObservableObject
             MappingTargetKind.MouseButton => new MouseButtonTarget(SelectedMouseButton),
             MappingTargetKind.MouseMove => new MouseMoveTarget(MouseSettings),
             MappingTargetKind.WheelScroll => new WheelScrollTarget(ScrollSettings),
+            MappingTargetKind.SpecialKey => new SpecialKeyTarget(
+                SpecialKind,
+                SpecialPrecisionMode,
+                SpecialSwitchMode,
+                SpecialSlotA,
+                SpecialSlotB),
             _ => new KeyPressTarget(SelectedKey),
         };
 
@@ -184,6 +210,15 @@ public partial class GestureSlotEditor : ObservableObject
                 TargetKind = MappingTargetKind.WheelScroll;
                 ScrollSettings = wheelScroll.Settings;
                 break;
+            case SpecialKeyTarget special:
+                Function = GestureSlotFunction.Target;
+                TargetKind = MappingTargetKind.SpecialKey;
+                SpecialKind = special.Kind;
+                SpecialPrecisionMode = special.PrecisionMode;
+                SpecialSwitchMode = special.SwitchMode;
+                SpecialSlotA = special.SlotA;
+                SpecialSlotB = special.SlotB;
+                break;
         }
     }
 
@@ -200,6 +235,11 @@ public partial class GestureSlotEditor : ObservableObject
         SelectedMouseButton = MouseButton.Left;
         MouseSettings = new MouseStickSettings();
         ScrollSettings = new ScrollStickSettings();
+        SpecialKind = SpecialKeyKind.Precision;
+        SpecialPrecisionMode = PrecisionMode.Toggle;
+        SpecialSwitchMode = LeaderSwitchMode.Press;
+        SpecialSlotA = 1;
+        SpecialSlotB = 2;
     }
 
     partial void OnTargetKindChanged(MappingTargetKind value)
@@ -232,6 +272,16 @@ public partial class GestureSlotEditor : ObservableObject
     partial void OnMouseSettingsChanged(MouseStickSettings value) => ClaimFunction();
 
     partial void OnScrollSettingsChanged(ScrollStickSettings value) => ClaimFunction();
+
+    partial void OnSpecialKindChanged(SpecialKeyKind value) => ClaimFunction();
+
+    partial void OnSpecialPrecisionModeChanged(PrecisionMode value) => ClaimFunction();
+
+    partial void OnSpecialSwitchModeChanged(LeaderSwitchMode value) => ClaimFunction();
+
+    partial void OnSpecialSlotAChanged(int value) => ClaimFunction();
+
+    partial void OnSpecialSlotBChanged(int value) => ClaimFunction();
 
     /// <summary>
     /// Editing any field is a choice of target, so a slot that was re-firing the click takes
