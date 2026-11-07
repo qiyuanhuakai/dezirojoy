@@ -288,4 +288,58 @@ public class SourceTargetMatrixTests
 
         Assert.Equal(new KeyDownCommand(GamepadKey.W, KeyModifiers.None), Assert.Single(push));
     }
+
+    [Fact]
+    public void SpecialKeyTarget_Accepts_A_Button_Source()
+    {
+        var engine = new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new SpecialKeyTarget(SpecialKeyKind.Leader),
+            }));
+
+        Assert.Empty(engine.Tick(GamepadState.Neutral, Tick));
+    }
+
+    [Fact]
+    public void SpecialKeyTarget_Accepts_A_Stick_With_Direction()
+    {
+        var engine = new MappingEngine(Profile(StickDigital(
+            GamepadStick.Left,
+            InputDirection.Up,
+            new SpecialKeyTarget(SpecialKeyKind.Leader))));
+
+        Assert.Empty(engine.Tick(GamepadState.Neutral, Tick));
+    }
+
+    [Fact]
+    public void SpecialKeyTarget_Rejects_A_Stick_Without_Direction()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new StickBinding(GamepadStick.Left),
+                Target = new SpecialKeyTarget(SpecialKeyKind.Leader),
+            })));
+
+        Assert.Contains("direction", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Stick_To_Leader_Toggles_The_Preset_On_Deflection()
+    {
+        var engine = new MappingEngine(Profile(StickDigital(
+            GamepadStick.Left,
+            InputDirection.Up,
+            new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Press))));
+
+        var push = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 1, 0, 0), Tick);
+        var back = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 0, 0, 0), Tick);
+        var pushAgain = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 1, 0, 0), Tick);
+
+        Assert.Equal(new SwitchPresetCommand(2), Assert.Single(push));
+        Assert.Empty(back);
+        Assert.Equal(new SwitchPresetCommand(1), Assert.Single(pushAgain));
+    }
 }

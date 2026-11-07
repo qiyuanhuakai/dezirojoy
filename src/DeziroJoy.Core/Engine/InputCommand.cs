@@ -24,3 +24,10 @@ public sealed record KeyUpCommand(GamepadKey Key, KeyModifiers Modifiers) : Inpu
 public sealed record MouseDownCommand(MouseButton Button) : InputCommand;
 
 public sealed record MouseUpCommand(MouseButton Button) : InputCommand;
+
+/// <summary>
+/// Switches the active preset slot. Host-side only: the engine emits it for leader-key
+/// mappings, and <see cref="Platform.CommandDispatcher"/> deliberately never forwards it
+/// to the output sink - the host applies it by swapping the active profile.
+/// </summary>
+public sealed record SwitchPresetCommand(int TargetSlot) : InputCommand;

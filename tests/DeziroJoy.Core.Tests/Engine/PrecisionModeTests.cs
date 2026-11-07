@@ -25,6 +25,9 @@ public class PrecisionModeTests
     private static MappingEntry Stick(GamepadStick stick, MappingTarget target)
         => new() { Source = new StickBinding(stick), Target = target };
 
+    private static MappingEntry Button(GamepadButton button, MappingTarget target)
+        => new() { Source = new ButtonBinding(button), Target = target };
+
     /// <summary>
     /// A raw mouse mapping: no deadzone, no smoothing, 640 px/s at full deflection, so one
     /// tick of a fully deflected stick moves exactly 10 px fast and 5 px at the 0.5
@@ -187,5 +190,54 @@ public class PrecisionModeTests
         var fourth = engine.Tick(GamepadState.Create(GamepadButtonMask.RightBumper, 1, 0, 1, 0), Dt);
         Assert.Equal(10, Dx(fourth[0]));
         Assert.Equal(5, Dx(fourth[1]));
+    }
+
+    [Fact]
+    public void SpecialKeyTarget_Accepts_A_Button_Source()
+    {
+        var engine = new MappingEngine(Profile(
+            Button(GamepadButton.LeftStick, new SpecialKeyTarget(SpecialKeyKind.Precision))));
+
+        Assert.Empty(engine.Tick(GamepadState.Neutral, Dt));
+    }
+
+    [Fact]
+    public void SpecialKeyTarget_Accepts_A_Stick_With_Direction()
+    {
+        var engine = new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new StickBinding(GamepadStick.Left) { Direction = InputDirection.Up },
+                Target = new SpecialKeyTarget(SpecialKeyKind.Precision),
+            }));
+
+        Assert.Empty(engine.Tick(GamepadState.Neutral, Dt));
+    }
+
+    [Fact]
+    public void SpecialKeyTarget_Rejects_A_Stick_Without_Direction()
+    {
+        var exception = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new StickBinding(GamepadStick.Left),
+                Target = new SpecialKeyTarget(SpecialKeyKind.Precision),
+            })));
+
+        Assert.Contains("direction", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Special_Key_Toggle_Latches_On_Press_And_Stays_Slow_After_Release()
+    {
+        var engine = new MappingEngine(Profile(
+            Stick(GamepadStick.Right, new MouseMoveTarget(Mouse(PrecisionMode.Hold, GamepadButton.LeftStick))),
+            Button(GamepadButton.RightBumper, new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Toggle))));
+
+        var press = engine.Tick(GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 1, 0), Dt);
+        var release = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0), Dt);
+
+        Assert.Equal(5, Dx(Assert.Single(press)));
+        Assert.Equal(5, Dx(Assert.Single(release)));
     }
 }

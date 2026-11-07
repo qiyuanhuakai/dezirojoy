@@ -161,6 +161,44 @@ public class MappingModelTests
     }
 
     [Fact]
+    public void SpecialKeyTarget_Roundtrips_With_Type_Discriminator_And_Enum_Names()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "special",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(
+                        SpecialKeyKind.Leader,
+                        PrecisionMode.Toggle,
+                        LeaderSwitchMode.Hold,
+                        SlotA: 1,
+                        SlotB: 3),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.Contains("\"$type\": \"specialKey\"", json);
+        Assert.Contains("\"Kind\": \"Leader\"", json);
+        Assert.Contains("\"SwitchMode\": \"Hold\"", json);
+
+        var back = ProfileSerializer.Deserialize(json);
+        var target = Assert.IsType<SpecialKeyTarget>(back.Mappings[0].Target);
+
+        Assert.Equal(SpecialKeyKind.Leader, target.Kind);
+        Assert.Equal(PrecisionMode.Toggle, target.PrecisionMode);
+        Assert.Equal(LeaderSwitchMode.Hold, target.SwitchMode);
+        Assert.Equal(1, target.SlotA);
+        Assert.Equal(3, target.SlotB);
+        Assert.Equal(json, ProfileSerializer.Serialize(back));
+    }
+
+    [Fact]
     public void Serialized_Json_Uses_Readable_Enums_And_Type_Discriminators()
     {
         var json = ProfileSerializer.Serialize(BuildFullProfile());

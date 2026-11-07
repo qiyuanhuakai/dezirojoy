@@ -11,9 +11,9 @@ namespace DeziroJoy.Core.Engine;
 /// <remarks>
 /// <para>
 /// Every source x target combination is honored: button -&gt; key / combo / mouse button /
-/// mouse move / wheel, and stick -&gt; mouse move / wheel / key / combo / mouse button. A
-/// combination that cannot work is rejected when the engine is built rather than silently
-/// dropped at runtime.
+/// mouse move / wheel / special key, and stick -&gt; mouse move / wheel / key / combo /
+/// mouse button / special key. A combination that cannot work is rejected when the engine is
+/// built rather than silently dropped at runtime.
 /// </para>
 /// <para>
 /// Buttons may carry a <see cref="ButtonGesture"/> (双击 / 长按). The latency rule: a button
@@ -37,6 +37,9 @@ public sealed class MappingEngine
     /// <summary>Identifies one gesture action's smoothing processor: a mapping plus a gesture.</summary>
     private readonly record struct GestureProcessorKey(Guid MappingId, GestureKind Kind);
 
+    /// <summary>One precision special-key mapping: where it listens and how it engages.</summary>
+    private readonly record struct SpecialPrecisionKey(Guid MappingId, InputBinding Source, PrecisionMode Mode);
+
     private readonly GamepadProfile _profile;
     private readonly Dictionary<Guid, MouseStickProcessor> _mouseProcessors = [];
     private readonly Dictionary<GestureProcessorKey, MouseStickProcessor> _gestureMouseProcessors = [];
@@ -45,6 +48,10 @@ public sealed class MappingEngine
     private readonly SortedSet<int> _previousExtraButtons = [];
     private readonly HashSet<GamepadButton> _togglePrecisionButtons = [];
     private readonly Dictionary<GamepadButton, bool> _precisionLatches = [];
+    private readonly List<SpecialPrecisionKey> _specialPrecisionKeys = [];
+    private readonly HashSet<Guid> _engagedPrecisionKeys = [];
+    private readonly Dictionary<Guid, bool> _specialKeyWasActive = [];
+    private readonly Dictionary<Guid, bool> _leaderLatches = [];
     private GamepadButtonMask _previousButtons;
 
     public MappingEngine(GamepadProfile profile)
@@ -71,8 +78,13 @@ public sealed class MappingEngine
                 case WheelScrollTarget wheel:
                     _scrollProcessors[mapping.Id] = new ScrollStickProcessor(wheel.Settings);
                     break;
+                case SpecialKeyTarget special:
+                    RegisterSpecialKey(mapping, special);
+                    break;
             }
         }
+
+        SeedLeaderLatches();
     }
 
     public IReadOnlyList<InputCommand> Tick(IGamepadState current, float deltaSeconds)
@@ -81,7 +93,7 @@ public sealed class MappingEngine
 
         var commands = new List<InputCommand>();
         var pressed = current.PressedButtons;
-        UpdatePrecisionLatches(current);
+        UpdatePrecisionState(current);
 
         foreach (var mapping in _profile.Mappings)
         {
@@ -136,6 +148,9 @@ public sealed class MappingEngine
         _gestures.Clear();
         _gestureMouseProcessors.Clear();
         _precisionLatches.Clear();
+        _engagedPrecisionKeys.Clear();
+        _specialKeyWasActive.Clear();
+        SeedLeaderLatches();
         foreach (var processor in _mouseProcessors.Values)
         {
             processor.Reset();
@@ -175,13 +190,112 @@ public sealed class MappingEngine
     /// <summary>
     /// Remembers a precision button whose mode is <see cref="PrecisionMode.Toggle"/>, so
     /// <see cref="UpdatePrecisionLatches"/> knows which buttons to watch. Buttons shared by
-    /// several mappings collapse into one entry and therefore share one latch.
+    /// several mappings collapse into one entry and therefore share one latch. Only consulted
+    /// on the legacy path: a profile carrying special-key precision mappings sources precision
+    /// from those instead (see <see cref="UpdatePrecisionState"/>).
     /// </summary>
     private void CollectTogglePrecisionButton(MouseStickSettings settings)
     {
         if (settings.PrecisionMode == PrecisionMode.Toggle)
         {
             _togglePrecisionButtons.Add(settings.PrecisionButton);
+        }
+    }
+
+    /// <summary>
+    /// Refreshes precision engagement before the mapping loop, so the tick that presses a
+    /// precision key already moves at precision speed. Special-key precision mappings own the
+    /// button set when the profile has any; otherwise the legacy per-mapping settings path
+    /// runs, which is what keeps un-migrated v1 profiles behaving exactly as before.
+    /// </summary>
+    private void UpdatePrecisionState(IGamepadState current)
+    {
+        if (_specialPrecisionKeys.Count > 0)
+        {
+            UpdateSpecialPrecisionKeys(current);
+        }
+        else
+        {
+            UpdatePrecisionLatches(current);
+        }
+    }
+
+    /// <summary>
+    /// Evaluates every special-key precision mapping for this tick. Hold engages while the
+    /// source is physically active; Toggle flips its latch on each new activation edge and
+    /// then survives the release, mirroring the legacy settings-based latch semantics.
+    /// </summary>
+    private void UpdateSpecialPrecisionKeys(IGamepadState current)
+    {
+        foreach (var key in _specialPrecisionKeys)
+        {
+            var active = SpecialKeyActive(current, key.Source);
+            var wasActive = _specialKeyWasActive.GetValueOrDefault(key.MappingId);
+
+            if (key.Mode == PrecisionMode.Toggle)
+            {
+                if (active && !wasActive)
+                {
+                    if (!_engagedPrecisionKeys.Add(key.MappingId))
+                    {
+                        _engagedPrecisionKeys.Remove(key.MappingId);
+                    }
+                }
+            }
+            else if (active)
+            {
+                _engagedPrecisionKeys.Add(key.MappingId);
+            }
+            else
+            {
+                _engagedPrecisionKeys.Remove(key.MappingId);
+            }
+
+            _specialKeyWasActive[key.MappingId] = active;
+        }
+    }
+
+    /// <summary>Whether a special key's source is active right now: its button held, or its stick deflected past the threshold.</summary>
+    private static bool SpecialKeyActive(IGamepadState current, InputBinding source) => source switch
+    {
+        ButtonBinding button => current.PressedButtons.Has(button.Button),
+        StickBinding { Direction: { } direction } stick => StickDirectionActive(current, stick.Stick, direction),
+        _ => false,
+    };
+
+    private static bool StickDirectionActive(IGamepadState current, GamepadStick stick, InputDirection direction)
+    {
+        var (x, y) = StickAxes(current, stick);
+        return IsDirectionActive(x, y, direction);
+    }
+
+    /// <summary>
+    /// Registers a special-key mapping. Precision keys join the button set
+    /// <see cref="UpdateSpecialPrecisionKeys"/> watches; leader keys need no registration
+    /// beyond validation, because their commands fire from the normal hold/tap edges.
+    /// </summary>
+    private void RegisterSpecialKey(MappingEntry mapping, SpecialKeyTarget special)
+    {
+        if (special.Kind == SpecialKeyKind.Precision)
+        {
+            _specialPrecisionKeys.Add(new SpecialPrecisionKey(mapping.Id, mapping.Source, special.PrecisionMode));
+        }
+    }
+
+    /// <summary>
+    /// Seeds each Press-mode leader's toggle from the profile's current slot, so the first
+    /// press after construction moves to the slot the profile is not on.
+    /// </summary>
+    private void SeedLeaderLatches()
+    {
+        _leaderLatches.Clear();
+        foreach (var mapping in _profile.Mappings)
+        {
+            if (mapping.Enabled
+                && mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Press } leader)
+            {
+                _leaderLatches[mapping.Id] = _profile.PresetSlot == leader.SlotB;
+            }
         }
     }
 
@@ -206,16 +320,19 @@ public sealed class MappingEngine
     }
 
     /// <summary>
-    /// Whether precision slowing is in effect for one tick. Hold mode reads the physical
-    /// button; Toggle mode reads the latch, which survives the button's release until the
-    /// next press edge.
+    /// Whether precision slowing is in effect for one tick. With special-key precision
+    /// mappings present they own the answer and the per-mapping settings fields are inert;
+    /// otherwise the legacy settings decide: Hold reads the physical button, Toggle reads the
+    /// latch, which survives the button's release until the next press edge.
     /// </summary>
     private bool PrecisionActive(IGamepadState current, MouseStickSettings settings)
-        => settings.PrecisionMode switch
-        {
-            PrecisionMode.Toggle => _precisionLatches.GetValueOrDefault(settings.PrecisionButton),
-            _ => current.PressedButtons.Has(settings.PrecisionButton),
-        };
+        => _specialPrecisionKeys.Count > 0
+            ? _engagedPrecisionKeys.Count > 0
+            : settings.PrecisionMode switch
+            {
+                PrecisionMode.Toggle => _precisionLatches.GetValueOrDefault(settings.PrecisionButton),
+                _ => current.PressedButtons.Has(settings.PrecisionButton),
+            };
 
     /// <summary>
     /// Rejects mappings that cannot work instead of silently dropping them: a continuous
@@ -243,6 +360,7 @@ public sealed class MappingEngine
             case KeyPressTarget:
             case KeyComboTarget:
             case MouseButtonTarget:
+            case SpecialKeyTarget:
                 if (mapping.Source is StickBinding { Direction: null } stick)
                 {
                     throw new ArgumentException(
@@ -294,7 +412,7 @@ public sealed class MappingEngine
         switch (step.Action)
         {
             case GestureAction.BeginHold:
-                BeginHold(mapping.Target, commands);
+                BeginHold(mapping.Target, mapping.Id, commands);
                 break;
             case GestureAction.EndHold:
                 EndHold(mapping.Target, commands);
@@ -429,7 +547,7 @@ public sealed class MappingEngine
 
         if (active)
         {
-            BeginHold(mapping.Target, commands);
+            BeginHold(mapping.Target, mapping.Id, commands);
         }
         else
         {
@@ -494,7 +612,7 @@ public sealed class MappingEngine
                 TapWheel(wheel, button, commands);
                 break;
             default:
-                BeginHold(target, commands);
+                BeginHold(target, mapping.Id, commands);
                 EndHold(target, commands);
                 break;
         }
@@ -564,9 +682,11 @@ public sealed class MappingEngine
 
     /// <summary>
     /// Begins a hold-style activation. A combo is a tap by nature, so it fires both edges at
-    /// once and has nothing to end.
+    /// once and has nothing to end. A leader key in Hold mode switches to its alternate slot
+    /// for the duration of the hold; one in Press mode toggles between its two slots on the
+    /// press edge. Precision keys emit nothing here - their engagement is tracked separately.
     /// </summary>
-    private static void BeginHold(MappingTarget target, List<InputCommand> commands)
+    private void BeginHold(MappingTarget target, Guid mappingId, List<InputCommand> commands)
     {
         switch (target)
         {
@@ -580,10 +700,21 @@ public sealed class MappingEngine
             case MouseButtonTarget mouseButton:
                 commands.Add(new MouseDownCommand(mouseButton.Button));
                 break;
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold } leader:
+                commands.Add(new SwitchPresetCommand(leader.SlotB));
+                break;
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader:
+                var latched = !_leaderLatches.GetValueOrDefault(mappingId);
+                _leaderLatches[mappingId] = latched;
+                commands.Add(new SwitchPresetCommand(latched ? leader.SlotB : leader.SlotA));
+                break;
         }
     }
 
-    /// <summary>Ends a hold-style activation.</summary>
+    /// <summary>
+    /// Ends a hold-style activation. A leader key in Hold mode returns to its primary slot
+    /// once the key is released.
+    /// </summary>
     private static void EndHold(MappingTarget target, List<InputCommand> commands)
     {
         switch (target)
@@ -593,6 +724,9 @@ public sealed class MappingEngine
                 break;
             case MouseButtonTarget mouseButton:
                 commands.Add(new MouseUpCommand(mouseButton.Button));
+                break;
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold } leader:
+                commands.Add(new SwitchPresetCommand(leader.SlotA));
                 break;
         }
     }

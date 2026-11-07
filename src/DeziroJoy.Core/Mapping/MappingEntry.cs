@@ -17,7 +17,7 @@ public sealed record MappingEntry
 /// <summary>A complete saved mapping set, optionally bound to one device.</summary>
 public sealed record GamepadProfile
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
@@ -27,6 +27,9 @@ public sealed record GamepadProfile
     public string? DeviceId { get; init; }
 
     public GamepadLayout Layout { get; init; } = GamepadLayout.Generic;
+
+    /// <summary>Active preset slot (1-4); leader keys switch between the slots they name.</summary>
+    public int PresetSlot { get; init; } = 1;
 
     public IReadOnlyList<MappingEntry> Mappings { get; init; } = [];
 }

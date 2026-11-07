@@ -1,6 +1,7 @@
 using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
+using DeziroJoy.Core.Profiles;
 using Xunit;
 
 namespace DeziroJoy.Core.Tests.Engine;
@@ -140,6 +141,71 @@ public class MappingEngineTests
 
         Assert.Equal(10, Assert.IsType<MouseMoveCommand>(Assert.Single(fast)).Dx);
         Assert.Equal(5, Assert.IsType<MouseMoveCommand>(Assert.Single(slow)).Dx);
+    }
+
+    [Fact]
+    public void Leader_Press_Mode_Toggles_Between_SlotA_And_SlotB_On_Press_Edges()
+    {
+        var engine = new MappingEngine(Profile(
+            Button(GamepadButton.Back, new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Press))));
+
+        var firstPress = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+        var release = engine.Tick(GamepadState.Neutral, 0.016f);
+        var secondPress = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+
+        Assert.Equal(new SwitchPresetCommand(2), Assert.Single(firstPress));
+        Assert.Empty(release);
+        Assert.Equal(new SwitchPresetCommand(1), Assert.Single(secondPress));
+    }
+
+    [Fact]
+    public void Leader_Hold_Mode_Activates_SlotB_While_Held_And_Returns_To_SlotA_On_Release()
+    {
+        var engine = new MappingEngine(Profile(
+            Button(GamepadButton.Back, new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold))));
+
+        var press = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+        var hold = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+        var release = engine.Tick(GamepadState.Neutral, 0.016f);
+
+        Assert.Equal(new SwitchPresetCommand(2), Assert.Single(press));
+        Assert.Empty(hold);
+        Assert.Equal(new SwitchPresetCommand(1), Assert.Single(release));
+    }
+
+    [Fact]
+    public void Precision_Key_From_A_Special_Key_Mapping_Slows_The_Stick()
+    {
+        var engine = new MappingEngine(Profile(
+            Stick(GamepadStick.Right, new MouseMoveTarget(RawMouse with { PrecisionScale = 0.5f })),
+            Button(GamepadButton.LeftStick, new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Hold))));
+
+        var fast = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0), 1f / 64f);
+        var slow = engine.Tick(GamepadState.Create(GamepadButtonMask.LeftStick, 0, 0, 1, 0), 1f / 64f);
+        var released = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0), 1f / 64f);
+
+        Assert.Equal(10, Assert.IsType<MouseMoveCommand>(Assert.Single(fast)).Dx);
+        Assert.Equal(5, Assert.IsType<MouseMoveCommand>(Assert.Single(slow)).Dx);
+        Assert.Equal(10, Assert.IsType<MouseMoveCommand>(Assert.Single(released)).Dx);
+    }
+
+    [Fact]
+    public void Default_Migration_Preserves_Precision_Behavior()
+    {
+        var legacy = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Xbox) with { SchemaVersion = 1 };
+        var migrated = ProfileMigration.Migrate(legacy);
+
+        var fast = GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0);
+        var slow = GamepadState.Create(GamepadButtonMask.LeftStick, 0, 0, 1, 0);
+
+        var legacyFast = new MappingEngine(legacy).Tick(fast, 1f / 64f);
+        var legacySlow = new MappingEngine(legacy).Tick(slow, 1f / 64f);
+        var migratedFast = new MappingEngine(migrated).Tick(fast, 1f / 64f);
+        var migratedSlow = new MappingEngine(migrated).Tick(slow, 1f / 64f);
+
+        Assert.Equal(legacyFast, migratedFast);
+        Assert.Equal(legacySlow, migratedSlow);
+        Assert.NotEqual(legacyFast, legacySlow);
     }
 
     [Fact]

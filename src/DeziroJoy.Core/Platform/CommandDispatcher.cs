@@ -63,6 +63,11 @@ public sealed class CommandDispatcher
                 }
 
                 break;
+
+            case SwitchPresetCommand:
+                // Host-side only: a preset switch never reaches the output sink. The host
+                // applies it by swapping the active profile, so the dispatcher drops it.
+                break;
         }
     }
 

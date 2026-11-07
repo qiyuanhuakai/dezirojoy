@@ -30,13 +30,20 @@ public sealed record MouseStickSettings
     /// <summary>Speed multiplier while the precision button is held (0..1).</summary>
     public float PrecisionScale { get; init; } = 0.35f;
 
-    /// <summary>Button that temporarily slows the stick for fine aiming.</summary>
+    /// <summary>
+    /// Button that temporarily slows the stick for fine aiming. Migration-only: v2 profiles
+    /// carry the precision button as a <see cref="SpecialKeyTarget"/> mapping instead, and the
+    /// engine ignores this field once any special-key precision mapping exists. It stays on
+    /// the record so v1 JSON still binds.
+    /// </summary>
     public GamepadButton PrecisionButton { get; init; } = GamepadButton.LeftStick;
 
     /// <summary>
     /// How <see cref="PrecisionButton"/> engages: Hold slows the stick only while the button
     /// is physically held (the classic behavior); Toggle latches on each new press and
-    /// releases on the next one, so fine aiming survives the button's release.
+    /// releases on the next one, so fine aiming survives the button's release. Migration-only
+    /// and inert after migration, exactly like <see cref="PrecisionButton"/>: the mode now
+    /// lives on the <see cref="SpecialKeyTarget"/> mapping.
     /// </summary>
     public PrecisionMode PrecisionMode { get; init; } = PrecisionMode.Hold;
 

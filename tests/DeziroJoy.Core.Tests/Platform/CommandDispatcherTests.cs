@@ -158,4 +158,15 @@ public class CommandDispatcherTests
             sink.Calls);
         Assert.False(dispatcher.HasHeldInput);
     }
+
+    [Fact]
+    public void SwitchPresetCommand_Is_Never_Forwarded_To_The_Sink()
+    {
+        var (dispatcher, sink) = CreateDispatcher();
+
+        dispatcher.Dispatch(new SwitchPresetCommand(3));
+
+        Assert.Empty(sink.Calls);
+        Assert.False(dispatcher.HasHeldInput);
+    }
 }

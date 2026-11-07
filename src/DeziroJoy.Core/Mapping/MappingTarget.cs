@@ -8,6 +8,7 @@ namespace DeziroJoy.Core.Mapping;
 [JsonDerivedType(typeof(MouseButtonTarget), "mouseButton")]
 [JsonDerivedType(typeof(MouseMoveTarget), "mouseMove")]
 [JsonDerivedType(typeof(WheelScrollTarget), "wheel")]
+[JsonDerivedType(typeof(SpecialKeyTarget), "specialKey")]
 [JsonDerivedType(typeof(NoneTarget), "none")]
 public abstract record MappingTarget;
 
