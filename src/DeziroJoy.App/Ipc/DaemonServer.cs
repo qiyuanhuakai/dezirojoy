@@ -209,7 +209,21 @@ public sealed partial class DaemonServer
                 return RevisionMismatch(apply.RequestId, apply.ExpectedRevision);
             }
 
-            _profileStore.Save(profile);
+            // An apply lands in the device's active preset slot, not the bare device key:
+            // slot 1 keeps the legacy key, every other slot is stored under its preset key.
+            var applyDeviceId = SnapshotDeviceFor(profile.DeviceId);
+            if (applyDeviceId is null)
+            {
+                _profileStore.Save(profile);
+            }
+            else
+            {
+                _presetStore.SaveSlot(
+                    applyDeviceId,
+                    _activePresetSlots.GetValueOrDefault(applyDeviceId, 1),
+                    profile);
+            }
+
             ReloadTargetDevice(profile);
             _snapshotDeviceId = SnapshotDeviceFor(profile.DeviceId);
 
@@ -277,6 +291,10 @@ public sealed partial class DaemonServer
 
             _activePresetSlots[request.DeviceId] = request.Slot;
             _snapshotDeviceId = request.DeviceId;
+
+            // The snapshot body must follow the slot the engine now runs, or a GUI re-adopting on the revision bump would overwrite the new slot with the old one. The body keeps the bare device id: the GUI keys its drafts and applies by it.
+            _profileName = profile.Name;
+            _profileJson = ProfileSerializer.Serialize(profile with { DeviceId = request.DeviceId });
 
             if (_host.ConnectedDeviceIds.Contains(request.DeviceId, StringComparer.Ordinal))
             {

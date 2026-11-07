@@ -369,6 +369,75 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Apply_Stores_Into_The_Active_Preset_Slot_Rather_Than_The_Bare_Device_Key()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var slotOne = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "主配置",
+            DeviceId = "pad-1",
+        };
+        var slotTwo = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第二套",
+            DeviceId = "pad-1",
+        };
+        presets.SaveSlot("pad-1", 1, slotOne);
+        presets.SaveSlot("pad-1", 2, slotTwo);
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-s", "pad-1", 2));
+
+        var edited = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第三套",
+            DeviceId = "pad-1",
+        };
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new ApplyConfigurationMessage(
+                "req-a", 1, "第三套", ProfileSerializer.Serialize(edited))));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal("第三套", presets.LoadSlot("pad-1", 2)!.Name);
+        Assert.Equal("主配置", presets.LoadSlot("pad-1", 1)!.Name);
+    }
+
+    [Fact]
+    public async Task Switching_The_Preset_Slot_Publishes_The_Slot_Profile_Body()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var slotOne = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "主配置",
+            DeviceId = "pad-1",
+        };
+        var slotTwo = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第二套",
+            DeviceId = "pad-1",
+        };
+        presets.SaveSlot("pad-1", 1, slotOne);
+        presets.SaveSlot("pad-1", 2, slotTwo);
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
+        await server.ProcessAsync(new ApplyConfigurationMessage(
+            "req-a", 0, "主配置", ProfileSerializer.Serialize(slotOne)));
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-s", "pad-1", 2));
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-state")));
+
+        Assert.Equal("第二套", snapshot.Snapshot.ProfileName);
+        Assert.Equal(ProfileSerializer.Serialize(slotTwo), snapshot.Snapshot.ProfileJson);
+    }
+
+    [Fact]
     public async Task SwitchPresetSlot_Rejects_A_Slot_Outside_One_To_Four()
     {
         var (server, _, host) = CreateRunning();
