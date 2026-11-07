@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Reflection;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -48,6 +49,7 @@ internal sealed class DaemonSupervisor : IDisposable
     private readonly IElevationService _elevation;
     private readonly ProcessLaunch _launcher;
     private readonly Func<bool> _isWindows;
+    private readonly Func<bool> _isDaemonReachable;
     private IProcessHandle? _daemon;
     private bool _elevatedRequested;
     private bool _disposed;
@@ -55,25 +57,36 @@ internal sealed class DaemonSupervisor : IDisposable
     public DaemonSupervisor(
         IElevationService? elevation = null,
         ProcessLaunch? launch = null,
-        Func<bool>? isWindows = null)
+        Func<bool>? isWindows = null,
+        Func<bool>? isDaemonReachable = null)
     {
         _elevation = elevation ?? new ElevationService();
         _launcher = launch ?? ProcessLauncher.Start;
         _isWindows = isWindows ?? (static () => OperatingSystem.IsWindows());
+        _isDaemonReachable = isDaemonReachable ?? (static () => IsDaemonReachable(IpcContract.PipeName));
     }
 
     public bool IsRunning => _daemon is { HasExited: false };
 
     /// <summary>
-    /// Starts the daemon when this supervisor does not already hold a live one. A daemon whose
-    /// pipe never answers is not something the tray acts on: it stays resident and the next
-    /// menu action tries again. There is no local-engine fallback - the daemon is the only
-    /// mapping authority, and a tray that injected on its own behalf would be the
-    /// UIPI-silent-drop failure the architecture exists to prevent.
+    /// Starts the daemon when this supervisor does not already hold a live one and none is
+    /// already reachable. A daemon whose pipe never answers is not something the tray acts on:
+    /// it stays resident and the next menu action tries again. There is no local-engine
+    /// fallback - the daemon is the only mapping authority, and a tray that injected on its
+    /// own behalf would be the UIPI-silent-drop failure the architecture exists to prevent.
     /// </summary>
     public void EnsureRunning()
     {
         if (_disposed || IsRunning)
+        {
+            return;
+        }
+
+        // A daemon the render process already started answers on the mapping pipe, so there is
+        // nothing to start: relaunching would show a UAC prompt for a copy the instance mutex
+        // makes exit immediately. Probed on every call, never cached, so a daemon that
+        // genuinely died is still restarted on the next menu action.
+        if (_isDaemonReachable())
         {
             return;
         }
@@ -131,6 +144,53 @@ internal sealed class DaemonSupervisor : IDisposable
         _disposed = true;
 
         Stop();
+    }
+
+    /// <summary>
+    /// How long one connect attempt waits for the daemon's mapping pipe to answer - the same
+    /// budget the daemon itself uses to detect a peer. The daemon holds the pipe open for its
+    /// whole life, so a connect that cannot complete in this window means no daemon is there.
+    /// </summary>
+    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Pause between probe attempts. The daemon-mid-startup race is exactly this wide: the
+    /// process exists but has not created its pipe yet, so one failed attempt proves nothing.
+    /// </summary>
+    private static readonly TimeSpan ProbeRetryDelay = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Attempts before the probe concludes that no daemon is reachable.</summary>
+    private const int ProbeAttempts = 3;
+
+    /// <summary>
+    /// True when something answers on <paramref name="pipeName"/>. The pipe, not a process or
+    /// a mutex, is the liveness signal: the daemon listens for its whole life, so a connect
+    /// that succeeds means the mapping authority is already up.
+    /// </summary>
+    internal static bool IsDaemonReachable(string pipeName)
+    {
+        for (var attempt = 0; attempt < ProbeAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                Thread.Sleep(ProbeRetryDelay);
+            }
+
+            try
+            {
+                using var client = new NamedPipeClientStream(
+                    ".", pipeName, PipeDirection.InOut, PipeOptions.None);
+                client.Connect(ProbeTimeout);
+                return client.IsConnected;
+            }
+            catch (Exception exception) when (exception
+                is TimeoutException or IOException or UnauthorizedAccessException)
+            {
+                // Nothing answered within the budget: retry, then conclude unreachable.
+            }
+        }
+
+        return false;
     }
 
     private static void TryKill(IProcessHandle daemon)

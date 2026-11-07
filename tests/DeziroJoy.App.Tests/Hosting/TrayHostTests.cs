@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -134,7 +135,7 @@ public sealed class TrayHostTests : IDisposable
         // The shutdown is recorded rather than performed: Shutdown() on a lifetime reaches the
         // shared headless Application, which would take every later test's input with it.
         var launcher = new FakeLauncher { Daemon = new FakeProcessHandle(), Render = new FakeProcessHandle() };
-        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false);
+        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => false);
         var render = new RenderSupervisor(launcher.Start, () => { });
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var shutdownRequested = false;
@@ -166,7 +167,7 @@ public sealed class TrayHostTests : IDisposable
     public void The_Daemon_Supervisor_Starts_The_Same_Entry_Unelevated_On_Linux()
     {
         var launcher = new FakeLauncher();
-        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false);
+        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => false);
 
         daemon.EnsureRunning();
 
@@ -181,13 +182,65 @@ public sealed class TrayHostTests : IDisposable
     {
         var launcher = new FakeLauncher();
         var elevation = new FakeElevation();
-        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true);
+        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true, () => false);
 
         daemon.EnsureRunning();
 
         Assert.Equal(1, elevation.RelaunchCalls);
         Assert.Equal("--daemon", elevation.LastArguments);
         Assert.Empty(launcher.Started);
+    }
+
+    [AvaloniaFact]
+    public void A_Reachable_Daemon_Keeps_The_Tray_From_Prompting_For_Elevation()
+    {
+        // The render process starts the daemon before it spawns this tray, so the daemon is
+        // already listening by the time the tray's first menu action runs: an elevated
+        // relaunch would be a UAC prompt for a copy the instance mutex makes exit at once.
+        var launcher = new FakeLauncher();
+        var elevation = new FakeElevation();
+        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true, () => true);
+
+        daemon.EnsureRunning();
+
+        Assert.Equal(0, elevation.RelaunchCalls);
+        Assert.Empty(launcher.Started);
+    }
+
+    [AvaloniaFact]
+    public void A_Reachable_Daemon_On_Linux_Skips_The_Child_Launch()
+    {
+        var launcher = new FakeLauncher();
+        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => true);
+
+        daemon.EnsureRunning();
+
+        Assert.Empty(launcher.Started);
+    }
+
+    [AvaloniaFact]
+    public void The_Probe_Reports_Reachable_When_A_Daemon_Listens_And_Unreachable_When_None_Does()
+    {
+        // Hermetic: a GUID pipe name per case, so no daemon on this machine can answer and no
+        // other test can collide. A daemon holds its pipe open for its whole life, so a
+        // created server stream is exactly what "a daemon listens" looks like to a client.
+        var listening = NewProbePipeName();
+        var silent = NewProbePipeName();
+
+        using var daemon = new NamedPipeServerStream(
+            listening,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous);
+
+        Assert.True(
+            DaemonSupervisor.IsDaemonReachable(listening),
+            "a daemon holding the mapping pipe open must read as reachable");
+        Assert.False(
+            DaemonSupervisor.IsDaemonReachable(silent),
+            "a pipe no daemon listens on must read as unreachable");
+        Assert.Equal(TimeSpan.FromMilliseconds(250), DaemonSupervisor.ProbeTimeout);
     }
 
     [AvaloniaFact]
@@ -245,7 +298,7 @@ public sealed class TrayHostTests : IDisposable
         };
         var elevation = new FakeElevation();
 
-        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => false);
+        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => false, () => false);
         var shows = new List<string>();
         var render = new RenderSupervisor(launcher.Start, () => shows.Add("show"));
 
@@ -265,6 +318,8 @@ public sealed class TrayHostTests : IDisposable
 
         return fixture;
     }
+
+    private static string NewProbePipeName() => $"DeziroJoy.Test.Daemon.Probe.{Guid.NewGuid():N}";
 
     private static TrayIcon SingleTrayIcon()
     {
