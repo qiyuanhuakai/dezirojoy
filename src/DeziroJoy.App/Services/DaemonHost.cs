@@ -96,6 +96,9 @@ public static class DaemonHost
             composition.ProfileStore,
             stateStore);
 
+        composition.Host.PresetSwitchRequested += (_, slot) =>
+            daemon.RequestPresetSlotSwitch(slot);
+
         // Resume the mapping the user last asked for before the pipe opens, so a GUI that
         // never connects still gets the persisted configuration.
         daemon.ResumeDesiredState();

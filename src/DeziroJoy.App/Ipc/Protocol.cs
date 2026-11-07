@@ -115,10 +115,17 @@ public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : 
 public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
 
 /// <summary>
-/// GUI to daemon: switch the active preset slot of one device. The daemon loads the
-/// slot's stored profile, swaps its in-memory active slot for that device and reloads
-/// only that device; a slot outside 1..4, or one holding no stored profile, is refused
-/// with an <see cref="ErrorMessage"/> instead of a mutation ack.
+/// GUI to daemon: switch the active preset slot. The slot is app-wide rather than
+/// per-device: the daemon reloads every connected device that holds a stored profile
+/// in the target slot, and the one active slot the whole app reads moves with it. A
+/// slot outside 1..4 is refused with an <see cref="ErrorMessage"/> instead of a
+/// mutation ack, and so is a switch when devices are connected but none of them holds
+/// the target slot.
+/// <para>
+/// <see cref="DeviceId"/> still travels on the wire but the daemon ignores it: a
+/// switch no longer names a device. It is kept for soft compatibility with existing
+/// clients, so the protocol version does not bump.
+/// </para>
 /// </summary>
 public sealed record SwitchPresetSlotMessage(string RequestId, string DeviceId, int Slot) : IpcMessage;
 

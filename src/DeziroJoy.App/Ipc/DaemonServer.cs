@@ -25,19 +25,25 @@ public sealed partial class DaemonServer
     private const string DirectConnectionId = "direct";
     private const string InvalidPresetSlotErrorCode = "invalid-slot";
     private const string NoPresetConfigurationErrorCode = "no-configuration";
+    private const string LeaderPresetSwitchRequestId = "leader-key";
     private readonly Lock _sync = new();
     private readonly DaemonState? _restored;
     private readonly HashSet<string> _injectionSuspensions = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _activePresetSlots = new(StringComparer.Ordinal);
 
     private long _revision;
     private long _sequence;
     private string _profileName = string.Empty;
     private string _profileJson = string.Empty;
     private string? _lastError;
-    private string? _snapshotDeviceId;
     private bool _desiredEnabled;
     private bool _injectionSuspended;
+
+    /// <summary>
+    /// The one active preset slot the whole app reads: a switch moves every connected
+    /// device at once, so the slot is app-wide rather than per-device state. In-memory
+    /// only - a restart resumes at slot 1, exactly as an unmigrated profile reads.
+    /// </summary>
+    private int _activePresetSlot = 1;
 
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
@@ -220,12 +226,11 @@ public sealed partial class DaemonServer
             {
                 _presetStore.SaveSlot(
                     applyDeviceId,
-                    _activePresetSlots.GetValueOrDefault(applyDeviceId, 1),
+                    _activePresetSlot,
                     profile);
             }
 
             ReloadTargetDevice(profile);
-            _snapshotDeviceId = SnapshotDeviceFor(profile.DeviceId);
 
             _profileName = apply.ProfileName;
             _profileJson = apply.ProfileJson;
@@ -263,10 +268,12 @@ public sealed partial class DaemonServer
     }
 
     /// <summary>
-    /// Switches one device's active preset slot: the slot's stored profile is loaded, the
-    /// in-memory active slot for that device is swapped, only that device is reloaded, and
-    /// the revision is bumped so every GUI sees the new slot. A slot outside 1..4 or one
-    /// holding no stored profile is refused without touching any state.
+    /// Switches the app-wide active preset slot: every connected device holding a stored
+    /// profile in the target slot is reloaded with it, a device holding nothing there
+    /// keeps running its current profile, and the revision is bumped once so every GUI
+    /// sees the new slot. A slot outside 1..4 is refused without touching any state, and
+    /// so is a switch no connected device can honor - with no pad connected there is
+    /// nothing to reload and no running configuration to contradict, so the slot moves.
     /// </summary>
     private IpcMessage HandleSwitchPresetSlot(SwitchPresetSlotMessage request)
     {
@@ -280,8 +287,17 @@ public sealed partial class DaemonServer
 
         lock (_sync)
         {
-            var profile = _presetStore.LoadSlot(request.DeviceId, request.Slot);
-            if (profile is null)
+            var connected = _host.ConnectedDeviceIds;
+            var holders = new List<(string DeviceId, GamepadProfile Profile)>();
+            foreach (var deviceId in connected)
+            {
+                if (_presetStore.LoadSlot(deviceId, request.Slot) is { } profile)
+                {
+                    holders.Add((deviceId, profile));
+                }
+            }
+
+            if (holders.Count == 0 && connected.Count > 0)
             {
                 return new ErrorMessage(
                     request.RequestId,
@@ -289,16 +305,36 @@ public sealed partial class DaemonServer
                     "no configuration");
             }
 
-            _activePresetSlots[request.DeviceId] = request.Slot;
-            _snapshotDeviceId = request.DeviceId;
-
-            // The snapshot body must follow the slot the engine now runs, or a GUI re-adopting on the revision bump would overwrite the new slot with the old one. The body keeps the bare device id: the GUI keys its drafts and applies by it.
-            _profileName = profile.Name;
-            _profileJson = ProfileSerializer.Serialize(profile with { DeviceId = request.DeviceId });
-
-            if (_host.ConnectedDeviceIds.Contains(request.DeviceId, StringComparer.Ordinal))
+            // The snapshot body must follow the slot the engine now runs, or a GUI re-adopting on the revision bump would overwrite the new slot with the old one. The body keeps the bare device id: the GUI keys its drafts and applies by it. The slot is app-wide, so the body describes the requesting device when it holds the slot, else the first connected holder, else - no pad connected - whatever the store still holds for the named device.
+            var bodyDeviceId = request.DeviceId;
+            GamepadProfile? bodyProfile = null;
+            foreach (var (deviceId, profile) in holders)
             {
-                _host.Reload(request.DeviceId, profile);
+                if (deviceId == request.DeviceId)
+                {
+                    bodyDeviceId = deviceId;
+                    bodyProfile = profile;
+                    break;
+                }
+            }
+
+            if (bodyProfile is null && holders.Count > 0)
+            {
+                (bodyDeviceId, bodyProfile) = holders[0];
+            }
+
+            bodyProfile ??= _presetStore.LoadSlot(request.DeviceId, request.Slot);
+
+            _activePresetSlot = request.Slot;
+            if (bodyProfile is not null)
+            {
+                _profileName = bodyProfile.Name;
+                _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = bodyDeviceId });
+            }
+
+            foreach (var (deviceId, profile) in holders)
+            {
+                _host.Reload(deviceId, profile);
             }
 
             _revision++;
@@ -307,6 +343,18 @@ public sealed partial class DaemonServer
             return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
         }
     }
+
+    /// <summary>
+    /// The daemon-side entry point for a leader-key preset switch.
+    /// <see cref="EngineHost.PresetSwitchRequested"/> is raised from the tick thread and
+    /// the host owns no preset store, so without a daemon-side subscriber the leader key
+    /// is dead in daemon mode; <see cref="DaemonHost"/> wires the event here. Runs the
+    /// same logic as a GUI switch under a synthetic request id - the slot is app-wide,
+    /// so no device is named - and the tick thread calls it synchronously, exactly like
+    /// the reloads the switch performs.
+    /// </summary>
+    internal void RequestPresetSlotSwitch(int slot)
+        => Process(new SwitchPresetSlotMessage(LeaderPresetSwitchRequestId, string.Empty, slot), DirectConnectionId);
 
     private MutationAckMessage HandleStart(StartMessage start)
     {
@@ -502,20 +550,9 @@ public sealed partial class DaemonServer
             InjectedEvents: _host.InjectedEvents,
             BlockedEvents: _host.BlockedEvents,
             HasController: _host.HasController,
-            ActivePresetSlot: ActivePresetSlotFor(connected))
+            ActivePresetSlot: _activePresetSlot)
         {
             ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
         };
-    }
-
-    /// <summary>
-    /// The active preset slot the snapshot reports: the slot of the device the snapshot
-    /// describes, or 1 when no device is known. Slots are in-memory only - a restart
-    /// resumes every device at slot 1, exactly as an unmigrated profile reads.
-    /// </summary>
-    private int ActivePresetSlotFor(IReadOnlyList<string> connected)
-    {
-        var deviceId = _snapshotDeviceId ?? (connected.Count > 0 ? connected[0] : null);
-        return deviceId is null ? 1 : _activePresetSlots.GetValueOrDefault(deviceId, 1);
     }
 }
