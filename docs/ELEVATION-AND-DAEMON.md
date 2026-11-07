@@ -251,6 +251,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `Stop` | GUI → daemon | — | 请求停止映射 |
 | `SetMappingEnabled` | GUI → daemon | 请求 ID、启用状态 | 暂停或恢复分发，不停止引擎 |
 | `SetInjectionSuspended` | GUI → daemon | 请求 ID、挂起状态 | 编辑器劫持手柄期间暂停注入 |
+| `SwitchPresetSlot` | GUI → daemon | 请求 ID、目标槽位（`DeviceId` 保留线上传输但服务端忽略） | 切换整体级活动预设槽 |
 | `MutationAck` | daemon → GUI | 请求 ID、结果、新修订号、新序号 | 变更已被受理 |
 | `StateChanged` | daemon → GUI | 全量快照 | 状态推送 |
 | `Error` | daemon → GUI | 请求 ID、错误码、可读信息 | 请求失败 |
@@ -263,11 +264,17 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 - **单调序号**：守护进程侧每次状态变更递增。GUI 用它检测丢帧与乱序；发现缺号就补一次
   `GetState`，不猜测中间状态。
 - **全量快照**：`StateChanged` 与 `GetState` 的应答都携带完整状态，不做增量。快照包含
-  运行状态、活动配置修订号及其完整 `ProfileJson`、实际注入者身份和计数；GUI 以此重建编辑基线。
+  运行状态、活动配置修订号及其完整 `ProfileJson`、整体级活动预设槽、实际注入者身份和计数；
+  GUI 以此重建编辑基线。
 - **期望配置修订号**：`ApplyConfiguration` 与 `Start` 都带 GUI 认为当前的修订号。守护进程
   发现不一致就拒绝该请求并回 `MutationAck(Accepted=false, ErrorCode="revision-mismatch")`，
   同时携带当前修订号；GUI 的编辑草稿固定其基线修订，冲突后必须重新读取权威 profile 或明确合并，
   **不得只更新修订号后提交旧草稿，也不自动重放**。
+- **整体级预设槽**：`SwitchPresetSlot` 切换的是整个应用唯一的活动槽标量，不属于任何设备。
+  守护进程重载每个存有该槽配置的已连接设备，未存该槽的设备保持运行；没有任何已连接设备
+  存有该槽时拒绝切换。消息中的 `DeviceId` 保留在线上但服务端忽略，属于软兼容，协议版本
+  不因此升级。Leader 键经 `EngineHost.PresetSwitchRequested` 由守护进程内部驱动同一标量，
+  与 GUI 切换走同一条逻辑（tick 线程同步执行，与切换本身执行的重载相同）。
 - **完整 profile JSON，不是路径**：配置随消息传输序列化后的 profile 本体。传路径会让
   守护进程去读一个 GUI 有权限而它未必有权限的位置，也会让"到底改没改"无法从消息本身判断。
 - **同一时刻只有一个未完成变更**：GUI 在收到上一条 `MutationAck` 之前，不发下一条
@@ -299,7 +306,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `CurrentUserOnly`；同一用户的普通 GUI 与提权守护进程均可连接，其他用户不可写。
 - **同会话验证**：任何控制消息之前必须完成握手，拒绝后立即断开；Windows 上通过
   `GetNamedPipeClientProcessId` 取得真实对端 PID/SessionId，不信任客户端自报的会话字段。
-- **最小攻击面**：管道只暴露 4.4 节那 11 条映射控制消息，不提供任意代码执行、文件读写或
+- **最小攻击面**：管道只暴露 4.4 节那 12 条映射控制消息，不提供任意代码执行、文件读写或
   进程启动能力。
 
 ### 4.7 第二个守护进程
