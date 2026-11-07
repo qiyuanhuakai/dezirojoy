@@ -229,6 +229,60 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Switching_A_Preset_Locally_Applies_To_Every_Connected_Controller()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.Add("xinput:1", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        provider.SetState("xinput:1", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        var presets = new PresetStore(store);
+        presets.SaveSlot("xinput:0", 2, new GamepadProfile
+        {
+            Name = "第二套·甲",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.A),
+                    Target = new KeyPressTarget(GamepadKey.Space),
+                },
+            ],
+        });
+        presets.SaveSlot("xinput:1", 2, new GamepadProfile
+        {
+            Name = "第二套·乙",
+            DeviceId = "xinput:1",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B),
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        });
+
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+
+        Assert.Equal(2, vm.ActivePresetSlot);
+        Assert.Equal("第二套·甲", vm.ActiveProfile!.Name);
+
+        // The slot is app-wide: the second pad is not the active one, yet it must have
+        // been reloaded with its own stored profile for the slot too.
+        var running = host.Controllers.ToDictionary(
+            controller => controller.Descriptor.DeviceId,
+            controller => controller.Profile.Name);
+        Assert.Equal("第二套·甲", running["xinput:0"]);
+        Assert.Equal("第二套·乙", running["xinput:1"]);
+    }
+
+    [Fact]
     public void A_Leader_Press_Through_The_Host_Switches_The_Active_Preset_Slot()
     {
         var (vm, host, provider, store) = CreateHost();

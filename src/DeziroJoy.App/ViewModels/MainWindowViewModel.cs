@@ -313,15 +313,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_daemon is not null)
         {
-            if (ActiveController is not { } controller)
-            {
-                return;
-            }
-
             try
             {
+                // The server ignores DeviceId by contract - it keeps one app-wide slot scalar - so the empty string is deliberate, not a bug.
                 var result = await _daemon.SwitchPresetSlotAsync(
-                    controller.Descriptor.DeviceId, slot, _lifetime.Token);
+                    ActiveController?.Descriptor.DeviceId ?? string.Empty, slot, _lifetime.Token);
                 ReportMutationFailure(result, "切换配置槽位");
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
@@ -342,13 +338,25 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        if (_presets.LoadSlot(controller.Descriptor.DeviceId, slot) is not { } profile)
+        // The slot is app-wide, so every connected device switches at once: each one is
+        // reloaded with its own stored profile for the slot, and a device holding nothing
+        // there keeps running its current profile - the same contract the daemon honors.
+        foreach (var connected in _host.Controllers)
         {
-            return;
+            if (_presets.LoadSlot(connected.Descriptor.DeviceId, slot) is { } profile)
+            {
+                _host.Reload(connected.Descriptor.DeviceId, profile);
+            }
         }
 
-        ApplyProfileLocally(profile);
+        if (_presets.LoadSlot(controller.Descriptor.DeviceId, slot) is { } activeProfile)
+        {
+            ActiveProfile = activeProfile;
+        }
+
         ActivePresetSlot = slot;
+        ReloadSensitivityPanels();
+        RefreshMappings();
     }
 
     partial void OnIsPhysicalInputInScopeChanged(bool value)

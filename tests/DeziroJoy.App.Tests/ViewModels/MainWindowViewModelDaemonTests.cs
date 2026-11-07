@@ -329,6 +329,40 @@ public sealed class MainWindowViewModelDaemonTests
         }
     }
 
+    [Fact]
+    public async Task Switching_A_Preset_In_Daemon_Mode_Does_Not_Wait_For_A_Local_Controller()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        // The presentation host is a NoGamepadProvider seam, so no local controller ever
+        // exists here - exactly the state that made the picker silently dead.
+        Assert.Null(viewModel.ActiveController);
+
+        await viewModel.SwitchPresetSlotCommand.ExecuteAsync(2);
+
+        var sent = Assert.Single(context.Channel.Sent.OfType<SwitchPresetSlotMessage>());
+        Assert.Equal(2, sent.Slot);
+        Assert.Equal(string.Empty, sent.DeviceId);
+        Assert.False(viewModel.IsTransferError);
+
+        var authoritative = Assert.IsType<StateChangedMessage>(
+            await context.Server.ProcessAsync(new GetStateMessage("verify")));
+        Assert.Equal(2, authoritative.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task Switching_A_Preset_In_Daemon_Mode_Adopts_The_Snapshots_Slot()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        await viewModel.SwitchPresetSlotCommand.ExecuteAsync(2);
+
+        Assert.Equal(2, viewModel.DaemonSnapshot!.ActivePresetSlot);
+        Assert.Equal(2, viewModel.ActivePresetSlot);
+    }
+
     private static async Task WaitForSuspension(FakeDaemonHost host, bool expected)
     {
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -440,8 +474,12 @@ public sealed class MainWindowViewModelDaemonTests
         private TaskCompletionSource<IpcMessage>? _waiting;
         private bool _closed;
 
+        /// <summary>Every message the client sent, in order, so a test can assert what reached the daemon.</summary>
+        public List<IpcMessage> Sent { get; } = [];
+
         public async Task SendAsync(IpcMessage message, CancellationToken cancellationToken)
         {
+            Sent.Add(message);
             var answer = await server.ProcessAsync(message);
             Push(answer);
         }
