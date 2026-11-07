@@ -102,6 +102,18 @@ public sealed class SettingsPanelGuiTests : IDisposable
         Assert.False(viewModel.IsEditing);
     }
 
+    [AvaloniaFact]
+    public void The_Gamepad_Hijack_Toggle_Is_Named_For_What_It_Does()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var toggle = window.FindControl<SettingsPanel>("SettingsPanelHost")!
+            .FindControl<CheckBox>("GamepadNavigationBox")!;
+
+        Assert.Equal("劫持手柄按键", toggle.Content);
+    }
+
     private static void ConnectPad(FakeGamepadProvider provider)
     {
         provider.Add(DeviceId, "Xbox Wireless Controller");
