@@ -417,6 +417,49 @@ public sealed class GamepadVisualizerTests
     }
 
     /// <summary>
+    /// The silhouette is ONE swept curve, not a chain of arcs: every segment leaves its
+    /// junction along the tangent the previous segment arrived on, so the outline has no
+    /// crease where the shoulder rolls into the grip or the grip flares out. The alpha.8b
+    /// body turned 78 degrees at the shoulder-to-grip junctions and 53 more where the
+    /// grip flared wide, which is the incoherent read; this walks the flattened outline
+    /// vertex by vertex (wrapping the closure) and fails on any turn over 25 degrees.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Silhouette_Joins_Every_Segment_With_A_Continuous_Tangent()
+    {
+        var shell = Flatten(ShellOutline());
+
+        var worst = 0.0;
+        var worstAt = default(Point);
+
+        for (var i = 0; i < shell.Count; i++)
+        {
+            var previous = shell[(i - 1 + shell.Count) % shell.Count];
+            var current = shell[i];
+            var next = shell[(i + 1) % shell.Count];
+
+            var inX = current.X - previous.X;
+            var inY = current.Y - previous.Y;
+            var outX = next.X - current.X;
+            var outY = next.Y - current.Y;
+
+            var dot = (inX * outX) + (inY * outY);
+            var cross = (inX * outY) - (inY * outX);
+            var turn = Math.Abs(Math.Atan2(cross, dot)) * 180.0 / Math.PI;
+
+            if (turn > worst)
+            {
+                worst = turn;
+                worstAt = current;
+            }
+        }
+
+        Assert.True(worst <= 25.0,
+            $"the silhouette creases {worst:0.#} degrees near ({worstAt.X:0.#},{worstAt.Y:0.#}) - " +
+            "every outline segment must join the next along a continuous tangent");
+    }
+
+    /// <summary>
     /// An element's centre in the model's own canvas space. Bounds alone is parent-relative,
     /// so a button nested in its label panel would report the same centre as its siblings;
     /// translating through the visual tree puts every element on one coordinate system.
