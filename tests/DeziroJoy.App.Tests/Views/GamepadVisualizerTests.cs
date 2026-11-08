@@ -868,20 +868,20 @@ public sealed class GamepadVisualizerTests
         buttonA.Transitions = null;
         bumper.Transitions = null;
 
-        var accent = Token(buttonA.ActualThemeVariant, "AccentBrush");
+        var hover = Token(buttonA.ActualThemeVariant, "AccentHoverBrush");
         var ring = Token(buttonA.ActualThemeVariant, "StickRingBrush");
 
         AssertColor(ring, ColorOf(buttonA.GetValue(Shape.StrokeProperty)), "an untouched element wears the ring");
 
         Hover(window, buttonA);
-        AssertColor(accent, ColorOf(buttonA.GetValue(Shape.StrokeProperty)),
-            "hovering an element must ring it in the accent");
+        AssertColor(hover, ColorOf(buttonA.GetValue(Shape.StrokeProperty)),
+            "hovering an element must use the hover accent");
 
         Hover(window, bumper);
         AssertColor(ring, ColorOf(buttonA.GetValue(Shape.StrokeProperty)),
             "leaving an element must drop its ring");
-        AssertColor(accent, ColorOf(bumper.GetValue(Border.BorderBrushProperty)),
-            "a hovered Border element must ring in the accent too");
+        AssertColor(hover, ColorOf(bumper.GetValue(Border.BorderBrushProperty)),
+            "a hovered Border element must use the same hover accent");
     }
 
     [AvaloniaFact]
@@ -897,7 +897,7 @@ public sealed class GamepadVisualizerTests
         var buttonA = control.FindControl<Shape>("ButtonA")!;
         buttonA.Transitions = null;
 
-        var accent = Token(buttonA.ActualThemeVariant, "AccentBrush");
+        var hover = Token(buttonA.ActualThemeVariant, "AccentHoverBrush");
         var pressed = Token(buttonA.ActualThemeVariant, "AccentPressedBrush");
 
         var point = buttonA.TranslatePoint(
@@ -914,7 +914,7 @@ public sealed class GamepadVisualizerTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        AssertColor(accent, ColorOf(buttonA.GetValue(Shape.StrokeProperty)),
+        AssertColor(hover, ColorOf(buttonA.GetValue(Shape.StrokeProperty)),
             "releasing must fall back to the hover ring, not the press ring");
         window.Close();
     }
@@ -963,7 +963,7 @@ public sealed class GamepadVisualizerTests
 
         // The selected element is the one being edited, so its outline must outrank the
         // transient hover ring rather than being swapped for it.
-        Assert.Equal(2.5, buttonB.StrokeThickness);
+        Assert.Equal(1.5, buttonB.StrokeThickness);
         AssertColor(Token(buttonB.ActualThemeVariant, "AccentBrush"),
             ColorOf(buttonB.GetValue(Shape.StrokeProperty)), "the selected element keeps the accent ring");
     }
@@ -1006,7 +1006,95 @@ public sealed class GamepadVisualizerTests
         window.Close();
     }
 
-    // ---- Photo-fidelity redraw (white GameSir Nova reference) --------------
+    [AvaloniaFact]
+    public void Material_Layers_Are_Pure_Vector_And_Never_Intercept_Input()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        foreach (var name in new[]
+        {
+            "ShellSurface", "ShellSheen", "LeftGripInset", "RightGripInset",
+            "LeftGripTexture", "RightGripTexture", "LeftStickThumbSheen",
+            "RightStickThumbSheen", "LeftStickThumbTread", "RightStickThumbTread",
+        })
+        {
+            Assert.False(control.FindControl<Control>(name)!.IsHitTestVisible, $"{name} must not eat clicks");
+        }
+
+        Assert.IsType<LinearGradientBrush>(control.FindControl<Avalonia.Controls.Shapes.Path>("ShellSurface")!.Fill, exactMatch: false);
+        Assert.IsType<LinearGradientBrush>(control.FindControl<Avalonia.Controls.Shapes.Path>("LeftGripInset")!.Fill, exactMatch: false);
+        Assert.Empty(control.FindControl<Canvas>("PadCanvas")!.GetVisualDescendants().OfType<Image>());
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void Every_Thumb_Material_Layer_Follows_The_Live_Axes()
+    {
+        var viewModel = new GamepadVisualizerViewModel();
+        var control = new GamepadVisualizer { DataContext = viewModel };
+
+        viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 1f, -1f, -0.5f, 0.5f));
+
+        foreach (var side in new[] { "Left", "Right" })
+        {
+            var thumb = control.FindControl<Control>($"{side}StickThumb")!;
+            var sheen = control.FindControl<Control>($"{side}StickThumbSheen")!;
+            var tread = control.FindControl<Control>($"{side}StickThumbTread")!;
+            var centre = control.FindControl<Control>($"{side}StickThumbCentre")!;
+
+            Assert.Equal(Canvas.GetLeft(thumb), Canvas.GetLeft(sheen));
+            Assert.Equal(Canvas.GetTop(thumb), Canvas.GetTop(sheen));
+            Assert.Equal(Canvas.GetLeft(thumb), Canvas.GetLeft(tread));
+            Assert.Equal(Canvas.GetTop(thumb), Canvas.GetTop(tread));
+            Assert.Equal(Canvas.GetLeft(thumb) + 6, Canvas.GetLeft(centre));
+            Assert.Equal(Canvas.GetTop(thumb) + 6, Canvas.GetTop(centre));
+        }
+    }
+
+    [AvaloniaFact]
+    public void Feedback_Changes_Brushes_Without_Changing_Control_Geometry()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        foreach (var name in new[] { "ButtonA", "LeftBumper" })
+        {
+            var target = control.FindControl<Control>(name)!;
+            target.Transitions = null;
+            var bounds = target.Bounds;
+            var contentBounds = (target as Border)?.Child?.Bounds;
+
+            Hover(window, target);
+            var point = target.TranslatePoint(target.Bounds.Center, window) ?? default;
+            window.MouseDown(point, Avalonia.Input.MouseButton.Left);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal(bounds, target.Bounds);
+            Assert.Equal(1.5, target is Shape shape ? shape.StrokeThickness : ((Border)target).BorderThickness.Top);
+            Assert.Equal(contentBounds, (target as Border)?.Child?.Bounds);
+
+            window.MouseUp(point, Avalonia.Input.MouseButton.Left);
+            control.SelectedSource = name == "ButtonA"
+                ? new ButtonBinding(GamepadButton.A)
+                : new ButtonBinding(GamepadButton.LeftBumper);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal(bounds, target.Bounds);
+            Assert.Equal(contentBounds, (target as Border)?.Child?.Bounds);
+        }
+
+        window.Close();
+    }
+
+    // ---- Pearl-shell material redraw ----------------------------------------
 
     /// <summary>
     /// The redrawn model is a WHITE controller: the body is an off-white shell in BOTH
@@ -1066,12 +1154,10 @@ public sealed class GamepadVisualizerTests
     }
 
     /// <summary>
-    /// The stick caps are black and each sits inside a prominent ORANGE ring: the ring is
-    /// solid (no dash array), at least 5px thick, drawn inside the pad and clearing the
-    /// thumb's radius so the cap never touches it.
+    /// Graphite caps sit inside a precise cyan ring, with separate metal bevels and tread.
     /// </summary>
     [AvaloniaFact]
-    public void The_Stick_Caps_Are_Black_With_A_Prominent_Orange_Ring()
+    public void The_Stick_Caps_Are_Graphite_With_A_Precise_Accent_Ring()
     {
         var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
         var window = new Window { Content = control, Width = 700, Height = 460 };
@@ -1090,12 +1176,12 @@ public sealed class GamepadVisualizerTests
 
             var cap = ColorOf(thumb.Fill);
             Assert.True(cap.R <= 0x28 && cap.G <= 0x28 && cap.B <= 0x28,
-                $"{thumbName} must be a black cap, got #{cap}");
+                $"{thumbName} must be a graphite cap, got #{cap}");
 
             var accent = Token(ring.ActualThemeVariant, "StickAccentRingBrush");
-            AssertColor(accent, ColorOf(ring.Stroke), $"{ringName} must wear the orange accent ring");
-            Assert.True(ring.StrokeThickness >= 5,
-                $"{ringName} must be a prominent ring, thickness was {ring.StrokeThickness}");
+            AssertColor(accent, ColorOf(ring.Stroke), $"{ringName} must wear the app accent");
+            Assert.True(ring.StrokeThickness >= 2,
+                $"{ringName} must stay readable, thickness was {ring.StrokeThickness}");
             Assert.True(ring.StrokeDashArray is null || ring.StrokeDashArray.Count == 0,
                 $"{ringName} must be a solid ring, not dashed");
 
@@ -1171,10 +1257,7 @@ public sealed class GamepadVisualizerTests
         window.Close();
     }
 
-    /// <summary>
-    /// No GameSir wordmark or brand text appears anywhere on the model: the redraw copies
-    /// the reference's SHAPE, never its logo.
-    /// </summary>
+    /// <summary>The model uses generic controls and letters, never manufacturer marks.</summary>
     [AvaloniaFact]
     public void No_Brand_Wordmark_Appears_Anywhere_On_The_Model()
     {
@@ -1183,15 +1266,15 @@ public sealed class GamepadVisualizerTests
         window.Show();
         window.UpdateLayout();
 
-        var canvas = control.FindControl<Canvas>("PadCanvas")!;
-        var brands = canvas.GetVisualDescendants()
+        var brands = new[] { "GameSir", "Xbox", "PlayStation", "Nintendo" };
+        var brandedText = control.FindControl<Canvas>("PadCanvas")!.GetVisualDescendants()
             .OfType<TextBlock>()
             .Where(t => !string.IsNullOrEmpty(t.Text)
-                && t.Text.Contains("GameSir", StringComparison.OrdinalIgnoreCase))
+                && brands.Any(brand => t.Text.Contains(brand, StringComparison.OrdinalIgnoreCase)))
             .Select(t => t.Text)
             .ToList();
 
-        Assert.Empty(brands);
+        Assert.Empty(brandedText);
 
         window.Close();
     }

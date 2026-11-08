@@ -488,15 +488,15 @@ public sealed class GamepadModelEditorTests
         var model = Model(window);
         var buttonA = model.FindControl<Shape>("ButtonA")!;
         var buttonB = model.FindControl<Shape>("ButtonB")!;
-        Assert.Equal(1, buttonA.StrokeThickness);
+        Assert.Equal(1.5, buttonA.StrokeThickness);
 
         viewModel.SelectSource(new ButtonBinding(GamepadButton.A));
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
         // The selected element is outlined on the model itself.
-        Assert.Equal(2.5, buttonA.StrokeThickness);
-        Assert.Equal(1d, buttonB.StrokeThickness);
+        Assert.Equal(1.5, buttonA.StrokeThickness);
+        Assert.Equal(1.5d, buttonB.StrokeThickness);
     }
 
     [AvaloniaFact]
@@ -514,14 +514,14 @@ public sealed class GamepadModelEditorTests
         viewModel.SelectSource(new ButtonBinding(GamepadButton.A));
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
-        Assert.Equal(2.5, buttonA.StrokeThickness);
+        Assert.Equal(1.5, buttonA.StrokeThickness);
 
         viewModel.SelectSource(new ButtonBinding(GamepadButton.B));
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(1d, buttonA.StrokeThickness);
-        Assert.Equal(2.5, buttonB.StrokeThickness);
+        Assert.Equal(1.5d, buttonA.StrokeThickness);
+        Assert.Equal(1.5, buttonB.StrokeThickness);
     }
 
     [AvaloniaFact]
@@ -541,7 +541,7 @@ public sealed class GamepadModelEditorTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.Null(viewModel.SelectedMapping);
-        Assert.Equal(new Thickness(1), back.BorderThickness);
+        Assert.Equal(new Thickness(1.5), back.BorderThickness);
     }
 
     [AvaloniaFact]
@@ -575,7 +575,7 @@ public sealed class GamepadModelEditorTests
 
         // Extra buttons are dynamic pills found by raw code rather than named elements, so
         // they take a different lookup path and need their own test.
-        Assert.Equal(new Thickness(2.5), outlined!.BorderThickness);
+        Assert.Equal(new Thickness(1.5), outlined!.BorderThickness);
     }
 
     // ---- Gesture actions ----------------------------------------------------

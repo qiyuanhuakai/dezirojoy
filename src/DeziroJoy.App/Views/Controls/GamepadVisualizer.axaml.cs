@@ -33,6 +33,10 @@ public partial class GamepadVisualizer : UserControl
 
     private Ellipse? _rightThumb;
 
+    private (Control Element, double OffsetX, double OffsetY)[]? _leftThumbDetails;
+
+    private (Control Element, double OffsetX, double OffsetY)[]? _rightThumbDetails;
+
     private GamepadVisualizerViewModel? _bound;
 
     private InputElement? _selectedElement;
@@ -136,11 +140,33 @@ public partial class GamepadVisualizer : UserControl
             return;
         }
 
+        _leftThumbDetails ??= ThumbDetails("Left");
+        _rightThumbDetails ??= ThumbDetails("Right");
+
         Place(_leftThumb, LeftThumbBaseX, LeftThumbBaseY, _bound.LeftStickX, _bound.LeftStickY, _bound.LeftMagnitude);
         Place(_rightThumb, RightThumbBaseX, RightThumbBaseY, _bound.RightStickX, _bound.RightStickY, _bound.RightMagnitude);
+        PlaceDetails(_leftThumbDetails, LeftThumbBaseX, LeftThumbBaseY, _bound.LeftStickX, _bound.LeftStickY, _bound.LeftMagnitude);
+        PlaceDetails(_rightThumbDetails, RightThumbBaseX, RightThumbBaseY, _bound.RightStickX, _bound.RightStickY, _bound.RightMagnitude);
     }
 
-    private static void Place(Ellipse thumb, double baseX, double baseY, double x, double y, double magnitude)
+    private (Control Element, double OffsetX, double OffsetY)[] ThumbDetails(string side) =>
+    [
+        (this.FindControl<Control>($"{side}StickThumbSheen")!, 0, 0),
+        (this.FindControl<Control>($"{side}StickThumbTread")!, 0, 0),
+        (this.FindControl<Control>($"{side}StickThumbCentre")!, 6, 6),
+    ];
+
+    private static void PlaceDetails(
+        IEnumerable<(Control Element, double OffsetX, double OffsetY)> details,
+        double baseX, double baseY, double x, double y, double magnitude)
+    {
+        foreach (var detail in details)
+        {
+            Place(detail.Element, baseX + detail.OffsetX, baseY + detail.OffsetY, x, y, magnitude);
+        }
+    }
+
+    private static void Place(Control thumb, double baseX, double baseY, double x, double y, double magnitude)
     {
         var clampedX = Math.Clamp(x, -1.0, 1.0);
         var clampedY = Math.Clamp(y, -1.0, 1.0);
