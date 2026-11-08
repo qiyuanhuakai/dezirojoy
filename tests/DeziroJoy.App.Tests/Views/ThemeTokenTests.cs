@@ -24,9 +24,16 @@ public sealed class ThemeTokenTests
         "AccentForegroundBrush", "DangerForegroundBrush", "AccentBrush", "AccentHoverBrush",
         "AccentPressedBrush", "ConnectedBrush", "IdleDotBrush", "DangerBrush",
         "PadBodyBrush", "StickPadBrush", "StickPadStrokeBrush", "StickRingBrush",
-        "StickAccentRingBrush",
-        "StickThumbBrush", "DpadCenterBrush", "PadIdleBrush", "PadPressedBrush",
-        "PadWellBrush", "PadCapBrush", "PadBodyStrokeBrush",
+        "StickAccentRingBrush", "StickThumbBrush", "StickBevelBrush", "StickTreadBrush",
+        "DpadCenterBrush", "PadIdleBrush", "PadPressedBrush", "PadWellBrush", "PadCapBrush",
+        "PadBodyStrokeBrush", "PadGripEdgeBrush", "PadGripTextureBrush", "PadSeamBrush",
+        "PadInsetLineBrush", "PadControlEdgeBrush",
+    ];
+
+    private static readonly string[] GradientTokenKeys =
+    [
+        "PadControlGlossBrush", "PadShellSheenBrush", "StickCapSheenBrush",
+        "PadShellSurfaceBrush", "PadGripBrush", "StickWellBrush",
     ];
 
     private static Color ColorOf(object? resource)
@@ -52,7 +59,20 @@ public sealed class ThemeTokenTests
     }
 
     [AvaloniaFact]
-    public void Dark_Tokens_Reproduce_The_Original_Hardcoded_Hexes()
+    public void Every_Material_Gradient_Resolves_Under_Both_Variants()
+    {
+        foreach (var key in GradientTokenKeys)
+        {
+            foreach (var variant in new[] { ThemeVariant.Dark, ThemeVariant.Light })
+            {
+                var gradient = Assert.IsType<LinearGradientBrush>(Resolve(key, variant), exactMatch: false);
+                Assert.True(gradient.GradientStops.Count >= 2, $"{key} needs distinct highlight and shade stops");
+            }
+        }
+    }
+
+    [AvaloniaFact]
+    public void Dark_Tokens_Match_The_Pearl_And_Graphite_Palette()
     {
         var expected = new Dictionary<string, Color>
         {
@@ -79,7 +99,7 @@ public sealed class ThemeTokenTests
             ["CaptionGlyphBrush"] = Color.FromRgb(0xD0, 0xD0, 0xD0),
             ["BadgeTextBrush"] = Color.FromRgb(0xB9, 0xB9, 0xB9),
             ["OverlayTextBrush"] = Color.FromRgb(0xD6, 0xD6, 0xD6),
-            ["PadLabelBrush"] = Color.FromRgb(0x9A, 0x9A, 0x9A),
+            ["PadLabelBrush"] = Color.FromRgb(0xD9, 0xDD, 0xE3),
             ["AccentForegroundBrush"] = Color.FromRgb(0x10, 0x10, 0x10),
             ["DangerForegroundBrush"] = Color.FromRgb(0xD0, 0xD0, 0xD0),
             ["AccentBrush"] = Color.FromRgb(0x4C, 0xC2, 0xFF),
@@ -88,18 +108,25 @@ public sealed class ThemeTokenTests
             ["ConnectedBrush"] = Color.FromRgb(0x3F, 0xB9, 0x50),
             ["IdleDotBrush"] = Color.FromRgb(0x6E, 0x76, 0x81),
             ["DangerBrush"] = Color.FromRgb(0xC4, 0x2B, 0x1C),
-            ["PadBodyBrush"] = Color.FromRgb(0xEC, 0xEA, 0xE3),
-            ["StickPadBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
-            ["StickPadStrokeBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
-            ["StickRingBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
-            ["StickAccentRingBrush"] = Color.FromRgb(0xFF, 0x8A, 0x1E),
-            ["StickThumbBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
-            ["DpadCenterBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
+            ["PadBodyBrush"] = Color.FromRgb(0xE8, 0xE9, 0xE7),
+            ["StickPadBrush"] = Color.FromRgb(0x18, 0x1B, 0x20),
+            ["StickPadStrokeBrush"] = Color.FromRgb(0x68, 0x71, 0x7B),
+            ["StickRingBrush"] = Color.FromRgb(0x70, 0x79, 0x84),
+            ["StickAccentRingBrush"] = Color.FromRgb(0x4C, 0xC2, 0xFF),
+            ["StickThumbBrush"] = Color.FromRgb(0x32, 0x37, 0x3F),
+            ["StickBevelBrush"] = Color.FromRgb(0x73, 0x7D, 0x88),
+            ["StickTreadBrush"] = Color.FromRgb(0x7E, 0x87, 0x92),
+            ["DpadCenterBrush"] = Color.FromRgb(0x18, 0x1B, 0x20),
             ["PadIdleBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
             ["PadPressedBrush"] = Color.FromRgb(0x4C, 0xC2, 0xFF),
-            ["PadWellBrush"] = Color.FromRgb(0xDC, 0xD8, 0xCE),
-            ["PadCapBrush"] = Color.FromRgb(0x1C, 0x1C, 0x1C),
-            ["PadBodyStrokeBrush"] = Color.FromRgb(0xC9, 0xC6, 0xBD),
+            ["PadWellBrush"] = Color.FromRgb(0xD4, 0xD7, 0xDA),
+            ["PadCapBrush"] = Color.FromRgb(0x17, 0x1A, 0x1F),
+            ["PadBodyStrokeBrush"] = Color.FromRgb(0xB9, 0xBE, 0xC5),
+            ["PadGripEdgeBrush"] = Color.FromRgb(0xAA, 0xB2, 0xBB),
+            ["PadGripTextureBrush"] = Color.FromRgb(0x68, 0x72, 0x7E),
+            ["PadSeamBrush"] = Color.FromRgb(0x9F, 0xA8, 0xB2),
+            ["PadInsetLineBrush"] = Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF),
+            ["PadControlEdgeBrush"] = Color.FromArgb(0x52, 0xFF, 0xFF, 0xFF),
         };
 
         Assert.Equal(TokenKeys.Length, expected.Count);
@@ -111,7 +138,7 @@ public sealed class ThemeTokenTests
     }
 
     [AvaloniaFact]
-    public void Light_Tokens_Are_Distinct_From_Dark_And_Readable()
+    public void Light_Tokens_Match_The_Pearl_And_Graphite_Palette()
     {
         var expected = new Dictionary<string, Color>
         {
@@ -138,7 +165,7 @@ public sealed class ThemeTokenTests
             ["CaptionGlyphBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
             ["BadgeTextBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
             ["OverlayTextBrush"] = Color.FromRgb(0x1F, 0x23, 0x28),
-            ["PadLabelBrush"] = Color.FromRgb(0x9A, 0x9A, 0x9A),
+            ["PadLabelBrush"] = Color.FromRgb(0xD9, 0xDD, 0xE3),
             ["AccentForegroundBrush"] = Color.FromRgb(0xFF, 0xFF, 0xFF),
             ["DangerForegroundBrush"] = Color.FromRgb(0xFF, 0xFF, 0xFF),
             ["AccentBrush"] = Color.FromRgb(0x0A, 0x6F, 0xBF),
@@ -147,18 +174,25 @@ public sealed class ThemeTokenTests
             ["ConnectedBrush"] = Color.FromRgb(0x1A, 0x7F, 0x37),
             ["IdleDotBrush"] = Color.FromRgb(0x57, 0x60, 0x6A),
             ["DangerBrush"] = Color.FromRgb(0xC4, 0x2B, 0x1C),
-            ["PadBodyBrush"] = Color.FromRgb(0xF4, 0xF2, 0xEC),
-            ["StickPadBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
-            ["StickPadStrokeBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
-            ["StickRingBrush"] = Color.FromRgb(0x6E, 0x6E, 0x6E),
-            ["StickAccentRingBrush"] = Color.FromRgb(0xFF, 0x8A, 0x1E),
-            ["StickThumbBrush"] = Color.FromRgb(0x3A, 0x3A, 0x3A),
-            ["DpadCenterBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
+            ["PadBodyBrush"] = Color.FromRgb(0xED, 0xEE, 0xF0),
+            ["StickPadBrush"] = Color.FromRgb(0x18, 0x1B, 0x20),
+            ["StickPadStrokeBrush"] = Color.FromRgb(0x68, 0x71, 0x7B),
+            ["StickRingBrush"] = Color.FromRgb(0x70, 0x79, 0x84),
+            ["StickAccentRingBrush"] = Color.FromRgb(0x0A, 0x6F, 0xBF),
+            ["StickThumbBrush"] = Color.FromRgb(0x32, 0x37, 0x3F),
+            ["StickBevelBrush"] = Color.FromRgb(0x73, 0x7D, 0x88),
+            ["StickTreadBrush"] = Color.FromRgb(0x7E, 0x87, 0x92),
+            ["DpadCenterBrush"] = Color.FromRgb(0x18, 0x1B, 0x20),
             ["PadIdleBrush"] = Color.FromRgb(0x16, 0x16, 0x16),
             ["PadPressedBrush"] = Color.FromRgb(0x0A, 0x6F, 0xBF),
-            ["PadWellBrush"] = Color.FromRgb(0xDC, 0xD8, 0xCE),
-            ["PadCapBrush"] = Color.FromRgb(0x1C, 0x1C, 0x1C),
-            ["PadBodyStrokeBrush"] = Color.FromRgb(0xC9, 0xC6, 0xBD),
+            ["PadWellBrush"] = Color.FromRgb(0xD9, 0xDD, 0xE1),
+            ["PadCapBrush"] = Color.FromRgb(0x17, 0x1A, 0x1F),
+            ["PadBodyStrokeBrush"] = Color.FromRgb(0xB6, 0xBD, 0xC5),
+            ["PadGripEdgeBrush"] = Color.FromRgb(0xAA, 0xB2, 0xBB),
+            ["PadGripTextureBrush"] = Color.FromRgb(0x68, 0x72, 0x7E),
+            ["PadSeamBrush"] = Color.FromRgb(0x9F, 0xA8, 0xB2),
+            ["PadInsetLineBrush"] = Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF),
+            ["PadControlEdgeBrush"] = Color.FromArgb(0x52, 0xFF, 0xFF, 0xFF),
         };
 
         Assert.Equal(TokenKeys.Length, expected.Count);
@@ -179,25 +213,16 @@ public sealed class ThemeTokenTests
         Assert.NotEqual(ColorOf(dark), ColorOf(light));
     }
 
-    /// <summary>
-    /// The redrawn model is a WHITE controller, so the dark theme is no longer a grey
-    /// ladder: the body is an off-white shell and every piece of hardware on it is
-    /// near-black. This pins that shell/hardware contrast instead of the old dim-to-bright
-    /// ladder the near-black slab used to need.
-    /// </summary>
     [AvaloniaFact]
     public void Dark_Pad_Is_An_Off_White_Shell_With_Black_Hardware()
     {
-        // The shell is off-white: bright in the dark theme.
         var body = Luminance(ColorOf(Resolve("PadBodyBrush", ThemeVariant.Dark)));
         Assert.True(body > 0.6, $"the off-white shell must read as bright, luminance was {body}");
 
-        // The shell clears the near-black card it sits on by a wide margin.
         var card = Luminance(ColorOf(Resolve("CardBrush", ThemeVariant.Dark)));
         Assert.True(body - card > 0.3,
             $"the off-white shell must stand off the dark card, delta was {body - card}");
 
-        // Every piece of hardware sits far below the shell: black controls on an off-white body.
         var hardware = new[]
         {
             "PadIdleBrush", "StickPadBrush", "DpadCenterBrush", "PadCapBrush", "StickThumbBrush",
@@ -210,11 +235,6 @@ public sealed class ThemeTokenTests
         }
     }
 
-    /// <summary>
-    /// DESIGN.md 4.6: the light theme stays soft rather than stark white. The pad body is an
-    /// off-white shell clearly below the white card, so the silhouette reads as a surface
-    /// instead of a hole punched in the panel, and the wells sit just below it as a recess.
-    /// </summary>
     [AvaloniaFact]
     public void Light_Pad_Tokens_Stay_Soft_Rather_Than_Stark_White()
     {
@@ -224,15 +244,10 @@ public sealed class ThemeTokenTests
         Assert.True(card - body > 0.05,
             $"the light pad body must stay clearly softer than the white card, delta was {card - body}");
 
-        // The wells sit below the body, so the light theme keeps a soft recessed step.
         var well = Luminance(ColorOf(Resolve("PadWellBrush", ThemeVariant.Light)));
         Assert.True(well < body, "the light wells must sit below the body");
     }
 
-    /// <summary>
-    /// No Xbox brand green anywhere in the pad tokens: the accent stays the app's cyan and
-    /// every pad surface is a neutral grey step.
-    /// </summary>
     [AvaloniaFact]
     public void No_Pad_Token_Carries_Brand_Green()
     {

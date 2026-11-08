@@ -198,8 +198,7 @@ public sealed class MotionEnrichmentTests
         var buttonB = visualizer.FindControl<Ellipse>("ButtonB")!;
 
         // The accent stroke fades in (BrushTransition) on hover and selection rather than
-        // snapping on. The outline thickness stays instant (the code-behind drives it to 2.5
-        // and several tests pin that exact value).
+        // snapping on. Ring width stays fixed at 1.5 so feedback never shifts glyph layout.
         Assert.Contains(
             buttonB.Transitions!.OfType<BrushTransition>(),
             t => t.Property == Shape.StrokeProperty);
