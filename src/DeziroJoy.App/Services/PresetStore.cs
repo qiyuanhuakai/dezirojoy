@@ -1,6 +1,7 @@
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
+using DeziroJoy.Core.Profiles;
 
 namespace DeziroJoy.App.Services;
 
@@ -50,6 +51,41 @@ public sealed class PresetStore
         ArgumentNullException.ThrowIfNull(profile);
 
         _store.Save(profile with { DeviceId = KeyFor(deviceId, slot) });
+    }
+
+    /// <summary>
+    /// Creates any missing slot as an independent copy of the device's primary profile.
+    /// Existing slots are never overwritten. The returned profile is the one the runtime
+    /// should activate for <paramref name="activeSlot"/>.
+    /// </summary>
+    public GamepadProfile EnsureDefaults(GamepadDescriptor descriptor, int activeSlot = MinSlot)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        ValidateSlot(activeSlot);
+
+        var primary = LoadSlot(descriptor.DeviceId, MinSlot)
+            ?? DefaultProfileLibrary.CreateDefault(descriptor);
+        if (LoadSlot(descriptor.DeviceId, MinSlot) is null)
+        {
+            SaveSlot(descriptor.DeviceId, MinSlot, primary);
+        }
+
+        for (var slot = MinSlot + 1; slot <= MaxSlot; slot++)
+        {
+            if (LoadSlot(descriptor.DeviceId, slot) is not null)
+            {
+                continue;
+            }
+
+            SaveSlot(descriptor.DeviceId, slot, primary with
+            {
+                Name = $"{primary.Name} · 预设 {slot}",
+                DeviceId = KeyFor(descriptor.DeviceId, slot),
+            });
+        }
+
+        return LoadSlot(descriptor.DeviceId, activeSlot)
+            ?? throw new InvalidOperationException($"preset slot {activeSlot} was not initialized");
     }
 
     /// <summary>The slots 1..4 that hold a profile for the device, in ascending order.</summary>

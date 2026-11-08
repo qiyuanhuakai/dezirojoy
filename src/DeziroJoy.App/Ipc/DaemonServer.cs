@@ -38,15 +38,16 @@ public sealed partial class DaemonServer
     private bool _desiredEnabled;
     private bool _injectionSuspended;
 
-    /// <summary>
-    /// The one active preset slot the whole app reads: a switch moves every connected
-    /// device at once, so the slot is app-wide rather than per-device state. In-memory
-    /// only - a restart resumes at slot 1, exactly as an unmigrated profile reads.
-    /// </summary>
+    /// <summary>The one persisted, app-wide preset slot every connected device follows.</summary>
     private int _activePresetSlot = 1;
 
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
+
+    /// <summary>Raised by the transport after the shutdown acknowledgement is written.</summary>
+    public event Action? ShutdownRequested;
+
+    internal void RequestShutdown() => ShutdownRequested?.Invoke();
 
     /// <summary>Changes on every daemon start, so a GUI can tell a restarted daemon apart.</summary>
     public string DaemonInstanceId { get; }
@@ -66,6 +67,7 @@ public sealed partial class DaemonServer
         _presetStore = new PresetStore(profileStore);
         _stateStore = stateStore;
         DaemonInstanceId = $"daemon-{(clock ?? new SystemClock()).UtcNow.Ticks:x16}";
+        _host.DevicesChanged += OnDevicesChanged;
 
         _restored = stateStore.Load();
         if (_restored is not null)
@@ -74,6 +76,9 @@ public sealed partial class DaemonServer
             _profileName = _restored.ProfileName;
             _profileJson = _restored.ProfileJson;
             _revision = _restored.Revision;
+            _activePresetSlot = _restored.ActivePresetSlot is >= PresetStore.MinSlot and <= PresetStore.MaxSlot
+                ? _restored.ActivePresetSlot
+                : PresetStore.MinSlot;
         }
         else
         {
@@ -141,6 +146,9 @@ public sealed partial class DaemonServer
 
             case SwitchPresetSlotMessage switchSlot:
                 return HandleSwitchPresetSlot(switchSlot);
+
+            case ShutdownDaemonMessage shutdown:
+                return new MutationAckMessage(shutdown.RequestId, true, CurrentRevision(), CurrentSequence());
 
             default:
                 // The union is closed and the deserializer rejects unknown kinds, so this is
@@ -325,16 +333,28 @@ public sealed partial class DaemonServer
 
             bodyProfile ??= _presetStore.LoadSlot(request.DeviceId, request.Slot);
 
+            try
+            {
+                _host.SwitchPresetSlot(
+                    request.Slot,
+                    holders.ToDictionary(holder => holder.DeviceId, holder => holder.Profile, StringComparer.Ordinal));
+            }
+            catch (Exception exception)
+            {
+                return new MutationAckMessage(
+                    request.RequestId,
+                    false,
+                    _revision,
+                    _sequence,
+                    "preset-switch-failed",
+                    $"preset switch rolled back: {exception.Message}");
+            }
+
             _activePresetSlot = request.Slot;
             if (bodyProfile is not null)
             {
                 _profileName = bodyProfile.Name;
                 _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = bodyDeviceId });
-            }
-
-            foreach (var (deviceId, profile) in holders)
-            {
-                _host.Reload(deviceId, profile);
             }
 
             _revision++;
@@ -518,11 +538,22 @@ public sealed partial class DaemonServer
     private void PublishStateChange()
     {
         _sequence++;
-        _stateStore.Save(new DaemonState(_desiredEnabled, _profileName, _profileJson, _revision));
+        _stateStore.Save(new DaemonState(_desiredEnabled, _profileName, _profileJson, _revision, _activePresetSlot));
 
         var message = new StateChangedMessage(DaemonInstanceId, BuildSnapshot());
         StateChanged?.Invoke(message);
         PublishToConnections(message);
+    }
+
+    private void OnDevicesChanged()
+    {
+        lock (_sync)
+        {
+            _sequence++;
+            var message = new StateChangedMessage(DaemonInstanceId, BuildSnapshot());
+            StateChanged?.Invoke(message);
+            PublishToConnections(message);
+        }
     }
 
     private StateSnapshot BuildSnapshot()
@@ -553,6 +584,7 @@ public sealed partial class DaemonServer
             ActivePresetSlot: _activePresetSlot)
         {
             ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
+            Devices = _host.ConnectedDevices,
         };
     }
 }

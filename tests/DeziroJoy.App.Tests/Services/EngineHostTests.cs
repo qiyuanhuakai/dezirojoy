@@ -441,6 +441,61 @@ public class EngineHostTests
         Assert.Contains("down:Enter", sink.Calls);
     }
 
+    [Fact]
+    public void First_Connect_Initializes_All_Four_Preset_Slots()
+    {
+        var store = new InMemoryProfileStore();
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+
+        host.RefreshPresence();
+
+        var presets = new PresetStore(store);
+        Assert.Equal([1, 2, 3, 4], presets.SlotsInUse("xinput:0"));
+        Assert.Equal("xinput:0", host.Controllers.Single().Profile.DeviceId);
+    }
+
+    [Fact]
+    public void Preset_Switch_Rolls_Back_Every_Device_When_One_Reload_Fails()
+    {
+        var (host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.Add("xinput:1", "DualShock 4");
+        host.RefreshPresence();
+        var before = host.Controllers.ToDictionary(
+            controller => controller.Descriptor.DeviceId,
+            controller => controller.Profile,
+            StringComparer.Ordinal);
+        var replacements = before.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value with { Name = $"Replacement {pair.Key}" },
+            StringComparer.Ordinal);
+        replacements["xinput:1"] = null!;
+
+        Assert.Throws<ArgumentNullException>(() => host.SwitchPresetSlot(2, replacements));
+
+        Assert.Equal(1, host.ActivePresetSlot);
+        foreach (var controller in host.Controllers)
+        {
+            Assert.Equal(before[controller.Descriptor.DeviceId].Name, controller.Profile.Name);
+        }
+    }
+
+    [Fact]
+    public void ControllersChanged_Raises_For_Connect_And_Disconnect()
+    {
+        var (host, provider, _) = CreateHost();
+        var changed = 0;
+        host.ControllersChanged += () => changed++;
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+
+        host.RefreshPresence();
+        provider.Remove("xinput:0");
+        host.RefreshPresence();
+
+        Assert.Equal(2, changed);
+    }
+
     private static GamepadProfile LeaderProfile(LeaderSwitchMode switchMode, params GamepadButton[] buttons)
         => new()
         {

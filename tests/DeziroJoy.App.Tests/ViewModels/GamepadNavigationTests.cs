@@ -7,12 +7,10 @@ using Xunit;
 namespace DeziroJoy.App.Tests.ViewModels;
 
 /// <summary>
-/// Physical-gamepad navigation is two-level. A press on the pad SELECTS that element in the
-/// model and the source list, and nothing else: it must not open the editor and must not
-/// suspend injection, because browsing the pad is not a request to configure. Entering the
-/// editor - a click, or Enter - is the second level, and that is the only thing that hijacks
-/// the pad: while a mapping is open, presses switch which element is being configured instead
-/// of being injected.
+/// Physical-gamepad navigation is two-level. A press selects an element; a click or Enter
+/// opens its editor. The explicit hijack preference, not editor visibility, owns injection:
+/// enabled and in scope means the UI consumes presses while mapping injection is suspended;
+/// disabled means every press follows the active mapping even with an editor open.
 /// </summary>
 public sealed class GamepadNavigationTests
 {
@@ -94,24 +92,23 @@ public sealed class GamepadNavigationTests
 
         Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
         Assert.False(vm.IsEditing, "selecting must not open the editor - that is the second level");
-        Assert.False(vm.Host.IsInjectionSuspended);
+        Assert.True(vm.Host.IsInjectionSuspended, "the explicit hijack setting owns the pad in scope");
     }
 
     [Fact]
-    public void Pressing_A_Button_Keeps_Injecting_While_The_Engine_Runs()
+    public void Pressing_A_Button_With_Hijack_Enabled_Pauses_Injection()
     {
         var (vm, host, provider, sink) = CreateHost();
         Connect(provider);
         Sample(vm, host);
 
-        // B carries a default mapping (B -> Enter). Pressing it must select the element AND
-        // still inject: browsing the pad is not a request to configure, so nothing may be
-        // hijacked at the first level.
+        // B carries a default mapping (B -> Enter). With hijack enabled it selects the
+        // element for the UI and the injector stays suspended.
         SetState(provider, GamepadButtonMask.B);
         Sample(vm, host);
 
         Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
-        Assert.Contains("down:Enter", sink.Calls);
+        Assert.DoesNotContain("down:Enter", sink.Calls);
     }
 
     [Fact]
@@ -229,7 +226,7 @@ public sealed class GamepadNavigationTests
         Click(vm, new ButtonBinding(GamepadButton.B));
 
         Assert.True(vm.IsEditing);
-        Assert.True(vm.Host.IsInjectionSuspended, "entering the editor is what hijacks the pad");
+        Assert.True(vm.Host.IsInjectionSuspended, "the explicit hijack setting already owns the pad");
         Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
     }
 
@@ -342,7 +339,7 @@ public sealed class GamepadNavigationTests
     }
 
     [Fact]
-    public void Closing_The_Editor_Resumes_Injection()
+    public void Closing_The_Editor_Does_Not_Release_The_Explicit_Hijack_Lease()
     {
         var (vm, host, provider, sink) = CreateHost();
         Connect(provider);
@@ -359,7 +356,28 @@ public sealed class GamepadNavigationTests
         sink.Calls.Clear();
         host.TickOnce(Tick);
 
+        Assert.True(vm.Host.IsInjectionSuspended);
+        Assert.DoesNotContain("down:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void Disabling_Hijack_While_Editing_Immediately_Restores_Mapping()
+    {
+        var (vm, host, provider, sink) = CreateHost();
+        Connect(provider);
+        Sample(vm, host);
+        SetState(provider, GamepadButtonMask.B);
+        Sample(vm, host);
+        Click(vm, new ButtonBinding(GamepadButton.B));
+        sink.Calls.Clear();
+
+        vm.SetGamepadNavigationEnabled(false);
+        host.TickOnce(Tick);
+
+        Assert.True(vm.IsEditing);
+        Assert.False(vm.Host.IsInjectionSuspended);
         Assert.Contains("down:Enter", sink.Calls);
+        Assert.Equal(GamepadButton.B, vm.Editor.SelectedButton);
     }
 
     [Fact]
@@ -388,7 +406,7 @@ public sealed class GamepadNavigationTests
         Assert.False(host.IsRunning);
         Assert.Equal(new ButtonBinding(GamepadButton.B), vm.SelectedSource);
         Assert.False(vm.IsEditing);
-        Assert.False(vm.Host.IsInjectionSuspended);
+        Assert.True(vm.Host.IsInjectionSuspended);
     }
 
     [Fact]

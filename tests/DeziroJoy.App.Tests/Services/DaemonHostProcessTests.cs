@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Text;
+using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using Xunit;
 
@@ -81,6 +83,52 @@ public class DaemonHostProcessTests
         Assert.Equal(0, process.ExitCode);
     }
 
+    [Fact]
+    public async Task Daemon_Exits_Cleanly_After_An_Ipc_Shutdown()
+    {
+        var executable = LocateExecutable();
+        using var process = StartDaemon(executable);
+        var output = new StringBuilder();
+        var pump = Task.Run(() =>
+        {
+            string? line;
+            while ((line = process.StandardOutput.ReadLine()) is not null)
+            {
+                lock (output)
+                {
+                    output.AppendLine(line);
+                }
+            }
+        }, TestContext.Current.CancellationToken);
+
+        try
+        {
+            Assert.True(
+                await WaitForOutputAsync(output, DaemonHost.StartupCompleteMarker, TimeSpan.FromSeconds(30)),
+                Snapshot(output));
+            await using var controller = new DaemonController(new PipeEndpoint());
+            await controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+            var shutdown = await controller.ShutdownDaemonAsync(TestContext.Current.CancellationToken);
+            Assert.True(
+                shutdown.Outcome == MutationOutcome.Accepted,
+                $"shutdown={shutdown}; error={shutdown.ErrorCode}: {shutdown.ErrorMessage}; output={Snapshot(output)}");
+            Assert.True(
+                await WaitForExitAsync(process, TimeSpan.FromSeconds(15)),
+                $"daemon did not exit after IPC shutdown. Output:\n{Snapshot(output)}");
+            await pump;
+            Assert.Contains("daemon exited cleanly", Snapshot(output));
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
     private static string LocateExecutable()
     {
         var name = OperatingSystem.IsWindows() ? "DeziroJoy.exe" : "DeziroJoy";
@@ -155,6 +203,31 @@ public class DaemonHostProcessTests
         lock (output)
         {
             return output.ToString();
+        }
+    }
+
+    private sealed class PipeEndpoint : IDaemonEndpoint
+    {
+        public Task<bool> EnsureReadyAsync(bool allowLaunch, CancellationToken cancellationToken)
+            => Task.FromResult(true);
+
+        public async Task<IDaemonChannel> OpenChannelAsync(CancellationToken cancellationToken)
+        {
+            var pipe = new NamedPipeClientStream(
+                ".",
+                IpcContract.PipeName,
+                PipeDirection.InOut,
+                PipeOptions.Asynchronous);
+            try
+            {
+                await pipe.ConnectAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                return new NamedPipeDaemonChannel(pipe);
+            }
+            catch
+            {
+                await pipe.DisposeAsync();
+                throw;
+            }
         }
     }
 }

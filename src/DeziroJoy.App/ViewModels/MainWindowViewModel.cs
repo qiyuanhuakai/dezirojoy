@@ -125,6 +125,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_daemon is not null)
         {
             _daemon.SnapshotChanged += OnDaemonSnapshot;
+            _daemon.Connected += OnDaemonConnected;
             _daemon.Disconnected += OnDaemonDisconnected;
             if (_daemon.Snapshot is { } snapshot)
             {
@@ -141,7 +142,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _legacyLeaderPending = true;
         }
 
+        ActivePresetSlot = _host.ActivePresetSlot;
         RefreshStatus();
+        ApplyInputLease();
     }
 
     public ObservableCollection<ControllerRuntime> Controllers { get; } = [];
@@ -188,8 +191,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private MappingRowViewModel? _selectedMapping;
 
     /// <summary>
-    /// First-level selection. Selecting deliberately does NOT open the editor: browsing the
-    /// pad must never suspend injection. Only entering the editor hijacks the pad.
+    /// First-level selection. Selecting deliberately does NOT open the editor. Injection is
+    /// controlled by the explicit hijack preference and input scope, not by editor visibility.
     /// </summary>
     [ObservableProperty]
     private InputBinding? _selectedSource;
@@ -227,9 +230,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     /// Called by the view when the window's visibility, activation or selected tab changes.
-    /// Leaving scope stops capture, forgets the held edges and releases this connection's
-    /// editor suspension lease; reentry resets the edges again and restores the lease when a
-    /// draft is still open on the mapping tab.
+    /// Leaving scope stops capture, forgets held edges and releases this connection's explicit
+    /// hijack lease; reentry resets the edges and restores the lease only when hijack is enabled.
     /// </summary>
     public void SetPhysicalInputScope(bool inScope) => IsPhysicalInputInScope = inScope;
 
@@ -240,12 +242,124 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     public bool GamepadNavigationEnabled
     {
-        get => _settings?.GamepadNavigationEnabled ?? true;
+        get => _settings?.GamepadNavigationEnabled ?? _gamepadNavigationEnabled;
         set => SetGamepadNavigationEnabled(value);
     }
 
     /// <summary>Turns gamepad-driven navigation off or on and persists the choice.</summary>
-    public void SetGamepadNavigationEnabled(bool enabled) => _settings?.SetGamepadNavigation(enabled);
+    public void SetGamepadNavigationEnabled(bool enabled)
+    {
+        if (GamepadNavigationEnabled == enabled)
+        {
+            return;
+        }
+
+        if (_settings is null)
+        {
+            _gamepadNavigationEnabled = enabled;
+        }
+        else
+        {
+            _settings.SetGamepadNavigation(enabled);
+        }
+
+        if (!enabled)
+        {
+            Editor.EndKeyboardCapture();
+            Editor.IsCapturingButton = false;
+        }
+
+        OnPropertyChanged(nameof(GamepadNavigationEnabled));
+        ResetNavigationBaseline();
+        ApplyInputLease();
+    }
+
+    private bool _gamepadNavigationEnabled = true;
+
+    /// <summary>Whether closing the render window hands the application to the tray.</summary>
+    public bool CloseToTrayEnabled
+    {
+        get => ReadTrayPreference(nameof(CloseToTrayEnabled));
+        set => SetCloseToTrayEnabled(value);
+    }
+
+    /// <summary>Whether minimizing the render window hands the application to the tray.</summary>
+    public bool MinimizeToTrayEnabled
+    {
+        get => ReadTrayPreference(nameof(MinimizeToTrayEnabled));
+        set => SetMinimizeToTrayEnabled(value);
+    }
+
+    public bool CloseToTray
+    {
+        get => CloseToTrayEnabled;
+        set => SetCloseToTrayEnabled(value);
+    }
+
+    public bool MinimizeToTray
+    {
+        get => MinimizeToTrayEnabled;
+        set => SetMinimizeToTrayEnabled(value);
+    }
+
+    public void SetCloseToTrayEnabled(bool enabled) => WriteTrayPreference(nameof(CloseToTrayEnabled), enabled);
+
+    public void SetMinimizeToTrayEnabled(bool enabled) => WriteTrayPreference(nameof(MinimizeToTrayEnabled), enabled);
+
+    private bool _closeToTrayEnabled = true;
+
+    private bool _minimizeToTrayEnabled = true;
+
+    private bool ReadTrayPreference(string name)
+    {
+        if (_settings?.GetType().GetProperty(name)?.GetValue(_settings) is bool value)
+        {
+            return value;
+        }
+
+        return name == nameof(CloseToTrayEnabled) ? _closeToTrayEnabled : _minimizeToTrayEnabled;
+    }
+
+    private void WriteTrayPreference(string name, bool enabled)
+    {
+        if (ReadTrayPreference(name) == enabled)
+        {
+            return;
+        }
+
+        var forwarded = false;
+        if (_settings is not null)
+        {
+            var settingsType = _settings.GetType();
+            var setter = settingsType.GetMethod($"Set{name}");
+            if (setter?.GetParameters() is [{ ParameterType: var parameterType }]
+                && parameterType == typeof(bool))
+            {
+                setter.Invoke(_settings, [enabled]);
+                forwarded = true;
+            }
+            else if (settingsType.GetProperty(name) is { CanWrite: true } property)
+            {
+                property.SetValue(_settings, enabled);
+                forwarded = true;
+            }
+        }
+
+        if (!forwarded)
+        {
+            if (name == nameof(CloseToTrayEnabled))
+            {
+                _closeToTrayEnabled = enabled;
+            }
+            else
+            {
+                _minimizeToTrayEnabled = enabled;
+            }
+        }
+
+        OnPropertyChanged(name);
+        OnPropertyChanged(name == nameof(CloseToTrayEnabled) ? nameof(CloseToTray) : nameof(MinimizeToTray));
+    }
 
     /// <summary>
     /// The retired leader pair, captured at construction so the one-shot migration can run
@@ -333,23 +447,38 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyPresetSlotLocally(int slot)
     {
-        if (ActiveController is not { } controller)
+        if (slot is < PresetStore.MinSlot or > PresetStore.MaxSlot)
         {
             return;
         }
 
-        // The slot is app-wide, so every connected device switches at once: each one is
-        // reloaded with its own stored profile for the slot, and a device holding nothing
-        // there keeps running its current profile - the same contract the daemon honors.
+        var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
         foreach (var connected in _host.Controllers)
         {
             if (_presets.LoadSlot(connected.Descriptor.DeviceId, slot) is { } profile)
             {
-                _host.Reload(connected.Descriptor.DeviceId, profile);
+                profiles.Add(connected.Descriptor.DeviceId, profile);
             }
         }
 
-        if (_presets.LoadSlot(controller.Descriptor.DeviceId, slot) is { } activeProfile)
+        if (profiles.Count == 0 && _host.Controllers.Count > 0)
+        {
+            SetTransferError("目标预设没有可用配置，未切换。");
+            return;
+        }
+
+        try
+        {
+            _host.SwitchPresetSlot(slot, profiles);
+        }
+        catch (Exception exception)
+        {
+            SetTransferError($"切换配置槽位失败，已保留原槽位：{exception.Message}");
+            return;
+        }
+
+        if (ActiveController is { } controller
+            && _presets.LoadSlot(controller.Descriptor.DeviceId, slot) is { } activeProfile)
         {
             ActiveProfile = activeProfile;
         }
@@ -363,19 +492,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (!value)
         {
-            // Leaving scope: an armed capture must stand down, and the held edges are
-            // forgotten so a button held across the boundary is never read as a press on
-            // reentry.
             Editor.EndKeyboardCapture();
             Editor.IsCapturingButton = false;
-            ResetNavigationBaseline();
         }
 
-        // The editor lease is this connection's: releasing it here is what lets the daemon
-        // (or the local engine) inject again while no window is presenting, and taking it
-        // back on reentry keeps the retained draft hijacking the pad. A discarded draft
-        // never re-arms it.
-        ApplyEditorLease();
+        ResetNavigationBaseline();
+        ApplyInputLease();
     }
 
     /// <summary>Forgets the navigation baseline so the next sample starts from a clean slate.</summary>
@@ -500,25 +622,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnIsElevatedChanged(bool value) => RelaunchElevatedCommand.NotifyCanExecuteChanged();
 
-    partial void OnIsEditingChanged(bool value)
-    {
-        // The editor hijacks the pad: while a mapping is open, physical presses navigate the
-        // editor instead of being injected, so the engine must not dispatch. Sampling continues
-        // either way - navigation works with the engine running or stopped.
-        ApplyEditorLease();
-    }
-
     /// <summary>
-    /// Takes or releases this connection's editor suspension lease. The lease is held exactly
-    /// while a draft is open AND physical input is in scope, so leaving the mapping tab,
-    /// deactivating the window or destroying it hands the pad straight back to the injector -
-    /// whichever side owns it, the resident daemon or the local engine on Linux. Transitions
-    /// go through the daemon's own mutation gate, so they are serialized with every other
-    /// mutation this connection makes.
+    /// The explicit hijack preference owns this connection's input lease. An open editor
+    /// never pauses injection on its own; when hijack is off every physical press follows
+    /// the active mapping even while a draft is visible.
     /// </summary>
-    private void ApplyEditorLease()
+    private void ApplyInputLease()
     {
-        var suspended = IsEditing && IsPhysicalInputInScope;
+        var suspended = GamepadNavigationEnabled && IsPhysicalInputInScope;
 
         if (_daemon is not null)
         {
@@ -540,7 +651,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var result = await _daemon.SetInjectionSuspendedAsync(suspended, _lifetime.Token);
-            ReportMutationFailure(result, "编辑器输入挂起");
+            ReportMutationFailure(result, "手柄劫持租约");
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
         {
@@ -941,7 +1052,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Visualizer.SetConnected(true);
     }
 
-    /// <summary>Selects an element without opening the editor, so injection is never suspended.</summary>
+    /// <summary>Selects an element without opening the editor or changing the input lease.</summary>
     public void SelectSource(InputBinding source)
     {
         SelectedSource = source;
@@ -1018,16 +1129,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private void Navigate(IGamepadState state)
     {
-        // With the setting off the pad stops driving the UI entirely: it still highlights the
-        // model and still feeds the mapping editor, but it never navigates and never opens
-        // the editor on its own.
-        if (!IsPhysicalInputInScope || !GamepadNavigationEnabled)
+        // Off means the active mapping owns every press. Even a visible editor must not
+        // capture or navigate behind the user's back; highlighting still stays live.
+        if (!IsPhysicalInputInScope)
         {
-            // Out of scope the pad belongs to the injector, not to this window: nothing is
-            // selected and nothing is captured. The editor's capture baseline is still
-            // tracked, so arming capture after the user comes back never fires on a button
-            // they are already holding.
             Editor.CaptureGamepadSample(state);
+            return;
+        }
+
+        if (!GamepadNavigationEnabled)
+        {
             return;
         }
 
@@ -1055,13 +1166,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    /// Handles a newly pressed button or deflected stick. While the editor is open (second
-    /// level) the press switches which element is being configured, and injection stays
-    /// suspended - that is the hijack, and it is scoped to the editor. Otherwise the press
-    /// only selects the element in the model (first level): it never opens the editor, so the
-    /// mapping keeps injecting while the user browses the pad. Only press edges count, so a
-    /// held button acts once; the first sample for a controller is the baseline, so a button
-    /// held since before the app looked is not a press.
+    /// Handles a newly pressed button or deflected stick while the explicit hijack lease is
+    /// active. With the editor open the press switches the configured element; otherwise it
+    /// only selects that element. Only press edges count, and the first sample establishes a
+    /// baseline so a button already held is not treated as a new press.
     /// </summary>
     private void NavigateByPhysicalInput(IGamepadState state)
     {
@@ -1246,8 +1354,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // daemon lost is worded exactly like a local disconnect.
         if (_daemon is not null)
         {
+            var daemonDevice = DaemonSnapshot is { Devices.Count: > 0 } snapshot ? snapshot.Devices[0] : null;
             StatusMessage = HasController
-                ? "已连接手柄 · 由常驻守护进程映射"
+                ? daemonDevice is not null
+                    ? $"{daemonDevice.Name} · {MappingDescriptions.Layout(daemonDevice.Layout)}"
+                    : "已连接手柄 · 等待设备信息"
                 : wasConnected
                     ? "手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接"
                     : "未检测到手柄，请连接手柄";
@@ -1420,6 +1531,24 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private void OnDaemonConnected()
+    {
+        if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+        {
+            _uiContext.Post(_ => OnDaemonConnected(), null);
+            return;
+        }
+
+        if (_daemon?.Snapshot is { } snapshot)
+        {
+            OnDaemonSnapshot(snapshot);
+        }
+
+        TransferMessage = string.Empty;
+        IsTransferError = false;
+        ApplyInputLease();
+    }
+
     private void OnDaemonDisconnected()
     {
         if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
@@ -1460,12 +1589,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             TransferMessage = string.Empty;
             IsTransferError = false;
-            if (IsEditing && IsPhysicalInputInScope)
-            {
-                // Reconnect lease recovery: the draft survived the disconnect, so the lease
-                // is taken back - but only while the pad is still in scope.
-                await SetEditorInjectionSuspended(true);
-            }
+            await SetEditorInjectionSuspended(GamepadNavigationEnabled && IsPhysicalInputInScope);
 
             RefreshStatus();
         }
@@ -1518,6 +1642,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_daemon is not null)
         {
             _daemon.SnapshotChanged -= OnDaemonSnapshot;
+            _daemon.Connected -= OnDaemonConnected;
             _daemon.Disconnected -= OnDaemonDisconnected;
         }
 
@@ -1538,6 +1663,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         _disposed = true;
+        if (_daemon is null && !_daemonRequired)
+        {
+            _host.SetInjectionSuspended(false);
+        }
+
         await DisconnectDaemonAsync();
         GC.SuppressFinalize(this);
     }

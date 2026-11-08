@@ -181,6 +181,18 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void ShutdownDaemon_Round_Trips()
+    {
+        var message = new ShutdownDaemonMessage("shutdown-1");
+
+        var restored = Assert.IsType<ShutdownDaemonMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.Equal(message, restored);
+        Assert.Contains("shutdown-daemon", IpcSerializer.Serialize(message));
+    }
+
+    [Fact]
     public void MutationAck_Echoes_The_Request_Id_Across_The_Wire()
     {
         var request = new ApplyConfigurationMessage("req-42", 7, "Xbox Default", ProfileJson());
@@ -234,7 +246,11 @@ public class ProtocolTests
         var restored = Assert.IsType<StateChangedMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
-        Assert.Equal(message, restored);
+        Assert.Equal(message.DaemonInstanceId, restored.DaemonInstanceId);
+        Assert.Equal(message.Snapshot.Sequence, restored.Snapshot.Sequence);
+        Assert.Equal(message.Snapshot.Revision, restored.Snapshot.Revision);
+        Assert.Equal(message.Snapshot.InjectedEvents, restored.Snapshot.InjectedEvents);
+        Assert.Empty(restored.Snapshot.Devices);
     }
 
     [Fact]
@@ -260,12 +276,19 @@ public class ProtocolTests
             InjectedEvents: 1000,
             BlockedEvents: 5,
             HasController: true,
-            ActivePresetSlot: 3));
+            ActivePresetSlot: 3)
+        {
+            Devices = [new ConnectedDeviceSnapshot("pad-1", "Xbox Wireless Controller", GamepadLayout.Xbox)],
+        });
 
         var restored = Assert.IsType<StateChangedMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
         Assert.Equal(3, restored.Snapshot.ActivePresetSlot);
+        var device = Assert.Single(restored.Snapshot.Devices);
+        Assert.Equal("pad-1", device.DeviceId);
+        Assert.Equal("Xbox Wireless Controller", device.Name);
+        Assert.Equal(GamepadLayout.Xbox, device.Layout);
     }
 
     [Fact]
@@ -287,9 +310,11 @@ public class ProtocolTests
         var restored = Assert.IsType<StateChangedMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
-        Assert.Equal(message, restored);
+        Assert.Equal(message.DaemonInstanceId, restored.DaemonInstanceId);
+        Assert.Equal(message.Snapshot.Sequence, restored.Snapshot.Sequence);
         Assert.Null(restored.Snapshot.LastError);
         Assert.Null(restored.Snapshot.InjectorIntegrity);
+        Assert.Empty(restored.Snapshot.Devices);
     }
 
     [Fact]

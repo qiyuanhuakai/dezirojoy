@@ -196,6 +196,34 @@ public sealed class DaemonControllerTests
     }
 
     [Fact]
+    public async Task A_Late_Authoritative_Answer_Does_Not_Roll_Back_A_Newer_Push()
+    {
+        var endpoint = new FakeEndpoint { InitialSequence = 5 };
+        await using var controller = new DaemonController(
+            endpoint,
+            heartbeatInterval: TimeSpan.FromSeconds(10));
+        await ConnectAsync(controller);
+        var adopted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.SnapshotChanged += snapshot =>
+        {
+            if (snapshot.Sequence == 6)
+            {
+                adopted.TrySetResult();
+            }
+        };
+        endpoint.Channel.Push(State("daemon-1", 6));
+        await adopted.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+        endpoint.Channel.OnSend = message => message is GetStateMessage getState
+            ? State("daemon-1", 5, getState.RequestId)
+            : null;
+
+        var returned = await controller.GetStateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(6, returned.Sequence);
+        Assert.Equal(6, controller.Snapshot!.Sequence);
+    }
+
+    [Fact]
     public async Task A_Sequence_Gap_Triggers_One_Authoritative_Reread()
     {
         var endpoint = new FakeEndpoint();
@@ -236,6 +264,73 @@ public sealed class DaemonControllerTests
         Assert.Equal(0, controller.Snapshot!.Sequence);
     }
 
+    [Fact]
+    public async Task Heartbeat_Reads_Authoritative_State_Without_Replaying_Mutations()
+    {
+        var endpoint = new FakeEndpoint();
+        await using var controller = new DaemonController(
+            endpoint,
+            heartbeatInterval: TimeSpan.FromMilliseconds(10),
+            reconnectDelay: TimeSpan.FromSeconds(10));
+        await ConnectAsync(controller);
+        var refreshed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.SnapshotChanged += _ => refreshed.TrySetResult();
+
+        await refreshed.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+
+        Assert.True(endpoint.Channel.Sent.OfType<GetStateMessage>().Count() >= 2);
+        Assert.DoesNotContain(endpoint.Channel.Sent, message => message is ApplyConfigurationMessage);
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+    }
+
+    [Fact]
+    public async Task Disconnect_Automatically_Reconnects_And_Adopts_The_New_Daemon_Instance()
+    {
+        var endpoint = new FakeEndpoint { RenewChannelOnOpen = true };
+        await using var controller = new DaemonController(
+            endpoint,
+            heartbeatInterval: TimeSpan.FromSeconds(10),
+            reconnectDelay: TimeSpan.FromMilliseconds(10));
+        await ConnectAsync(controller);
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.Connected += () =>
+        {
+            if (controller.DaemonInstanceId == "daemon-2")
+            {
+                reconnected.TrySetResult();
+            }
+        };
+        endpoint.InstanceId = "daemon-2";
+
+        endpoint.Channel.Close();
+        await reconnected.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, endpoint.OpenCalls);
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+        Assert.Equal("daemon-2", controller.DaemonInstanceId);
+        Assert.Equal(0, controller.Snapshot!.Sequence);
+    }
+
+    [Fact]
+    public async Task Graceful_Shutdown_Returns_Accepted_And_Does_Not_Auto_Reconnect()
+    {
+        var endpoint = new FakeEndpoint { RenewChannelOnOpen = true };
+        await using var controller = new DaemonController(
+            endpoint,
+            reconnectDelay: TimeSpan.FromMilliseconds(10));
+        await ConnectAsync(controller);
+        endpoint.Channel.OnSend = message => message is ShutdownDaemonMessage shutdown
+            ? new MutationAckMessage(shutdown.RequestId, true, 0, 0)
+            : null;
+
+        Assert.True(await controller.RequestShutdownAsync(TestContext.Current.CancellationToken));
+        endpoint.Channel.Close();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        Assert.Single(endpoint.Channel.Sent.OfType<ShutdownDaemonMessage>());
+        Assert.Equal(1, endpoint.OpenCalls);
+    }
+
     private static async Task ConnectAsync(DaemonController controller)
     {
         await controller.ConnectAsync(TestContext.Current.CancellationToken);
@@ -247,9 +342,13 @@ public sealed class DaemonControllerTests
 
     private sealed class FakeEndpoint : IDaemonEndpoint
     {
-        public FakeDaemonChannel Channel { get; } = new();
+        public FakeDaemonChannel Channel { get; private set; }
 
         public bool Ready { get; set; } = true;
+
+        public bool RenewChannelOnOpen { get; set; }
+
+        public string InstanceId { get; set; } = "daemon-1";
 
         public long InitialSequence { get; set; }
 
@@ -261,11 +360,19 @@ public sealed class DaemonControllerTests
 
         public FakeEndpoint()
         {
-            Channel.OnSend = message => message switch
+            Channel = CreateChannel();
+        }
+
+        private FakeDaemonChannel CreateChannel()
+        {
+            return new FakeDaemonChannel
             {
-                HelloMessage => new HelloAckMessage(IpcContract.ProtocolVersion, true, "daemon-1", 0),
-                GetStateMessage getState => State("daemon-1", InitialSequence, getState.RequestId),
-                _ => null,
+                OnSend = message => message switch
+                {
+                    HelloMessage => new HelloAckMessage(IpcContract.ProtocolVersion, true, InstanceId, 0),
+                    GetStateMessage getState => State(InstanceId, InitialSequence, getState.RequestId),
+                    _ => null,
+                },
             };
         }
 
@@ -279,6 +386,11 @@ public sealed class DaemonControllerTests
         public Task<IDaemonChannel> OpenChannelAsync(CancellationToken cancellationToken)
         {
             OpenCalls++;
+            if (RenewChannelOnOpen && OpenCalls > 1)
+            {
+                Channel = CreateChannel();
+            }
+
             return Task.FromResult<IDaemonChannel>(Channel);
         }
     }

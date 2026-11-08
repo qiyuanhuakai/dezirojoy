@@ -322,6 +322,7 @@ public class MainWindowViewModelTests
         });
         provider.Add("xinput:0", "Xbox Wireless Controller");
         provider.SetState("xinput:0", GamepadState.Neutral);
+        vm.SetGamepadNavigationEnabled(false);
         SampleHelper.Sample(vm, host);
 
         provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
@@ -789,7 +790,21 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
-    public async Task Without_A_Legacy_Leader_Button_Nothing_Is_Migrated()
+    public void Tray_Preferences_Default_True_And_Expose_Both_Binding_Names()
+    {
+        var (vm, _, _, _) = CreateHost();
+
+        Assert.True(vm.CloseToTrayEnabled);
+        Assert.True(vm.MinimizeToTrayEnabled);
+        vm.CloseToTray = false;
+        vm.MinimizeToTray = false;
+
+        Assert.False(vm.CloseToTrayEnabled);
+        Assert.False(vm.MinimizeToTrayEnabled);
+    }
+
+    [Fact]
+    public async Task Without_A_Legacy_Leader_Button_Default_Slots_Contain_No_Leader_Mapping()
     {
         var directory = Path.Combine(Path.GetTempPath(), "dezirojoy-leader-migration", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -810,7 +825,9 @@ public class MainWindowViewModelTests
             provider.SetState("xinput:0", GamepadState.Neutral);
             SampleHelper.Sample(vm, host);
 
-            Assert.Null(new PresetStore(store).LoadSlot("xinput:0", 2));
+            var slotTwo = new PresetStore(store).LoadSlot("xinput:0", 2);
+            Assert.NotNull(slotTwo);
+            Assert.DoesNotContain(slotTwo.Mappings, mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
         }
         finally
         {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Channels;
 
 namespace DeziroJoy.App.Ipc;
 
@@ -94,6 +95,11 @@ public sealed partial class DaemonServer
 
                 var response = await ProcessAsync(request, connection.Id).ConfigureAwait(false);
                 await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+                if (request is ShutdownDaemonMessage && response is MutationAckMessage { Accepted: true })
+                {
+                    RequestShutdown();
+                    return;
+                }
             }
         }
         finally
@@ -141,52 +147,63 @@ public sealed partial class DaemonServer
     private static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint processId);
 
     /// <summary>
-    /// One client connection. Writes are serialised by a semaphore so a push raised on
-    /// another connection's thread can never interleave with this connection's own response.
+    /// One client connection with a single ordered writer. Responses and pushed snapshots
+    /// share the same queue, so concurrent publishers cannot reorder sequence numbers.
     /// </summary>
     private sealed class Connection : IDisposable
     {
-        private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private readonly Channel<Outbound> _outbound = Channel.CreateUnbounded<Outbound>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
         private readonly Stream _stream;
+        private readonly Task _writer;
 
         public string Id { get; } = Guid.NewGuid().ToString("N");
 
-        public Connection(Stream stream) => _stream = stream;
+        public Connection(Stream stream)
+        {
+            _stream = stream;
+            _writer = Task.Run(WriteLoopAsync, CancellationToken.None);
+        }
 
         public async Task SendAsync(IpcMessage message, CancellationToken cancellationToken)
         {
-            var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(message));
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_outbound.Writer.TryWrite(new Outbound(message, completion, cancellationToken)))
+            {
+                throw new EndOfStreamException();
+            }
 
-            await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                await PipeFraming.WriteFrameAsync(_stream, payload, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _writeGate.Release();
-            }
+            await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        /// <summary>Queues a push without blocking the thread that raised the state change.</summary>
         public void Post(IpcMessage message)
+            => _outbound.Writer.TryWrite(new Outbound(message, null, CancellationToken.None));
+
+        private async Task WriteLoopAsync()
         {
-            _ = Task.Run(
-                async () =>
+            await foreach (var item in _outbound.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                try
                 {
-                    try
-                    {
-                        await SendAsync(message, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (Exception)
-                    {
-                        // A dead peer is reaped by its own ServeConnectionAsync loop.
-                    }
-                },
-                CancellationToken.None);
+                    var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(item.Message));
+                    await PipeFraming.WriteFrameAsync(_stream, payload, item.CancellationToken).ConfigureAwait(false);
+                    item.Completion?.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    item.Completion?.TrySetException(exception);
+                    // Keep draining: a response queued behind a failed push must also
+                    // complete, or ServeConnectionAsync would wait on it forever.
+                }
+            }
         }
 
-        public void Dispose() => _writeGate.Dispose();
+        public void Dispose() => _outbound.Writer.TryComplete();
+
+        private sealed record Outbound(
+            IpcMessage Message,
+            TaskCompletionSource? Completion,
+            CancellationToken CancellationToken);
     }
 
     private void PublishToConnections(StateChangedMessage message)

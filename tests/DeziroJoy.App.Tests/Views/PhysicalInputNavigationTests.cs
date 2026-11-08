@@ -112,7 +112,7 @@ public sealed class PhysicalInputNavigationTests
 
         Assert.Equal(new ButtonBinding(GamepadButton.B), viewModel.SelectedSource);
         Assert.False(viewModel.IsEditing, "a press selects; only a click enters the editor");
-        Assert.False(host.IsInjectionSuspended);
+        Assert.True(host.IsInjectionSuspended, "explicit hijack owns the in-scope pad even before the editor opens");
         Assert.False(window.FindControl<Border>("EditorPanel")!.IsVisible);
     }
 

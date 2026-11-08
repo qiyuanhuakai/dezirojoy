@@ -23,14 +23,31 @@ public sealed partial class DaemonServer
             {
                 try
                 {
-                    var profile = ProfileSerializer.Deserialize(_restored.ProfileJson);
-                    _profileStore.Save(profile);
-                    ReloadTargetDevice(profile);
+                    var restoredProfile = ProfileSerializer.Deserialize(_restored.ProfileJson);
+                    if (SnapshotDeviceFor(restoredProfile.DeviceId) is { } deviceId
+                        && _presetStore.LoadSlot(deviceId, _activePresetSlot) is null)
+                    {
+                        _presetStore.SaveSlot(deviceId, _activePresetSlot, restoredProfile);
+                    }
                 }
                 catch (JsonException)
                 {
                     // A corrupt persisted profile must not stop the daemon from starting.
                 }
+            }
+
+            var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
+            foreach (var deviceId in _host.ConnectedDeviceIds)
+            {
+                if (_presetStore.LoadSlot(deviceId, _activePresetSlot) is { } profile)
+                {
+                    profiles.Add(deviceId, profile);
+                }
+            }
+
+            if (profiles.Count > 0 || _host.ConnectedDeviceIds.Count == 0)
+            {
+                _host.SwitchPresetSlot(_activePresetSlot, profiles);
             }
 
             if (_desiredEnabled && !_host.IsRunning)

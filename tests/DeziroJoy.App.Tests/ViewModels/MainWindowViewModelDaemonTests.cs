@@ -183,10 +183,15 @@ public sealed class MainWindowViewModelDaemonTests
         await using var viewModel = context.ViewModel;
 
         context.DaemonHost.HasController = true;
+        context.DaemonHost.AddDevice(
+            "ds4-1",
+            "DualShock 4 Wireless Controller",
+            DeziroJoy.Core.Input.GamepadLayout.DualShock);
         await viewModel.ToggleEngineCommand.ExecuteAsync(null);
 
         Assert.True(viewModel.HasController);
-        Assert.NotEqual("未检测到手柄，请连接手柄", viewModel.StatusMessage);
+        Assert.Equal("DualShock 4 Wireless Controller · DualShock 布局", viewModel.StatusMessage);
+        Assert.DoesNotContain("由常驻守护进程映射", viewModel.StatusMessage);
     }
 
     [Fact]

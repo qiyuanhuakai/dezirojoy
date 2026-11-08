@@ -28,6 +28,7 @@ internal sealed class FakeClock : IClock
 internal sealed class FakeDaemonHost : IDaemonHost
 {
     private readonly List<string> _deviceIds = [];
+    private readonly Dictionary<string, ConnectedDeviceSnapshot> _devices = new(StringComparer.Ordinal);
     private readonly Dictionary<string, GamepadProfile> _profiles = new(StringComparer.Ordinal);
 
     public bool IsRunning { get; private set; }
@@ -59,9 +60,31 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public IReadOnlyList<string> ConnectedDeviceIds => _deviceIds;
 
+    public IReadOnlyList<ConnectedDeviceSnapshot> ConnectedDevices
+        => _deviceIds.Select(deviceId => _devices[deviceId]).ToList();
+
+    public event Action? DevicesChanged;
+
+    public string? FailReloadDevice { get; set; }
+
     public GamepadProfile? GetProfile(string deviceId) => _profiles.GetValueOrDefault(deviceId);
 
-    public void AddDevice(string deviceId) => _deviceIds.Add(deviceId);
+    public void AddDevice(
+        string deviceId,
+        string name = "Test Controller",
+        GamepadLayout layout = GamepadLayout.Xbox)
+    {
+        _deviceIds.Add(deviceId);
+        _devices[deviceId] = new ConnectedDeviceSnapshot(deviceId, name, layout);
+        DevicesChanged?.Invoke();
+    }
+
+    public void RemoveDevice(string deviceId)
+    {
+        _deviceIds.Remove(deviceId);
+        _devices.Remove(deviceId);
+        DevicesChanged?.Invoke();
+    }
 
     public void Start()
     {
@@ -91,8 +114,38 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public void Reload(string deviceId, GamepadProfile profile)
     {
+        if (deviceId == FailReloadDevice)
+        {
+            throw new InvalidOperationException("injected reload failure");
+        }
+
         ReloadedDevices.Add(deviceId);
         _profiles[deviceId] = profile;
+    }
+
+    public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
+    {
+        var previous = profiles.Keys.ToDictionary(deviceId => deviceId, GetProfile, StringComparer.Ordinal);
+        try
+        {
+            foreach (var (deviceId, profile) in profiles)
+            {
+                Reload(deviceId, profile);
+            }
+        }
+        catch
+        {
+            FailReloadDevice = null;
+            foreach (var (deviceId, profile) in previous)
+            {
+                if (profile is not null && ReloadedDevices.Contains(deviceId))
+                {
+                    Reload(deviceId, profile);
+                }
+            }
+
+            throw;
+        }
     }
 }
 
@@ -258,6 +311,31 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Device_Changes_Push_Real_Identity_Without_A_Configuration_Revision()
+    {
+        var (server, _, host) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+        host.HasController = true;
+
+        host.AddDevice("ds4-1", "DualShock 4 Wireless Controller", GamepadLayout.DualShock);
+
+        var push = Assert.Single(pushes);
+        Assert.Equal(0, push.Snapshot.Revision);
+        Assert.Equal(1, push.Snapshot.Sequence);
+        var device = Assert.Single(push.Snapshot.Devices);
+        Assert.Equal("ds4-1", device.DeviceId);
+        Assert.Equal("DualShock 4 Wireless Controller", device.Name);
+        Assert.Equal(GamepadLayout.DualShock, device.Layout);
+
+        host.HasController = false;
+        host.RemoveDevice("ds4-1");
+        Assert.Equal(2, pushes.Count);
+        Assert.Empty(pushes[1].Snapshot.Devices);
+        await server.ProcessAsync(new GetStateMessage("verify"));
+    }
+
+    [Fact]
     public async Task Apply_Stores_The_Profile_Body_And_Bumps_The_Revision()
     {
         var (server, store, host) = CreateRunning();
@@ -335,6 +413,46 @@ public class DaemonServerTests
         var push = Assert.Single(pushes);
         Assert.Equal(2, push.Snapshot.ActivePresetSlot);
         Assert.Equal(1, push.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task Failed_Switch_Rolls_Back_And_Keeps_The_Previous_Global_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var deviceId in new[] { "pad-1", "pad-2" })
+        {
+            presets.SaveSlot(deviceId, 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Original {deviceId}",
+                DeviceId = deviceId,
+            });
+            presets.SaveSlot(deviceId, 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Replacement {deviceId}",
+                DeviceId = deviceId,
+            });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        host.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        host.Reload("pad-2", presets.LoadSlot("pad-2", 1)!);
+        host.FailReloadDevice = "pad-2";
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-rollback", "pad-1", 2)));
+
+        Assert.False(ack.Accepted);
+        Assert.Equal("preset-switch-failed", ack.ErrorCode);
+        Assert.Equal("Original pad-1", host.GetProfile("pad-1")!.Name);
+        Assert.Equal("Original pad-2", host.GetProfile("pad-2")!.Name);
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("verify")));
+        Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+        Assert.Equal(0, snapshot.Snapshot.Revision);
     }
 
     [Fact]
@@ -559,6 +677,40 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Restart_Restores_The_Persisted_Global_Preset_Slot_And_Its_Profiles()
+    {
+        var stateStore = NewStore();
+        var profileStore = new InMemoryProfileStore();
+        var presets = new PresetStore(profileStore);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Primary",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 3, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Third",
+            DeviceId = "pad-1",
+        });
+        var clock = new FakeClock();
+        var firstHost = new FakeDaemonHost();
+        firstHost.AddDevice("pad-1");
+        var first = CreateServer(firstHost, stateStore, clock, profileStore);
+        await first.ProcessAsync(new SwitchPresetSlotMessage("switch", "pad-1", 3));
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var secondHost = new FakeDaemonHost();
+        secondHost.AddDevice("pad-1");
+        var second = CreateServer(secondHost, stateStore, clock, profileStore);
+        second.ResumeDesiredState();
+
+        Assert.Equal(3, stateStore.Load()!.ActivePresetSlot);
+        Assert.Equal("Third", secondHost.GetProfile("pad-1")!.Name);
+        var snapshot = Assert.IsType<StateChangedMessage>(await second.ProcessAsync(new GetStateMessage("state")));
+        Assert.Equal(3, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
     public async Task A_Leader_Request_From_Inside_The_Daemon_Moves_The_App_Wide_Slot()
     {
         var store = new InMemoryProfileStore();
@@ -658,6 +810,26 @@ public class DaemonServerTests
         var snapshot = Assert.IsType<StateChangedMessage>(
             await server.ProcessAsync(new GetStateMessage("req-state")));
         Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task Shutdown_Is_Acknowledged_Before_The_Transport_Requests_Process_Exit()
+    {
+        var (server, _, _) = CreateRunning();
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage("tray", IpcContract.ProtocolVersion, "tray-1", IpcSession.Current));
+        stream.Script(new ShutdownDaemonMessage("shutdown-1"));
+        var requested = false;
+        server.ShutdownRequested += () =>
+        {
+            requested = true;
+            Assert.Contains("shutdown-1", stream.WrittenText());
+            Assert.Contains("\"Accepted\":true", stream.WrittenText());
+        };
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        Assert.True(requested);
     }
 
     [Fact]

@@ -216,8 +216,10 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 
 渲染进程（默认入口，由托盘在窗口关闭后按需拉起）**不共享 `EngineComposition`**：它只装配管道客户端、
 状态镜像，以及一个**不注入**的呈现用宿主——`NoGamepadProvider` + `NullOutputSink` 的
-`EngineHost`，存在性检测、可视化器高亮、编辑器劫持都走它，且从不启动。注入路径只存在于
-守护进程内；`EngineComposition` 退居库/测试能力，生产组合根不再构造它。
+`EngineHost`，存在性检测与可视化器高亮都走它，且从不启动。注入路径只存在于
+守护进程内；`EngineComposition` 退居库/测试能力，生产组合根不再构造它。显式“劫持手柄按键”
+开启且窗口输入在作用域内时，GUI 通过 `SetInjectionSuspended` 取得按连接划分的输入租约；
+关闭劫持、失焦、离开映射页或关窗都会释放租约。编辑器是否打开不再隐式决定注入是否暂停。
 
 ### 4.3 两个不同的内核对象
 
@@ -250,8 +252,9 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `Start` | GUI → daemon | 期望配置修订号 | 请求开始映射 |
 | `Stop` | GUI → daemon | — | 请求停止映射 |
 | `SetMappingEnabled` | GUI → daemon | 请求 ID、启用状态 | 暂停或恢复分发，不停止引擎 |
-| `SetInjectionSuspended` | GUI → daemon | 请求 ID、挂起状态 | 编辑器劫持手柄期间暂停注入 |
+| `SetInjectionSuspended` | GUI/tray → daemon | 请求 ID、挂起状态 | 显式劫持生效期间按连接暂停注入 |
 | `SwitchPresetSlot` | GUI → daemon | 请求 ID、目标槽位（`DeviceId` 保留线上传输但服务端忽略） | 切换整体级活动预设槽 |
+| `ShutdownDaemon` | GUI/tray → daemon | 请求 ID | 释放输入并优雅退出常驻进程 |
 | `MutationAck` | daemon → GUI | 请求 ID、结果、新修订号、新序号 | 变更已被受理 |
 | `StateChanged` | daemon → GUI | 全量快照 | 状态推送 |
 | `Error` | daemon → GUI | 请求 ID、错误码、可读信息 | 请求失败 |
@@ -264,16 +267,22 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 - **单调序号**：守护进程侧每次状态变更递增。GUI 用它检测丢帧与乱序；发现缺号就补一次
   `GetState`，不猜测中间状态。
 - **全量快照**：`StateChanged` 与 `GetState` 的应答都携带完整状态，不做增量。快照包含
-  运行状态、活动配置修订号及其完整 `ProfileJson`、整体级活动预设槽、实际注入者身份和计数；
-  GUI 以此重建编辑基线。
+  运行状态、活动配置修订号及其完整 `ProfileJson`、整体级活动预设槽、实际注入者身份和计数，
+  以及每个真实连接设备的 `DeviceId`、`Name`、`Layout`。连接状态由这些描述呈现具体设备名和
+  Xbox / DualShock / 通用布局，不再用“由常驻守护进程映射”代替设备身份。
+- **心跳、重连与有序推送**：客户端周期 `GetState`，兼作心跳与权威状态刷新；断线后串行重连并
+  重新握手，实例 ID 与序号在新会话重新建立基线。每个 daemon 连接只有一个写队列，响应和推送
+  不会因并发线程不同而乱序。主动 `ShutdownDaemon` 成功后客户端不再自动拉起 daemon。
+- **设备变化及时推送**：daemon 的存在性监视器在映射停止时也继续扫描；连接或断开只推进快照序号，
+  不伪造配置 revision。新设备首次出现时初始化四个彼此独立的默认槽，旧槽内容不被覆盖。
 - **期望配置修订号**：`ApplyConfiguration` 与 `Start` 都带 GUI 认为当前的修订号。守护进程
   发现不一致就拒绝该请求并回 `MutationAck(Accepted=false, ErrorCode="revision-mismatch")`，
   同时携带当前修订号；GUI 的编辑草稿固定其基线修订，冲突后必须重新读取权威 profile 或明确合并，
   **不得只更新修订号后提交旧草稿，也不自动重放**。
-- **整体级预设槽**：`SwitchPresetSlot` 切换的是整个应用唯一的活动槽标量，不属于任何设备。
-  守护进程重载每个存有该槽配置的已连接设备，未存该槽的设备保持运行；没有任何已连接设备
-  存有该槽时拒绝切换。消息中的 `DeviceId` 保留在线上但服务端忽略，属于软兼容，协议版本
-  不因此升级。Leader 键经 `EngineHost.PresetSwitchRequested` 由守护进程内部驱动同一标量，
+- **整体级预设槽**：`SwitchPresetSlot` 切换的是整个应用唯一且持久化的活动槽标量，不属于任何设备，
+  daemon 重启后恢复同一槽。所有可切换设备在同一宿主锁内重载；任一设备失败会回滚已经重载的设备，
+  活动槽与 revision 保持原值，不能半切换。消息中的 `DeviceId` 保留在线上但服务端忽略，属于软兼容，
+  协议版本不因此升级。Leader 键经 `EngineHost.PresetSwitchRequested` 由守护进程内部驱动同一标量，
   与 GUI 切换走同一条逻辑（tick 线程同步执行，与切换本身执行的重载相同）。
 - **完整 profile JSON，不是路径**：配置随消息传输序列化后的 profile 本体。传路径会让
   守护进程去读一个 GUI 有权限而它未必有权限的位置，也会让"到底改没改"无法从消息本身判断。
@@ -291,11 +300,13 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `Stop` | `ReleaseAll()` 释放所有按住的键与鼠标键，再释放互斥体，停止循环 | **在释放与互斥体释放都完成之后**才回 ack |
 | `ApplyConfiguration` | 运行中**直接换 profile，不停引擎**；未运行则只更新待用配置 | 配置已生效后 |
 | `SetMappingEnabled` | 暂停或恢复分发；引擎与互斥体保持运行 | 分发状态已改变后 |
-| `SetInjectionSuspended` | 按连接持有编辑器挂起租约；多个客户端叠加，断开自动释放自己的租约 | 聚合挂起状态已改变后 |
-| GUI 关闭 / 断开 | 不停引擎、不释放注入互斥体，只断开管道并撤销该连接的编辑器挂起 | — |
+| `SetInjectionSuspended` | 按连接持有显式劫持租约；多个客户端叠加，断开自动释放自己的租约 | 聚合挂起状态已改变后 |
+| `ShutdownDaemon` | 停止映射、释放所有按键与互斥体，然后退出 daemon | **退出开始前**先写完 ack |
+| GUI 关闭 / 断开 | 不停引擎、不释放注入互斥体，只断开管道并撤销该连接的劫持租约 | — |
 
 - `Start` 的 ack 必须晚于互斥体获取。否则 GUI 会显示"已启动"，而注入槽位其实在另一个进程手里。
-- `Stop` 之后**守护进程继续存活**：它只是不再注入。停止映射不等于退出守护进程。
+- `Stop` 之后**守护进程继续存活**：它只是不再注入。停止映射不等于退出守护进程；完整退出必须
+  使用 `ShutdownDaemon`（客户端详细结果为 `ShutdownDaemonAsync`，布尔便捷入口为 `RequestShutdownAsync`）。
 - `ApplyConfiguration` 运行中生效是核心场景：改灵敏度不该要求用户先停止映射。
 - GUI 关闭只断开连接，守护进程按当前配置继续映射。这正是常驻架构的意义所在。
 
@@ -306,8 +317,8 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `CurrentUserOnly`；同一用户的普通 GUI 与提权守护进程均可连接，其他用户不可写。
 - **同会话验证**：任何控制消息之前必须完成握手，拒绝后立即断开；Windows 上通过
   `GetNamedPipeClientProcessId` 取得真实对端 PID/SessionId，不信任客户端自报的会话字段。
-- **最小攻击面**：管道只暴露 4.4 节那 12 条映射控制消息，不提供任意代码执行、文件读写或
-  进程启动能力。
+- **最小攻击面**：管道只暴露 4.4 节那 13 条映射控制消息，不提供任意代码执行、文件读写或
+  进程启动能力。`ShutdownDaemon` 只能请求本 daemon 按既定清理路径退出，不接受命令行或任意 PID。
 
 ### 4.7 第二个守护进程
 

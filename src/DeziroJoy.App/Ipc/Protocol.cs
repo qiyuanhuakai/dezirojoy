@@ -43,7 +43,7 @@ public static class IpcErrorCodes
 }
 
 /// <summary>
-/// One message on the mapping control channel. The union is closed: exactly the twelve
+/// One message on the mapping control channel. The union is closed: exactly the thirteen
 /// messages of section 4.4, each carrying only the fields its own semantics need -
 /// there is no envelope that forces every field onto every message. The
 /// <c>kind</c> discriminator is written by the serializer, not by hand.
@@ -58,6 +58,7 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
+[JsonDerivedType(typeof(ShutdownDaemonMessage), "shutdown-daemon")]
 [JsonDerivedType(typeof(MutationAckMessage), "mutation-ack")]
 [JsonDerivedType(typeof(StateChangedMessage), "state-changed")]
 [JsonDerivedType(typeof(ErrorMessage), "error")]
@@ -111,7 +112,7 @@ public sealed record StopMessage(string RequestId) : IpcMessage;
 /// <summary>GUI to daemon: pause or resume dispatch without stopping the mapping loop.</summary>
 public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : IpcMessage;
 
-/// <summary>GUI to daemon: suspend dispatch while the mapping editor owns physical input.</summary>
+/// <summary>GUI to daemon: suspend dispatch while this connection's explicit hijack lease owns input.</summary>
 public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
 
 /// <summary>
@@ -128,6 +129,9 @@ public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspend
 /// </para>
 /// </summary>
 public sealed record SwitchPresetSlotMessage(string RequestId, string DeviceId, int Slot) : IpcMessage;
+
+/// <summary>GUI/tray to daemon: release held input and exit the resident process.</summary>
+public sealed record ShutdownDaemonMessage(string RequestId) : IpcMessage;
 
 /// <summary>
 /// Daemon to GUI: a mutation has been settled. <see cref="RequestId"/> echoes the
@@ -180,6 +184,9 @@ public sealed record StateSnapshot(
 {
     /// <summary>The active profile body at <see cref="Revision"/>, used to rebase GUI drafts.</summary>
     public string? ProfileJson { get; init; }
+
+    /// <summary>Real devices currently owned by the daemon, in stable provider order.</summary>
+    public IReadOnlyList<ConnectedDeviceSnapshot> Devices { get; init; } = [];
 }
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>
