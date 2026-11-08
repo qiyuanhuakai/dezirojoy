@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -19,12 +20,9 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// The floating preset picker and the special-key target editor, both hosted by the
-/// mapping editor panel. The picker is an overlay on the model column rather than a
-/// tab of its own: four round slots at the panel's right edge, the active one worn
-/// in the accent, a click switching through the window view model's command. The
-/// special-key editor offers the sub-kind first and only the controls that sub-kind
-/// reads, and refuses a leader whose two slots are the same.
+/// The global preset selector beside the gamepad model and the special-key target editor in
+/// the mapping panel. Preset buttons switch the whole application's active slot through the
+/// window view model; the special-key editor's two slots remain Leader-key parameters.
 /// </summary>
 public sealed class MappingEditorPresetPickerTests
 {
@@ -67,13 +65,14 @@ public sealed class MappingEditorPresetPickerTests
     private static Control ModelElement(Window window, string name)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
 
-    // The mapping editor is a UserControl, so its controls live in the panel's own name
-    // scope: reach them through the panel instance rather than through the window's scope.
     private static MappingEditorPanel EditorPanelOf(Window window)
         => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
 
+    private static PresetSlotSelector PresetSelector(Window window)
+        => window.FindControl<PresetSlotSelector>("GlobalPresetSelector")!;
+
     private static Button PresetSlot(Window window, int slot)
-        => EditorPanelOf(window).FindControl<Button>($"PresetSlot{slot}Button")!;
+        => PresetSelector(window).FindControl<Button>($"PresetSlot{slot}Button")!;
 
     private static Rect RectInWindow(Control control, Window window)
     {
@@ -81,6 +80,10 @@ public sealed class MappingEditorPresetPickerTests
         Assert.NotNull(origin);
         return new Rect(origin!.Value, control.Bounds.Size);
     }
+
+    private static bool Overlaps(Rect left, Rect right)
+        => left.Left < right.Right && right.Left < left.Right
+            && left.Top < right.Bottom && right.Top < left.Bottom;
 
     private static Color ColorOf(IBrush? brush)
         => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
@@ -92,7 +95,6 @@ public sealed class MappingEditorPresetPickerTests
         return ColorOf(brush as IBrush);
     }
 
-    /// <summary>Opens the editor on an element that carries no mapping, so a commit adds one.</summary>
     private static void OpenEditorOnUnmappedElement(Window window, MainWindowViewModel viewModel, EngineHost host, FakeGamepadProvider provider)
     {
         ConnectPad(provider);
@@ -101,13 +103,29 @@ public sealed class MappingEditorPresetPickerTests
         Assert.True(viewModel.IsEditing);
     }
 
-    // ---- The floating preset picker -----------------------------------------
+    private static void SaveAllPresets(MainWindowViewModel viewModel, InMemoryProfileStore store)
+    {
+        var presets = new PresetStore(store);
+        var defaultProfile = viewModel.ActiveProfile!;
+        for (var slot = 2; slot <= 4; slot++)
+        {
+            presets.SaveSlot(DeviceId, slot, defaultProfile);
+        }
+    }
+
+    // ---- The global preset selector -----------------------------------------
 
     [AvaloniaFact]
-    public void The_Preset_Picker_Offers_Four_Round_Focusable_Slots()
+    public void The_Global_Preset_Selector_Offers_Four_Round_Focusable_Slots_Without_Opening_The_Editor()
     {
-        var (window, viewModel, host, provider, _) = BuildWindow();
-        OpenEditorOnUnmappedElement(window, viewModel, host, provider);
+        var (window, viewModel, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var selector = PresetSelector(window);
+        Assert.Same(viewModel, selector.DataContext);
+        Assert.False(viewModel.IsEditing);
+        Assert.Contains(selector.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "全局预设");
+        Assert.Contains(selector.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "切换整个应用");
 
         for (var slot = 1; slot <= 4; slot++)
         {
@@ -121,10 +139,10 @@ public sealed class MappingEditorPresetPickerTests
     }
 
     [AvaloniaFact]
-    public void The_Active_Preset_Slot_Is_Highlighted_With_The_Accent_Fill()
+    public void The_Active_Global_Preset_Slot_Is_Highlighted_With_The_Accent_Fill()
     {
-        var (window, viewModel, host, provider, _) = BuildWindow();
-        OpenEditorOnUnmappedElement(window, viewModel, host, provider);
+        var (window, viewModel, _, _, _) = BuildWindow();
+        window.UpdateLayout();
 
         var active = PresetSlot(window, 1);
         var resting = PresetSlot(window, 2);
@@ -137,59 +155,116 @@ public sealed class MappingEditorPresetPickerTests
     }
 
     [AvaloniaFact]
-    public void Clicking_A_Preset_Slot_Switches_Through_The_View_Model_Command()
+    public void Every_Global_Preset_Button_Binds_The_Command_And_An_Integer_Parameter()
+    {
+        var (window, viewModel, _, _, _) = BuildWindow();
+
+        for (var slot = 1; slot <= 4; slot++)
+        {
+            var button = PresetSlot(window, slot);
+            Assert.Same(viewModel.SwitchPresetSlotCommand, button.Command);
+            Assert.Equal(slot, Assert.IsType<int>(button.CommandParameter));
+        }
+    }
+
+    [AvaloniaFact]
+    public void Clicking_Each_Global_Preset_Slot_Switches_The_Whole_View_Model()
     {
         var (window, viewModel, host, provider, store) = BuildWindow();
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
+        SaveAllPresets(viewModel, store);
 
-        // The initial state: all four presets equal the default, so every slot is a live
-        // switch target rather than an empty one the store would refuse.
-        var presets = new PresetStore(store);
-        var defaultProfile = viewModel.ActiveProfile!;
-        for (var slot = 2; slot <= 4; slot++)
+        foreach (var slot in new[] { 2, 3, 4, 1 })
         {
-            presets.SaveSlot(DeviceId, slot, defaultProfile);
+            Click(PresetSlot(window, slot), window);
+
+            Assert.Equal(slot, viewModel.ActivePresetSlot);
+            for (var candidate = 1; candidate <= 4; candidate++)
+            {
+                Assert.Equal(candidate == slot, PresetSlot(window, candidate).Classes.Contains("active"));
+            }
         }
-
-        OpenEditorOnUnmappedElement(window, viewModel, host, provider);
-        Assert.Equal(1, viewModel.ActivePresetSlot);
-
-        Click(PresetSlot(window, 3), window);
-
-        Assert.Equal(3, viewModel.ActivePresetSlot);
-        Assert.Equal(defaultProfile with { DeviceId = PresetStore.KeyFor(DeviceId, 3) }, viewModel.ActiveProfile);
-        Assert.Contains("active", PresetSlot(window, 3).Classes);
-        Assert.DoesNotContain("active", PresetSlot(window, 1).Classes);
     }
 
     [AvaloniaFact]
-    public void The_Preset_Picker_Floats_Clear_Of_The_Models_Hit_Targets()
+    public void A_Focused_Global_Preset_Slot_Can_Be_Switched_With_The_Keyboard()
+    {
+        var (window, viewModel, host, provider, store) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        SaveAllPresets(viewModel, store);
+
+        window.Focus();
+        var button = PresetSlot(window, 2);
+        Assert.True(button.Focus());
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(2, viewModel.ActivePresetSlot);
+        Assert.Contains("active", button.Classes);
+    }
+
+    [AvaloniaFact]
+    public void The_Global_Selector_Is_Not_In_The_Mapping_Editor()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
         OpenEditorOnUnmappedElement(window, viewModel, host, provider);
 
-        var hits = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!
-            .GetVisualDescendants()
+        var editor = EditorPanelOf(window);
+        Assert.Null(editor.FindControl<Border>("PresetPickerRow"));
+        for (var slot = 1; slot <= 4; slot++)
+        {
+            Assert.Null(editor.FindControl<Button>($"PresetSlot{slot}Button"));
+        }
+
+        Assert.True(PresetSelector(window).IsVisible);
+        Assert.DoesNotContain(PresetSelector(window).GetVisualAncestors().OfType<MappingEditorPanel>(), _ => true);
+    }
+
+    [AvaloniaFact]
+    public void At_The_Minimum_Size_The_Selector_Stays_Right_Of_The_Model_And_Clear_Of_The_Editor()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        window.Width = 1180;
+        window.Height = 780;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        OpenEditorOnUnmappedElement(window, viewModel, host, provider);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
+        var modelViewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+        var modelRect = RectInWindow(modelViewbox, window);
+        var selectorRect = RectInWindow(PresetSelector(window), window);
+        var editorRect = RectInWindow(window.FindControl<Border>("EditorPanel")!, window);
+
+        Assert.True(selectorRect.Left >= modelRect.Right,
+            $"selector starts at {selectorRect.Left}, but the model ends at {modelRect.Right}");
+        Assert.False(Overlaps(selectorRect, editorRect), "the global selector must not cover the mapping editor");
+
+        var hits = model.GetVisualDescendants()
             .OfType<Control>()
             .Where(element =>
                 element.Classes.Contains("padHit")
                 || element.Name is { } name && name.EndsWith("Hit", StringComparison.Ordinal))
             .ToList();
-
         Assert.NotEmpty(hits);
 
         for (var slot = 1; slot <= 4; slot++)
         {
             var slotRect = RectInWindow(PresetSlot(window, slot), window);
-
             foreach (var hit in hits)
             {
-                var hitRect = RectInWindow(hit, window);
-                var overlaps = slotRect.Left < hitRect.Right && hitRect.Left < slotRect.Right
-                    && slotRect.Top < hitRect.Bottom && hitRect.Top < slotRect.Bottom;
-
-                Assert.False(overlaps, $"slot {slot} overlaps the model's hit target {hit.Name}");
+                Assert.False(Overlaps(slotRect, RectInWindow(hit, window)),
+                    $"slot {slot} overlaps the model's hit target {hit.Name}");
             }
         }
     }
@@ -213,7 +288,6 @@ public sealed class MappingEditorPresetPickerTests
         var slotARow = panel.FindControl<Grid>("SpecialSlotARow")!;
         var slotBRow = panel.FindControl<Grid>("SpecialSlotBRow")!;
 
-        // 精准键 leads: its mode picker shows, and the leader-only controls stay hidden.
         Assert.True(kindCombo.IsVisible);
         Assert.True(precisionModeRow.IsVisible);
         Assert.False(switchModeRow.IsVisible);
@@ -268,8 +342,6 @@ public sealed class MappingEditorPresetPickerTests
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
 
-        // The right stick's default mapping is the mouse move, so its precision combo is the
-        // one the editor offers.
         Click(ModelElement(window, "RightStickPad"), window);
         Assert.True(viewModel.Editor.SourceIsStick);
         Assert.Equal(MappingTargetKind.MouseMove, viewModel.Editor.ActiveTargetKind);
