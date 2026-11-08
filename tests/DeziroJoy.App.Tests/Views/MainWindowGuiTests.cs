@@ -134,6 +134,7 @@ public sealed class MainWindowGuiTests
         Assert.NotNull(window.FindControl<TabControl>("MainTabs"));
         Assert.NotNull(window.FindControl<ItemsControl>("MappingsList"));
         Assert.NotNull(window.FindControl<GamepadVisualizer>("GamepadVisualizer"));
+        Assert.NotNull(window.FindControl<PresetSlotSelector>("GlobalPresetSelector"));
         Assert.NotNull(window.FindControl<Button>("MinimizeButton"));
         Assert.NotNull(window.FindControl<Button>("CloseButton"));
 

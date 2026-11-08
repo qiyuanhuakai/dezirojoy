@@ -1,0 +1,83 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             x:Class="DeziroJoy.App.Views.Controls.PresetSlotSelector"
+             x:DataType="vm:MainWindowViewModel">
+    <UserControl.Styles>
+        <Style Selector="Button.presetSlot">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="CornerRadius" Value="18" />
+            <Setter Property="Width" Value="36" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,3" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Button.presetSlot:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.presetSlot:focus">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.presetSlot.active">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </UserControl.Styles>
+
+    <Border Background="{DynamicResource SubtleBrush}"
+            BorderBrush="{DynamicResource ControlBorderBrush}"
+            BorderThickness="1" CornerRadius="18" Padding="8,10">
+        <StackPanel>
+            <TextBlock Text="全局预设" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="切换整个应用" FontSize="10" TextWrapping="Wrap" TextAlignment="Center"
+                       Foreground="{DynamicResource HintTextBrush}" Margin="0,3,0,6" />
+
+            <Button x:Name="PresetSlot1Button" Classes="presetSlot" Content="1"
+                    Command="{Binding SwitchPresetSlotCommand}"
+                    ToolTip.Tip="切换整个应用到全局预设 1"
+                    AutomationProperties.Name="全局预设 1">
+                <Button.CommandParameter>
+                    <sys:Int32>1</sys:Int32>
+                </Button.CommandParameter>
+            </Button>
+            <Button x:Name="PresetSlot2Button" Classes="presetSlot" Content="2"
+                    Command="{Binding SwitchPresetSlotCommand}"
+                    ToolTip.Tip="切换整个应用到全局预设 2"
+                    AutomationProperties.Name="全局预设 2">
+                <Button.CommandParameter>
+                    <sys:Int32>2</sys:Int32>
+                </Button.CommandParameter>
+            </Button>
+            <Button x:Name="PresetSlot3Button" Classes="presetSlot" Content="3"
+                    Command="{Binding SwitchPresetSlotCommand}"
+                    ToolTip.Tip="切换整个应用到全局预设 3"
+                    AutomationProperties.Name="全局预设 3">
+                <Button.CommandParameter>
+                    <sys:Int32>3</sys:Int32>
+                </Button.CommandParameter>
+            </Button>
+            <Button x:Name="PresetSlot4Button" Classes="presetSlot" Content="4"
+                    Command="{Binding SwitchPresetSlotCommand}"
+                    ToolTip.Tip="切换整个应用到全局预设 4"
+                    AutomationProperties.Name="全局预设 4">
+                <Button.CommandParameter>
+                    <sys:Int32>4</sys:Int32>
+                </Button.CommandParameter>
+            </Button>
+        </StackPanel>
+    </Border>
+</UserControl>

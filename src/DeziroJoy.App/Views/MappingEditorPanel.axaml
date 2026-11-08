@@ -134,34 +134,6 @@
             <Setter Property="MinHeight" Value="32" />
         </Style>
 
-        <!-- A preset slot: a round, focusable button at least 32px tall. The active slot
-             wears the accent surface and the accent ink, so the state never rests on
-             colour alone - the label is emboldened with it. -->
-        <Style Selector="Button.presetSlot">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-            <Setter Property="CornerRadius" Value="16" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="MinWidth" Value="32" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="2,0,2,0" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-        </Style>
-
-        <Style Selector="Button.presetSlot:pointerover">
-            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
-        </Style>
-
-        <Style Selector="Button.presetSlot.active">
-            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
     </UserControl.Styles>
 
     <Grid RowDefinitions="Auto,*">
@@ -184,24 +156,6 @@
 
         <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-
-                <!-- The floating preset picker. Four round slots at the panel's right edge,
-                     directly under the pad model: an overlay on the model column rather than
-                     a tab of its own. The active slot wears the accent; a click switches the
-                     device's active preset through the window view model, which loads that
-                     slot's profile. The slots sit clear of the model's hit targets, so the
-                     pad stays fully clickable while the picker is open. -->
-                <Border x:Name="PresetPickerRow" HorizontalAlignment="Right" Margin="0,0,0,12"
-                        Background="{DynamicResource SubtleBrush}"
-                        CornerRadius="{DynamicResource CornerRadiusMd}" Padding="6,2">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Classes="fieldLabel" Text="预设" VerticalAlignment="Center" Margin="4,0,10,0" />
-                        <Button x:Name="PresetSlot1Button" Classes="presetSlot" Content="1" Click="OnPresetSlotClick" />
-                        <Button x:Name="PresetSlot2Button" Classes="presetSlot" Content="2" Click="OnPresetSlotClick" />
-                        <Button x:Name="PresetSlot3Button" Classes="presetSlot" Content="3" Click="OnPresetSlotClick" />
-                        <Button x:Name="PresetSlot4Button" Classes="presetSlot" Content="4" Click="OnPresetSlotClick" />
-                    </StackPanel>
-                </Border>
 
                 <!-- The switcher. One segmented control where all three gestures are equally
                      reachable - the double-click and the long-press are peers of the click,

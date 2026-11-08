@@ -554,7 +554,7 @@
             <TabControl x:Name="MainTabs" Grid.Column="2" Margin="6,8,10,16">
 
                 <TabItem Header="按键映射">
-                    <Grid Margin="14,12,14,0">
+                    <Grid Margin="14,12,14,0" ColumnDefinitions="*,Auto">
                         <Grid.RowDefinitions>
                             <!-- The model stage is a fixed-height row: opening the editor below
                                  must not re-lay the model out, or it would jump before the lift
@@ -578,7 +578,7 @@
                              reserves an inset equal to the lift (EditorLift, -24): at full
                              lift the model's top lands exactly on its own row's top edge, so
                              the header stays clear while the editor is open. -->
-                        <Grid Grid.Row="0" MaxWidth="620" HorizontalAlignment="Center">
+                        <Grid Grid.Row="0" Grid.Column="0" MaxWidth="620" HorizontalAlignment="Center">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
@@ -603,6 +603,11 @@
                             </Viewbox>
                         </Grid>
 
+                        <controls:PresetSlotSelector x:Name="GlobalPresetSelector"
+                                                     Grid.Row="0" Grid.Column="1"
+                                                     Margin="12,24,0,0"
+                                                     VerticalAlignment="Center" />
+
                         <!-- The editor card is a FIXED frame, not a child of a scroll region:
                              only its body scrolls, so the card's border, background and rounded
                              corners stay put and the connector line's endpoint does not drift.
@@ -611,7 +616,7 @@
                              scroll. Its row collapses to zero when no mapping is open, handing
                              the whole height back to the model stage. The card slides up and
                              fades in as it appears, and the model lifts out of its way. -->
-                        <Border Grid.Row="1" x:Name="EditorPanel" Classes="card" Margin="0,0,0,12"
+                        <Border Grid.Row="1" Grid.ColumnSpan="2" x:Name="EditorPanel" Classes="card" Margin="0,0,0,12"
                                 IsVisible="{Binding IsEditing}" ClipToBounds="True"
                                 Opacity="{Binding IsEditing, Converter={StaticResource EditorFade}}">
                             <Border.RenderTransform>
@@ -635,12 +640,12 @@
                              line stays visible where it crosses them; non-interactive, so it never
                              steals a click. MappingLink draws it from the selected model element to
                              that element's source card. -->
-                        <Canvas x:Name="ConnectorLayer" Grid.RowSpan="2" IsHitTestVisible="False" />
+                        <Canvas x:Name="ConnectorLayer" Grid.RowSpan="2" Grid.ColumnSpan="2" IsHitTestVisible="False" />
 
                         <!-- Zero-size wiring control: keeps the model, the source list and the
                              connector layer in step with the selected mapping. Measures to nothing
                              and takes no hit-testing. -->
-                        <controls:MappingLink Width="0" Height="0" IsHitTestVisible="False" />
+                        <controls:MappingLink Grid.ColumnSpan="2" Width="0" Height="0" IsHitTestVisible="False" />
                     </Grid>
                 </TabItem>
 

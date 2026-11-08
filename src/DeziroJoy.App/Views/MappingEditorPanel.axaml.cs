@@ -16,21 +16,16 @@ namespace DeziroJoy.App.Views;
 /// the <see cref="MappingEditorViewModel"/> the host assigns as its DataContext. The one
 /// thing binding cannot express is the key-cap grid's selection visual - a categorized grid
 /// of buttons has no selector of its own to carry it - so the panel mirrors
-/// <see cref="MappingEditorViewModel.ActiveSelectedKeyOption"/> onto the caps. The floating
-/// preset picker needs the same treatment for its active slot, which lives on the window
-/// view model rather than on the editor.
+/// <see cref="MappingEditorViewModel.ActiveSelectedKeyOption"/> onto the caps.
 /// </summary>
 public partial class MappingEditorPanel : UserControl
 {
     private MappingEditorViewModel? _editor;
 
-    private MainWindowViewModel? _window;
-
     public MappingEditorPanel()
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
-        Loaded += OnLoaded;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -47,33 +42,7 @@ public partial class MappingEditorPanel : UserControl
             _editor.PropertyChanged += OnEditorPropertyChanged;
         }
 
-        AttachWindowViewModel();
         RefreshKeyCapSelection();
-    }
-
-    private void OnLoaded(object? sender, RoutedEventArgs e) => AttachWindowViewModel();
-
-    /// <summary>
-    /// Resolves the window view model the preset picker acts through. The panel's own
-    /// DataContext is the editor, so the window is reached through the visual tree; the
-    /// resolution is retried on Loaded because the DataContext can arrive before the panel
-    /// is attached to a window.
-    /// </summary>
-    private void AttachWindowViewModel()
-    {
-        if (_window is not null)
-        {
-            _window.PropertyChanged -= OnWindowPropertyChanged;
-        }
-
-        _window = TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel;
-
-        if (_window is not null)
-        {
-            _window.PropertyChanged += OnWindowPropertyChanged;
-        }
-
-        RefreshPresetPicker();
     }
 
     private void OnEditorPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -81,14 +50,6 @@ public partial class MappingEditorPanel : UserControl
         if (e.PropertyName == nameof(MappingEditorViewModel.ActiveSelectedKeyOption))
         {
             RefreshKeyCapSelection();
-        }
-    }
-
-    private void OnWindowPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(MainWindowViewModel.ActivePresetSlot))
-        {
-            RefreshPresetPicker();
         }
     }
 
@@ -113,20 +74,6 @@ public partial class MappingEditorPanel : UserControl
         }
     }
 
-    /// <summary>
-    /// A preset slot was activated: the window view model switches the device's active slot,
-    /// which loads that slot's profile - the daemon snapshot body in daemon mode, the stored
-    /// slot locally.
-    /// </summary>
-    private void OnPresetSlotClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Content: string content }
-            && int.TryParse(content, NumberStyles.Integer, CultureInfo.InvariantCulture, out var slot))
-        {
-            _window?.SwitchPresetSlotCommand.Execute(slot);
-        }
-    }
-
     private void RefreshKeyCapSelection()
     {
         foreach (var button in this.GetLogicalDescendants().OfType<Button>())
@@ -134,22 +81,6 @@ public partial class MappingEditorPanel : UserControl
             if (button.DataContext is KeyPickerItem item)
             {
                 button.Classes.Set("selected", IsSelected(item));
-            }
-        }
-    }
-
-    /// <summary>
-    /// Marks the slot the window view model reports as active. The picker is a row of plain
-    /// buttons with no selector of its own, so the panel mirrors the active slot onto them
-    /// exactly as it does for the key caps.
-    /// </summary>
-    private void RefreshPresetPicker()
-    {
-        for (var slot = 1; slot <= 4; slot++)
-        {
-            if (this.FindControl<Button>($"PresetSlot{slot}Button") is { } button)
-            {
-                button.Classes.Set("active", _window is not null && _window.ActivePresetSlot == slot);
             }
         }
     }
