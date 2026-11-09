@@ -43,6 +43,43 @@ Linux 实验性说明：
 
 - 无权限时应用仍可正常启动，仅映射输出不可用（界面与预览不受影响）。
 
+## 安装
+
+发布页提供四个自包含安装包（内含 .NET 运行时，无需单独安装），各附 `.sha256` 校验和：
+
+| 文件 | 平台 |
+| --- | --- |
+| `DeziroJoy-<version>-win-x64-setup.exe` | Windows，Intel / AMD 64 位 |
+| `DeziroJoy-<version>-win-arm64-setup.exe` | Windows，ARM64（如骁龙笔记本） |
+| `DeziroJoy_<version>_amd64.deb` | Linux（Debian / Ubuntu 系），Intel / AMD 64 位 |
+| `DeziroJoy_<version>_arm64.deb` | Linux，ARM64（如树莓派） |
+
+### Windows
+
+双击 `setup.exe`，按向导完成即可。安装器为 per-user 模式：默认安装到
+`%LOCALAPPDATA%\Programs\DeziroJoy`，不需要管理员权限，也不注册开机自启动——
+登录自启动与提权常驻服务请在应用内「设置」中按需开启（见
+[docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md)）。卸载通过
+「设置 → 应用 → 已安装的应用」或安装目录中的 `unins000.exe`；卸载不会删除
+`%APPDATA%\DeziroJoy` 下的配置。
+
+### Linux
+
+```sh
+sudo dpkg -i DeziroJoy_<version>_amd64.deb
+```
+
+程序装入 `/opt/dezirojoy`，应用菜单出现 DeziroJoy 入口（图标随包提供）。
+卸载：
+
+```sh
+sudo dpkg -r dezirojoy
+```
+
+卸载同样保留 `~/.config/DeziroJoy/profiles/` 下的配置。运行需要系统提供 X11
+客户端库与 `evdev` / `uinput`（见[平台支持](#平台支持)）；deb 的依赖声明
+已覆盖这些库，桌面发行版默认齐全。
+
 ## 构建与运行
 
 要求 .NET 10 SDK。

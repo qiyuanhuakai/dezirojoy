@@ -248,6 +248,37 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
 
 本节是已执行验证的记录，不替代上面需要真实物理手柄与长期使用观察的人工项目。
 
+## 20. 安装包（beta.1-preview 起）
+
+自动化部分由 Release workflow 完成，每个产物都附 `.sha256`：
+
+- Windows：Inno Setup 6 编译 per-user `setup.exe`（`PrivilegesRequired=lowest`，
+  默认 `%LOCALAPPDATA%\Programs\DeziroJoy`）；win-x64 在 runner 上静默安装到临时
+  目录、断言 `DeziroJoy.exe` 与版本、静默卸载后断言安装目录 / 卸载注册项 / 快捷
+  方式全部清理；ISCC 从 PATH 或标准安装路径解析，缺失时报错列出全部尝试过的位置
+- Linux：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
+  元数据与 payload（完整 `/opt/dezirojoy`、`dezirojoy.ico`、desktop 入口），
+  并负向断言不含 `/etc` 下任何文件（无 systemd / cron / udev）与不附维护脚本；
+  linux-x64 用 `apt-get install` 实际安装（同时验证依赖可解析）、从
+  `/opt/dezirojoy` 运行 daemon smoke、卸载后验证路径与注册信息清理
+- win-arm64 的 setup.exe 是 ARM64 程序，无法在 x64 runner 上执行安装/卸载，
+  该 RID 只做编译与 PE 架构校验；arm64 deb 同理只做静态校验
+
+以下项目需要人工在目标机器上确认：
+
+- [ ] Windows：双击 `DeziroJoy-<version>-win-x64-setup.exe`，不弹 UAC，默认目录为
+      `%LOCALAPPDATA%\Programs\DeziroJoy`，开始菜单出现 DeziroJoy
+- [ ] Windows：从开始菜单启动，窗口正常；配置写入 `%APPDATA%\DeziroJoy\profiles\`
+- [ ] Windows：SmartScreen 对未签名安装器的提示符合预期（发布未做代码签名）
+- [ ] Windows：卸载后安装目录、开始菜单与桌面入口消失，`%APPDATA%\DeziroJoy` 配置仍在
+- [ ] Windows ARM64：安装包在 ARM64 设备正常运行；在 x64 设备上应被架构约束拒绝
+- [ ] Linux：`sudo dpkg -i DeziroJoy_<version>_amd64.deb` 成功，应用菜单出现
+      DeziroJoy 且图标正常，`/opt/dezirojoy/DeziroJoy` 可执行
+- [ ] Linux：启动后映射功能正常（依赖系统 X11 库、evdev/uinput，见「平台支持」）
+- [ ] Linux：`sudo dpkg -r dezirojoy` 后 `/opt/dezirojoy` 与应用菜单入口消失，
+      `~/.config/DeziroJoy/profiles/` 配置仍在
+- [ ] 两个平台的安装器均未注册自启动、计划任务或 udev 规则（应用内 opt-in 不变）
+
 ## 已知限制（预期行为，非缺陷）
 
 - XInput 无法提供稳定硬件 ID，配置按 XInput 槽位（#1-#4）保存；

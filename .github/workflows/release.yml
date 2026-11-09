@@ -110,42 +110,154 @@ jobs:
             exit 1
           fi
 
-      - name: Zip (Windows)
+      # Inno Setup 6 ships on the windows-latest image. The script is driven entirely
+      # by ISCC /D defines, so the step only passes the version, the RID and the two
+      # absolute paths. For win-x64 it also runs the silent install / verify /
+      # uninstall cycle against a throwaway directory; a win-arm64 setup.exe is an
+      # ARM64 binary and cannot execute on the x64 runner, so that RID gets the
+      # compile and the PE architecture check only (the same cross-compilation
+      # convention the binary smoke step above uses for linux-arm64).
+      - name: Build and verify the installer (Inno Setup)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: >
-          Compress-Archive
-          -Path publish/${{ matrix.rid }}/*
-          -DestinationPath DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip
-          -CompressionLevel Optimal
+        run: ./tools/Packaging/win/build-and-verify.ps1 -Version '${{ steps.version.outputs.version }}' -Rid '${{ matrix.rid }}' -PublishDir 'publish/${{ matrix.rid }}'
 
-      # The zip step used to shell out to the `zip` binary, which is not present on the
-      # ubuntu-latest runner image. It failed silently - `set -e` aborted the step before
-      # anything was printed - and the failure only surfaced 11 seconds later as
-      # "sha256sum: ... No such file or directory". Compressing through the .NET SDK that
-      # just published the binaries keeps the step dependent on nothing but dotnet.
-      - name: Zip (Linux)
+      # dpkg-deb from the ubuntu-latest image builds the package. The payload contract
+      # (complete /opt/dezirojoy, the icon, the desktop entry, and nothing under /etc)
+      # is asserted by the validation step below, and the install / smoke / remove
+      # step proves it end to end on x64.
+      - name: Build the .deb (dpkg-deb)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           version='${{ steps.version.outputs.version }}'
-          rid='${{ matrix.rid }}'
-          out="DeziroJoy-${version}-${rid}.zip"
-          dotnet run --project tools/ZipPack -c Release -- "publish/${rid}" "$out"
-          test -s "$out" || { echo "no zip produced"; exit 1; }
-          ls -la "$out"
+          case '${{ matrix.rid }}' in
+            linux-x64)   arch=amd64 ;;
+            linux-arm64) arch=arm64 ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          tools/Packaging/linux/build-deb.sh "$version" '${{ matrix.rid }}' "publish/${{ matrix.rid }}" .
+          test -s "DeziroJoy_${version}_${arch}.deb" || { echo "no deb produced"; exit 1; }
+
+      # dpkg-deb --field is used instead of parsing --info output: --info indents the
+      # control fields with a leading space, which exact line matching trips over.
+      - name: Validate the .deb metadata and payload
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          case '${{ matrix.rid }}' in
+            linux-x64)   arch=amd64 ;;
+            linux-arm64) arch=arm64 ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          deb="DeziroJoy_${version}_${arch}.deb"
+
+          [ "$(dpkg-deb --field "$deb" Package)" = dezirojoy ] || { echo "wrong package name"; exit 1; }
+          [ "$(dpkg-deb --field "$deb" Version)" = "$version" ] || { echo "wrong version"; exit 1; }
+          [ "$(dpkg-deb --field "$deb" Architecture)" = "$arch" ] || { echo "wrong architecture"; exit 1; }
+          dpkg-deb --field "$deb" Depends | grep -q . || { echo "no Depends line"; exit 1; }
+
+          contents="$(dpkg-deb --contents "$deb")"
+          for required in \
+            "./opt/dezirojoy/DeziroJoy" \
+            "./opt/dezirojoy/dezirojoy.ico" \
+            "./usr/share/applications/dezirojoy.desktop"
+          do
+            echo "$contents" | grep -q " ${required}$" || { echo "missing from package: $required"; exit 1; }
+          done
+          # The payload must stay the complete publish output, not a trimmed subset.
+          # +1 for the icon the build script adds, +1 for the /opt/dezirojoy directory
+          # entry itself, which dpkg-deb --contents lists alongside the files.
+          count="$(echo "$contents" | grep -c ' \./opt/dezirojoy/')"
+          expected="$(find "publish/${{ matrix.rid }}" -type f | wc -l)"
+          [ "$count" -ge $((expected + 2)) ] || { echo "only $count payload entries for $expected publish files"; exit 1; }
+          # The installer must not ship anything under /etc: no systemd units, no cron
+          # jobs, no udev rules. Autostart and the elevated daemon stay opt-in features
+          # of the app itself.
+          if echo "$contents" | grep -E ' \./etc/'; then
+            echo "installer must not ship anything under /etc"
+            exit 1
+          fi
+          # And no maintainer scripts: install and removal must stay side-effect free.
+          ctrldir="$(mktemp -d)"
+          dpkg-deb --control "$deb" "$ctrldir"
+          if ls "$ctrldir" | grep -E '^(preinst|postinst|prerm|postrm)$'; then
+            echo "installer must not ship maintainer scripts"
+            exit 1
+          fi
+
+      # The x64 runner can install and run the amd64 package. apt resolves the Depends
+      # line against the archive, which also proves every declared dependency exists;
+      # the daemon is then smoked from the installed location, and removal must leave
+      # nothing behind. linux-arm64 is cross-compiled and cannot run on this runner,
+      # so it is covered by the static checks above - the same convention the binary
+      # smoke step already uses for cross-published builds.
+      - name: Install, smoke and remove the .deb
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          deb="DeziroJoy_${version}_amd64.deb"
+
+          sudo apt-get update
+          sudo apt-get install -y "./$deb"
+
+          test -x /opt/dezirojoy/DeziroJoy || { echo "missing /opt/dezirojoy/DeziroJoy"; exit 1; }
+          test -f /opt/dezirojoy/dezirojoy.ico || { echo "missing /opt/dezirojoy/dezirojoy.ico"; exit 1; }
+          test -f /usr/share/applications/dezirojoy.desktop || { echo "missing desktop entry"; exit 1; }
+          grep -q '^Exec=/opt/dezirojoy/DeziroJoy$' /usr/share/applications/dezirojoy.desktop \
+            || { echo "desktop entry does not launch the installed binary"; exit 1; }
+
+          # The daemon loads no GUI stack, but a binary whose native dependencies fail
+          # to resolve still exits immediately, while a healthy one is still running
+          # when timeout kills it, which is exit code 124. Run from the installed
+          # location rather than the publish directory, and capture the code instead
+          # of letting -e abort on the expected timeout.
+          timeout 10 /opt/dezirojoy/DeziroJoy --daemon > daemon.log 2>&1 && code=0 || code=$?
+          echo "daemon exit code: $code"
+          sed -n '1,20p' daemon.log
+          if [ "$code" -ne 124 ]; then
+            echo "daemon did not stay running (expected 124 from timeout)"
+            exit 1
+          fi
+
+          sudo dpkg -r dezirojoy
+          test ! -e /opt/dezirojoy || { echo "/opt/dezirojoy still present after removal"; exit 1; }
+          test ! -e /usr/share/applications/dezirojoy.desktop || { echo "desktop entry still present after removal"; exit 1; }
+          if dpkg -s dezirojoy >/dev/null 2>&1; then
+            echo "package still registered after removal"
+            exit 1
+          fi
 
       - name: Checksum
         shell: bash
-        run: sha256sum "DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip" > "DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip.sha256"
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          rid='${{ matrix.rid }}'
+          case "$rid" in
+            win-x64|win-arm64)
+              artifact="DeziroJoy-${version}-${rid}-setup.exe" ;;
+            linux-x64)   artifact="DeziroJoy_${version}_amd64.deb" ;;
+            linux-arm64) artifact="DeziroJoy_${version}_arm64.deb" ;;
+            *) echo "unknown rid $rid"; exit 1 ;;
+          esac
+          test -s "$artifact" || { echo "artifact missing: $artifact"; exit 1; }
+          sha256sum "$artifact" > "${artifact}.sha256"
+          ls -la "$artifact" "${artifact}.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.rid }}
           path: |
-            DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip
-            DeziroJoy-${{ steps.version.outputs.version }}-${{ matrix.rid }}.zip.sha256
+            DeziroJoy-*-setup.exe
+            DeziroJoy-*-setup.exe.sha256
+            DeziroJoy_*.deb
+            DeziroJoy_*.deb.sha256
           if-no-files-found: error
 
   release:
@@ -213,11 +325,16 @@ jobs:
 
           | 文件 | 平台 | 说明 |
           | --- | --- | --- |
-          | `DeziroJoy-PACKAGEVERSION-win-x64.zip` | Windows | 自包含，解压即用（无需安装 .NET），Intel / AMD 64 位 |
-          | `DeziroJoy-PACKAGEVERSION-win-arm64.zip` | Windows | 同上，ARM64（如骁龙笔记本） |
-          | `DeziroJoy-PACKAGEVERSION-linux-x64.zip` | Linux | 自包含，解压即用，Intel / AMD 64 位 |
-          | `DeziroJoy-PACKAGEVERSION-linux-arm64.zip` | Linux | 同上，ARM64（如树莓派） |
+          | `DeziroJoy-PACKAGEVERSION-win-x64-setup.exe` | Windows | 自包含安装包，双击即装（无需安装 .NET），per-user 装到 `%LOCALAPPDATA%\Programs\DeziroJoy`，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-win-arm64-setup.exe` | Windows | 同上，ARM64（如骁龙笔记本） |
+          | `DeziroJoy_PACKAGEVERSION_amd64.deb` | Linux | 自包含 deb，`sudo dpkg -i` 装到 `/opt/dezirojoy` 并注册应用菜单入口，Intel / AMD 64 位 |
+          | `DeziroJoy_PACKAGEVERSION_arm64.deb` | Linux | 同上，ARM64（如树莓派） |
           | `*.sha256` | — | SHA256 校验和 |
+
+          Windows 安装器为 per-user 模式，不需要管理员权限；两个平台的安装器都不注册
+          自启动、计划任务或 udev 规则（登录自启动与提权常驻服务请在应用内「设置」中
+          按需开启），卸载也不会删除用户配置。卸载方式：Windows 用「设置 → 应用」或
+          安装目录中的 `unins000.exe`，Linux 用 `sudo dpkg -r dezirojoy`。
 
           Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，
           桌面发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要
@@ -240,8 +357,9 @@ jobs:
 
           发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1244 项，
           1239 通过、0 失败、5 项 Windows 专属跳过；release.yml 已通过 actionlint。
-          Windows / Ubuntu 双平台 CI、四 RID 自包含打包及 smoke check 由 Release workflow
-          执行；本轮未进行 Windows 真机或物理手柄实测，不以自动化测试替代人工验收。
+          Windows / Ubuntu 双平台 CI、四 RID 自包含安装包（Windows Inno per-user
+          EXE / Linux dpkg-deb .deb）构建与安装验证由 Release workflow 执行；
+          本轮未进行 Windows 真机或物理手柄实测，不以自动化测试替代人工验收。
           人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
@@ -268,4 +386,4 @@ jobs:
             --title "DeziroJoy ${{ steps.version.outputs.tag }}" \
             --notes-file body.md \
             --prerelease \
-            artifacts/*/*.zip artifacts/*/*.sha256
+            artifacts/*/*.exe artifacts/*/*.deb artifacts/*/*.sha256
