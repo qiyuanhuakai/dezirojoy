@@ -66,19 +66,20 @@ Linux 实验性说明：
 ### Linux
 
 ```sh
-sudo dpkg -i DeziroJoy_<version>_amd64.deb
+sudo apt install ./DeziroJoy_<version>_amd64.deb
 ```
 
-程序装入 `/opt/dezirojoy`，应用菜单出现 DeziroJoy 入口（图标随包提供）。
-卸载：
+用 `apt`（而非 `dpkg -i`）安装，依赖会一并解析：X11 客户端库、fontconfig、
+ICU 等（桌面发行版默认齐全，最小系统也会被 apt 自动补齐）。程序装入
+`/opt/dezirojoy`，应用菜单出现 DeziroJoy 入口（图标随包提供）。卸载：
 
 ```sh
 sudo dpkg -r dezirojoy
 ```
 
-卸载同样保留 `~/.config/DeziroJoy/profiles/` 下的配置。运行需要系统提供 X11
-客户端库与 `evdev` / `uinput`（见[平台支持](#平台支持)）；deb 的依赖声明
-已覆盖这些库，桌面发行版默认齐全。
+卸载同样保留 `~/.config/DeziroJoy/profiles/` 下的配置。运行还需要 `evdev` /
+`uinput`（见[平台支持](#平台支持)）：读取手柄只需要 `evdev`；注入鼠标键盘需要
+`/dev/uinput` 可写，若不可写应用会明确报告，不会静默失效。
 
 ## 构建与运行
 

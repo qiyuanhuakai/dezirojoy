@@ -258,7 +258,9 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   方式全部清理；ISCC 从 PATH 或标准安装路径解析，缺失时报错列出全部尝试过的位置
 - Linux：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
   元数据与 payload（完整 `/opt/dezirojoy`、`dezirojoy.ico`、desktop 入口），
-  并负向断言不含 `/etc` 下任何文件（无 systemd / cron / udev）与不附维护脚本；
+  断言依赖含版本化 `libicu` 备选项（应用未启用 InvariantGlobalization，缺 ICU
+  的 .NET 会在启动时 FailFast，runner 自带 ICU 所以只能靠断言保证），并负向
+  断言不含 `/etc` 下任何文件（无 systemd / cron / udev）与不附维护脚本；
   linux-x64 用 `apt-get install` 实际安装（同时验证依赖可解析）、从
   `/opt/dezirojoy` 运行 daemon smoke、卸载后验证路径与注册信息清理
 - win-arm64 的 setup.exe 是 ARM64 程序，无法在 x64 runner 上执行安装/卸载，
@@ -272,8 +274,8 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
 - [ ] Windows：SmartScreen 对未签名安装器的提示符合预期（发布未做代码签名）
 - [ ] Windows：卸载后安装目录、开始菜单与桌面入口消失，`%APPDATA%\DeziroJoy` 配置仍在
 - [ ] Windows ARM64：安装包在 ARM64 设备正常运行；在 x64 设备上应被架构约束拒绝
-- [ ] Linux：`sudo dpkg -i DeziroJoy_<version>_amd64.deb` 成功，应用菜单出现
-      DeziroJoy 且图标正常，`/opt/dezirojoy/DeziroJoy` 可执行
+- [ ] Linux：`sudo apt install ./DeziroJoy_<version>_amd64.deb` 成功（依赖一并
+      解析），应用菜单出现 DeziroJoy 且图标正常，`/opt/dezirojoy/DeziroJoy` 可执行
 - [ ] Linux：启动后映射功能正常（依赖系统 X11 库、evdev/uinput，见「平台支持」）
 - [ ] Linux：`sudo dpkg -r dezirojoy` 后 `/opt/dezirojoy` 与应用菜单入口消失，
       `~/.config/DeziroJoy/profiles/` 配置仍在
