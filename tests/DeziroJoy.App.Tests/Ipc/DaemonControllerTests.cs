@@ -259,7 +259,7 @@ public sealed class DaemonControllerTests
         await ConnectAsync(controller);
         endpoint.Channel.OnSend = null;
         var firstOlderAnswer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var newerPushAdopted = 0;
+        var newerPushAdopted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var rolledBack = 0;
         controller.SnapshotChanged += snapshot =>
         {
@@ -270,9 +270,9 @@ public sealed class DaemonControllerTests
 
             if (snapshot.Sequence == 7)
             {
-                Volatile.Write(ref newerPushAdopted, 1);
+                newerPushAdopted.TrySetResult();
             }
-            else if (Volatile.Read(ref newerPushAdopted) != 0)
+            else if (newerPushAdopted.Task.IsCompleted)
             {
                 Interlocked.Exchange(ref rolledBack, 1);
             }
@@ -281,12 +281,9 @@ public sealed class DaemonControllerTests
         var reads = Enumerable.Range(0, ReadCount)
             .Select(_ => controller.GetStateAsync(TestContext.Current.CancellationToken))
             .ToArray();
-        for (var attempt = 0;
-            attempt < 200 && endpoint.Channel.Sent.OfType<GetStateMessage>().Count() != ReadCount + 1;
-            attempt++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await endpoint.Channel.WaitForSendCountAsync<GetStateMessage>(
+            ReadCount + 1,
+            TestContext.Current.CancellationToken);
 
         var requests = endpoint.Channel.Sent.OfType<GetStateMessage>().Skip(1).ToList();
         Assert.Equal(ReadCount, requests.Count);
@@ -295,8 +292,14 @@ public sealed class DaemonControllerTests
             endpoint.Channel.Push(State("daemon-1", 6, request.RequestId));
         }
 
+        // The older answers are in flight: the first continuation adopts one while the rest
+        // are still queued behind it, which is the race the newer push has to win.
         await firstOlderAnswer.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
         endpoint.Channel.Push(State("daemon-1", 7));
+
+        // The push travels the receive loop asynchronously, so the reads completing says
+        // nothing about it: wait for the adoption itself before judging the outcome.
+        await newerPushAdopted.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
         await Task.WhenAll(reads).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
 
         Assert.Equal(7, controller.Snapshot!.Sequence);
@@ -572,6 +575,43 @@ public sealed class DaemonControllerTests
                 }
 
                 return await completion.Task.WaitAsync(TestTimeout, cancellationToken);
+            }
+            finally
+            {
+                SentObserved -= Handler;
+            }
+        }
+
+        /// <summary>
+        /// Waits until at least <paramref name="count"/> messages of type <typeparamref name="T"/>
+        /// have been sent. Event-driven so a caller never has to poll or sleep for sends whose
+        /// timing it does not control.
+        /// </summary>
+        public async Task WaitForSendCountAsync<T>(int count, CancellationToken cancellationToken)
+            where T : IpcMessage
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var observed = 0;
+            void Handler(IpcMessage message)
+            {
+                if (message is T && Interlocked.Increment(ref observed) >= count)
+                {
+                    completion.TrySetResult();
+                }
+            }
+
+            SentObserved += Handler;
+            try
+            {
+                lock (_gate)
+                {
+                    if (Sent.OfType<T>().Count() >= count)
+                    {
+                        return;
+                    }
+                }
+
+                await completion.Task.WaitAsync(TestTimeout, cancellationToken);
             }
             finally
             {

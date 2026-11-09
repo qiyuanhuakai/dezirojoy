@@ -363,7 +363,13 @@ public sealed class MainWindowViewModelDaemonTests
             daemonHost.PublishInputSample(
                 "pad-1",
                 GamepadState.Create(GamepadButtonMask.A, 0.5f, 0, 0, 0));
-            await WaitForCondition(() => viewModel.SelectedSource is ButtonBinding { Button: GamepadButton.A });
+
+            // One sample drives navigation first and the visualizer second, so a wait on
+            // the navigation alone can observe the half-finished sample: match the whole
+            // target state the asserts below check.
+            await WaitForCondition(() => viewModel.SelectedSource is ButtonBinding { Button: GamepadButton.A }
+                && viewModel.Visualizer.IsAPressed
+                && viewModel.Visualizer.LeftStickX == 0.5f);
 
             Assert.True(viewModel.Visualizer.IsAPressed);
             Assert.Equal(0.5f, viewModel.Visualizer.LeftStickX);
@@ -637,7 +643,14 @@ public sealed class MainWindowViewModelDaemonTests
 
         viewModel.AddMappingCommand.Execute(null);
         daemonHost.RemoveDevice("pad-1");
-        await WaitForCondition(() => viewModel.DaemonSnapshot?.Devices.SingleOrDefault()?.DeviceId == "pad-2");
+
+        // The removal reaches the view model asynchronously (daemon -> channel -> receive
+        // loop), so the snapshot in view may still list both devices for a moment. Match
+        // only the target state: exactly one device left, and it is pad-2. Anything else -
+        // the historical two-device snapshot included - keeps the wait going instead of
+        // being mistaken for a result.
+        await WaitForCondition(() => viewModel.DaemonSnapshot?.Devices is { Count: 1 } devices
+            && devices[0].DeviceId == "pad-2");
 
         Assert.Equal(revisionBeforeDisconnect, viewModel.DaemonSnapshot.Revision);
         Assert.True(viewModel.IsEditing);
