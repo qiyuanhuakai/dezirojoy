@@ -32,7 +32,7 @@ public sealed class TrayService : IDisposable
     private readonly IClassicDesktopStyleApplicationLifetime _lifetime;
     private readonly ThemeService _themes;
     private readonly Action _showMainWindow;
-    private readonly Action _exit;
+    private readonly Func<bool> _exit;
 
     private TrayIcon? _trayIcon;
     private bool _exiting;
@@ -43,7 +43,7 @@ public sealed class TrayService : IDisposable
         IClassicDesktopStyleApplicationLifetime lifetime,
         ThemeService themes,
         Action showMainWindow,
-        Action exit)
+        Func<bool> exit)
     {
         ArgumentNullException.ThrowIfNull(application);
         ArgumentNullException.ThrowIfNull(lifetime);
@@ -58,7 +58,7 @@ public sealed class TrayService : IDisposable
         _exit = exit;
     }
 
-    /// <summary>True once the tray's 退出 item has been chosen.</summary>
+    /// <summary>True while an exit is in progress or after the host accepts it.</summary>
     public bool IsExiting => _exiting;
 
     /// <summary>
@@ -100,8 +100,9 @@ public sealed class TrayService : IDisposable
     public void ShowMainWindow() => _showMainWindow();
 
     /// <summary>
-    /// Ends the tray from its menu. The host answers by stopping the daemon and shutting the
-    /// lifetime down; the tray only asks, and it asks exactly once.
+    /// Ends the tray from its menu once the host confirms that the daemon and render stopped.
+    /// A failed request releases the guard so the user can retry; successful and reentrant
+    /// requests keep the guard latched.
     /// </summary>
     public void Exit()
     {
@@ -111,8 +112,18 @@ public sealed class TrayService : IDisposable
         }
 
         _exiting = true;
-
-        _exit();
+        try
+        {
+            if (!_exit())
+            {
+                _exiting = false;
+            }
+        }
+        catch
+        {
+            _exiting = false;
+            throw;
+        }
     }
 
     public void Dispose()

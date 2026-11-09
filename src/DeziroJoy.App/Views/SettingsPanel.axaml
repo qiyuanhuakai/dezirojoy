@@ -79,6 +79,20 @@
 
                     <Border Classes="card">
                         <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="后台与托盘" />
+                            <CheckBox x:Name="CloseToTrayBox" Content="关闭后退出到托盘" Margin="0,12,0,0"
+                                      IsChecked="{Binding CloseToTrayEnabled, Mode=TwoWay}" />
+                            <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="开启时关闭窗口并交接托盘，daemon 继续映射；关闭时完整退出 GUI、托盘与 daemon。普通最小化仍由下方选项决定。" />
+                            <CheckBox x:Name="MinimizeToTrayBox" Content="最小化后退出到托盘" Margin="0,12,0,0"
+                                      IsChecked="{Binding MinimizeToTrayEnabled, Mode=TwoWay}" />
+                            <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="开启时最小化会销毁窗口与渲染资源并交接托盘；关闭时保留 GUI 进程，仅执行普通最小化。" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="card">
+                        <StackPanel>
                             <TextBlock Classes="cardTitle" Text="注入状态" />
                             <TextBlock Classes="fieldLabel" Margin="0,10,0,0"
                                        Text="{Binding InjectorDescription}" />

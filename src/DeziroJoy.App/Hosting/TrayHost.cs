@@ -32,24 +32,31 @@ internal interface IProcessHandle : IDisposable
 /// </summary>
 internal delegate IProcessHandle? ProcessLaunch(ProcessStartInfo startInfo);
 
+internal enum DaemonSupervisionState
+{
+    Stopped,
+    Running,
+    Stopping,
+    StoppedGracefully,
+    Killed,
+    StartFailed,
+    StopFailed,
+}
+
 /// <summary>
-/// Supervises the resident daemon. The tray starts it and never hosts the mapping engine
-/// itself: on Windows the start goes through <see cref="IElevationService"/> so the daemon runs
-/// elevated, and on Linux the same entry assembly is started as the current user, because
-/// uinput is not gated by UIPI and needs no elevation.
+/// Supervises the resident daemon. Disposing a supervisor only releases its process handle;
+/// explicit application exit is the sole path that asks the daemon to stop.
 /// </summary>
 internal sealed class DaemonSupervisor : IDisposable
 {
-    /// <summary>
-    /// How long the exit waits for the daemon before killing whatever survived. Bounded so a
-    /// wedged daemon can never hold the tray's exit open.
-    /// </summary>
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IElevationService _elevation;
     private readonly ProcessLaunch _launcher;
     private readonly Func<bool> _isWindows;
     private readonly Func<bool> _isDaemonReachable;
+    private readonly Func<CancellationToken, Task<bool>> _requestShutdown;
+    private readonly TimeSpan _stopTimeout;
     private IProcessHandle? _daemon;
     private bool _elevatedRequested;
     private bool _disposed;
@@ -58,15 +65,23 @@ internal sealed class DaemonSupervisor : IDisposable
         IElevationService? elevation = null,
         ProcessLaunch? launch = null,
         Func<bool>? isWindows = null,
-        Func<bool>? isDaemonReachable = null)
+        Func<bool>? isDaemonReachable = null,
+        Func<CancellationToken, Task<bool>>? requestShutdown = null,
+        TimeSpan? stopTimeout = null)
     {
         _elevation = elevation ?? new ElevationService();
         _launcher = launch ?? ProcessLauncher.Start;
         _isWindows = isWindows ?? (static () => OperatingSystem.IsWindows());
         _isDaemonReachable = isDaemonReachable ?? (static () => IsDaemonReachable(IpcContract.PipeName));
+        _requestShutdown = requestShutdown ?? RequestDaemonShutdownAsync;
+        _stopTimeout = stopTimeout ?? StopTimeout;
     }
 
     public bool IsRunning => _daemon is { HasExited: false };
+
+    public DaemonSupervisionState State { get; private set; } = DaemonSupervisionState.Stopped;
+
+    public string? LastError { get; private set; }
 
     /// <summary>
     /// Starts the daemon when this supervisor does not already hold a live one and none is
@@ -82,56 +97,111 @@ internal sealed class DaemonSupervisor : IDisposable
             return;
         }
 
-        // A daemon the render process already started answers on the mapping pipe, so there is
-        // nothing to start: relaunching would show a UAC prompt for a copy the instance mutex
-        // makes exit immediately. Probed on every call, never cached, so a daemon that
-        // genuinely died is still restarted on the next menu action.
-        if (_isDaemonReachable())
+        if (SafeIsDaemonReachable())
         {
+            State = DaemonSupervisionState.Running;
             return;
         }
 
         if (_isWindows())
         {
-            // The elevated relaunch shows a UAC prompt, so it is asked for once per tray
-            // process: the daemon's own single-instance mutex makes a duplicate launch a clean
-            // no-op, and re-prompting on every menu action would be unusable.
             if (_elevatedRequested)
             {
                 return;
             }
 
             _elevatedRequested = true;
-            _elevation.RelaunchElevated("--daemon");
+            State = _elevation.RelaunchElevated("--daemon")
+                ? DaemonSupervisionState.Running
+                : DaemonSupervisionState.StartFailed;
             return;
         }
 
         _daemon = _launcher(ProcessLauncher.DaemonStartInfo());
+        State = _daemon is null ? DaemonSupervisionState.StartFailed : DaemonSupervisionState.Running;
+        Trace.WriteLine($"[DeziroJoy] daemon supervisor: {State}");
     }
 
     /// <summary>
-    /// Stops the daemon this supervisor started: stop, wait, then kill whatever survived the
-    /// wait. The wait is bounded, so a daemon that refuses to die cannot hold the tray's exit
-    /// open.
+    /// Asks the daemon to exit over IPC before waiting and, for a child we own, killing only
+    /// what survived the bounded graceful wait. A remote daemon that cannot confirm its exit
+    /// reports failure so the caller can keep its UI alive instead of pretending to have exited.
     /// </summary>
-    public void Stop()
+    public bool Stop()
     {
-        if (_daemon is not { } daemon)
+        if (_daemon is { HasExited: true } exited)
         {
-            return;
+            _daemon = null;
+            exited.Dispose();
         }
 
-        _daemon = null;
-
-        TryKill(daemon);
-        TryWait(daemon);
-
-        if (!daemon.HasExited)
+        var daemon = _daemon;
+        if (daemon is null && !_elevatedRequested && !SafeIsDaemonReachable())
         {
-            TryKill(daemon);
+            State = DaemonSupervisionState.Stopped;
+            LastError = null;
+            return true;
         }
 
-        daemon.Dispose();
+        State = DaemonSupervisionState.Stopping;
+        LastError = null;
+        var acknowledged = false;
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(_stopTimeout);
+            acknowledged = _requestShutdown(timeout.Token).GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            LastError = exception.Message;
+        }
+
+        var stopped = false;
+        var killed = false;
+        if (daemon is not null)
+        {
+            if (acknowledged)
+            {
+                TryWait(daemon, _stopTimeout);
+            }
+
+            if (!daemon.HasExited)
+            {
+                killed = true;
+                TryKill(daemon);
+                TryWait(daemon, _stopTimeout);
+            }
+
+            stopped = daemon.HasExited;
+            if (stopped)
+            {
+                _daemon = null;
+                daemon.Dispose();
+            }
+        }
+        else if (acknowledged)
+        {
+            stopped = WaitUntilUnreachable(_stopTimeout);
+        }
+
+        State = stopped
+            ? killed
+                ? DaemonSupervisionState.Killed
+                : acknowledged ? DaemonSupervisionState.StoppedGracefully : DaemonSupervisionState.Stopped
+            : DaemonSupervisionState.StopFailed;
+        if (stopped)
+        {
+            _elevatedRequested = false;
+            LastError = null;
+        }
+        else
+        {
+            LastError ??= "the daemon did not confirm its exit within the shutdown budget";
+        }
+
+        Trace.WriteLine($"[DeziroJoy] daemon supervisor: {State}; {LastError}");
+        return stopped;
     }
 
     public void Dispose()
@@ -142,8 +212,8 @@ internal sealed class DaemonSupervisor : IDisposable
         }
 
         _disposed = true;
-
-        Stop();
+        _daemon?.Dispose();
+        _daemon = null;
     }
 
     /// <summary>
@@ -193,6 +263,46 @@ internal sealed class DaemonSupervisor : IDisposable
         return false;
     }
 
+    private bool SafeIsDaemonReachable()
+    {
+        try
+        {
+            return _isDaemonReachable();
+        }
+        catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException)
+        {
+            LastError = exception.Message;
+            return false;
+        }
+    }
+
+    private bool WaitUntilUnreachable(TimeSpan timeout)
+    {
+        var elapsed = Stopwatch.StartNew();
+        do
+        {
+            if (!SafeIsDaemonReachable())
+            {
+                return true;
+            }
+
+            if (elapsed.Elapsed >= timeout)
+            {
+                return false;
+            }
+
+            Thread.Sleep(TimeSpan.FromMilliseconds(50));
+        }
+        while (true);
+    }
+
+    private static async Task<bool> RequestDaemonShutdownAsync(CancellationToken cancellationToken)
+    {
+        await using var controller = new DaemonController(new NamedPipeDaemonEndpoint());
+        await controller.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        return await controller.RequestShutdownAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static void TryKill(IProcessHandle daemon)
     {
         try
@@ -201,22 +311,21 @@ internal sealed class DaemonSupervisor : IDisposable
         }
         catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
         {
-            // The daemon may already be gone, or refuse the terminate; neither is worth
-            // failing the tray's exit over.
+            // Already gone, or not ours to terminate.
         }
     }
 
-    private static void TryWait(IProcessHandle daemon)
+    private static void TryWait(IProcessHandle daemon, TimeSpan timeout)
     {
         try
         {
-            using var timeout = new CancellationTokenSource(StopTimeout);
-            daemon.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+            using var cancellation = new CancellationTokenSource(timeout);
+            daemon.WaitForExitAsync(cancellation.Token).GetAwaiter().GetResult();
         }
         catch (Exception exception) when (exception
             is OperationCanceledException or AggregateException or InvalidOperationException)
         {
-            // A daemon that outlives the wait is killed as residue instead.
+            // The fallback path inspects HasExited after this bounded wait.
         }
     }
 }
@@ -225,8 +334,17 @@ internal sealed class DaemonSupervisor : IDisposable
 /// Supervises the render process: the stateless Avalonia window the tray starts on demand.
 /// The tray never hosts a window itself, so this is the only thing that can put one on screen.
 /// </summary>
+internal enum RenderSupervisionState
+{
+    Stopped,
+    Running,
+    StartFailed,
+    StopFailed,
+}
+
 internal sealed class RenderSupervisor : IDisposable
 {
+    private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
     private readonly ProcessLaunch _launcher;
     private readonly Action _showLive;
     private IProcessHandle? _render;
@@ -240,11 +358,8 @@ internal sealed class RenderSupervisor : IDisposable
 
     public bool IsAlive => _render is { HasExited: false };
 
-    /// <summary>
-    /// The tray menu's 显示主窗口. A render process that is not alive is started; one that is
-    /// alive already has its window on screen - closing it would have ended the process - so
-    /// the show is sent over the activation pipe instead of spawning a second render process.
-    /// </summary>
+    public RenderSupervisionState State { get; private set; } = RenderSupervisionState.Stopped;
+
     public void Show()
     {
         if (_disposed)
@@ -261,27 +376,48 @@ internal sealed class RenderSupervisor : IDisposable
         Spawn();
     }
 
-    /// <summary>
-    /// Ends the render process this supervisor spawned, as the tray's exit item does: the
-    /// window is the process, so killing the child is the whole cleanup. A render that
-    /// already exited on its own is a no-op.
-    /// </summary>
-        public void Stop()
+    public bool Stop()
+    {
+        if (_render is not { } render)
         {
-            if (_disposed || _render is not { } render)
-            {
-                return;
-            }
-
-            render.Kill(entireTree: true);
+            State = RenderSupervisionState.Stopped;
+            return true;
         }
 
-        public void Dispose()
+        if (!render.HasExited)
         {
-            if (_disposed)
+            try
             {
-                return;
+                render.Kill(entireTree: true);
+                using var timeout = new CancellationTokenSource(StopTimeout);
+                render.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
             }
+            catch (Exception exception) when (exception
+                is InvalidOperationException or Win32Exception or OperationCanceledException)
+            {
+                Trace.WriteLine($"[DeziroJoy] render stop: {exception.Message}");
+            }
+        }
+
+        var stopped = render.HasExited;
+        State = stopped ? RenderSupervisionState.Stopped : RenderSupervisionState.StopFailed;
+        if (stopped)
+        {
+            render.Exited -= OnRenderExited;
+            _render = null;
+            render.Dispose();
+        }
+
+        Trace.WriteLine($"[DeziroJoy] render supervisor: {State}");
+        return stopped;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
 
         _disposed = true;
 
@@ -289,6 +425,7 @@ internal sealed class RenderSupervisor : IDisposable
         {
             render.Exited -= OnRenderExited;
             _render = null;
+            render.Dispose();
         }
     }
 
@@ -298,10 +435,12 @@ internal sealed class RenderSupervisor : IDisposable
 
         if (handle is null)
         {
+            State = RenderSupervisionState.StartFailed;
             return;
         }
 
         _render = handle;
+        State = RenderSupervisionState.Running;
         handle.Exited += OnRenderExited;
     }
 
@@ -317,14 +456,14 @@ internal sealed class RenderSupervisor : IDisposable
         if (ReferenceEquals(_render, render))
         {
             _render = null;
+            State = RenderSupervisionState.Stopped;
         }
     }
 }
 
 /// <summary>
-/// The tray process: a resident Avalonia application with no window. It owns the instance lock,
-/// the activation channel, the persisted theme, the tray icon and the two supervisors, and it
-/// starts the daemon on its own - the GUI never asks for it.
+/// The tray process: a resident Avalonia application with no window. It owns the instance lease,
+/// activation channel, persisted theme, tray icon and process supervisors while no render is up.
 /// </summary>
 internal static class TrayHost
 {
@@ -334,21 +473,9 @@ internal static class TrayHost
     /// <summary>Pause between render-answer polls while the show route waits for the window.</summary>
     private static readonly TimeSpan ShowPollPause = TimeSpan.FromMilliseconds(100);
 
-    /// <summary>
-    /// How long the show route gives the render to answer before the tray retires anyway. The
-    /// render has to win the instance lock, build its window and start serving, which is a
-    /// startup-scale wait, not a spin.
-    /// </summary>
     private static readonly TimeSpan ShowPollBudget = TimeSpan.FromSeconds(10);
 
-    /// <summary>
-    /// Releases the instance lease and the activation channel, set by <see cref="Run"/> for the
-    /// life of the tray process. The show route calls it before it spawns the render, because
-    /// the render arbitrates the lock exactly once with no retry - a tray still holding it makes
-    /// the render lose, ask this tray to show itself and exit with no GUI. Null in tests, which
-    /// install a tray without a real lease.
-    /// </summary>
-    private static Action? _releaseInstance;
+    private static GuiInstanceOwner? _instance;
 
     /// <summary>
     /// The default entry point. The tray wins the instance lock, so a second launch reaches it
@@ -395,19 +522,9 @@ internal static class TrayHost
             return arbitration.ExitCode;
         }
 
-        // The lease and the activation channel are held for the whole life of the tray: the
-        // lock is what makes this the one tray, and the channel is how a second launch asks it
-        // to show a window. They are lifted out of using statements because the show route
-        // releases them before it spawns the render: the render arbitrates the lock exactly
-        // once with no retry, so a tray still holding it makes the render lose and exit with
-        // no GUI at all.
-        var lease = arbitration.Lease!;
-        var activation = GuiActivationServer.StartActive(identity);
-        _releaseInstance = () =>
-        {
-            activation.Dispose();
-            lease.Dispose();
-        };
+        var activation = GuiActivationServer.StartActive(identity, GuiInstanceRole.Tray);
+        var owner = new GuiInstanceOwner(identity, arbitration.Lease!, activation);
+        _instance = owner;
 
         try
         {
@@ -416,10 +533,8 @@ internal static class TrayHost
         }
         finally
         {
-            // Idempotent by construction: the show route may already have released both, and a
-            // double dispose is exactly what the guards in each type exist to absorb.
-            _releaseInstance?.Invoke();
-            _releaseInstance = null;
+            _instance = null;
+            owner.Dispose();
         }
     }
 
@@ -433,7 +548,8 @@ internal static class TrayHost
             new DaemonSupervisor(),
             new RenderSupervisor(showLive: ShowLiveRenderProcess),
             GuiActivationServer.ActiveInstance,
-            releaseInstance: _releaseInstance);
+            releaseInstance: () => _instance?.ReleaseLease(),
+            reacquireInstance: () => _instance?.TryReacquireLease() ?? false);
 
     internal static TrayService InstallTray(
         Application application,
@@ -446,51 +562,78 @@ internal static class TrayHost
         Action? releaseInstance = null,
         Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>>? showPoll = null,
         Func<Task>? pollDelay = null,
-        TimeSpan? pollBudget = null)
+        TimeSpan? pollBudget = null,
+        Func<bool>? reacquireInstance = null)
     {
         themes.ApplyPersisted();
 
         showPoll ??= static (identity, options, cancellationToken)
-            => GuiActivationClient.TryShowAsync(identity, options, cancellationToken);
+            => GuiActivationClient.TryProbeAsync(identity, GuiInstanceRole.Render, options, cancellationToken);
         pollDelay ??= static () => Task.Delay(ShowPollPause);
         var budget = pollBudget ?? ShowPollBudget;
+        var handoverGate = new object();
+        Task<bool>? handover = null;
+
+        async Task ShowAsync()
+        {
+            Task<bool> current;
+            lock (handoverGate)
+            {
+                current = handover ??= HandOverToRenderAsync(
+                    daemon,
+                    render,
+                    releaseInstance,
+                    showPoll,
+                    pollDelay,
+                    budget,
+                    shutdown,
+                    lifetime,
+                    reacquireInstance);
+            }
+
+            var handedOver = false;
+            try
+            {
+                handedOver = await current;
+            }
+            catch (Exception exception)
+            {
+                Trace.WriteLine($"[DeziroJoy] render handover failed: {exception.Message}");
+            }
+
+            if (!handedOver)
+            {
+                lock (handoverGate)
+                {
+                    if (ReferenceEquals(handover, current))
+                    {
+                        handover = null;
+                    }
+                }
+            }
+        }
 
         var tray = new TrayService(
             application,
             lifetime,
             themes,
-            showMainWindow: async void () => await HandOverToRenderAsync(
-                daemon,
-                render,
-                releaseInstance,
-                showPoll,
-                pollDelay,
-                budget,
-                shutdown,
-                lifetime),
+            showMainWindow: async void () => await ShowAsync(),
             exit: () =>
             {
-                daemon.Stop();
-                render.Stop();
+                if (!daemon.Stop() || !render.Stop())
+                {
+                    return false;
+                }
+
                 Retire(shutdown, lifetime);
+                return true;
             });
 
         tray.Install();
 
         if (activation is not null)
         {
-            activation.ShowRequested += () => HandOverToRenderAsync(
-                daemon,
-                render,
-                releaseInstance,
-                showPoll,
-                pollDelay,
-                budget,
-                shutdown,
-                lifetime);
-
-            // Serving starts only once the tray can actually answer, so a launch arriving
-            // while the supervisors are still being built waits for the live listener.
+            activation.ShowRequested += ShowAsync;
             activation.BeginServing();
         }
 
@@ -501,8 +644,6 @@ internal static class TrayHost
             render.Dispose();
         };
 
-        // The daemon is resident on its own: it starts with the tray, not with a GUI, so a
-        // configuration persisted by an earlier session maps before any window exists.
         daemon.EnsureRunning();
 
         return tray;
@@ -516,18 +657,11 @@ internal static class TrayHost
         => (shutdown ?? (() => lifetime.Shutdown()))();
 
     /// <summary>
-    /// The one handover from tray to render, shared by both show routes - the menu item and the
-    /// activation channel a second launch writes to - so the release-before-spawn order exists
-    /// once instead of twice. The instance lock and the activation pipe are released BEFORE the
-    /// render is spawned: the render arbitrates the lock exactly once with no retry, so a tray
-    /// still holding it makes the render lose, ask this tray to show itself and exit with no
-    /// window at all. The poll then waits for the render to answer on the same pipe name - an
-    /// answer is proof the window is up, because the render's NotifyWindowShown orders
-    /// window-show before BeginServing - and only then does the tray retire. The poll is bounded
-    /// by the budget and also stops the moment the render dies, so the tray can neither hang on
-    /// a dead child nor outlive a window that never came.
+    /// Releases only the instance lease before spawning the render. The tray's activation server
+    /// stays up until a render-role readiness probe proves that the new window is serving. Any
+    /// failure kills the incomplete successor and reclaims the lease, leaving this tray resident.
     /// </summary>
-    internal static async Task HandOverToRenderAsync(
+    internal static async Task<bool> HandOverToRenderAsync(
         DaemonSupervisor daemon,
         RenderSupervisor render,
         Action? releaseInstance,
@@ -535,35 +669,73 @@ internal static class TrayHost
         Func<Task> pollDelay,
         TimeSpan budget,
         Action? shutdown,
-        IClassicDesktopStyleApplicationLifetime lifetime)
+        IClassicDesktopStyleApplicationLifetime lifetime,
+        Func<bool>? reacquireInstance = null)
     {
-        // The daemon is started by the tray, never by the GUI, and a show route is also the
-        // retry point for a daemon whose pipe never answered.
-        daemon.EnsureRunning();
-
-        releaseInstance?.Invoke();
-
-        render.Show();
-
         var identity = GuiInstanceIdentity.ForCurrentProcess();
         var elapsed = Stopwatch.StartNew();
+        var handedOver = false;
 
-        while (render.IsAlive)
+        try
         {
-            if (await showPoll(identity, GuiActivationOptions.Default, CancellationToken.None))
-            {
-                break;
-            }
+            daemon.EnsureRunning();
+            releaseInstance?.Invoke();
+            render.Show();
 
-            if (elapsed.Elapsed >= budget)
+            while (render.IsAlive)
             {
-                break;
-            }
+                var remaining = budget - elapsed.Elapsed;
+                var probeBudget = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1);
+                var options = new GuiActivationOptions(
+                    probeBudget < TimeSpan.FromMilliseconds(250) ? probeBudget : TimeSpan.FromMilliseconds(250),
+                    probeBudget < TimeSpan.FromSeconds(1) ? probeBudget : TimeSpan.FromSeconds(1));
 
-            await pollDelay();
+                if (await showPoll(identity, options, CancellationToken.None))
+                {
+                    handedOver = true;
+                    break;
+                }
+
+                if (elapsed.Elapsed >= budget)
+                {
+                    break;
+                }
+
+                await pollDelay();
+            }
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] render handover failed: {exception.Message}");
         }
 
-        Retire(shutdown, lifetime);
+        if (handedOver)
+        {
+            Retire(shutdown, lifetime);
+            return true;
+        }
+
+        try
+        {
+            render.Stop();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] render handover cleanup failed: {exception.Message}");
+        }
+
+        var reclaimed = false;
+        try
+        {
+            reclaimed = reacquireInstance?.Invoke() ?? true;
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] render handover lease rollback failed: {exception.Message}");
+        }
+
+        Trace.WriteLine($"[DeziroJoy] render handover rolled back; instance lease reclaimed: {reclaimed}");
+        return false;
     }
 
     /// <summary>

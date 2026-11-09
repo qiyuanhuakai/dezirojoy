@@ -37,9 +37,9 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// The render process: a stateless window over the daemon's authoritative state. It owns no
-    /// tray, no instance lock and no activation channel - all three belong to the tray - and
-    /// closing its window ends the process immediately.
+    /// The render process: a stateless window over the daemon's authoritative state. While the
+    /// window is alive it owns the instance lease and activation channel but no tray; its close
+    /// and minimize policies are completed before the process exits.
     /// </summary>
     private static void InstallRenderProcess(IClassicDesktopStyleApplicationLifetime desktop)
     {
@@ -53,9 +53,8 @@ public partial class App : Application
         var sink = new NullOutputSink();
         var presentationHost = new EngineHost(provider, sink, store);
 
-        // The settings service is built before the view model so the persisted preferences
-        // reach it: the view model reads and writes the 允许手柄操作 choice through this
-        // instance, and one built without it silently ignores the setting.
+        // The settings service is built before the view model so gamepad ownership and both
+        // tray policies use the same persisted instance as the render lifetime coordinator.
         var themes = new ThemeService();
         var controller = new DaemonController(new NamedPipeDaemonEndpoint());
 
@@ -93,45 +92,301 @@ public partial class App : Application
             viewModel.ReportDaemonUnavailable(exception.Message);
         }
 
-        RenderProcess.InstallWindow(desktop, viewModel, host, themes);
+        RenderProcess.InstallWindow(desktop, viewModel, host, themes, daemon: DesktopLauncher.Daemon);
     }
 }
 
-/// <summary>
-/// The render process's window policy: the window IS the process. Closing it wakes the tray
-/// process first - the tray takes over the instance lock, the activation channel and the daemon
-/// supervision - and only then ends the lifetime. Unsaved drafts are discarded by design,
-/// because the render process is stateless, and the daemon keeps mapping across the handover.
-/// </summary>
+internal enum TrayHandoverOutcome
+{
+    HandedOver,
+    RolledBack,
+    YieldedToNewInstance,
+}
+
+internal sealed class RenderWindowCoordinator
+{
+    private readonly MainWindow _window;
+    private readonly MainWindowViewModel _viewModel;
+    private readonly ThemeService _themes;
+    private readonly Func<ProcessStartInfo, IProcessHandle?> _spawnTray;
+    private readonly Action _releaseInstance;
+    private readonly Func<bool> _reacquireInstance;
+    private readonly Func<GuiInstanceIdentity, GuiInstanceRole, GuiActivationOptions, CancellationToken, Task<bool>> _probe;
+    private readonly Func<Task> _pollDelay;
+    private readonly TimeSpan _handoverBudget;
+    private readonly Func<Task<bool>> _stopDaemon;
+    private Task<TrayHandoverOutcome>? _handover;
+    private bool _closeApproved;
+    private bool _exitInProgress;
+
+    internal RenderWindowCoordinator(
+        MainWindow window,
+        MainWindowViewModel viewModel,
+        ThemeService themes,
+        Func<ProcessStartInfo, IProcessHandle?> spawnTray,
+        Action releaseInstance,
+        Func<bool> reacquireInstance,
+        Func<GuiInstanceIdentity, GuiInstanceRole, GuiActivationOptions, CancellationToken, Task<bool>> probe,
+        Func<Task> pollDelay,
+        TimeSpan handoverBudget,
+        Func<Task<bool>> stopDaemon)
+    {
+        _window = window;
+        _viewModel = viewModel;
+        _themes = themes;
+        _spawnTray = spawnTray;
+        _releaseInstance = releaseInstance;
+        _reacquireInstance = reacquireInstance;
+        _probe = probe;
+        _pollDelay = pollDelay;
+        _handoverBudget = handoverBudget;
+        _stopDaemon = stopDaemon;
+    }
+
+    internal async void OnClosing(object? sender, WindowClosingEventArgs e)
+    {
+        if (_closeApproved)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (_exitInProgress)
+        {
+            return;
+        }
+
+        _exitInProgress = true;
+        var approved = _themes.CloseToTrayEnabled
+            ? await HandOverToTrayAsync() is not TrayHandoverOutcome.RolledBack
+            : await StopDaemonAsync();
+        if (!approved)
+        {
+            if (_themes.CloseToTrayEnabled)
+            {
+                _viewModel.StatusMessage = "无法切换到托盘：托盘进程未就绪，窗口已保留。";
+            }
+
+            _exitInProgress = false;
+            return;
+        }
+
+        ApproveClose();
+    }
+
+    internal async Task<bool> MinimizeAsync()
+    {
+        if (_exitInProgress)
+        {
+            if (!_themes.CloseToTrayEnabled)
+            {
+                _window.WindowState = WindowState.Normal;
+            }
+
+            return true;
+        }
+
+        if (!_themes.MinimizeToTrayEnabled)
+        {
+            return false;
+        }
+
+        _exitInProgress = true;
+        if (await HandOverToTrayAsync() is TrayHandoverOutcome.RolledBack)
+        {
+            _window.WindowState = WindowState.Normal;
+            _viewModel.StatusMessage = "无法切换到托盘：托盘进程未就绪，窗口已保留。";
+            _exitInProgress = false;
+            return true;
+        }
+
+        ApproveClose();
+        return true;
+    }
+
+    private async Task<bool> StopDaemonAsync()
+    {
+        try
+        {
+            if (await _stopDaemon())
+            {
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] full exit failed: {exception.Message}");
+        }
+
+        _viewModel.StatusMessage = "无法完全退出：守护进程未确认停止。请重试。";
+        return false;
+    }
+
+    private async Task<TrayHandoverOutcome> HandOverToTrayAsync()
+    {
+        var current = _handover ??= PerformHandOverAsync();
+        TrayHandoverOutcome outcome;
+        try
+        {
+            outcome = await current;
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] tray handover failed: {exception.Message}");
+            outcome = RollBackHandOver();
+        }
+
+        if (outcome is TrayHandoverOutcome.RolledBack && ReferenceEquals(_handover, current))
+        {
+            _handover = null;
+        }
+
+        return outcome;
+    }
+
+    private async Task<TrayHandoverOutcome> PerformHandOverAsync()
+    {
+        IProcessHandle? tray = null;
+        try
+        {
+            tray = _spawnTray(ProcessLauncher.TrayStartInfo());
+            if (tray is null)
+            {
+                return TrayHandoverOutcome.RolledBack;
+            }
+
+            _releaseInstance();
+            var identity = GuiInstanceIdentity.ForCurrentProcess();
+            var elapsed = Stopwatch.StartNew();
+
+            while (!tray.HasExited)
+            {
+                var remaining = _handoverBudget - elapsed.Elapsed;
+                var probeBudget = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1);
+                var options = new GuiActivationOptions(
+                    probeBudget < TimeSpan.FromMilliseconds(250) ? probeBudget : TimeSpan.FromMilliseconds(250),
+                    probeBudget < TimeSpan.FromSeconds(1) ? probeBudget : TimeSpan.FromSeconds(1));
+
+                if (await _probe(identity, GuiInstanceRole.Tray, options, CancellationToken.None))
+                {
+                    tray.Dispose();
+                    return TrayHandoverOutcome.HandedOver;
+                }
+
+                if (elapsed.Elapsed >= _handoverBudget)
+                {
+                    break;
+                }
+
+                await _pollDelay();
+            }
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] tray handover failed: {exception.Message}");
+        }
+
+        if (tray is not null)
+        {
+            try
+            {
+                if (!tray.HasExited)
+                {
+                    tray.Kill(entireTree: true);
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    await tray.WaitForExitAsync(timeout.Token);
+                }
+            }
+            catch (Exception exception) when (exception
+                is InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception)
+            {
+                Trace.WriteLine($"[DeziroJoy] incomplete tray cleanup failed: {exception.Message}");
+            }
+            finally
+            {
+                tray.Dispose();
+            }
+        }
+
+        return RollBackHandOver();
+    }
+
+    private TrayHandoverOutcome RollBackHandOver()
+    {
+        var reclaimed = false;
+        try
+        {
+            reclaimed = _reacquireInstance();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] tray handover lease rollback failed: {exception.Message}");
+        }
+
+        if (reclaimed)
+        {
+            Trace.WriteLine("[DeziroJoy] tray handover rolled back; this render reclaimed the instance lease");
+            return TrayHandoverOutcome.RolledBack;
+        }
+
+        Trace.WriteLine(
+            "[DeziroJoy] instance lease is held elsewhere; retiring the unlocked render without touching the new instance or daemon");
+        return TrayHandoverOutcome.YieldedToNewInstance;
+    }
+
+    private void ApproveClose()
+    {
+        _closeApproved = true;
+        _window.Close();
+    }
+}
+
+/// <summary>Owns the close/minimize policy of the one stateless render window.</summary>
 internal static class RenderProcess
 {
-    public static MainWindow InstallWindow(
+    private static readonly TimeSpan HandoverBudget = TimeSpan.FromSeconds(10);
+
+    internal static MainWindow InstallWindow(
         IClassicDesktopStyleApplicationLifetime lifetime,
         MainWindowViewModel viewModel,
         EngineHost host,
         ThemeService themes,
-        Func<ProcessStartInfo, bool>? spawnTray = null,
-        Action? shutdown = null)
+        Func<ProcessStartInfo, IProcessHandle?>? spawnTray = null,
+        Action? shutdown = null,
+        DaemonSupervisor? daemon = null,
+        Action? releaseInstance = null,
+        Func<bool>? reacquireInstance = null,
+        Func<GuiInstanceIdentity, GuiInstanceRole, GuiActivationOptions, CancellationToken, Task<bool>>? probe = null,
+        Func<Task>? pollDelay = null,
+        TimeSpan? handoverBudget = null,
+        Func<Task<bool>>? stopDaemon = null)
     {
-        spawnTray ??= static info =>
-        {
-            using var process = Process.Start(info);
-            return process is not null;
-        };
+        spawnTray ??= ProcessLauncher.Start;
+        releaseInstance ??= DesktopLauncher.ReleaseInstanceLease;
+        reacquireInstance ??= DesktopLauncher.TryReacquireInstanceLease;
+        probe ??= static (identity, role, options, cancellationToken)
+            => GuiActivationClient.TryProbeAsync(identity, role, options, cancellationToken);
+        pollDelay ??= static () => Task.Delay(100);
+        stopDaemon ??= () => Task.Run(() => daemon?.Stop() ?? true);
 
-        // The window owns the process. Closing it first wakes the tray - which takes over the
-        // instance lock, the activation channel and the daemon supervision - and only then
-        // ends the lifetime, so the daemon keeps mapping across the handover and no second
-        // GUI is ever constructed by the render process itself.
         lifetime.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
         var window = new MainWindow(viewModel, host, themes);
+        var coordinator = new RenderWindowCoordinator(
+            window,
+            viewModel,
+            themes,
+            spawnTray,
+            releaseInstance,
+            reacquireInstance,
+            probe,
+            pollDelay,
+            handoverBudget ?? HandoverBudget,
+            stopDaemon);
+        window.Closing += coordinator.OnClosing;
+        window.MinimizeToTrayRequested = coordinator.MinimizeAsync;
         lifetime.MainWindow = window;
-        window.Closed += (_, _) =>
-        {
-            spawnTray(ProcessLauncher.TrayStartInfo());
-            (shutdown ?? (() => lifetime.Shutdown()))();
-        };
+        window.Closed += (_, _) => (shutdown ?? (() => lifetime.Shutdown()))();
         window.Show();
         DesktopLauncher.NotifyWindowShown();
 

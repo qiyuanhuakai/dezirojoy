@@ -98,4 +98,23 @@ public sealed class GuiInstanceGuardTests
 
         Assert.Null(GuiInstanceLease.TryAcquire(identity));
     }
+
+    [Fact]
+    public void The_Instance_Owner_Can_Roll_Back_A_Failed_Handover()
+    {
+        var identity = NewIdentity();
+        var lease = GuiInstanceLease.TryAcquire(identity);
+        Assert.NotNull(lease);
+        using var owner = new GuiInstanceOwner(identity, lease, new GuiActivationServer(identity));
+
+        owner.ReleaseLease();
+        using (var successor = GuiInstanceLease.TryAcquire(identity))
+        {
+            Assert.NotNull(successor);
+            Assert.False(owner.TryReacquireLease());
+        }
+
+        Assert.True(owner.TryReacquireLease());
+        Assert.Null(GuiInstanceLease.TryAcquire(identity));
+    }
 }

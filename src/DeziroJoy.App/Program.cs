@@ -197,13 +197,16 @@ internal static class Program
 
 /// <summary>
 /// The render process. It arbitrates the instance lock, serves the activation channel, starts
-/// the daemon and shows the window. When the window closes it spawns the tray process first,
-/// so the lock, the channel and the daemon supervision hand over without a gap.
+/// the daemon and shows the window. The render lifetime coordinator either acknowledges a tray
+/// successor or stops the daemon for a full exit before this owner releases its resources.
 /// </summary>
 internal static class DesktopLauncher
 {
+    private static GuiInstanceOwner? _instance;
     private static GuiActivationServer? _activation;
     private static bool _serving;
+
+    internal static DaemonSupervisor? Daemon { get; private set; }
 
     public static int Launch(string[] args)
     {
@@ -218,8 +221,9 @@ internal static class DesktopLauncher
             return arbitration.ExitCode;
         }
 
-        using var lease = arbitration.Lease!;
-        using var activation = GuiActivationServer.StartActive(identity);
+        var activation = GuiActivationServer.StartActive(identity);
+        var owner = new GuiInstanceOwner(identity, arbitration.Lease!, activation);
+        _instance = owner;
         _activation = activation;
 
         activation.ShowRequested += () =>
@@ -227,10 +231,10 @@ internal static class DesktopLauncher
             var window = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
             if (window is null)
             {
-                return Task.CompletedTask;
+                throw new InvalidOperationException("the render window is not available");
             }
 
-            Dispatcher.UIThread.InvokeAsync(() =>
+            return Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (window.WindowState == WindowState.Minimized)
                 {
@@ -238,20 +242,33 @@ internal static class DesktopLauncher
                 }
 
                 window.Activate();
-            });
-            return Task.CompletedTask;
+            }).GetTask();
         };
 
         // The daemon is the mapping authority from the first window on: the render process
         // starts it (elevated on Windows) and supervises nothing else.
         var daemon = new DaemonSupervisor();
+        Daemon = daemon;
         daemon.EnsureRunning();
 
-        Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
-
-        _activation = null;
-        return 0;
+        try
+        {
+            Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+            return 0;
+        }
+        finally
+        {
+            _activation = null;
+            _instance = null;
+            Daemon = null;
+            owner.Dispose();
+            daemon.Dispose();
+        }
     }
+
+    internal static void ReleaseInstanceLease() => _instance?.ReleaseLease();
+
+    internal static bool TryReacquireInstanceLease() => _instance?.TryReacquireLease() ?? false;
 
     /// <summary>
     /// Called once the render window is on screen: serving starts only then, so a Show arriving

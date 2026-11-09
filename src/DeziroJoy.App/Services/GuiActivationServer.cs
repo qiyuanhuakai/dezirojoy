@@ -53,15 +53,37 @@ public sealed record GuiInstanceIdentity(string LockPath, string PipeName)
     }
 }
 
-/// <summary>GUI to GUI: show yourself. Versioned so a peer speaking another protocol is refused.</summary>
-public sealed record GuiShowRequest(int Version);
+public enum GuiInstanceRole
+{
+    Render,
+    Tray,
+}
+
+public enum GuiActivationRequestKind
+{
+    Show,
+    Probe,
+}
+
+/// <summary>
+/// GUI to GUI: show yourself, or probe whether the expected process role is ready. The added
+/// fields have defaults so a version-1 Show written by an older build retains its meaning.
+/// </summary>
+public sealed record GuiShowRequest(
+    int Version,
+    GuiActivationRequestKind Kind = GuiActivationRequestKind.Show,
+    GuiInstanceRole? RequiredRole = null);
 
 /// <summary>
 /// GUI to GUI: the answer to a <see cref="GuiShowRequest"/>. <see cref="Accepted"/> is false
-/// when this peer cannot show itself - another protocol version, or no window to restore -
-/// and <see cref="Reason"/> says why.
+/// when this peer cannot answer - another protocol version, the wrong process role, or no
+/// window to restore - and <see cref="Reason"/> says why.
 /// </summary>
-public sealed record GuiShowAck(int Version, bool Accepted, string? Reason = null);
+public sealed record GuiShowAck(
+    int Version,
+    bool Accepted,
+    string? Reason = null,
+    GuiInstanceRole Role = GuiInstanceRole.Render);
 
 /// <summary>The bounded timeouts of one Show/ack exchange.</summary>
 public sealed class GuiActivationOptions
@@ -155,26 +177,33 @@ public sealed class GuiActivationServer : IDisposable
     private Task? _acceptLoop;
     private bool _disposed;
 
-    public GuiActivationServer(GuiInstanceIdentity identity, GuiActivationOptions? options = null)
-        : this(identity, options, autoStart: true)
+    public GuiActivationServer(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions? options = null,
+        GuiInstanceRole role = GuiInstanceRole.Render)
+        : this(identity, options, autoStart: true, role)
     {
     }
 
     private GuiActivationServer(
         GuiInstanceIdentity identity,
         GuiActivationOptions? options,
-        bool autoStart)
+        bool autoStart,
+        GuiInstanceRole role)
     {
         ArgumentNullException.ThrowIfNull(identity);
 
         _identity = identity;
         _options = options ?? GuiActivationOptions.Default;
+        Role = role;
 
         if (autoStart)
         {
             BeginServing();
         }
     }
+
+    public GuiInstanceRole Role { get; }
 
     /// <summary>
     /// The server of this process's own GUI instance, set by the launcher before the desktop
@@ -189,9 +218,11 @@ public sealed class GuiActivationServer : IDisposable
     /// </summary>
     public event Func<Task>? ShowRequested;
 
-    internal static GuiActivationServer StartActive(GuiInstanceIdentity identity)
+    internal static GuiActivationServer StartActive(
+        GuiInstanceIdentity identity,
+        GuiInstanceRole role = GuiInstanceRole.Render)
     {
-        var server = new GuiActivationServer(identity, null, autoStart: false);
+        var server = new GuiActivationServer(identity, null, autoStart: false, role);
         ActiveInstance = server;
         return server;
     }
@@ -297,7 +328,7 @@ public sealed class GuiActivationServer : IDisposable
 
                 await PipeFraming.WriteFrameAsync(
                     server,
-                    Serialize(new GuiShowAck(GuiActivationContract.ProtocolVersion, accepted, reason)),
+                    Serialize(new GuiShowAck(GuiActivationContract.ProtocolVersion, accepted, reason, Role)),
                     _lifetime.Token).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
@@ -314,6 +345,21 @@ public sealed class GuiActivationServer : IDisposable
             return (false, $"unsupported activation protocol version {request.Version}");
         }
 
+        if (request.RequiredRole is { } requiredRole && requiredRole != Role)
+        {
+            return (false, $"this activation peer is {Role}, not {requiredRole}");
+        }
+
+        if (request.Kind == GuiActivationRequestKind.Probe)
+        {
+            return (true, null);
+        }
+
+        if (request.Kind != GuiActivationRequestKind.Show)
+        {
+            return (false, $"unsupported activation request kind {request.Kind}");
+        }
+
         var handler = ShowRequested;
         if (handler is null)
         {
@@ -328,6 +374,10 @@ public sealed class GuiActivationServer : IDisposable
         catch (TimeoutException)
         {
             return (false, "the show request timed out");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (false, $"the show request failed: {exception.Message}");
         }
     }
 
@@ -376,10 +426,35 @@ internal static class GuiActivationClient
     /// </summary>
     private const int Attempts = 3;
 
-    public static async Task<bool> TryShowAsync(
+    public static Task<bool> TryShowAsync(
         GuiInstanceIdentity identity,
         GuiActivationOptions options,
         CancellationToken cancellationToken = default)
+        => TryExchangeAsync(
+            identity,
+            options,
+            new GuiShowRequest(GuiActivationContract.ProtocolVersion),
+            expectedRole: null,
+            cancellationToken);
+
+    public static Task<bool> TryProbeAsync(
+        GuiInstanceIdentity identity,
+        GuiInstanceRole requiredRole,
+        GuiActivationOptions options,
+        CancellationToken cancellationToken = default)
+        => TryExchangeAsync(
+            identity,
+            options,
+            new GuiShowRequest(GuiActivationContract.ProtocolVersion, GuiActivationRequestKind.Probe, requiredRole),
+            requiredRole,
+            cancellationToken);
+
+    private static async Task<bool> TryExchangeAsync(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions options,
+        GuiShowRequest request,
+        GuiInstanceRole? expectedRole,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(options);
@@ -398,8 +473,6 @@ internal static class GuiActivationClient
             }
             catch (Exception exception) when (IsTransient(exception, cancellationToken))
             {
-                // Nothing is listening: there is no GUI to ask, and retrying would only
-                // delay the launch that is about to become the one GUI.
                 await pipe.DisposeAsync().ConfigureAwait(false);
                 return false;
             }
@@ -408,7 +481,7 @@ internal static class GuiActivationClient
             {
                 await PipeFraming.WriteFrameAsync(
                     pipe,
-                    GuiActivationServer.Serialize(new GuiShowRequest(GuiActivationContract.ProtocolVersion)),
+                    GuiActivationServer.Serialize(request),
                     cancellationToken).ConfigureAwait(false);
 
                 var payload = await PipeFraming.ReadFrameAsync(pipe, cancellationToken)
@@ -417,7 +490,8 @@ internal static class GuiActivationClient
                     .ConfigureAwait(false);
                 var ack = GuiActivationServer.Deserialize<GuiShowAck>(payload);
 
-                return ack is { Version: GuiActivationContract.ProtocolVersion, Accepted: true };
+                return ack is { Version: GuiActivationContract.ProtocolVersion, Accepted: true }
+                    && (expectedRole is null || ack.Role == expectedRole);
             }
             catch (Exception exception) when (IsTransient(exception, cancellationToken))
             {

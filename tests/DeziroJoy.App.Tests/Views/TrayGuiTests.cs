@@ -63,7 +63,7 @@ public sealed class TrayGuiTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private TrayFixture BuildTray()
+    private TrayFixture BuildTray(Func<bool>? exit = null)
     {
         var themes = new ThemeService(_directory);
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
@@ -75,7 +75,11 @@ public sealed class TrayGuiTests : IDisposable
             lifetime,
             themes,
             () => shows.Add("show"),
-            () => exits.Add("exit"));
+            () =>
+            {
+                exits.Add("exit");
+                return exit?.Invoke() ?? true;
+            });
 
         tray.Install();
         Dispatcher.UIThread.RunJobs();
@@ -188,6 +192,24 @@ public sealed class TrayGuiTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void A_Failed_Exit_Unlocks_The_Menu_For_A_Successful_Retry()
+    {
+        var attempts = 0;
+        var fixture = BuildTray(() => ++attempts >= 2);
+
+        Click(Item("退出"));
+
+        Assert.False(fixture.Tray.IsExiting);
+        Assert.Equal(["exit"], fixture.Exits);
+
+        Click(Item("退出"));
+        Click(Item("退出"));
+
+        Assert.True(fixture.Tray.IsExiting);
+        Assert.Equal(["exit", "exit"], fixture.Exits);
+    }
+
+    [AvaloniaFact]
     public void The_Tray_Theme_Item_Toggles_And_Persists_The_Theme()
     {
         var fixture = BuildTray();
@@ -214,7 +236,7 @@ public sealed class TrayGuiTests : IDisposable
     }
 
     /// <summary>
-    /// The 允许手柄操作 preference reaches the view model only through the injected
+    /// The 劫持手柄按键 preference reaches the view model only through the injected
     /// <see cref="ThemeService"/>: a view model built without one silently ignores the
     /// setting, because the getter falls back to true and the setter has nothing to persist
     /// through. This pins that seam - the getter is the service's value and the setter

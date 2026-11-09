@@ -132,6 +132,48 @@ public sealed class ThemeServiceTests : IDisposable
     }
 
     [Fact]
+    public void Tray_Preferences_Default_To_Enabled_When_The_File_Is_Missing_Or_Corrupt()
+    {
+        var missing = Service(_directory);
+        missing.Load();
+
+        Assert.True(missing.CloseToTrayEnabled);
+        Assert.True(missing.MinimizeToTrayEnabled);
+
+        File.WriteAllText(Path.Combine(_directory, "settings.json"), "{ not json");
+        var corrupt = Service(_directory);
+        corrupt.Load();
+
+        Assert.True(corrupt.CloseToTrayEnabled);
+        Assert.True(corrupt.MinimizeToTrayEnabled);
+    }
+
+    [Fact]
+    public void Tray_Preferences_Round_Trip_Independently_And_Preserve_Existing_Settings()
+    {
+        var service = Service(_directory);
+        service.Save(ThemeVariant.Light);
+        service.SetGamepadNavigation(false);
+        service.SetCloseToTrayEnabled(false);
+
+        var closeDisabled = Service(_directory);
+        closeDisabled.Load();
+        Assert.False(closeDisabled.CloseToTrayEnabled);
+        Assert.True(closeDisabled.MinimizeToTrayEnabled);
+        Assert.False(closeDisabled.GamepadNavigationEnabled);
+        Assert.Equal(ThemeVariant.Light, closeDisabled.Load());
+
+        closeDisabled.SetMinimizeToTrayEnabled(false);
+        closeDisabled.SetCloseToTrayEnabled(true);
+
+        var reloaded = Service(_directory);
+        reloaded.Load();
+        Assert.True(reloaded.CloseToTrayEnabled);
+        Assert.False(reloaded.MinimizeToTrayEnabled);
+        Assert.False(reloaded.GamepadNavigationEnabled);
+    }
+
+    [Fact]
     public void The_Default_Directory_Matches_The_Profile_Store_Convention()
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
