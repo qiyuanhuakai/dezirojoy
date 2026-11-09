@@ -1842,6 +1842,126 @@ public class MappingEditorViewModelTests
         Assert.Equal(GamepadKey.Space, editor.ActiveSelectedKeyOption!.Key);
     }
 
+    // ---- The key picker's category navigator --------------------------------
+
+    [Fact]
+    public void A_Fresh_Editor_Opens_The_Category_Its_Selected_Key_Lives_In()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // The slot's default key is Enter, a 系统键 key, so the picker opens there rather
+        // than on the first category.
+        Assert.Equal("系统键", editor.ActiveKeyCategory!.Name);
+        Assert.True(editor.ActiveKeyCategory.IsActive);
+        Assert.Equal(editor.ActiveKeyCategory, editor.KeyCategoryGroups.Single(group => group.IsActive));
+    }
+
+    [Fact]
+    public void The_Active_Category_Follows_The_Selected_Key()
+    {
+        var editor = new MappingEditorViewModel();
+
+        editor.ActiveSelectedKeyOption = editor.KeyOptions.First(
+            option => !option.IsHeader && option.Key == GamepadKey.Space);
+        Assert.Equal("系统键", editor.ActiveKeyCategory!.Name);
+
+        editor.ActiveSelectedKeyOption = editor.KeyOptions.First(
+            option => !option.IsHeader && option.Key == GamepadKey.Y);
+        Assert.Equal("面部按键", editor.ActiveKeyCategory.Name);
+
+        // A key no fixed category claims lands in the extension group, however far down it is.
+        editor.ActiveSelectedKeyOption = editor.KeyOptions.First(
+            option => !option.IsHeader && option.Key == GamepadKey.F13);
+        Assert.Equal(KeyCategories.ExtensionGroupName, editor.ActiveKeyCategory.Name);
+    }
+
+    [Fact]
+    public void A_Category_Segment_Checked_From_The_View_Moves_The_Grid()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // The navigator is an ItemsControl over the groups, and a segment writes its check
+        // straight onto its group - the same two-way idiom the gesture switcher uses.
+        var extension = editor.KeyCategoryGroups.First(group => group.Name == KeyCategories.ExtensionGroupName);
+        extension.IsActive = true;
+
+        Assert.Equal(extension, editor.ActiveKeyCategory);
+        Assert.Equal(extension, editor.KeyCategoryGroups.Single(group => group.IsActive));
+        Assert.Equal(6, editor.ActiveKeyCategoryColumns);
+    }
+
+    [Fact]
+    public void The_Grid_Columns_Fit_The_Category_It_Shows()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // A short category shares one row instead of floating in a half-empty grid; a long
+        // one is capped, so the card's width buys a shorter grid rather than wider caps.
+        foreach (var (name, expected) in new[]
+                 {
+                     ("面部按键", 4), ("肩键与扳机", 4), ("摇杆", 4),
+                     ("十字键", 6), ("系统键", 6), (KeyCategories.ExtensionGroupName, 6),
+                 })
+        {
+            var group = editor.KeyCategoryGroups.First(candidate => candidate.Name == name);
+            group.IsActive = true;
+
+            Assert.Equal(expected, editor.ActiveKeyCategoryColumns);
+        }
+    }
+
+    [Fact]
+    public void Switching_Gestures_Moves_The_Active_Category_With_The_Selection()
+    {
+        var editor = new MappingEditorViewModel();
+
+        editor.ActiveSelectedKeyOption = editor.KeyOptions.First(
+            option => !option.IsHeader && option.Key == GamepadKey.Y);
+        Assert.Equal("面部按键", editor.ActiveKeyCategory!.Name);
+
+        // The double-click's own key lives in another category: the switcher move carries the
+        // category with it, so the key that is selected is the key that is in view.
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveSelectedKeyOption = editor.KeyOptions.First(
+            option => !option.IsHeader && option.Key == GamepadKey.Escape);
+
+        Assert.Equal("系统键", editor.ActiveKeyCategory.Name);
+
+        editor.SelectedGestureKind = GestureKind.Click;
+        Assert.Equal("面部按键", editor.ActiveKeyCategory.Name);
+    }
+
+    [Fact]
+    public void Reset_Reopens_The_Category_Of_The_Selected_Key()
+    {
+        var editor = new MappingEditorViewModel { SelectedKey = GamepadKey.Enter };
+        Assert.Equal("系统键", editor.ActiveKeyCategory!.Name);
+
+        // A browse left on another category must not survive the reset. The default key is
+        // unchanged by a reset, so only an explicit follow puts the grid back on it.
+        editor.KeyCategoryGroups.First(group => group.Name == "面部按键").IsActive = true;
+        Assert.Equal("面部按键", editor.ActiveKeyCategory.Name);
+
+        editor.Reset();
+
+        Assert.Equal("系统键", editor.ActiveKeyCategory.Name);
+    }
+
+    [Fact]
+    public void LoadFrom_Opens_The_Category_Of_The_Loaded_Key()
+    {
+        var editor = new MappingEditorViewModel();
+        var entry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.Y),
+            Target = new KeyPressTarget(GamepadKey.Numpad7),
+        };
+
+        editor.LoadFrom(entry);
+
+        Assert.Equal("十字键", editor.ActiveKeyCategory!.Name);
+    }
+
     // ---- The click-repeat interval editor ------------------------------------
 
     [Fact]

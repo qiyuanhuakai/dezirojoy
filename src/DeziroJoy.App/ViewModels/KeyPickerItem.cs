@@ -3,8 +3,10 @@ using DeziroJoy.Core.Mapping;
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>
-/// One row of the categorized target-key picker: either a category header or a key. Mirrors
-/// <see cref="ButtonPickerItem"/> so the same item-template trick renders both lists.
+/// One row of the target-key picker's flat model: either a category boundary or a key. The
+/// boundary rows are how the flat list encodes where one category ends and the next begins;
+/// the picker itself renders keys only, one category at a time behind its navigator. Mirrors
+/// <see cref="ButtonPickerItem"/> so the same item-model serves both pickers.
 /// </summary>
 /// <remarks>
 /// The categories are the gamepad's own groups rather than a keyboard layout: the user is

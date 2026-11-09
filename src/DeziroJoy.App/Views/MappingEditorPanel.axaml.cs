@@ -14,8 +14,8 @@ namespace DeziroJoy.App.Views;
 /// <summary>
 /// Code-behind for the mapping editor panel. The panel is declarative: it binds straight to
 /// the <see cref="MappingEditorViewModel"/> the host assigns as its DataContext. The one
-/// thing binding cannot express is the key-cap grid's selection visual - a categorized grid
-/// of buttons has no selector of its own to carry it - so the panel mirrors
+/// thing binding cannot express is the key-cap grid's selection visual - a grid of buttons
+/// has no selector of its own to carry it - so the panel mirrors
 /// <see cref="MappingEditorViewModel.ActiveSelectedKeyOption"/> onto the caps.
 /// </summary>
 public partial class MappingEditorPanel : UserControl

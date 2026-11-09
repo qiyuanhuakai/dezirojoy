@@ -118,6 +118,10 @@ public sealed class GestureEditorGuiTests
         => EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
             .First(button => button.DataContext is KeyPickerItem item && item.Key == key);
 
+    private static RadioButton KeyCategorySegment(Window window, string name)
+        => EditorPanelOf(window).GetLogicalDescendants().OfType<RadioButton>()
+            .First(button => button.Classes.Contains("keyCategorySegment") && button.Content as string == name);
+
     private static void ChooseDirection(Window window, InputDirection direction)
     {
         var editor = (MappingEditorViewModel)EditorPanelOf(window).DataContext!;
@@ -542,15 +546,22 @@ public sealed class GestureEditorGuiTests
         Assert.True(viewModel.Editor.KeyPickerExpanded);
         Assert.True(expander.Bounds.Height > collapsedHeight, "expanding must reveal the list");
 
-        // The expanded grid shows one section per category, in the picker's own order.
-        var headers = EditorPanelOf(window).GetLogicalDescendants().OfType<TextBlock>()
-            .Where(text => text.Classes.Contains("pickerHeaderLabel"))
-            .Select(text => text.Text ?? string.Empty)
+        // The expanded picker leads with its category navigator: one segment per category,
+        // in the picker's own order, with exactly the selected key's category checked.
+        var segments = EditorPanelOf(window).GetLogicalDescendants().OfType<RadioButton>()
+            .Where(button => button.Classes.Contains("keyCategorySegment"))
             .ToArray();
 
         Assert.Equal(
             ["面部按键", "肩键与扳机", "摇杆", "十字键", "系统键", "扩展按键"],
-            headers);
+            segments.Select(segment => segment.Content as string));
+
+        // The loaded A mapping is A -> Esc, a 系统键 key, so that is the segment the picker
+        // opens on - and the only one that is checked.
+        Assert.Equal(
+            ["系统键"],
+            segments.Where(segment => segment.IsChecked == true).Select(segment => segment.Content as string));
+        Assert.Equal(6, viewModel.Editor.ActiveKeyCategoryColumns);
     }
 
     [AvaloniaFact]
@@ -929,45 +940,193 @@ public sealed class GestureEditorGuiTests
         Assert.True(modelTop < panelTop, "the model must stay above the editor");
     }
 
-    // ---- The expanded picker is a full-width four-column grid ----------------
+    // ---- The expanded picker is a navigator over one compact grid -------------
 
     [AvaloniaFact]
-    public void The_Expanded_Picker_Is_A_Four_Column_Grid_Across_The_Full_Card_Width()
+    public void The_Expanded_Picker_Is_A_Compact_Grid_Across_The_Full_Card_Width()
     {
         var (window, viewModel) = OpenEditorOn("ButtonA");
 
         ExpandKeyList(window);
 
         var panel = EditorPanelOf(window);
-        var grids = panel.GetVisualDescendants().OfType<UniformGrid>().ToArray();
+        var grid = panel.GetVisualDescendants().OfType<UniformGrid>().Single();
 
-        Assert.NotEmpty(grids);
-        Assert.All(grids, grid => Assert.Equal(4, grid.Columns));
+        // One category at a time: the grid is the active category's keys - 系统键's eleven,
+        // since A maps to Esc - packed into as many columns as they fill, not the whole
+        // picker stacked section over section.
+        Assert.Equal(6, grid.Columns);
+        Assert.Equal(11, grid.Children.Count);
 
         // The grid takes the editor card's width: not a narrow centered popup, and not a
         // column beside the rest of the editor.
-        var grid = grids[0];
-
         Assert.True(grid.Bounds.Width > 400, $"the grid is only {grid.Bounds.Width}px wide");
         Assert.True(
             grid.Bounds.Width >= panel.Bounds.Width * 0.9,
             $"the grid ({grid.Bounds.Width}px) must fill the card ({panel.Bounds.Width}px)");
 
-        // Four caps share the first row, each a comfortable hit target. The grid's own
-        // children are the per-item containers, so the row is read from them; the caps
-        // themselves are reached through the panel's logical tree.
+        // Six caps share the first row, each a comfortable hit target even at the denser
+        // packing: the grid's own children are the per-item containers, so the row is read
+        // from them; the caps themselves are reached through the panel's logical tree.
         var cells = grid.Children.Cast<Control>().ToArray();
         var firstRow = cells.Where(cell => Math.Abs(cell.Bounds.Y - cells[0].Bounds.Y) < 0.5).ToArray();
 
-        Assert.Equal(4, firstRow.Length);
+        Assert.Equal(6, firstRow.Length);
 
         var caps = panel.GetLogicalDescendants().OfType<Button>()
             .Where(button => button.DataContext is KeyPickerItem)
-            .Take(4)
+            .Take(6)
             .ToArray();
 
         Assert.All(caps, cap => Assert.True(cap.Bounds.Height >= 32, $"a key cap is only {cap.Bounds.Height}px tall"));
-        Assert.All(caps, cap => Assert.True(cap.Bounds.Width >= 100, $"a key cap is only {cap.Bounds.Width}px wide"));
+        Assert.All(caps, cap => Assert.True(cap.Bounds.Width >= 80, $"a key cap is only {cap.Bounds.Width}px wide"));
+    }
+
+    [AvaloniaFact]
+    public void Switching_Categories_Shows_That_Categorys_Keys()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+
+        // The picker opens on the loaded key's category, and only that category's caps exist.
+        Assert.Equal("系统键", viewModel.Editor.ActiveKeyCategory!.Name);
+        Assert.Equal(11, EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
+            .Count(button => button.DataContext is KeyPickerItem));
+        Assert.True(KeyCategorySegment(window, "系统键").IsChecked);
+
+        // A click on the extension segment moves the grid there - the whole long category,
+        // one press away instead of a scroll past every other one.
+        Click(KeyCategorySegment(window, "扩展按键"), window);
+
+        Assert.Equal(KeyCategories.ExtensionGroupName, viewModel.Editor.ActiveKeyCategory.Name);
+        Assert.True(KeyCategorySegment(window, "扩展按键").IsChecked);
+        Assert.False(KeyCategorySegment(window, "系统键").IsChecked);
+
+        var extension = KeyCategories.All.Count(key => !KeyCategories.Grouped.Contains(key));
+        Assert.Equal(extension, EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
+            .Count(button => button.DataContext is KeyPickerItem));
+
+        // The selection itself survives the switch - it is the editor's own state, not the
+        // grid's - and a cap click writes it: the check moves to the clicked cap alone.
+        Assert.Equal(GamepadKey.Escape, viewModel.Editor.ActiveSlot.SelectedKey);
+
+        Click(KeyCapButton(window, GamepadKey.F13), window);
+        Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSlot.SelectedKey);
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.F13).Classes);
+        Assert.DoesNotContain("selected", KeyCapButton(window, GamepadKey.F14).Classes);
+    }
+
+    [AvaloniaFact]
+    public void The_Category_Navigator_Is_Keyboard_Reachable()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+
+        var segment = KeyCategorySegment(window, "扩展按键");
+
+        Assert.True(segment.Focusable, "a category segment must be reachable from the keyboard");
+        Assert.True(segment.Focus());
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(segment.IsFocused);
+
+        window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(segment.IsChecked);
+        Assert.Equal(KeyCategories.ExtensionGroupName, viewModel.Editor.ActiveKeyCategory!.Name);
+        Assert.NotNull(EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
+            .FirstOrDefault(button => button.DataContext is KeyPickerItem item && item.Key == GamepadKey.F13));
+    }
+
+    [AvaloniaFact]
+    public void The_Picker_Stays_Compact_And_Reachable_At_The_Minimum_Window_Size()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        // The smallest window the app allows: the card is at its narrowest, so the picker's
+        // density claim has to hold here rather than only at the default size.
+        window.Width = window.MinWidth;
+        window.Height = window.MinHeight;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        ExpandKeyList(window);
+
+        var panel = EditorPanelOf(window);
+        var well = panel.GetLogicalDescendants().OfType<Border>()
+            .First(border => border.Classes.Contains("pickerWell"));
+
+        // The navigator fits the card without clipping and without a scrollbar of its own.
+        foreach (var segment in panel.GetLogicalDescendants().OfType<RadioButton>()
+                     .Where(button => button.Classes.Contains("keyCategorySegment")))
+        {
+            Assert.True(segment.Bounds.Right <= well.Bounds.Right + 0.5,
+                $"the {segment.Content} segment overflows the picker");
+            Assert.True(segment.Bounds.Width > 0);
+        }
+
+        var grid = panel.GetVisualDescendants().OfType<UniformGrid>().Single();
+
+        Assert.Equal(6, grid.Columns);
+
+        var caps = panel.GetLogicalDescendants().OfType<Button>()
+            .Where(button => button.DataContext is KeyPickerItem)
+            .ToArray();
+
+        Assert.Equal(11, caps.Length);
+        Assert.All(caps, cap => Assert.True(cap.Bounds.Height >= 32, $"a key cap is only {cap.Bounds.Height}px tall"));
+        Assert.All(caps, cap => Assert.True(cap.Bounds.Width >= 64, $"a key cap is only {cap.Bounds.Width}px wide"));
+
+        // The body ScrollViewer remains the only scroller, at every size.
+        Assert.Empty(well.GetVisualDescendants().OfType<ScrollViewer>());
+    }
+
+    [AvaloniaFact]
+    public void Reopening_A_Mapping_Shows_The_Selected_Key_In_Its_Category()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+        ChooseKey(window, GamepadKey.F13);
+
+        Assert.Equal(KeyCategories.ExtensionGroupName, viewModel.Editor.ActiveKeyCategory!.Name);
+
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        // The reopened editor opens collapsed, and expanding it lands on the category the
+        // committed key lives in - with that key's cap wearing the selection.
+        ExpandKeyList(window);
+
+        Assert.Equal(KeyCategories.ExtensionGroupName, viewModel.Editor.ActiveKeyCategory.Name);
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.F13).Classes);
+    }
+
+    [AvaloniaFact]
+    public void Switching_Gestures_Keeps_The_Selected_Key_In_View()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        ExpandKeyList(window);
+        ChooseKey(window, GamepadKey.Y);
+        Assert.Equal("面部按键", viewModel.Editor.ActiveKeyCategory!.Name);
+
+        // The double-click's own key is a 系统键 key: the switcher move carries the category
+        // with it, so whichever slot is active, its key is the one the grid shows.
+        SelectTab(window, viewModel, "GestureDoubleClickTab");
+        ChooseKey(window, GamepadKey.Escape);
+        Assert.Equal("系统键", viewModel.Editor.ActiveKeyCategory.Name);
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.Escape).Classes);
+
+        SelectTab(window, viewModel, "GestureClickTab");
+        Assert.Equal("面部按键", viewModel.Editor.ActiveKeyCategory.Name);
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.Y).Classes);
     }
 
     [AvaloniaFact]
@@ -985,24 +1144,25 @@ public sealed class GestureEditorGuiTests
     }
 
     [AvaloniaFact]
-    public void Selecting_A_Key_Realizes_Every_Cap_Without_Scrolling_The_Picker()
+    public void Selecting_A_Key_Realizes_Every_Cap_Of_The_Active_Category()
     {
         var (window, viewModel) = OpenEditorOn("ButtonA");
 
         ExpandKeyList(window);
 
-        // Every cap is realized at once: the picker virtualizes nothing, so a key far down
-        // the list is as reachable as the first one and nothing scrolls under the selection.
+        // Every cap of the shown category is realized at once: the picker virtualizes
+        // nothing, so a key far down the grid is as reachable as the first one and nothing
+        // scrolls under the selection.
         var caps = EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
             .Where(button => button.DataContext is KeyPickerItem)
             .ToArray();
 
-        Assert.Equal(Enum.GetValues<GamepadKey>().Length, caps.Length);
+        Assert.Equal(11, caps.Length);
 
-        ChooseKey(window, GamepadKey.F13);
+        ChooseKey(window, GamepadKey.PageDown);
 
-        Assert.Equal(GamepadKey.F13, viewModel.Editor.ActiveSlot.SelectedKey);
-        Assert.Contains("selected", KeyCapButton(window, GamepadKey.F13).Classes);
+        Assert.Equal(GamepadKey.PageDown, viewModel.Editor.ActiveSlot.SelectedKey);
+        Assert.Contains("selected", KeyCapButton(window, GamepadKey.PageDown).Classes);
     }
 
     [AvaloniaFact]
@@ -1011,6 +1171,10 @@ public sealed class GestureEditorGuiTests
         var (window, viewModel) = OpenEditorOn("ButtonA");
 
         ExpandKeyList(window);
+
+        // F13 lives in the extension category, so the picker is moved there first - the
+        // selection leads, the grid follows.
+        ChooseKey(window, GamepadKey.F14);
 
         var cap = KeyCapButton(window, GamepadKey.F13);
 

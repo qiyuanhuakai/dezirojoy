@@ -369,37 +369,10 @@
             <Setter Property="Background" Value="Transparent" />
         </Style>
 
-        <!-- The categorized picker. One flat item list, but a header is a recessed band
-             with an accent tick and a letterspaced muted label - never just another row -
-             and an option is a key cap: a keyboard key is a different kind of thing from a
-             gamepad button, so the list reads as keys instead of a wall of same-weight
-             rows. The band covers its row completely, so a header never takes the hover or
-             selected treatment an option row takes. -->
-        <Style Selector="ListBox.pickerList">
-            <Setter Property="Background" Value="{DynamicResource SunkenBrush}" />
-            <Setter Property="Padding" Value="4" />
-            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
-        </Style>
-
-        <Style Selector="ListBox.pickerList ListBoxItem">
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="0,2" />
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-            <Setter Property="Background" Value="Transparent" />
-        </Style>
-
-        <Style Selector="Border.pickerHeader">
-            <Setter Property="Background" Value="{DynamicResource CardBrush}" />
-            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusSm}" />
-        </Style>
-
-        <Style Selector="TextBlock.pickerHeaderLabel">
-            <Setter Property="FontSize" Value="10" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
-            <Setter Property="LetterSpacing" Value="1.5" />
-        </Style>
-
+        <!-- The key cap: a keyboard key is a different kind of thing from a gamepad button,
+             so the picker's options read as keys instead of a wall of same-weight rows. This
+             is the cap's resting surface; the picker panel's own styles carry the selection,
+             hover and focus states on top of it. -->
         <Style Selector="Border.keyCap">
             <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
             <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
@@ -408,19 +381,6 @@
         <Style Selector="TextBlock.keyCapLabel">
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
-        </Style>
-
-        <Style Selector="ListBox.pickerList ListBoxItem:pointerover Border.keyCap">
-            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
-        </Style>
-
-        <Style Selector="ListBox.pickerList ListBoxItem:selected Border.keyCap">
-            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
-        </Style>
-
-        <Style Selector="ListBox.pickerList ListBoxItem:selected TextBlock.keyCapLabel">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
     </Window.Styles>
 

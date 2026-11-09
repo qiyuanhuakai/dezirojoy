@@ -192,12 +192,16 @@ public sealed class GamepadModelEditorTests
         Click(Model(window).FindControl<Control>("ButtonA")!, window);
 
         var capture = EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!;
+        var nav = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryNav")!;
         var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
 
         Assert.True(capture.IsVisible, "the keyboard-capture affordance must be visible");
+        Assert.True(nav.IsVisible, "the category navigator must be available at the same time");
         Assert.True(grid.IsVisible, "the categorized key grid must be available at the same time");
 
-        var categories = grid.Items.OfType<KeyCategoryGroup>().Select(group => group.Name).ToArray();
+        // The navigator is the categorized surface: one segment per category, in the
+        // picker's own order.
+        var categories = nav.Items.OfType<KeyCategoryGroup>().Select(group => group.Name).ToArray();
 
         Assert.Equal(ExpectedKeyCategories, categories);
     }
