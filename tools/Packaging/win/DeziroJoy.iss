@@ -52,8 +52,11 @@
 
 [Setup]
 ; Fixed identity. Changing this GUID orphans existing installs from upgrades and
-; from their entry in Settings > Apps.
-AppId={{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}}
+; from their entry in Settings > Apps. A literal opening brace is escaped as '{{'
+; in an Inno script value; a closing brace needs no escape and stays a single '}'
+; (beta.1 shipped '{{...}}', so the uninstall key gained a doubled closing brace -
+; run 42678407586). build-and-verify.ps1 asserts this exact AppId before compiling.
+AppId={{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}

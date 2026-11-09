@@ -138,6 +138,34 @@ foreach ($directive in @('ArchitecturesAllowed', 'ArchitecturesInstallIn64BitMod
 }
 Write-Host "$Rid ArchitecturesAllowed/InstallIn64BitMode: $allowedInIss"
 
+# --- verify the AppId resolves to the stable uninstall key --------------------------
+# The per-user uninstall registration Inno writes at the end of a successful install
+# is named '<AppId>_is1' (Inno help, topic_setup_appid), and both the install wait
+# below and the post-uninstall assertion key off it. Inno Setup treats a lone '{' as
+# the start of a constant: a literal opening brace must be escaped as '{{', while a
+# closing brace needs no escape and stays a single '}' (Inno help, topic_consts).
+# beta.1 shipped 'AppId={{...}}' - the doubled closing brace survived into the value -
+# so the installer registered '{GUID}}_is1' while the wait below polled for
+# '{GUID}_is1' and failed 180 s later (run 42678407586). Resolve the AppId the way
+# Inno's tokenizer does and fail here, before the compile and the install, when it is
+# not exactly the expected key: that is the static regression for this brace bug.
+# The GUID itself is asserted unchanged because changing it orphans existing installs
+# from upgrades and from their entry in Settings > Apps.
+$expectedAppId = '{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}'
+if ($issText -notmatch '(?m)^\s*AppId=(.+)$') {
+  throw "DeziroJoy.iss: no AppId directive found"
+}
+$resolvedAppId = $Matches[1].Trim() -replace '\{\{', '{'
+if ($resolvedAppId -ne $expectedAppId) {
+  throw "DeziroJoy.iss: AppId resolves to '{0}', expected '{1}' (a literal opening brace is escaped as '{{' in an Inno script value; a closing brace must not be doubled)" -f $resolvedAppId, $expectedAppId
+}
+$uninstallKeyName = "${resolvedAppId}_is1"
+$uninstallKeyPaths = @(
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKeyName",
+  "HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\$uninstallKeyName"
+)
+Write-Host "AppId: $resolvedAppId (uninstall key: $uninstallKeyName)"
+
 # --- resolve ISCC -----------------------------------------------------------------
 # windows-latest ships Inno Setup 6 on PATH. Fall back to the standard install
 # directories so the step also works on a runner image without the PATH entry.
@@ -283,16 +311,13 @@ function Show-InstallDiagnostics([string]$Reason) {
   }
 }
 
-# The per-user uninstall registration Inno writes at the end of a successful install.
-# The same key is asserted gone after the uninstall below, so requiring it here is the
-# script's own model of "the install finished": Inno creates it only once the files
-# and shortcuts are in place, so the checks below cannot race a half-finished copy.
-# Both registry views are checked so the wait does not depend on the bitness of the
-# pwsh running this script.
-$uninstallKeyPaths = @(
-  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1',
-  'HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1'
-)
+# The per-user uninstall registration Inno writes at the end of a successful install
+# ($uninstallKeyPaths, resolved from the .iss AppId above). Requiring it here is the
+# script's own model of "the install finished": Inno creates the key only once the
+# files and shortcuts are in place, so the checks below cannot race a half-finished
+# copy, and the same paths are asserted gone after the uninstall. Both registry views
+# are checked so the wait does not depend on the bitness of the pwsh running this
+# script.
 function Test-InstallCompleted {
   (Test-Path $exe) -and (@($uninstallKeyPaths | Where-Object { Test-Path $_ }).Count -gt 0)
 }
@@ -359,10 +384,7 @@ try {
     throw "install directory still present after uninstall: $installDir"
   }
 
-  $leftoverKeys = @(
-    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1',
-    'HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1'
-  ) | Where-Object { Test-Path $_ }
+  $leftoverKeys = @($uninstallKeyPaths | Where-Object { Test-Path $_ })
   if ($leftoverKeys) { throw "uninstall registry key left behind: $($leftoverKeys -join ', ')" }
 
   $leftoverShortcuts = @()
