@@ -479,7 +479,7 @@ public sealed class MainWindowViewModelDaemonTests
         await using var viewModel = context.ViewModel;
         Assert.NotNull(viewModel.ActiveProfile);
         viewModel.DaemonSnapshot = viewModel.DaemonSnapshot! with { ProfileJson = "{not-json" };
-        var before = Enumerable.Range(PresetStore.MinSlot, PresetStore.MaxSlot)
+        var before = context.Presets.SlotsInUse("pad-1")
             .ToDictionary(
                 slot => slot,
                 slot => ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
@@ -541,6 +541,27 @@ public sealed class MainWindowViewModelDaemonTests
         {
             Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("pad-1", slot)!));
         }
+    }
+
+    [Fact]
+    public async Task AddPreset_In_Daemon_Mode_Creates_A_Switchable_Persistent_Slot()
+    {
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        var presets = context.Presets;
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+
+        await viewModel.AddPresetCommand.ExecuteAsync(null);
+        await WaitForCondition(() => viewModel.ActivePresetSlot == 5);
+
+        Assert.Equal(5, viewModel.ActivePresetSlot);
+        Assert.Equal(5, viewModel.PresetSlots.Count);
+        Assert.Equal(5, viewModel.PresetSlots.Single(item => item.IsActive).Slot);
+
+        // The new slot is stored on its own key and the daemon switched the app-wide slot to it.
+        Assert.NotNull(presets.LoadSlot("pad-1", 5));
+        Assert.Contains(5, viewModel.Editor.SpecialSlotOptions);
+        Assert.Equal(5, viewModel.DaemonSnapshot!.ActivePresetSlot);
     }
 
     [Fact]

@@ -147,6 +147,161 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Committing_An_Edit_Persists_To_The_Slot_And_Survives_A_Switch_Round_Trip()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // Commit an edit on slot 1 through the real editor path, with no explicit save.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.TargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.SelectedKey = GamepadKey.Space;
+        vm.CommitEditorCommand.Execute(null);
+        Assert.Equal(11, vm.Mappings.Count);
+
+        // Leave the slot and come back: the committed edit must still be there.
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        Assert.Equal(10, vm.Mappings.Count);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(1);
+
+        Assert.Equal(11, vm.Mappings.Count);
+        Assert.Contains(vm.Mappings, row => row.TargetText.Contains("Space"));
+
+        var presets = new PresetStore(store);
+        Assert.Equal(11, presets.LoadSlot("xinput:0", 1)!.Mappings.Count);
+        Assert.Equal(10, presets.LoadSlot("xinput:0", 2)!.Mappings.Count);
+    }
+
+    [Fact]
+    public async Task Deleting_A_Mapping_Persists_Only_To_The_Active_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var presets = new PresetStore(store);
+        var slotTwoBefore = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 2)!);
+
+        var row = vm.Mappings.Single(r => r.SourceText.Contains('A'));
+        await vm.DeleteMappingCommand.ExecuteAsync(row);
+        Assert.Equal(9, vm.Mappings.Count);
+
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        Assert.Equal(10, vm.Mappings.Count);
+        Assert.Equal(slotTwoBefore, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 2)!));
+
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(1);
+        Assert.Equal(9, vm.Mappings.Count);
+        Assert.Equal(9, presets.LoadSlot("xinput:0", 1)!.Mappings.Count);
+    }
+
+    [Fact]
+    public async Task Applying_Sensitivity_Writes_Only_The_Active_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        var presets = new PresetStore(store);
+        var others = new Dictionary<int, string>
+        {
+            [1] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 1)!),
+            [3] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 3)!),
+            [4] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 4)!),
+        };
+
+        vm.MouseSensitivity.MaxSpeed = 4321f;
+        await vm.ApplyMouseSensitivityCommand.ExecuteAsync(null);
+
+        var saved = Assert.IsType<MouseMoveTarget>(
+            presets.LoadSlot("xinput:0", 2)!.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Right }).Target);
+        Assert.Equal(4321f, saved.Settings.MaxSpeed);
+        foreach (var (slot, expected) in others)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!));
+        }
+    }
+
+    [Fact]
+    public async Task Reset_To_Default_Writes_Only_The_Active_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var row = vm.Mappings.Single(r => r.SourceText.Contains('A'));
+        await vm.DeleteMappingCommand.ExecuteAsync(row);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        var presets = new PresetStore(store);
+        var slotOneAfterDelete = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 1)!);
+
+        await vm.ResetToDefaultCommand.ExecuteAsync(null);
+
+        Assert.Equal(10, vm.ActiveProfile!.Mappings.Count);
+        Assert.Equal(10, presets.LoadSlot("xinput:0", 2)!.Mappings.Count);
+        // Slot 1 keeps its customized 9-mapping state; the reset only touched slot 2.
+        Assert.Equal(slotOneAfterDelete, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 1)!));
+    }
+
+    [Fact]
+    public async Task PresetSlots_Tracks_The_Connected_Device_And_The_Active_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        Assert.Equal([1, 2, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.Equal(1, vm.PresetSlots.Single(item => item.IsActive).Slot);
+
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(3);
+
+        Assert.Equal(3, vm.PresetSlots.Single(item => item.IsActive).Slot);
+    }
+
+    [Fact]
+    public async Task AddPreset_Creates_An_Independent_Slot_That_Switches_And_Persists()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // Give slot 1 a distinguishing edit so the copied slot is recognizable.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.TargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.SelectedKey = GamepadKey.Space;
+        vm.CommitEditorCommand.Execute(null);
+        Assert.Equal(4, vm.PresetSlots.Count);
+
+        await vm.AddPresetCommand.ExecuteAsync(null);
+
+        var presets = new PresetStore(store);
+        Assert.Equal(5, vm.ActivePresetSlot);
+        Assert.Equal(5, vm.PresetSlots.Count);
+        Assert.Equal(5, vm.PresetSlots.Single(item => item.IsActive).Slot);
+
+        // The new slot is an independent copy of the profile in view, stored on its own key.
+        Assert.Equal(11, vm.ActiveProfile!.Mappings.Count);
+        Assert.Equal(11, presets.LoadSlot("xinput:0", 5)!.Mappings.Count);
+        Assert.Equal(11, presets.LoadSlot("xinput:0", 1)!.Mappings.Count);
+        Assert.Equal(10, presets.LoadSlot("xinput:0", 2)!.Mappings.Count);
+
+        // The leader slot options now offer the added slot.
+        Assert.Contains(5, vm.Editor.SpecialSlotOptions);
+
+        // It persists across a switch away and back, exactly like the initial four.
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(5);
+        Assert.Equal(11, vm.ActiveProfile!.Mappings.Count);
+    }
+
+    [Fact]
     public void Reset_To_Default_Restores_The_Built_In_Profile()
     {
         var (vm, host, provider, _) = CreateHost();

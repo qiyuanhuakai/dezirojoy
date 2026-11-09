@@ -6,17 +6,24 @@ using DeziroJoy.Core.Profiles;
 namespace DeziroJoy.App.Services;
 
 /// <summary>
-/// The preset-slot service layer over <see cref="IProfileStore"/>: the four slots of one
+/// The preset-slot service layer over <see cref="IProfileStore"/>: the slots of one
 /// device are stored beside each other under derived keys, so a leader key can flip
 /// between them and a reconnect restores whichever slot was saved. Slot 1 keeps the
 /// device's own key, which is what lets an unmigrated profile read as the primary slot.
+/// Slots are open-ended - any positive slot number is valid - and the four a device is
+/// first materialized with are only the initial set, not a ceiling.
 /// </summary>
 public sealed class PresetStore
 {
-    /// <summary>Slots are numbered 1..4; slot 1 is the device's own profile.</summary>
+    /// <summary>Slots are numbered 1 and up; slot 1 is the device's own profile.</summary>
     public const int MinSlot = 1;
 
-    public const int MaxSlot = 4;
+    /// <summary>
+    /// How many slots <see cref="EnsureDefaults"/> materializes on first use. Slots added
+    /// later persist and behave exactly like these; this is only the initial set a fresh
+    /// device starts with, not the maximum a device may hold.
+    /// </summary>
+    public const int DefaultSlotCount = 4;
 
     private readonly IProfileStore _store;
 
@@ -70,7 +77,7 @@ public sealed class PresetStore
             SaveSlot(descriptor.DeviceId, MinSlot, primary);
         }
 
-        for (var slot = MinSlot + 1; slot <= MaxSlot; slot++)
+        for (var slot = MinSlot + 1; slot <= DefaultSlotCount; slot++)
         {
             if (LoadSlot(descriptor.DeviceId, slot) is not null)
             {
@@ -88,20 +95,63 @@ public sealed class PresetStore
             ?? throw new InvalidOperationException($"preset slot {activeSlot} was not initialized");
     }
 
-    /// <summary>The slots 1..4 that hold a profile for the device, in ascending order.</summary>
+    /// <summary>
+    /// The slots that hold a profile for the device, in ascending order. Enumerated from
+    /// the store itself rather than a fixed 1..N range, so a slot added past the initial
+    /// four is discovered the same way the first four are.
+    /// </summary>
     public IReadOnlyList<int> SlotsInUse(string deviceId)
     {
-        var slots = new List<int>();
+        var slots = new SortedSet<int>();
 
-        for (var slot = MinSlot; slot <= MaxSlot; slot++)
+        foreach (var profile in _store.LoadAll())
         {
-            if (_store.Load(KeyFor(deviceId, slot)) is not null)
+            if (SlotFromKey(profile.DeviceId, deviceId) is { } slot)
             {
                 slots.Add(slot);
             }
         }
 
-        return slots;
+        return [.. slots];
+    }
+
+    /// <summary>
+    /// The slot number a stored profile's key stands for, or null when it is not one of
+    /// this device's slots. Slot 1 is the bare device id; every later slot is prefixed with
+    /// its number. The device id - which may itself contain a colon, as XInput ids do - is
+    /// matched as the suffix after the slot number, so a colon in the id cannot be mistaken
+    /// for the separator.
+    /// </summary>
+    private static int? SlotFromKey(string? key, string deviceId)
+    {
+        if (string.IsNullOrEmpty(key))
+        {
+            return null;
+        }
+
+        if (string.Equals(key, deviceId, StringComparison.Ordinal))
+        {
+            return MinSlot;
+        }
+
+        const string prefix = "preset";
+        if (!key.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var rest = key.Substring(prefix.Length);
+        var colon = rest.IndexOf(':');
+        if (colon <= 0)
+        {
+            return null;
+        }
+
+        return int.TryParse(rest.AsSpan(0, colon), out var slot)
+            && slot > MinSlot
+            && string.Equals(rest.Substring(colon + 1), deviceId, StringComparison.Ordinal)
+                ? slot
+                : null;
     }
 
     /// <summary>
@@ -181,12 +231,12 @@ public sealed class PresetStore
 
     private static void ValidateSlot(int slot)
     {
-        if (slot is < MinSlot or > MaxSlot)
+        if (slot < MinSlot)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(slot),
                 slot,
-                $"preset slots run from {MinSlot} to {MaxSlot}");
+                $"preset slots run from {MinSlot} upward");
         }
     }
 }

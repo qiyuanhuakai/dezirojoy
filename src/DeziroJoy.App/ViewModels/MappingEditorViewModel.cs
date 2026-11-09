@@ -261,8 +261,13 @@ public partial class MappingEditorViewModel : ObservableObject
         new(LeaderSwitchMode.Hold, "按住切换"),
     ];
 
-    /// <summary>The preset slots a leader key can flip between.</summary>
-    public IReadOnlyList<int> SpecialSlotOptions { get; } = [1, 2, 3, 4];
+    /// <summary>
+    /// The preset slots a leader key can flip between. Starts at the initial four and is
+    /// replaced by the window view model with the device's live slots, so a slot the user
+    /// added is offered here too.
+    /// </summary>
+    [ObservableProperty]
+    private IReadOnlyList<int> _specialSlotOptions = [1, 2, 3, 4];
 
     /// <summary>The active slot's special-key sub-kind.</summary>
     public SpecialKeyKind ActiveSpecialKind

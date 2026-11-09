@@ -739,17 +739,78 @@ public class DaemonServerTests
     }
 
     [Fact]
-    public async Task SwitchPresetSlot_Rejects_A_Slot_Outside_One_To_Four()
+    public async Task SwitchPresetSlot_Rejects_A_Slot_Below_One()
     {
         var (server, _, host) = CreateRunning();
         host.AddDevice("pad-1");
 
         var error = Assert.IsType<ErrorMessage>(
-            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 5)));
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 0)));
 
         Assert.Equal("req-1", error.RequestId);
         Assert.False(string.IsNullOrWhiteSpace(error.ErrorCode));
         Assert.Empty(host.ReloadedDevices);
+    }
+
+    [Fact]
+    public async Task SwitchPresetSlot_Accepts_A_Slot_Beyond_The_Initial_Four()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 5, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第五套",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 5)));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal("第五套", host.GetProfile("pad-1")!.Name);
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("verify")));
+        Assert.Equal(5, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task An_Edit_To_A_Slot_Survives_Switching_Away_And_Back_While_Other_Slots_Stay_Put()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var slot in new[] { 1, 2 })
+        {
+            presets.SaveSlot("pad-1", slot, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Slot {slot}",
+                DeviceId = "pad-1",
+            });
+        }
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        // Commit an edit while slot 1 is active.
+        await server.ProcessAsync(new SwitchPresetSlotMessage("s1", "pad-1", 1));
+        var edited = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Slot 1 edited",
+            DeviceId = "pad-1",
+        };
+        var apply = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new ApplyConfigurationMessage(
+                "a1", 1, "Slot 1 edited", ProfileSerializer.Serialize(edited))));
+        Assert.True(apply.Accepted);
+
+        // Switch away and back.
+        await server.ProcessAsync(new SwitchPresetSlotMessage("s2", "pad-1", 2));
+        await server.ProcessAsync(new SwitchPresetSlotMessage("s3", "pad-1", 1));
+
+        Assert.Equal("Slot 1 edited", presets.LoadSlot("pad-1", 1)!.Name);
+        Assert.Equal("Slot 2", presets.LoadSlot("pad-1", 2)!.Name);
     }
 
     [Fact]
