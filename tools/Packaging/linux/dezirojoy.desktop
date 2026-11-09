@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DeziroJoy
+Comment=手柄映射工具：将手柄输入映射为鼠标与键盘
+Exec=/opt/dezirojoy/DeziroJoy
+Icon=/opt/dezirojoy/dezirojoy.ico
+Terminal=false
+Categories=Utility;
+Keywords=gamepad;controller;mapping;手柄;映射;
+StartupNotify=true
+StartupWMClass=DeziroJoy
