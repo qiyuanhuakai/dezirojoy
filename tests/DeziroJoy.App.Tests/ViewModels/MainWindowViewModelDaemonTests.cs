@@ -479,7 +479,7 @@ public sealed class MainWindowViewModelDaemonTests
         await using var viewModel = context.ViewModel;
         Assert.NotNull(viewModel.ActiveProfile);
         viewModel.DaemonSnapshot = viewModel.DaemonSnapshot! with { ProfileJson = "{not-json" };
-        var before = Enumerable.Range(PresetStore.MinSlot, PresetStore.MaxSlot)
+        var before = context.Presets.SlotsInUse("pad-1")
             .ToDictionary(
                 slot => slot,
                 slot => ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
@@ -541,6 +541,71 @@ public sealed class MainWindowViewModelDaemonTests
         {
             Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("pad-1", slot)!));
         }
+    }
+
+    [Fact]
+    public async Task AddPreset_In_Daemon_Mode_Creates_A_Switchable_Persistent_Slot()
+    {
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        var presets = context.Presets;
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+
+        await viewModel.AddPresetCommand.ExecuteAsync(null);
+        await WaitForCondition(() => viewModel.ActivePresetSlot == 5);
+
+        Assert.Equal(5, viewModel.ActivePresetSlot);
+        Assert.Equal(5, viewModel.PresetSlots.Count);
+        Assert.Equal(5, viewModel.PresetSlots.Single(item => item.IsActive).Slot);
+
+        // The new slot is stored on its own key and the daemon switched the app-wide slot to it.
+        Assert.NotNull(presets.LoadSlot("pad-1", 5));
+        Assert.Contains(5, viewModel.Editor.SpecialSlotOptions);
+        Assert.Equal(5, viewModel.DaemonSnapshot!.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task A_Second_Client_Discovers_A_Slot_Another_Client_Added_Through_The_Snapshot()
+    {
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+
+        // Two independent GUI clients on one daemon, each on its own channel; both hear the
+        // daemon's state broadcasts.
+        var channelA = new ServerChannel(server);
+        var channelB = new ServerChannel(server);
+        server.StateChanged += channelA.Push;
+        server.StateChanged += channelB.Push;
+        server.InputSampled += channelA.Push;
+        server.InputSampled += channelB.Push;
+        await using var controllerA = new DaemonController(new ServerEndpoint(channelA));
+        await using var controllerB = new DaemonController(new ServerEndpoint(channelB));
+        await controllerA.ConnectAsync(TestContext.Current.CancellationToken);
+        await controllerB.ConnectAsync(TestContext.Current.CancellationToken);
+
+        using var presentationA = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        using var presentationB = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        await using var clientA = new MainWindowViewModel(presentationA, store, daemon: controllerA, daemonRequired: true);
+        await using var clientB = new MainWindowViewModel(presentationB, store, daemon: controllerB, daemonRequired: true);
+
+        Assert.Equal(4, clientA.PresetSlots.Count);
+        Assert.Equal(4, clientB.PresetSlots.Count);
+
+        // Client A adds slot 5; the daemon broadcasts the resulting snapshot to every client.
+        await clientA.AddPresetCommand.ExecuteAsync(null);
+        await WaitForCondition(() => clientB.ActivePresetSlot == 5);
+
+        // Client B never added the slot, yet it must reconcile the store on the snapshot: the
+        // new slot shows up in its selector data (active) and its leader slot options.
+        Assert.Contains(5, clientB.PresetSlots.Select(item => item.Slot));
+        Assert.Equal(5, clientB.PresetSlots.Single(item => item.IsActive).Slot);
+        Assert.Contains(5, clientB.Editor.SpecialSlotOptions);
     }
 
     [Fact]

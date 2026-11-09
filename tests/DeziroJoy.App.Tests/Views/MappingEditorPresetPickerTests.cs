@@ -188,6 +188,22 @@ public sealed class MappingEditorPresetPickerTests
     }
 
     [AvaloniaFact]
+    public async Task Adding_A_Preset_Extends_The_Bindable_Slot_Collection_And_The_Leader_Options()
+    {
+        var (window, viewModel, host, provider, store) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+
+        await viewModel.AddPresetCommand.ExecuteAsync(null);
+
+        Assert.Equal(5, viewModel.ActivePresetSlot);
+        Assert.Equal(5, viewModel.PresetSlots.Count);
+        Assert.Contains(5, viewModel.Editor.SpecialSlotOptions);
+    }
+
+    [AvaloniaFact]
     public void A_Focused_Global_Preset_Slot_Can_Be_Switched_With_The_Keyboard()
     {
         var (window, viewModel, host, provider, store) = BuildWindow();

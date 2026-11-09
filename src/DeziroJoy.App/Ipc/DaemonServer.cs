@@ -83,7 +83,7 @@ public sealed partial class DaemonServer
             _profileName = _restored.ProfileName;
             _profileJson = _restored.ProfileJson;
             _revision = _restored.Revision;
-            _activePresetSlot = _restored.ActivePresetSlot is >= PresetStore.MinSlot and <= PresetStore.MaxSlot
+            _activePresetSlot = _restored.ActivePresetSlot >= PresetStore.MinSlot
                 ? _restored.ActivePresetSlot
                 : PresetStore.MinSlot;
         }
@@ -295,18 +295,18 @@ public sealed partial class DaemonServer
     /// Switches the app-wide active preset slot: every connected device holding a stored
     /// profile in the target slot is reloaded with it, a device holding nothing there
     /// keeps running its current profile, and the revision is bumped once so every GUI
-    /// sees the new slot. A slot outside 1..4 is refused without touching any state, and
-    /// so is a switch no connected device can honor - with no pad connected there is
-    /// nothing to reload and no running configuration to contradict, so the slot moves.
+    /// sees the new slot. A slot below 1 is refused without touching any state, and so is
+    /// a switch no connected device can honor - with no pad connected there is nothing to
+    /// reload and no running configuration to contradict, so the slot moves.
     /// </summary>
     private IpcMessage HandleSwitchPresetSlot(SwitchPresetSlotMessage request)
     {
-        if (request.Slot is < PresetStore.MinSlot or > PresetStore.MaxSlot)
+        if (request.Slot < PresetStore.MinSlot)
         {
             return new ErrorMessage(
                 request.RequestId,
                 InvalidPresetSlotErrorCode,
-                $"preset slots run from {PresetStore.MinSlot} to {PresetStore.MaxSlot}");
+                $"preset slots run from {PresetStore.MinSlot} upward");
         }
 
         lock (_sync)

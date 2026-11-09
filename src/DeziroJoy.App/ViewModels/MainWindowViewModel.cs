@@ -89,6 +89,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private string? _daemonInputDeviceId;
 
+    /// <summary>The device whose slots <see cref="PresetSlots"/> was last built for.</summary>
+    private string? _presetSlotDeviceId;
+
     public MainWindowViewModel(
         EngineHost host,
         IProfileStore profileStore,
@@ -150,6 +153,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<ControllerRuntime> Controllers { get; } = [];
 
     public ObservableCollection<MappingRowViewModel> Mappings { get; } = [];
+
+    /// <summary>
+    /// The preset slots of the device in scope, one bindable item per slot in ascending
+    /// order. The selector iterates this, so the initial four and any slot the user adds
+    /// appear here without the view knowing a fixed count.
+    /// </summary>
+    public ObservableCollection<PresetSlotItem> PresetSlots { get; } = [];
 
     public MappingEditorViewModel Editor { get; }
 
@@ -395,7 +405,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _settings?.ClearLegacyLeader();
     }
 
-    /// <summary>Which preset slot (1-4) is active for the device in scope.</summary>
+    /// <summary>Which preset slot (1 and up) is active for the device in scope.</summary>
     [ObservableProperty]
     private int _activePresetSlot = 1;
 
@@ -448,7 +458,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyPresetSlotLocally(int slot)
     {
-        if (slot is < PresetStore.MinSlot or > PresetStore.MaxSlot)
+        if (slot < PresetStore.MinSlot)
         {
             return;
         }
@@ -485,8 +495,111 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         ActivePresetSlot = slot;
+        MarkActivePresetSlot(slot);
         ReloadSensitivityPanels();
         RefreshMappings();
+    }
+
+    /// <summary>
+    /// Adds a new preset slot and switches to it. The new slot continues the device's slot
+    /// sequence and starts as an independent copy of the profile in view (falling back to
+    /// the primary slot), so it can be configured on its own, switched to immediately, and
+    /// found again after a restart. Locally the copy is written straight to the store; in
+    /// daemon mode the shared store already carries it by the time the switch is sent, so
+    /// the daemon reloads the new slot exactly as it does for a click on an existing one.
+    /// </summary>
+    [RelayCommand]
+    private async Task AddPreset()
+    {
+        var deviceId = _daemon is null
+            ? ActiveController?.Descriptor.DeviceId
+            : PersistenceDeviceId;
+
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            SetTransferError("新增预设失败：请先连接手柄。");
+            return;
+        }
+
+        var nextSlot = _presets.SlotsInUse(deviceId).DefaultIfEmpty(PresetStore.MinSlot - 1).Max() + 1;
+        var source = ActiveProfile ?? _presets.LoadSlot(deviceId, PresetStore.MinSlot);
+        if (source is null)
+        {
+            SetTransferError("新增预设失败：没有可复制的配置。");
+            return;
+        }
+
+        _presets.SaveSlot(deviceId, nextSlot, source with
+        {
+            Name = $"{source.Name} · 预设 {nextSlot}",
+            DeviceId = PresetStore.KeyFor(deviceId, nextSlot),
+        });
+
+        ReconcilePresetSlots(deviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
+        await SwitchPresetSlot(nextSlot);
+    }
+
+    /// <summary>
+    /// Reconciles <see cref="PresetSlots"/> against the store for one device and keeps the
+    /// leader slot options in step. The stored slot set is re-read on every call, so a slot
+    /// another client added while this one runs is picked up on the next daemon snapshot; the
+    /// items and the collection are rebuilt only when that set actually changed, so a stream
+    /// of snapshots that add nothing costs one enumeration and no churn. With no device the
+    /// collection is emptied and the leader options fall back to the initial four.
+    /// </summary>
+    private void ReconcilePresetSlots(string? deviceId)
+    {
+        IReadOnlyList<int> slots = deviceId is null ? [] : _presets.SlotsInUse(deviceId);
+
+        if (deviceId == _presetSlotDeviceId
+            && PresetSlots.Select(item => item.Slot).SequenceEqual(slots))
+        {
+            return;
+        }
+
+        _presetSlotDeviceId = deviceId;
+        PresetSlots.Clear();
+        if (deviceId is not null)
+        {
+            foreach (var slot in slots)
+            {
+                var name = _presets.LoadSlot(deviceId, slot)?.Name ?? $"预设 {slot}";
+                PresetSlots.Add(new PresetSlotItem(slot, name));
+            }
+        }
+
+        UpdateLeaderSlotOptions(slots);
+    }
+
+    /// <summary>Moves the active flag onto the item for <paramref name="slot"/>, if present.</summary>
+    private void MarkActivePresetSlot(int slot)
+    {
+        foreach (var item in PresetSlots)
+        {
+            item.IsActive = item.Slot == slot;
+        }
+    }
+
+    /// <summary>
+    /// Points the mapping editor's leader slot pickers at the device's current slots, so a
+    /// leader key can flip between a slot the user just added. Falls back to the initial four
+    /// while no device is in scope, matching the editor's own default.
+    /// </summary>
+    private void UpdateLeaderSlotOptions(IReadOnlyList<int> slots)
+    {
+        Editor.SpecialSlotOptions = slots.Count > 0 ? slots : [1, 2, 3, 4];
+    }
+
+    /// <summary>
+    /// Daemon-mode counterpart of activating a controller: reconcile the slot list against the
+    /// store for the snapshot's device - another client may have added a slot since the last
+    /// snapshot - and move the active flag to whatever slot the snapshot reports.
+    /// </summary>
+    private void SyncPresetSlotsForDaemon()
+    {
+        ReconcilePresetSlots(PersistenceDeviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
     }
 
     partial void OnIsPhysicalInputInScopeChanged(bool value)
@@ -1032,13 +1145,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private async Task ApplyImportedProfile(GamepadProfile imported, ProfileTransferResult result)
     {
+        // ApplyProfile persists the import to the active slot on its own (locally through
+        // ApplyProfileLocally, in daemon mode through the daemon's apply), so there is no
+        // second save to make here.
         if (await ApplyProfile(imported))
         {
-            if (_daemon is null)
-            {
-                _presets.SaveSlot(imported.DeviceId!, ActivePresetSlot, imported);
-            }
-
             Report(result);
         }
     }
@@ -1463,6 +1574,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ReloadSensitivityPanels();
         RefreshMappings();
         MigrateLegacyLeader(runtime.Descriptor.DeviceId);
+        ReconcilePresetSlots(runtime.Descriptor.DeviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
     }
 
     internal async Task<bool> ApplyProfile(GamepadProfile updated)
@@ -1528,9 +1641,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         ActiveProfile = updated;
 
-        if (_daemon is null && ActiveController is not null)
+        if (_daemon is null && ActiveController is { } controller)
         {
-            _host.Reload(ActiveController.Descriptor.DeviceId, updated);
+            _host.Reload(controller.Descriptor.DeviceId, updated);
+
+            // A committed edit belongs to the active preset slot, not only to the running
+            // engine: writing it here is what keeps the slots independent and lets a switch
+            // away and back - or a restart - find the edit where it was made. In daemon mode
+            // the daemon owns this persistence through its apply path, so it stays local.
+            _presets.SaveSlot(controller.Descriptor.DeviceId, ActivePresetSlot, updated);
         }
 
         ReloadSensitivityPanels();
@@ -1561,6 +1680,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsMappingEnabled = snapshot.MappingEnabled;
         _mappingEnabledRequested = snapshot.MappingEnabled;
         ActivePresetSlot = snapshot.ActivePresetSlot;
+        SyncPresetSlotsForDaemon();
         MappingOwner = snapshot.Running ? MappingOwner.ResidentDaemon : MappingOwner.None;
         AdoptDaemonProfile(snapshot);
         if (!string.IsNullOrWhiteSpace(snapshot.LastError))
@@ -1815,4 +1935,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             Mappings.Add(new MappingRowViewModel(entry, row => EditMapping(row), row => { _ = DeleteMapping(row); }, ToggleMappingEnabled));
         }
     }
+}
+
+/// <summary>
+/// One row of the dynamic preset selector: the slot number, the preset's stored name, and
+/// whether it is the app-wide active slot. The view iterates
+/// <see cref="MainWindowViewModel.PresetSlots"/> over these; <see cref="IsActive"/> is the
+/// only mutable field, kept in step by the view model as the active slot moves.
+/// </summary>
+public sealed partial class PresetSlotItem : ObservableObject
+{
+    public PresetSlotItem(int slot, string name)
+    {
+        Slot = slot;
+        Name = name;
+    }
+
+    public int Slot { get; }
+
+    public string Name { get; }
+
+    [ObservableProperty]
+    private bool _isActive;
 }

@@ -49,12 +49,19 @@ public class PresetStoreTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(5)]
-    public void KeyFor_Rejects_A_Slot_Outside_One_To_Four(int slot)
+    public void KeyFor_Rejects_A_Slot_Below_One(int slot)
     {
         var store = new PresetStore(new InMemoryProfileStore());
 
         Assert.Throws<ArgumentOutOfRangeException>(() => PresetStore.KeyFor("pad-1", slot));
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(12)]
+    public void KeyFor_Accepts_A_Slot_Beyond_The_Initial_Four(int slot)
+    {
+        Assert.Equal($"preset{slot}:pad-1", PresetStore.KeyFor("pad-1", slot));
     }
 
     [Fact]
@@ -96,8 +103,8 @@ public class PresetStoreTests
 
     [Theory]
     [InlineData(0)]
-    [InlineData(5)]
-    public void LoadSlot_And_SaveSlot_Reject_A_Slot_Outside_One_To_Four(int slot)
+    [InlineData(-3)]
+    public void LoadSlot_And_SaveSlot_Reject_A_Slot_Below_One(int slot)
     {
         var store = new PresetStore(new InMemoryProfileStore());
 
@@ -106,7 +113,19 @@ public class PresetStoreTests
     }
 
     [Fact]
-    public void SlotsInUse_Scans_One_To_Four_In_Order()
+    public void SaveSlot_And_LoadSlot_Round_Trip_A_Slot_Beyond_The_Initial_Four()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+
+        store.SaveSlot("pad-1", 7, SlotProfile("第七套", "pad-1"));
+
+        Assert.Equal("第七套", store.LoadSlot("pad-1", 7)!.Name);
+        Assert.Equal("preset7:pad-1", inner.Load("preset7:pad-1")!.DeviceId);
+    }
+
+    [Fact]
+    public void SlotsInUse_Returns_The_Stored_Slots_In_Ascending_Order()
     {
         var store = new PresetStore(new InMemoryProfileStore());
         store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
@@ -114,6 +133,27 @@ public class PresetStoreTests
         store.SaveSlot("pad-1", 4, SlotProfile("第四套", "pad-1"));
 
         Assert.Equal([1, 2, 4], store.SlotsInUse("pad-1"));
+    }
+
+    [Fact]
+    public void SlotsInUse_Finds_Slots_Beyond_The_Initial_Four()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 6, SlotProfile("第六套", "pad-1"));
+        store.SaveSlot("pad-1", 11, SlotProfile("第十一套", "pad-1"));
+
+        Assert.Equal([1, 6, 11], store.SlotsInUse("pad-1"));
+    }
+
+    [Fact]
+    public void SlotsInUse_Handles_A_Device_Id_That_Contains_A_Colon()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("xinput:0", 1, SlotProfile("主配置", "xinput:0"));
+        store.SaveSlot("xinput:0", 5, SlotProfile("第五套", "xinput:0"));
+
+        Assert.Equal([1, 5], store.SlotsInUse("xinput:0"));
     }
 
     [Fact]

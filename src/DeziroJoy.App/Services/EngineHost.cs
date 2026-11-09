@@ -315,10 +315,7 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
     {
-        if (slot is < PresetStore.MinSlot or > PresetStore.MaxSlot)
-        {
-            throw new ArgumentOutOfRangeException(nameof(slot));
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThan(slot, PresetStore.MinSlot, nameof(slot));
 
         ArgumentNullException.ThrowIfNull(profiles);
         lock (_sync)

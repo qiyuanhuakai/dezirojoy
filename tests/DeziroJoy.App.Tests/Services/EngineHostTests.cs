@@ -456,6 +456,28 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void SwitchPresetSlot_Accepts_A_Slot_Beyond_The_Initial_Four()
+    {
+        var (host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        host.RefreshPresence();
+
+        host.SwitchPresetSlot(5, new Dictionary<string, GamepadProfile>
+        {
+            ["xinput:0"] = new GamepadProfile
+            {
+                Name = "第五套",
+                DeviceId = "xinput:0",
+                Layout = GamepadLayout.Xbox,
+                Mappings = [],
+            },
+        });
+
+        Assert.Equal(5, host.ActivePresetSlot);
+        Assert.Equal("第五套", host.Controllers.Single().Profile.Name);
+    }
+
+    [Fact]
     public void Preset_Switch_Rolls_Back_Every_Device_When_One_Reload_Fails()
     {
         var (host, provider, _) = CreateHost();
