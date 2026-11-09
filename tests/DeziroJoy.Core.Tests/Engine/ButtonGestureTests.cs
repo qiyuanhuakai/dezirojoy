@@ -672,6 +672,27 @@ public class ButtonGestureTests
     }
 
     [Fact]
+    public void Click_Repeat_Catches_Up_Inside_One_Long_Tick()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture { ClickRepeatInterval = 0.1f })));
+
+        // The press edge fires the initial activation and starts the repeat clock.
+        var press = engine.Tick(Held(GamepadButton.B), 0.016f);
+        Assert.Equal(2, press.Count);
+
+        // One 1s tick covers ten 0.1s intervals: the state machine emits the first repeat
+        // and the engine's catch-up drain fills in the other nine, so a stalled or resumed
+        // tick loses no unit - the same rule the long-press repeat already follows.
+        var caughtUp = engine.Tick(Held(GamepadButton.B), 1f);
+        Assert.Equal(10, Taps(caughtUp));
+
+        Assert.Empty(engine.Tick(Released, 0.05f));
+    }
+
+    [Fact]
     public void Click_Repeat_Stops_On_Release()
     {
         var engine = new MappingEngine(Profile(Gestured(
@@ -740,6 +761,36 @@ public class ButtonGestureTests
         // Click auto-repeat wins: the click fires 10 times, the long-press is inert (no Space).
         Assert.Equal(10, commands.Count(c => c is KeyDownCommand { Key: GamepadKey.Enter }));
         Assert.Equal(0, commands.Count(c => c is KeyDownCommand { Key: GamepadKey.Space }));
+    }
+
+    [Fact]
+    public void Click_Repeat_Drain_Never_Fires_The_Inert_Long_Press()
+    {
+        // A hand-edited profile may carry both repeat intervals at once. The contract is
+        // that click auto-repeat wins and the long-press is inert (HasEffectiveLongPress),
+        // so the catch-up drain must stay in its own phase and never resurrect the
+        // long-press action - the case a profile carrying only ClickRepeatInterval misses.
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            new ButtonGesture
+            {
+                ClickRepeatInterval = 0.1f,
+                LongPressThreshold = 0.4f,
+                LongPressRepeatInterval = 0.05f,
+                LongPressAction = new KeyPressTarget(GamepadKey.Space),
+            })));
+
+        var commands = new List<InputCommand>();
+        commands.AddRange(engine.Tick(Held(GamepadButton.B), 0.016f));
+        commands.AddRange(engine.Tick(Held(GamepadButton.B), 1f));
+
+        // The click repeat catches up on its own interval - the press edge plus ten
+        // repeats - and the long-press action never fires, not even from the drain.
+        Assert.Equal(11, commands.Count(c => c is KeyDownCommand { Key: GamepadKey.Enter }));
+        Assert.Equal(0, commands.Count(c => c is KeyDownCommand { Key: GamepadKey.Space }));
+
+        Assert.Empty(engine.Tick(Released, 0.05f));
     }
 
     [Fact]

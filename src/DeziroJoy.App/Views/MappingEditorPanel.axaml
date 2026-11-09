@@ -247,6 +247,25 @@
                             </ComboBox.ItemTemplate>
                         </ComboBox>
                     </StackPanel>
+                    <StackPanel x:Name="DirectionRow" Width="230" Margin="0,0,12,0"
+                                IsVisible="{Binding ShowDirectionPicker}">
+                        <TextBlock Classes="fieldLabel" Text="方向" />
+                        <!-- The two cross combinations cannot work without a direction the
+                             engine cannot guess: a stick driving a digital target has to say
+                             which deflection presses it, a button driving a continuous one
+                             which way it deflects. The row waits for the combination, so a
+                             native pairing never offers a direction that would be ignored,
+                             and the choice is written into the mapping on commit. -->
+                        <ComboBox x:Name="DirectionCombo" Classes="enumCombo"
+                                  ItemsSource="{Binding DirectionOptions}"
+                                  SelectedItem="{Binding SelectedDirectionOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:DirectionPickerItem">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
                     <StackPanel x:Name="MouseTargetRow" Width="230"
                                 IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=MouseButton}">
                         <TextBlock Classes="fieldLabel" Text="鼠标按键" />

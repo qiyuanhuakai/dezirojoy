@@ -62,7 +62,6 @@ public partial class MappingEditorViewModel : ObservableObject
     private ButtonPickerItem? _selectedButtonOption;
     private KeyPickerItem? _selectedKeyOption;
     private KeyPickerItem? _activeSelectedKeyOption;
-    private DirectionPickerItem? _selectedDirectionOption;
     private GestureActionOption? _selectedDoubleClickOption;
     private GestureActionOption? _selectedLongPressOption;
     private InputDirection? _loadedDirection;
@@ -749,20 +748,20 @@ public partial class MappingEditorViewModel : ObservableObject
 
     public bool ShowDirectionPicker => NeedsDirection;
 
-    /// <summary>The selected direction picker row, kept in step with <see cref="SelectedDirection"/>.</summary>
+    /// <summary>
+    /// The selected direction picker row, read from <see cref="SelectedDirection"/> rather
+    /// than cached, so a loaded or reset direction shows its own row instead of the one the
+    /// previous edit left behind: reopening a mapping always displays the direction it saved.
+    /// </summary>
     public DirectionPickerItem? SelectedDirectionOption
     {
-        get => _selectedDirectionOption;
+        get => DirectionOptions.FirstOrDefault(option => option.Direction == SelectedDirection);
         set
         {
-            if (value is null || EqualityComparer<DirectionPickerItem?>.Default.Equals(value, _selectedDirectionOption))
+            if (value is not null)
             {
-                return;
+                SelectedDirection = value.Direction;
             }
-
-            _selectedDirectionOption = value;
-            SelectedDirection = value.Direction;
-            OnPropertyChanged(nameof(SelectedDirectionOption));
         }
     }
 

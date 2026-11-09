@@ -1409,7 +1409,50 @@ public class MappingEditorViewModelTests
 
         editor.SourceKind = MappingSourceKind.Stick;
 
-        Assert.Equal("右摇杆", editor.SourceDescription);
+        // A stick driving a key needs a direction, so the description names the one the
+        // mapping would commit - the default 上 rather than a silently hidden value.
+        Assert.Equal("右摇杆（上）", editor.SourceDescription);
+    }
+
+    [Fact]
+    public void A_Reopened_Mapping_Shows_The_Direction_Row_It_Saved()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // Reopen a saved stick -> key mapping whose direction is Right: the picker row
+        // follows the loaded direction, so the editor never shows an empty selection.
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = new StickBinding(GamepadStick.Left) { Direction = InputDirection.Right },
+            Target = new KeyPressTarget(GamepadKey.W),
+        });
+
+        Assert.Equal(InputDirection.Right, editor.SelectedDirection);
+        Assert.Equal(InputDirection.Right, editor.SelectedDirectionOption?.Direction);
+
+        // Pick a different direction, then reopen another mapping saved with Right: the
+        // row must show the loaded direction, not the one the previous edit left behind.
+        editor.SelectedDirectionOption = editor.DirectionOptions.First(
+            option => option.Direction == InputDirection.Left);
+
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = new StickBinding(GamepadStick.Left) { Direction = InputDirection.Right },
+            Target = new KeyPressTarget(GamepadKey.W),
+        });
+
+        Assert.Equal(InputDirection.Right, editor.SelectedDirection);
+        Assert.Equal(InputDirection.Right, editor.SelectedDirectionOption?.Direction);
+
+        // A mapping that carries no direction opens on the default, row in step with it.
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = new StickBinding(GamepadStick.Left),
+            Target = new WheelScrollTarget(new ScrollStickSettings()),
+        });
+
+        Assert.Equal(InputDirection.Up, editor.SelectedDirection);
+        Assert.Equal(InputDirection.Up, editor.SelectedDirectionOption?.Direction);
     }
 
     [Fact]
