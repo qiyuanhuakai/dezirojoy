@@ -11,16 +11,24 @@
   What is verified here:
     * ISCC is resolved from PATH or a standard install directory, with a clear error
       listing everything that was tried when it is missing.
-    * The compiled setup.exe has the machine type the RID implies (x64 / ARM64).
+    * The publish payload (DeziroJoy.exe) carries the machine type the RID implies
+      (x64 / ARM64), and the .iss maps the RID to the matching ArchitecturesAllowed /
+      ArchitecturesInstallIn64BitMode: those two decide where a setup may install.
+    * The compiled setup.exe is the x86 bootstrap Inno Setup always emits, whatever
+      the payload architecture is.
     * For win-x64, the setup is silently installed into a throwaway directory, the
       installed DeziroJoy.exe and its version are asserted, and it is then silently
       uninstalled with the install directory, the uninstall registry key and the
       shortcuts asserted gone.
 
-  A win-arm64 setup.exe cannot execute on the x64 windows-latest image, so for that
-  RID the runtime install/uninstall cycle is reported as skipped: the compile and the
-  static architecture check are all a cross-architecture artefact can prove here. The
-  arm64 cycle needs an ARM64 runner (windows-11-arm).
+  Inno Setup 6 compiles a 32-bit x86 setup bootstrap for every architecture: the
+  loader is architecture-neutral, and the payload plus ArchitecturesAllowed decide
+  where a setup installs. A win-arm64 setup therefore cannot be installed on the x64
+  windows-latest image (ArchitecturesAllowed=arm64 refuses to run there, and the
+  ARM64 payload cannot execute), so for that RID the runtime install/uninstall cycle
+  is reported as skipped: the compile and the static architecture checks are all a
+  cross-architecture artefact can prove here. The arm64 cycle needs an ARM64 runner
+  (windows-11-arm).
 #>
 [CmdletBinding()]
 param(
@@ -74,9 +82,57 @@ if (-not $publish) {
 foreach ($required in @($iss, $icon)) {
   if (-not (Test-Path $required)) { throw "required file missing: $required" }
 }
-if (-not (Test-Path (Join-Path $publish 'DeziroJoy.exe'))) {
+$payloadExe = Join-Path $publish 'DeziroJoy.exe'
+if (-not (Test-Path $payloadExe)) {
   throw "DeziroJoy.exe missing from publish output: $publish"
 }
+
+# --- payload and .iss must agree with the RID ----------------------------------------
+# The architecture a user actually receives is decided by two things: the machine
+# type of the payload binaries and the ArchitecturesAllowed /
+# ArchitecturesInstallIn64BitMode pair in the .iss. The compiled setup.exe bootstrap
+# is architecture-neutral (checked after the compile), so both are verified here,
+# before the compile: a mislabeled publish directory or a loosened [Setup] directive
+# then fails the build instead of shipping a setup that installs ARM64 binaries on
+# x64 Windows.
+$expectedMachine = if ($Rid -eq 'win-x64') { 0x8664 } else { 0xAA64 }
+$expectedAllowed = if ($Rid -eq 'win-x64') { 'x64compatible' } else { 'arm64' }
+
+$payloadMachine = Get-PeMachineType $payloadExe
+if ($payloadMachine -ne $expectedMachine) {
+  throw "unexpected payload machine type 0x{0:X4} for $Rid, expected 0x{1:X4}: $payloadExe" -f $payloadMachine, $expectedMachine
+}
+Write-Host ("payload machine type: 0x{0:X4} (as expected for {1})" -f $payloadMachine, $Rid)
+
+# Walk the RID -> ArchitecturesAllowed mapping in the .iss the way the Inno
+# preprocessor resolves it, so the branch that matches this RID is the one checked,
+# and both [Setup] directives must reference that mapping rather than a literal.
+$allowedInIss = $null
+$inRidBranch = $false
+foreach ($line in Get-Content $iss) {
+  if ($line -match '^\s*#(?:if|elif)\s+DeziroJoyRid\s*==\s*"(win-x64|win-arm64)"') {
+    $inRidBranch = ($Matches[1] -eq $Rid)
+  }
+  elseif ($line -match '^\s*#(?:else|endif)') {
+    $inRidBranch = $false
+  }
+  elseif ($inRidBranch -and $line -match '^\s*#define\s+MyArchAllowed\s+"([^"]+)"') {
+    $allowedInIss = $Matches[1]
+  }
+}
+if (-not $allowedInIss) {
+  throw "DeziroJoy.iss maps no ArchitecturesAllowed value for $Rid"
+}
+if ($allowedInIss -ne $expectedAllowed) {
+  throw "DeziroJoy.iss allows '$allowedInIss' for $Rid, expected '$expectedAllowed'"
+}
+$issText = Get-Content $iss -Raw
+foreach ($directive in @('ArchitecturesAllowed', 'ArchitecturesInstallIn64BitMode')) {
+  if ($issText -notmatch "(?m)^\s*$directive=\{#MyArchAllowed\}\s*$") {
+    throw "DeziroJoy.iss: $directive must be {#MyArchAllowed} so it tracks the RID mapping"
+  }
+}
+Write-Host "$Rid ArchitecturesAllowed/InstallIn64BitMode: $allowedInIss"
 
 # --- resolve ISCC -----------------------------------------------------------------
 # windows-latest ships Inno Setup 6 on PATH. Fall back to the standard install
@@ -120,16 +176,22 @@ if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 if (-not (Test-Path $setupExePath)) { throw "ISCC reported success but $setupExeName is missing from $repoRoot" }
 Write-Host "built $setupExeName ($((Get-Item $setupExePath).Length) bytes)"
 
-# --- static architecture check ------------------------------------------------------
-$machine = Get-PeMachineType $setupExePath
-$expectedMachine = if ($Rid -eq 'win-x64') { 0x8664 } else { 0xAA64 }
-if ($machine -ne $expectedMachine) {
-  throw "unexpected setup.exe machine type 0x{0:X4} for $Rid, expected 0x{1:X4}" -f $machine, $expectedMachine
+# --- verify the compiled bootstrap ----------------------------------------------------
+# Inno Setup always compiles a 32-bit x86 setup bootstrap, whatever the payload is:
+# the loader is architecture-neutral and the ArchitecturesAllowed pair plus the
+# payload decide where the setup installs. Expecting x64/arm64 on setup.exe itself
+# fails on every Inno build (beta.1 run 42670117262: bootstrap machine 0x014C on
+# both Windows RIDs); expecting the x86 loader catches a replaced or corrupted
+# bootstrap, while the payload check above guards the architecture the user actually
+# receives.
+$bootstrapMachine = Get-PeMachineType $setupExePath
+if ($bootstrapMachine -ne 0x014C) {
+  throw "unexpected setup.exe machine type 0x{0:X4}, expected the Inno x86 bootstrap 0x014C" -f $bootstrapMachine
 }
-Write-Host "setup.exe machine type: 0x{0:X4} (as expected for $Rid)" -f $machine
+Write-Host ("setup.exe bootstrap machine type: 0x{0:X4} (Inno x86 loader, architecture-neutral)" -f $bootstrapMachine)
 
 if ($Rid -ne 'win-x64') {
-  Write-Host "ARM64 setup cannot execute on this x64 runner: silent install/uninstall smoke skipped."
+  Write-Host "ARM64 setup cannot install on this x64 runner (ArchitecturesAllowed=arm64 refuses, payload cannot execute): silent install/uninstall smoke skipped."
   return
 }
 
