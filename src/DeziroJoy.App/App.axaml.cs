@@ -96,6 +96,13 @@ public partial class App : Application
     }
 }
 
+internal enum TrayHandoverOutcome
+{
+    HandedOver,
+    RolledBack,
+    YieldedToNewInstance,
+}
+
 internal sealed class RenderWindowCoordinator
 {
     private readonly MainWindow _window;
@@ -108,7 +115,7 @@ internal sealed class RenderWindowCoordinator
     private readonly Func<Task> _pollDelay;
     private readonly TimeSpan _handoverBudget;
     private readonly Func<Task<bool>> _stopDaemon;
-    private Task<bool>? _handover;
+    private Task<TrayHandoverOutcome>? _handover;
     private bool _closeApproved;
     private bool _exitInProgress;
 
@@ -151,7 +158,7 @@ internal sealed class RenderWindowCoordinator
 
         _exitInProgress = true;
         var approved = _themes.CloseToTrayEnabled
-            ? await HandOverToTrayAsync()
+            ? await HandOverToTrayAsync() is not TrayHandoverOutcome.RolledBack
             : await StopDaemonAsync();
         if (!approved)
         {
@@ -185,7 +192,7 @@ internal sealed class RenderWindowCoordinator
         }
 
         _exitInProgress = true;
-        if (!await HandOverToTrayAsync())
+        if (await HandOverToTrayAsync() is TrayHandoverOutcome.RolledBack)
         {
             _window.WindowState = WindowState.Normal;
             _viewModel.StatusMessage = "无法切换到托盘：托盘进程未就绪，窗口已保留。";
@@ -215,28 +222,29 @@ internal sealed class RenderWindowCoordinator
         return false;
     }
 
-    private async Task<bool> HandOverToTrayAsync()
+    private async Task<TrayHandoverOutcome> HandOverToTrayAsync()
     {
         var current = _handover ??= PerformHandOverAsync();
-        var handedOver = false;
+        TrayHandoverOutcome outcome;
         try
         {
-            handedOver = await current;
+            outcome = await current;
         }
         catch (Exception exception)
         {
             Trace.WriteLine($"[DeziroJoy] tray handover failed: {exception.Message}");
+            outcome = RollBackHandOver();
         }
 
-        if (!handedOver && ReferenceEquals(_handover, current))
+        if (outcome is TrayHandoverOutcome.RolledBack && ReferenceEquals(_handover, current))
         {
             _handover = null;
         }
 
-        return handedOver;
+        return outcome;
     }
 
-    private async Task<bool> PerformHandOverAsync()
+    private async Task<TrayHandoverOutcome> PerformHandOverAsync()
     {
         IProcessHandle? tray = null;
         try
@@ -244,7 +252,7 @@ internal sealed class RenderWindowCoordinator
             tray = _spawnTray(ProcessLauncher.TrayStartInfo());
             if (tray is null)
             {
-                return false;
+                return TrayHandoverOutcome.RolledBack;
             }
 
             _releaseInstance();
@@ -262,7 +270,7 @@ internal sealed class RenderWindowCoordinator
                 if (await _probe(identity, GuiInstanceRole.Tray, options, CancellationToken.None))
                 {
                     tray.Dispose();
-                    return true;
+                    return TrayHandoverOutcome.HandedOver;
                 }
 
                 if (elapsed.Elapsed >= _handoverBudget)
@@ -300,6 +308,11 @@ internal sealed class RenderWindowCoordinator
             }
         }
 
+        return RollBackHandOver();
+    }
+
+    private TrayHandoverOutcome RollBackHandOver()
+    {
         var reclaimed = false;
         try
         {
@@ -310,8 +323,15 @@ internal sealed class RenderWindowCoordinator
             Trace.WriteLine($"[DeziroJoy] tray handover lease rollback failed: {exception.Message}");
         }
 
-        Trace.WriteLine($"[DeziroJoy] tray handover rolled back; instance lease reclaimed: {reclaimed}");
-        return false;
+        if (reclaimed)
+        {
+            Trace.WriteLine("[DeziroJoy] tray handover rolled back; this render reclaimed the instance lease");
+            return TrayHandoverOutcome.RolledBack;
+        }
+
+        Trace.WriteLine(
+            "[DeziroJoy] instance lease is held elsewhere; retiring the unlocked render without touching the new instance or daemon");
+        return TrayHandoverOutcome.YieldedToNewInstance;
     }
 
     private void ApproveClose()

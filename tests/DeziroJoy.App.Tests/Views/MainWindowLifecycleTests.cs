@@ -283,6 +283,69 @@ public sealed class MainWindowLifecycleTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void Closing_After_A_Third_Party_Takes_The_Lease_Retires_Only_The_Unlocked_Render()
+    {
+        var themes = new ThemeService(_directory);
+        var identity = new GuiInstanceIdentity(Path.Combine(_directory, "handover-race.lock"), "unused");
+        using var oldRenderLease = GuiInstanceLease.TryAcquire(identity)!;
+        GuiInstanceLease? newRenderLease = null;
+        RenderFixture? fixture = null;
+        fixture = BuildRender(
+            themes,
+            probe: () =>
+            {
+                // Once this lease moves, the third-party render is free to build its window.
+                newRenderLease = GuiInstanceLease.TryAcquire(identity);
+                fixture!.Events.Add("third-party-render-window");
+                return Task.FromResult(false);
+            },
+            releaseInstance: oldRenderLease.Dispose,
+            reacquireInstance: () =>
+            {
+                var reclaimed = GuiInstanceLease.TryAcquire(identity);
+                reclaimed?.Dispose();
+                return reclaimed is not null;
+            });
+
+        try
+        {
+            fixture.Window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.NotNull(newRenderLease);
+            Assert.Equal(1, fixture.Tray.KillCalls);
+            Assert.False(fixture.Window.IsVisible);
+            Assert.Single(fixture.Shutdowns);
+            Assert.DoesNotContain("stop-daemon", fixture.Events);
+            Assert.Equal(
+                ["spawn", "release", "probe", "third-party-render-window", "reacquire", "shutdown"],
+                fixture.Events);
+        }
+        finally
+        {
+            newRenderLease?.Dispose();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Minimize_After_A_Third_Party_Takes_The_Lease_Also_Retires_The_Unlocked_Render()
+    {
+        var themes = new ThemeService(_directory);
+        var fixture = BuildRender(
+            themes,
+            probe: () => Task.FromResult(false),
+            reacquireInstance: () => false);
+
+        fixture.Window.RequestMinimize();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(fixture.Window.IsVisible);
+        Assert.Single(fixture.Shutdowns);
+        Assert.DoesNotContain("stop-daemon", fixture.Events);
+        Assert.Equal(["spawn", "release", "probe", "reacquire", "shutdown"], fixture.Events);
+    }
+
+    [AvaloniaFact]
     public void Concurrent_Close_And_Minimize_Share_One_Tray_Handover()
     {
         var themes = new ThemeService(_directory);
@@ -330,7 +393,9 @@ public sealed class MainWindowLifecycleTests : IDisposable
     private static RenderFixture BuildRender(
         ThemeService themes,
         Func<Task<bool>>? probe = null,
-        Func<Task<bool>>? stopDaemon = null)
+        Func<Task<bool>>? stopDaemon = null,
+        Action? releaseInstance = null,
+        Func<bool>? reacquireInstance = null)
     {
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var (_, viewModel, host, _) = BuildWindow();
@@ -353,11 +418,15 @@ public sealed class MainWindowLifecycleTests : IDisposable
                 fixture.Shutdowns.Add(1);
                 fixture.Events.Add("shutdown");
             },
-            releaseInstance: () => fixture.Events.Add("release"),
+            releaseInstance: () =>
+            {
+                fixture.Events.Add("release");
+                releaseInstance?.Invoke();
+            },
             reacquireInstance: () =>
             {
                 fixture.Events.Add("reacquire");
-                return true;
+                return reacquireInstance?.Invoke() ?? true;
             },
             probe: (_, _, _, _) =>
             {

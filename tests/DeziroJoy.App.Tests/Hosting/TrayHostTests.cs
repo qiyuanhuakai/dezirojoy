@@ -229,6 +229,55 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void Tray_Exit_Retries_A_Daemon_Stop_After_The_First_Request_Fails()
+    {
+        var requests = 0;
+        var fixture = BuildTray(daemonShutdown: _ => Task.FromResult(++requests >= 2));
+        fixture.DaemonHandle.SurvivesKill = true;
+
+        Click(Item("退出"));
+
+        Assert.False(fixture.Tray.IsExiting);
+        Assert.Equal(1, requests);
+        Assert.Equal(DaemonSupervisionState.StopFailed, fixture.Daemon.State);
+        Assert.Empty(fixture.Shutdowns);
+
+        fixture.DaemonHandle.SurvivesKill = false;
+        Click(Item("退出"));
+        Click(Item("退出"));
+
+        Assert.True(fixture.Tray.IsExiting);
+        Assert.Equal(2, requests);
+        Assert.Equal(DaemonSupervisionState.StoppedGracefully, fixture.Daemon.State);
+        Assert.Single(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void Tray_Exit_Retries_A_Render_Stop_Without_Stopping_The_Daemon_Again()
+    {
+        var fixture = BuildTray();
+        fixture.RenderHandle.SurvivesKill = true;
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+        Assert.Single(fixture.Shutdowns);
+
+        Click(Item("退出"));
+
+        Assert.False(fixture.Tray.IsExiting);
+        Assert.Single(fixture.Shutdowns);
+        Assert.Equal(RenderSupervisionState.StopFailed, fixture.Render.State);
+
+        fixture.RenderHandle.SurvivesKill = false;
+        Click(Item("退出"));
+        Click(Item("退出"));
+
+        Assert.True(fixture.Tray.IsExiting);
+        Assert.Equal(2, fixture.Shutdowns.Count);
+        Assert.Equal(RenderSupervisionState.Stopped, fixture.Render.State);
+        Assert.Equal(1, fixture.Order.Count(entry => entry == "stop-daemon"));
+    }
+
+    [AvaloniaFact]
     public void The_Show_Route_Retires_Only_After_The_Render_Answers()
     {
         var answers = new Queue<bool>([false, false, true]);

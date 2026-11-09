@@ -620,15 +620,13 @@ internal static class TrayHost
             showMainWindow: async void () => await ShowAsync(),
             exit: () =>
             {
-                if (!daemon.Stop())
+                if (!daemon.Stop() || !render.Stop())
                 {
-                    return;
+                    return false;
                 }
 
-                if (render.Stop())
-                {
-                    Retire(shutdown, lifetime);
-                }
+                Retire(shutdown, lifetime);
+                return true;
             });
 
         tray.Install();
