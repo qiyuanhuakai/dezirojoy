@@ -412,6 +412,37 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task Malformed_Daemon_Profile_Blocks_Save_And_Import_Without_Writing_Any_Slot()
+    {
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        Assert.NotNull(viewModel.ActiveProfile);
+        viewModel.DaemonSnapshot = viewModel.DaemonSnapshot! with { ProfileJson = "{not-json" };
+        var before = Enumerable.Range(PresetStore.MinSlot, PresetStore.MaxSlot)
+            .ToDictionary(
+                slot => slot,
+                slot => ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-malformed-import-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, ProfileSerializer.Serialize(viewModel.ActiveProfile with { Name = "Must not import" }));
+
+        try
+        {
+            viewModel.SaveProfileCommand.Execute(null);
+            viewModel.ImportFrom(path);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        Assert.True(viewModel.IsTransferError);
+        foreach (var (slot, expected) in before)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
+        }
+    }
+
+    [Fact]
     public async Task Daemon_Import_Saves_The_Active_Slot_Once_And_Does_Not_Overwrite_Slot_One()
     {
         var context = await CreateDaemonPresetViewModel();
@@ -449,6 +480,54 @@ public sealed class MainWindowViewModelDaemonTests
         {
             Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("pad-1", slot)!));
         }
+    }
+
+    [Fact]
+    public async Task Disconnecting_The_Profile_Device_Rebases_To_The_Remaining_Device_Before_Editing()
+    {
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1");
+        daemonHost.AddDevice("pad-2");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var pad1 = presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Controller One")) with { Name = "One" };
+        var pad2 = presets.EnsureDefaults(new GamepadDescriptor("pad-2", "Controller Two")) with { Name = "Two" };
+        presets.SaveSlot("pad-1", 1, pad1);
+        presets.SaveSlot("pad-2", 1, pad2);
+        daemonHost.Reload("pad-1", pad1);
+        daemonHost.Reload("pad-2", pad2);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var channel = new ServerChannel(server);
+        server.StateChanged += channel.Push;
+        var controller = new DaemonController(new ServerEndpoint(channel));
+        await controller.ConnectAsync(TestContext.Current.CancellationToken);
+        var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        await using var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
+        Assert.Equal("pad-1", viewModel.ActiveProfile!.DeviceId);
+        await viewModel.SwitchPresetSlotCommand.ExecuteAsync(2);
+        var revisionBeforeDisconnect = viewModel.DaemonSnapshot!.Revision;
+        var pad1BeforeEdit = ProfileSerializer.Serialize(presets.LoadSlot("pad-1", 2)!);
+
+        viewModel.AddMappingCommand.Execute(null);
+        daemonHost.RemoveDevice("pad-1");
+        await WaitForCondition(() => viewModel.DaemonSnapshot?.Devices.SingleOrDefault()?.DeviceId == "pad-2");
+
+        Assert.Equal(revisionBeforeDisconnect, viewModel.DaemonSnapshot.Revision);
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal("pad-1", viewModel.ActiveProfile.DeviceId);
+        viewModel.CancelEditorCommand.Execute(null);
+        await WaitForCondition(() => viewModel.ActiveProfile?.DeviceId == "pad-2");
+        Assert.Equal(2, viewModel.ActivePresetSlot);
+
+        daemonHost.ReloadedDevices.Clear();
+        var applied = await viewModel.ApplyProfile(viewModel.ActiveProfile with { Name = "Edited remaining pad" });
+
+        Assert.True(applied);
+        Assert.Equal("pad-2", Assert.Single(daemonHost.ReloadedDevices));
+        Assert.Equal("Edited remaining pad", presets.LoadSlot("pad-2", 2)!.Name);
+        Assert.Equal(pad1BeforeEdit, ProfileSerializer.Serialize(presets.LoadSlot("pad-1", 2)!));
+        Assert.Equal(revisionBeforeDisconnect + 1, viewModel.DaemonSnapshot!.Revision);
     }
 
     [Fact]

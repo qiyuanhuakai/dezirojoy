@@ -188,6 +188,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private long _profileBaselineRevision = -1;
     private string? _profileDaemonInstanceId;
+    private string? _profileBaselineDeviceId;
 
     [ObservableProperty]
     private ControllerRuntime? _activeController;
@@ -930,7 +931,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 return null;
             }
 
-            if (!string.IsNullOrWhiteSpace(snapshot.ProfileJson))
+            if (!string.IsNullOrEmpty(snapshot.ProfileJson))
             {
                 try
                 {
@@ -944,7 +945,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 }
                 catch (System.Text.Json.JsonException)
                 {
-                    // Snapshot adoption already reports malformed profile JSON; persistence stays unavailable.
+                    return null;
                 }
             }
 
@@ -1483,6 +1484,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 return false;
             }
 
+            if (PersistenceDeviceId is { } targetDeviceId)
+            {
+                updated = updated with { DeviceId = targetDeviceId };
+            }
+            else if (DaemonSnapshot is { } snapshot
+                && (snapshot.Devices.Count > 0 || !string.IsNullOrEmpty(snapshot.ProfileJson)))
+            {
+                SetTransferError("守护进程配置或目标设备不可用；配置未应用。");
+                return false;
+            }
             try
             {
                 var result = await _daemon.ApplyAsync(
@@ -1499,6 +1510,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
                 _profileBaselineRevision = result.Revision;
                 _profileDaemonInstanceId = _daemon.DaemonInstanceId;
+                _profileBaselineDeviceId = updated.DeviceId;
             }
             catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
             {
@@ -1582,14 +1594,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var instanceId = _daemon?.DaemonInstanceId;
-        if (snapshot.Revision == _profileBaselineRevision && instanceId == _profileDaemonInstanceId)
-        {
-            return;
-        }
-
         GamepadProfile? profile = null;
-        if (!string.IsNullOrWhiteSpace(snapshot.ProfileJson))
+        if (!string.IsNullOrEmpty(snapshot.ProfileJson))
         {
             try
             {
@@ -1602,11 +1608,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
         }
 
+        var profileDeviceId = !string.IsNullOrWhiteSpace(profile?.DeviceId)
+            ? profile.DeviceId
+            : snapshot.Devices.Count > 0 ? snapshot.Devices[0].DeviceId : null;
+        var instanceId = _daemon?.DaemonInstanceId;
+        if (snapshot.Revision == _profileBaselineRevision
+            && instanceId == _profileDaemonInstanceId
+            && profileDeviceId == _profileBaselineDeviceId)
+        {
+            return;
+        }
+
         _profileBaselineRevision = snapshot.Revision;
         _profileDaemonInstanceId = instanceId;
+        _profileBaselineDeviceId = profileDeviceId;
         if (profile is not null)
         {
             ApplyProfileLocally(profile);
+        }
+        else
+        {
+            ActiveProfile = null;
+            RefreshMappings();
         }
     }
 

@@ -233,6 +233,14 @@ public sealed partial class DaemonServer
             // An apply lands in the device's active preset slot, not the bare device key:
             // slot 1 keeps the legacy key, every other slot is stored under its preset key.
             var applyDeviceId = SnapshotDeviceFor(profile.DeviceId);
+            var rebound = !string.IsNullOrWhiteSpace(profile.DeviceId)
+                && applyDeviceId is not null
+                && applyDeviceId != profile.DeviceId;
+            if (rebound)
+            {
+                profile = profile with { DeviceId = applyDeviceId };
+            }
+
             if (applyDeviceId is null)
             {
                 _profileStore.Save(profile);
@@ -248,7 +256,7 @@ public sealed partial class DaemonServer
             ReloadTargetDevice(profile);
 
             _profileName = apply.ProfileName;
-            _profileJson = apply.ProfileJson;
+            _profileJson = rebound ? ProfileSerializer.Serialize(profile) : apply.ProfileJson;
             _lastError = null;
             _revision++;
             PublishStateChange();
@@ -258,18 +266,19 @@ public sealed partial class DaemonServer
     }
 
     /// <summary>
-    /// The device a snapshot describes: the applied profile's own when it names one,
-    /// otherwise the first connected device - the same device <see cref="ReloadTargetDevice"/>
-    /// reloads and <see cref="BuildSnapshot"/> reads its fallback profile from.
+    /// The current apply target. A connected profile device keeps ownership; if it disconnected,
+    /// the edit moves to the first remaining device instead of succeeding against absent hardware.
+    /// With no connected device the named device remains available for offline persistence.
     /// </summary>
     private string? SnapshotDeviceFor(string? profileDeviceId)
     {
-        if (!string.IsNullOrWhiteSpace(profileDeviceId))
+        var connected = _host.ConnectedDeviceIds;
+        if (!string.IsNullOrWhiteSpace(profileDeviceId)
+            && (connected.Count == 0 || connected.Contains(profileDeviceId, StringComparer.Ordinal)))
         {
             return profileDeviceId;
         }
 
-        var connected = _host.ConnectedDeviceIds;
         return connected.Count > 0 ? connected[0] : null;
     }
 
@@ -612,12 +621,43 @@ public sealed partial class DaemonServer
         var profileName = _profileName;
         var profileJson = _profileJson;
         var connected = _host.ConnectedDeviceIds;
-        if (string.IsNullOrEmpty(profileJson)
-            && connected.Count > 0
-            && _host.GetProfile(connected[0]) is { } profile)
+        if (connected.Count > 0)
         {
-            profileName = profile.Name;
-            profileJson = ProfileSerializer.Serialize(profile);
+            string? profileDeviceId = null;
+            var malformedProfile = false;
+            if (!string.IsNullOrEmpty(profileJson))
+            {
+                try
+                {
+                    profileDeviceId = ProfileSerializer.Deserialize(profileJson).DeviceId;
+                }
+                catch (JsonException)
+                {
+                    malformedProfile = true;
+                }
+            }
+
+            var targetDeviceId = profileDeviceId is not null
+                && connected.Contains(profileDeviceId, StringComparer.Ordinal)
+                    ? profileDeviceId
+                    : connected[0];
+            var targetDisconnected = profileDeviceId is not null
+                && !connected.Contains(profileDeviceId, StringComparer.Ordinal);
+            if (malformedProfile || targetDisconnected || string.IsNullOrEmpty(profileJson))
+            {
+                var profile = _host.GetProfile(targetDeviceId)
+                    ?? _presetStore.LoadSlot(targetDeviceId, _activePresetSlot);
+                if (profile is not null)
+                {
+                    profileName = profile.Name;
+                    profileJson = ProfileSerializer.Serialize(profile with { DeviceId = targetDeviceId });
+                }
+                else
+                {
+                    profileName = string.Empty;
+                    profileJson = string.Empty;
+                }
+            }
         }
 
         return new StateSnapshot(
