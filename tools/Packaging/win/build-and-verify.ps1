@@ -238,29 +238,38 @@ function Show-InnoLogTail([string]$LogPath, [string]$What) {
   }
 }
 
-function Invoke-InnoSilent([string]$FilePath, [string[]]$Arguments, [string]$LogPath, [string]$What) {
+function Invoke-InnoSilent([string]$FilePath, [string[]]$Arguments, [string]$LogPath, [string]$What, [switch]$Diagnose) {
   # Runs an Inno setup or uninstaller silently, waits for the process it started, and
-  # decides success from that process's own exit code. On any failure the matching
-  # log tail is printed before the error propagates.
+  # decides success from that process's own exit code. On failure the matching log
+  # tail is printed; with -Diagnose (the install) the failure is routed through
+  # Show-InstallDiagnostics instead, so a failed install also lists every directory
+  # the payload could have landed in. That routing matters because the caller's
+  # cleanup removes the logs and the throwaway install directory as soon as the
+  # error propagates - both pieces of evidence must be printed before then. The
+  # uninstall keeps the plain log tail.
   try {
     $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -PassThru
   }
   catch {
-    Write-Host "$What could not be started: $($_.Exception.Message)"
-    Show-InnoLogTail $LogPath $What
+    $reason = "$What could not be started: $($_.Exception.Message)"
+    if ($Diagnose) { Show-InstallDiagnostics $reason } else { Write-Host $reason; Show-InnoLogTail $LogPath $What }
     throw
   }
   if ($process.ExitCode -ne 0) {
-    Show-InnoLogTail $LogPath $What
-    throw "$What failed with exit code $($process.ExitCode)"
+    $reason = "$What failed with exit code $($process.ExitCode)"
+    if ($Diagnose) { Show-InstallDiagnostics $reason } else { Show-InnoLogTail $LogPath $What }
+    throw $reason
   }
 }
 
 function Show-InstallDiagnostics([string]$Reason) {
-  # Everything an "exit code 0 but DeziroJoy.exe is not there" failure needs: the
-  # install log tail, the throwaway directory, and the per-user default directory the
-  # setup falls back to if /DIR were ever ignored, plus the publish payload.
-  Write-Host "silent install did not produce $exe`: $Reason"
+  # Everything an install failure needs: the install log tail, the throwaway
+  # directory, and the per-user default directory the setup falls back to if /DIR
+  # were ever ignored, plus the publish payload. Every install failure path - the
+  # process not starting, a nonzero exit, and the poll-timeout and missing-key
+  # cases below - comes through here, so none of them can fail with only a log
+  # tail or only a directory listing.
+  Write-Host "--- install diagnostics: $Reason ---"
   Show-InnoLogTail $installLog 'silent install'
   foreach ($dir in @($installDir, (Join-Path $env:LOCALAPPDATA 'Programs\DeziroJoy'), $publish)) {
     if (Test-Path $dir) {
@@ -295,7 +304,7 @@ try {
     '/NORESTART'
     "/DIR=$installDir"
     "/LOG=$installLog"
-  ) $installLog 'silent install'
+  ) $installLog 'silent install' -Diagnose
 
   # Second wait: the install itself, not just the process that launched it. The
   # process wait above covers the documented Inno flow; this covers every way it
