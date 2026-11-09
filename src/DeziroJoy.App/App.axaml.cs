@@ -366,7 +366,9 @@ internal static class RenderProcess
         reacquireInstance ??= DesktopLauncher.TryReacquireInstanceLease;
         probe ??= static (identity, role, options, cancellationToken)
             => GuiActivationClient.TryProbeAsync(identity, role, options, cancellationToken);
-        pollDelay ??= static () => Task.Delay(100);
+        // The render/tray role-probe pause. Short so close/minimize-to-tray hands over briskly;
+        // it is independent of the daemon probe, whose cadence is deliberately left untouched.
+        pollDelay ??= static () => Task.Delay(40);
         stopDaemon ??= () => Task.Run(() => daemon?.Stop() ?? true);
 
         lifetime.ShutdownMode = ShutdownMode.OnExplicitShutdown;

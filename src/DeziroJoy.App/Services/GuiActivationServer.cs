@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Net.Sockets;
 using System.Text.Json;
 using DeziroJoy.App.Ipc;
 
@@ -21,7 +23,7 @@ public static class GuiActivationContract
 }
 
 /// <summary>
-/// The runtime identity of one GUI: the instance lock and the activation pipe that belong to
+/// The runtime identity of one GUI: the instance lock and the activation channel that belong to
 /// the same user/session. Windows scopes both to the logon session (a second RDP logon is a
 /// separate instance by design); Linux scopes both to the user.
 /// </summary>
@@ -51,6 +53,14 @@ public sealed record GuiInstanceIdentity(string LockPath, string PipeName)
                 "gui.lock"),
             $"{GuiActivationContract.PipeNamePrefix}.{user}");
     }
+
+    /// <summary>
+    /// Where the current lease holder publishes the activation endpoint a launch should reach.
+    /// Only meaningful on Linux, where the endpoint is a per-instance abstract socket that has
+    /// to be discovered; Windows keeps its well-known named pipe and never reads this. The path
+    /// is derived from the lock so every process of one user/session agrees on it.
+    /// </summary>
+    public string DiscoveryPath => Path.ChangeExtension(LockPath, ".activation");
 }
 
 public enum GuiInstanceRole
@@ -102,8 +112,8 @@ public sealed class GuiActivationOptions
     }
 
     /// <summary>
-    /// How long a launch waits for the running GUI's pipe to appear. Covers the winner's
-    /// startup window: it takes the instance lease microseconds before it opens the pipe.
+    /// How long a launch waits for the running GUI's endpoint to appear. Covers the winner's
+    /// startup window: it takes the instance lease microseconds before it publishes the channel.
     /// </summary>
     public TimeSpan ConnectTimeout { get; }
 
@@ -163,17 +173,70 @@ public sealed class GuiInstanceLease : IDisposable
 }
 
 /// <summary>
+/// Accepts one activation connection at a time and hands back the connected stream. Windows
+/// implements this with a same-session named pipe (one server instance per accept, exactly as
+/// the OS intends); Linux with an abstract Unix domain socket. The abstraction exists so the
+/// accept loop, the Show/ack exchange and the drain never have to know which is in play.
+/// </summary>
+internal interface IActivationListener : IAsyncDisposable
+{
+    Task<Stream> AcceptAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>Opens the client half of the activation channel to a named endpoint.</summary>
+internal interface IActivationPortal
+{
+    Task<Stream> ConnectAsync(string endpoint, TimeSpan timeout, CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Serves the activation channel for the life of one GUI: every Show request is answered
 /// only after this GUI has restored its window, and a peer speaking another protocol
 /// version is refused instead of guessed at. Avalonia-free on purpose - it starts before
-/// the desktop lifetime does, and a pipe failure must never be able to take the GUI down.
+/// the desktop lifetime does, and a channel failure must never be able to take the GUI down.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Windows listens on the well-known named pipe (<see cref="GuiInstanceIdentity.PipeName"/>):
+/// named pipes are kernel objects, so a retiring holder's exit never disturbs a successor that
+/// binds the same name.
+/// </para>
+/// <para>
+/// Linux cannot share one Unix socket path across the handover: .NET maps a named pipe to a
+/// filesystem socket at a fixed path and unlinks it on dispose, so a retiring holder would
+/// delete the very socket its successor just bound (a fresh launch then waits out the whole
+/// connect budget). Linux therefore listens on a <b>per-instance abstract socket</b> - the
+/// kernel frees an abstract name the moment its last descriptor closes, so there is no file to
+/// unlink and no stale entry to accumulate - and publishes that endpoint through a small
+/// discovery file. A launch reads the discovery file to reach the current holder; the holder's
+/// own exit removes only its own descriptor and can never touch the successor's.
+/// </para>
+/// </remarks>
 public sealed class GuiActivationServer : IDisposable
 {
+    /// <summary>How long a retiring holder lets an in-flight Show finish writing its ack.</summary>
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>How often a launch re-checks the discovery file while waiting for a holder.</summary>
+    internal static readonly TimeSpan DiscoveryPollInterval = TimeSpan.FromMilliseconds(25);
+
     private readonly GuiInstanceIdentity _identity;
     private readonly GuiActivationOptions _options;
+
+    /// <summary>Stops the accept loop from taking new connections once the holder retires.</summary>
     private readonly CancellationTokenSource _lifetime = new();
+
+    /// <summary>
+    /// Cancels the connections still being served. Left running through a retire so an in-flight
+    /// Show can finish; cancelled only when the bounded drain gives up on a straggler.
+    /// </summary>
+    private readonly CancellationTokenSource _serving = new();
+
     private readonly object _serveGate = new();
+    private readonly object _drainGate = new();
+    private readonly HashSet<Task> _inFlight = [];
+
+    private IActivationListener? _listener;
     private Task? _acceptLoop;
     private bool _disposed;
 
@@ -230,7 +293,8 @@ public sealed class GuiActivationServer : IDisposable
     /// <summary>
     /// Starts accepting activation connections. Called once the GUI can actually answer a Show
     /// request, so a launch arriving while the runtime and window are still being built waits
-    /// for the live listener instead of being refused.
+    /// for the live listener instead of being refused. On Linux this is also the moment the
+    /// per-instance endpoint is published to the discovery file.
     /// </summary>
     public void BeginServing()
     {
@@ -238,6 +302,22 @@ public sealed class GuiActivationServer : IDisposable
         {
             if (_disposed || _acceptLoop is not null)
             {
+                return;
+            }
+
+            var endpoint = ServerEndpoint(_identity);
+            try
+            {
+                _listener = CreateListener(endpoint);
+                PublishEndpoint(_identity, endpoint);
+            }
+            catch (Exception exception) when (exception is IOException or SocketException or UnauthorizedAccessException)
+            {
+                // The activation channel is how a second launch reaches this GUI, never something
+                // the mapping depends on: a channel that cannot be opened must not take the GUI
+                // down. Leave the listener unset so the channel simply stays unavailable.
+                _listener = null;
+                Trace.WriteLine($"[DeziroJoy] activation channel unavailable: {exception.Message}");
                 return;
             }
 
@@ -259,6 +339,8 @@ public sealed class GuiActivationServer : IDisposable
             ActiveInstance = null;
         }
 
+        // Stop taking new connections first, so the drain below only has to wait for the
+        // exchanges already under way.
         _lifetime.Cancel();
 
         if (_acceptLoop is { } acceptLoop)
@@ -273,27 +355,39 @@ public sealed class GuiActivationServer : IDisposable
             }
         }
 
+        // Let every in-flight Show finish writing its ack before the channel is torn down: a
+        // launch that reached this holder microseconds before it retired must still be answered,
+        // not dropped by the lifetime cancellation above.
+        DrainInFlight();
+
+        // Anything still stuck after the bounded drain is a peer that never completed its
+        // exchange; cancel it so its stream is released instead of blocking process exit.
+        _serving.Cancel();
+
+        if (_listener is { } listener)
+        {
+            try
+            {
+                listener.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
+            }
+            catch (Exception exception) when (exception is AggregateException or OperationCanceledException)
+            {
+                // A listener that will not close must not block process exit either.
+            }
+        }
+
         _lifetime.Dispose();
+        _serving.Dispose();
     }
 
     private async Task AcceptLoopAsync()
     {
         while (!_lifetime.IsCancellationRequested)
         {
+            Stream stream;
             try
             {
-                var server = CreatePipe(_identity.PipeName);
-                try
-                {
-                    await server.WaitForConnectionAsync(_lifetime.Token).ConfigureAwait(false);
-                }
-                catch
-                {
-                    await server.DisposeAsync().ConfigureAwait(false);
-                    throw;
-                }
-
-                _ = ServeConnectionAsync(server);
+                stream = await _listener!.AcceptAsync(_lifetime.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -301,9 +395,9 @@ public sealed class GuiActivationServer : IDisposable
             }
             catch (Exception)
             {
-                // A pipe failure must never take the GUI down: the activation channel is how
+                // A channel failure must never take the GUI down: the activation channel is how
                 // a second launch reaches this one, not something the mapping depends on.
-                // Back off so a permanently unusable name cannot spin the loop.
+                // Back off so a permanently unusable channel cannot spin the loop.
                 try
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(250), _lifetime.Token).ConfigureAwait(false);
@@ -312,33 +406,84 @@ public sealed class GuiActivationServer : IDisposable
                 {
                     break;
                 }
+
+                continue;
             }
+
+            var serve = ServeConnectionAsync(stream, _serving.Token);
+            Track(serve);
         }
     }
 
-    private async Task ServeConnectionAsync(NamedPipeServerStream server)
+    /// <summary>
+    /// Registers an in-flight exchange so <see cref="DrainInFlight"/> can wait for it, and drops
+    /// the reference - observing any fault - once it completes.
+    /// </summary>
+    private void Track(Task serve)
     {
-        await using (server)
+        lock (_drainGate)
+        {
+            _inFlight.Add(serve);
+        }
+
+        _ = serve.ContinueWith(static (completed, state) =>
+        {
+            var server = (GuiActivationServer)state!;
+            _ = completed.Exception; // Observe, so a cancelled straggler never goes unobserved.
+            lock (server._drainGate)
+            {
+                server._inFlight.Remove(completed);
+            }
+        }, this, TaskScheduler.Default);
+    }
+
+    private void DrainInFlight()
+    {
+        Task[] pending;
+        lock (_drainGate)
+        {
+            pending = _inFlight.ToArray();
+        }
+
+        if (pending.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Task.WaitAll(pending, (int)DrainTimeout.TotalMilliseconds);
+        }
+        catch (AggregateException)
+        {
+            // A peer vanished mid-exchange: there is nobody left to answer, which is fine.
+        }
+    }
+
+    private async Task ServeConnectionAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        await using (stream)
         {
             try
             {
-                var payload = await PipeFraming.ReadFrameAsync(server, _lifetime.Token).ConfigureAwait(false);
+                var payload = await PipeFraming.ReadFrameAsync(stream, cancellationToken).ConfigureAwait(false);
                 var request = Deserialize<GuiShowRequest>(payload);
-                var (accepted, reason) = await AnswerAsync(request).ConfigureAwait(false);
+                var (accepted, reason) = await AnswerAsync(request, cancellationToken).ConfigureAwait(false);
 
                 await PipeFraming.WriteFrameAsync(
-                    server,
+                    stream,
                     Serialize(new GuiShowAck(GuiActivationContract.ProtocolVersion, accepted, reason, Role)),
-                    _lifetime.Token).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception)
             {
-                // The peer vanished mid-exchange: there is nobody left to answer.
+                // The peer vanished mid-exchange, or the channel was torn down while draining a
+                // retiring holder: either way there is nobody left to answer.
             }
         }
     }
 
-    private async Task<(bool Accepted, string? Reason)> AnswerAsync(GuiShowRequest request)
+    private async Task<(bool Accepted, string? Reason)> AnswerAsync(GuiShowRequest request, CancellationToken cancellationToken)
     {
         if (request.Version != GuiActivationContract.ProtocolVersion)
         {
@@ -368,7 +513,7 @@ public sealed class GuiActivationServer : IDisposable
 
         try
         {
-            await handler().WaitAsync(_options.AckTimeout, _lifetime.Token).ConfigureAwait(false);
+            await handler().WaitAsync(_options.AckTimeout, cancellationToken).ConfigureAwait(false);
             return (true, null);
         }
         catch (TimeoutException)
@@ -381,26 +526,74 @@ public sealed class GuiActivationServer : IDisposable
         }
     }
 
-    private static NamedPipeServerStream CreatePipe(string pipeName)
+    /// <summary>
+    /// The endpoint this process listens on. Windows reuses the well-known pipe name (named pipes
+    /// are per-kernel-object and survive a handover); Linux mints a per-instance abstract name so
+    /// a retiring holder can never unlink its successor.
+    /// </summary>
+    private static string ServerEndpoint(GuiInstanceIdentity identity)
+        => OperatingSystem.IsWindows()
+            ? identity.PipeName
+            : $"{identity.PipeName}.{Guid.NewGuid():N}";
+
+    private static IActivationListener CreateListener(string endpoint)
+        => OperatingSystem.IsWindows()
+            ? new NamedPipeListener(endpoint)
+            : new AbstractUnixListener(endpoint);
+
+    /// <summary>
+    /// The endpoint a launch should reach. Windows answers with the well-known pipe; Linux reads
+    /// the discovery file the current holder published. Null means no holder has published yet.
+    /// </summary>
+    internal static string? ClientEndpoint(GuiInstanceIdentity identity)
+        => OperatingSystem.IsWindows()
+            ? identity.PipeName
+            : ReadEndpoint(identity);
+
+    private static void PublishEndpoint(GuiInstanceIdentity identity, string endpoint)
     {
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
         {
-            return new NamedPipeServerStream(
-                pipeName,
-                PipeDirection.InOut,
-                NamedPipeServerStream.MaxAllowedServerInstances,
-                PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous);
+            return;
         }
 
-        // Same-integrity GUI-to-GUI signaling: only this user's processes may connect. The
-        // daemon's mapping pipe is a separate channel with its own ACL.
-        return new NamedPipeServerStream(
-            pipeName,
-            PipeDirection.InOut,
-            NamedPipeServerStream.MaxAllowedServerInstances,
-            PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        try
+        {
+            var path = identity.DiscoveryPath;
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            // Publish atomically: a launch must never read a half-written endpoint.
+            var temporary = $"{path}.{Environment.ProcessId}.tmp";
+            File.WriteAllText(temporary, endpoint);
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Discovery is best-effort; a GUI that cannot publish it simply cannot be woken.
+        }
+    }
+
+    private static string? ReadEndpoint(GuiInstanceIdentity identity)
+    {
+        try
+        {
+            var path = identity.DiscoveryPath;
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var endpoint = File.ReadAllText(path).Trim();
+            return endpoint.Length == 0 ? null : endpoint;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     internal static byte[] Serialize<T>(T message)
@@ -409,6 +602,119 @@ public sealed class GuiActivationServer : IDisposable
     internal static T Deserialize<T>(byte[] payload)
         => JsonSerializer.Deserialize<T>(payload, IpcSerializer.Options)
             ?? throw new JsonException($"the activation message deserialized to null ({typeof(T).Name}).");
+
+    /// <summary>
+    /// A same-session named pipe, one server instance per accept. <c>CurrentUserOnly</c> keeps
+    /// the GUI-to-GUI signaling inside this user's integrity level.
+    /// </summary>
+    private sealed class NamedPipeListener(string pipeName) : IActivationListener
+    {
+        public async Task<Stream> AcceptAsync(CancellationToken cancellationToken)
+        {
+            var server = new NamedPipeServerStream(
+                pipeName,
+                PipeDirection.InOut,
+                NamedPipeServerStream.MaxAllowedServerInstances,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+
+            try
+            {
+                await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                await server.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+
+            return server;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// A per-instance abstract Unix domain socket. The leading NUL puts the name in the abstract
+    /// namespace: there is no filesystem entry to unlink, and the kernel reclaims the name as soon
+    /// as this process closes its descriptor, so a retiring holder leaves neither a race nor a
+    /// stale socket behind.
+    /// </summary>
+    private sealed class AbstractUnixListener(string endpoint) : IActivationListener
+    {
+        private const int Backlog = 16;
+
+        private readonly Socket _listener = Create(endpoint);
+
+        private static Socket Create(string endpoint)
+        {
+            var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            socket.Bind(new UnixDomainSocketEndPoint("\0" + endpoint));
+            socket.Listen(Backlog);
+            return socket;
+        }
+
+        public async Task<Stream> AcceptAsync(CancellationToken cancellationToken)
+        {
+            var client = await _listener.AcceptAsync(cancellationToken).ConfigureAwait(false);
+            return new NetworkStream(client, ownsSocket: true);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _listener.Dispose();
+            await ValueTask.CompletedTask;
+        }
+    }
+}
+
+/// <summary>Connects a launch to a Windows same-session named pipe.</summary>
+internal sealed class NamedPipePortal : IActivationPortal
+{
+    public async Task<Stream> ConnectAsync(string pipeName, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var pipe = new NamedPipeClientStream(
+            ".",
+            pipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+
+        try
+        {
+            await pipe.ConnectAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await pipe.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        return pipe;
+    }
+}
+
+/// <summary>Connects a launch to a per-instance abstract Unix domain socket.</summary>
+internal sealed class AbstractUnixPortal : IActivationPortal
+{
+    public async Task<Stream> ConnectAsync(string endpoint, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+
+        try
+        {
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bound.CancelAfter(timeout);
+            await socket.ConnectAsync(new UnixDomainSocketEndPoint("\0" + endpoint), bound.Token)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+
+        return new NetworkStream(socket, ownsSocket: true);
+    }
 }
 
 /// <summary>
@@ -425,6 +731,11 @@ internal static class GuiActivationClient
     /// reaches the live listener. Show is idempotent, so a retry is always safe.
     /// </summary>
     private const int Attempts = 3;
+
+    private static readonly IActivationPortal Portal =
+        OperatingSystem.IsWindows()
+            ? new NamedPipePortal()
+            : new AbstractUnixPortal();
 
     public static Task<bool> TryShowAsync(
         GuiInstanceIdentity identity,
@@ -461,30 +772,25 @@ internal static class GuiActivationClient
 
         for (var attempt = 1; ; attempt++)
         {
-            var pipe = new NamedPipeClientStream(
-                ".",
-                identity.PipeName,
-                PipeDirection.InOut,
-                PipeOptions.Asynchronous);
-
+            Stream stream;
             try
             {
-                await pipe.ConnectAsync(options.ConnectTimeout, cancellationToken).ConfigureAwait(false);
+                stream = await ConnectAsync(identity, options.ConnectTimeout, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (IsTransient(exception, cancellationToken))
             {
-                await pipe.DisposeAsync().ConfigureAwait(false);
+                // No GUI is reachable within the connect budget: not a reason to start a second.
                 return false;
             }
 
             try
             {
                 await PipeFraming.WriteFrameAsync(
-                    pipe,
+                    stream,
                     GuiActivationServer.Serialize(request),
                     cancellationToken).ConfigureAwait(false);
 
-                var payload = await PipeFraming.ReadFrameAsync(pipe, cancellationToken)
+                var payload = await PipeFraming.ReadFrameAsync(stream, cancellationToken)
                     .AsTask()
                     .WaitAsync(options.AckTimeout, cancellationToken)
                     .ConfigureAwait(false);
@@ -502,13 +808,56 @@ internal static class GuiActivationClient
             }
             finally
             {
-                await pipe.DisposeAsync().ConfigureAwait(false);
+                await stream.DisposeAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Connects to the current holder. Windows connects straight to the well-known pipe, blocking
+    /// up to <paramref name="connectTimeout"/> while the winner finishes starting. Linux waits for
+    /// the holder to publish its per-instance endpoint, then connects the abstract socket. Exposed
+    /// internally so tests can drive a raw exchange against a live server on either platform.
+    /// </summary>
+    internal static async Task<Stream> ConnectAsync(
+        GuiInstanceIdentity identity,
+        TimeSpan connectTimeout,
+        CancellationToken cancellationToken)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return await Portal.ConnectAsync(identity.PipeName, connectTimeout, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var endpoint = GuiActivationServer.ClientEndpoint(identity);
+            if (endpoint is not null)
+            {
+                var remaining = connectTimeout - elapsed.Elapsed;
+                if (remaining < TimeSpan.FromMilliseconds(1))
+                {
+                    remaining = TimeSpan.FromMilliseconds(1);
+                }
+
+                return await Portal.ConnectAsync(endpoint, remaining, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (elapsed.Elapsed >= connectTimeout)
+            {
+                throw new TimeoutException("no activation endpoint was published within the connect budget");
+            }
+
+            await Task.Delay(GuiActivationServer.DiscoveryPollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private static bool IsTransient(Exception exception, CancellationToken cancellationToken)
         => exception is TimeoutException or IOException or UnauthorizedAccessException or ObjectDisposedException
-            or FrameProtocolException or JsonException
+            or SocketException or FrameProtocolException or JsonException
             || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested);
 }

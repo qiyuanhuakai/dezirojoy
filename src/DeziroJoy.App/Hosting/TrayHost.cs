@@ -470,8 +470,12 @@ internal static class TrayHost
     /// <summary>True once this process is the tray rather than a render process.</summary>
     internal static bool IsTrayProcess { get; private set; }
 
-    /// <summary>Pause between render-answer polls while the show route waits for the window.</summary>
-    private static readonly TimeSpan ShowPollPause = TimeSpan.FromMilliseconds(100);
+    /// <summary>
+    /// Pause between render-answer polls while the show route waits for the window. Kept short
+    /// (well under the daemon probe's own cadence) so a tray wake feels immediate without adding
+    /// load: the per-probe connect still honours the shrinking handover budget.
+    /// </summary>
+    private static readonly TimeSpan ShowPollPause = TimeSpan.FromMilliseconds(40);
 
     private static readonly TimeSpan ShowPollBudget = TimeSpan.FromSeconds(10);
 

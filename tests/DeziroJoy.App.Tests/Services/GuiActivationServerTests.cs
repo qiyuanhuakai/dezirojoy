@@ -1,4 +1,3 @@
-using System.IO.Pipes;
 using System.Text.Json;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
@@ -22,22 +21,21 @@ public sealed class GuiActivationServerTests
             $"DeziroJoy.Test.Gui.Activation.{id}");
     }
 
-    private static async Task<NamedPipeClientStream> ConnectAsync(GuiInstanceIdentity identity)
-    {
-        var pipe = new NamedPipeClientStream(".", identity.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        return pipe;
-    }
+    private static Task<Stream> ConnectAsync(GuiInstanceIdentity identity)
+        => GuiActivationClient.ConnectAsync(
+            identity,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
 
-    private static async Task<GuiShowAck> RoundTripAsync(NamedPipeClientStream pipe, GuiShowRequest request)
+    private static async Task<GuiShowAck> RoundTripAsync(Stream stream, GuiShowRequest request)
     {
         var cancellation = TestContext.Current.CancellationToken;
 
         await PipeFraming.WriteFrameAsync(
-            pipe,
+            stream,
             JsonSerializer.SerializeToUtf8Bytes(request, IpcSerializer.Options),
             cancellation);
-        var payload = await PipeFraming.ReadFrameAsync(pipe, cancellation)
+        var payload = await PipeFraming.ReadFrameAsync(stream, cancellation)
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(5), cancellation);
         return JsonSerializer.Deserialize<GuiShowAck>(payload, IpcSerializer.Options)!;
@@ -93,14 +91,14 @@ public sealed class GuiActivationServerTests
 
         using var server = GuiActivationServer.StartActive(identity);
 
-        await using var early = new NamedPipeClientStream(
-            ".",
-            identity.PipeName,
-            PipeDirection.InOut,
-            PipeOptions.Asynchronous);
-
+        // Nothing is serving yet: a connect must time out rather than be answered by a
+        // half-built channel. On Linux the per-instance endpoint is not published until
+        // BeginServing, so this is exactly "the listener is not up yet".
         await Assert.ThrowsAsync<TimeoutException>(async () =>
-            await early.ConnectAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken));
+            await GuiActivationClient.ConnectAsync(
+                identity,
+                TimeSpan.FromMilliseconds(300),
+                TestContext.Current.CancellationToken));
 
         server.ShowRequested += () => Task.CompletedTask;
         server.BeginServing();
@@ -214,5 +212,96 @@ public sealed class GuiActivationServerTests
     public void The_Identity_Is_Stable_For_The_Current_Process()
     {
         Assert.Equal(GuiInstanceIdentity.ForCurrentProcess(), GuiInstanceIdentity.ForCurrentProcess());
+    }
+
+    [Fact]
+    public async Task An_In_Flight_Show_Is_Acked_Even_As_The_Holder_Retires()
+    {
+        // A launch that reaches a holder microseconds before it retires must still be answered:
+        // the drain lets the ack finish writing instead of cancelling it with the lifetime.
+        var identity = NewIdentity();
+        var server = new GuiActivationServer(identity);
+
+        try
+        {
+            var restoring = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseRestore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.ShowRequested += () =>
+            {
+                restoring.TrySetResult();
+                return releaseRestore.Task;
+            };
+
+            await using var client = await ConnectAsync(identity);
+            var exchange = RoundTripAsync(client, new GuiShowRequest(GuiActivationContract.ProtocolVersion));
+
+            // The handler is mid-restore; retire the holder before it can write the ack.
+            await restoring.Task;
+            var retire = Task.Run(() => server.Dispose(), TestContext.Current.CancellationToken);
+
+            releaseRestore.SetResult();
+            var ack = await exchange;
+
+            Assert.True(ack.Accepted, $"the show must be acked as the holder retires: {ack.Reason}");
+            await retire;
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task A_Retiring_Holder_Does_Not_Disturb_Its_Successors_Channel()
+    {
+        // The Linux bug this guards: a retiring holder must not delete the socket its successor
+        // now serves. Each holder owns a distinct channel, so the holder's exit leaves the
+        // successor reachable - a launch through discovery still gets its ack.
+        var identity = NewIdentity();
+        using var holder = new GuiActivationServer(identity, role: GuiInstanceRole.Tray);
+        using var successor = new GuiActivationServer(identity, role: GuiInstanceRole.Render);
+
+        var shows = 0;
+        successor.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+
+        holder.Dispose();
+
+        var shown = await GuiActivationClient.TryShowAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(shown, "the successor must remain reachable after the holder retired");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public async Task A_Launch_Always_Reaches_The_Current_Holder_Across_Handovers()
+    {
+        // Back-to-back handovers: each new holder publishes its own endpoint, the previous one
+        // retires, and a launch must land on the live holder every time - never a stale one.
+        var identity = NewIdentity();
+        for (var generation = 1; generation <= 3; generation++)
+        {
+            using var holder = new GuiActivationServer(identity);
+            var shows = 0;
+            holder.ShowRequested += () =>
+            {
+                shows++;
+                return Task.CompletedTask;
+            };
+
+            var shown = await GuiActivationClient.TryShowAsync(
+                identity,
+                GuiActivationOptions.Default,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(shown, $"generation {generation} must be reachable after the previous holder retired");
+            Assert.Equal(1, shows);
+        }
     }
 }
