@@ -50,6 +50,10 @@ public partial class MainWindow : Window
     /// </summary>
     private bool _windowActive;
 
+    private bool _minimizeRequestInProgress;
+
+    internal Func<Task<bool>>? MinimizeToTrayRequested { get; set; }
+
     public MainWindow()
         : this(CreateRuntime())
     {
@@ -226,10 +230,9 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Releases everything this window attached: both timers, both host sampling
-    /// subscriptions, the view-model listener, the visualizer and the key handler. The
-    /// runtime is deliberately NOT stopped here - the window is a presentation resource, and
-    /// the engine (the Windows daemon or the Linux local one) keeps mapping with no window
-    /// open. Shutdown belongs to the application lifetime and the tray's 退出 item.
+    /// subscriptions, the view-model listener, the visualizer and the key handler. Daemon
+    /// shutdown is deliberately decided before this event by the render lifetime coordinator:
+    /// a tray handover keeps it running, while a full exit has already stopped it.
     /// </summary>
     private void OnClosed(object? sender, EventArgs e)
     {
@@ -488,6 +491,12 @@ public partial class MainWindow : Window
         if (change.Property == WindowStateProperty)
         {
             UpdateMaximizeGlyph();
+            if (WindowState == WindowState.Minimized
+                && !_minimizeRequestInProgress
+                && MinimizeToTrayRequested is not null)
+            {
+                RequestMinimize();
+            }
         }
     }
 
@@ -541,8 +550,28 @@ public partial class MainWindow : Window
 
     private void ShowRightPanelClick(object? sender, RoutedEventArgs e) => SetSidebarCollapsed(false, false);
 
-    private void MinimizeClick(object? sender, RoutedEventArgs e)
-        => WindowState = WindowState.Minimized;
+    private void MinimizeClick(object? sender, RoutedEventArgs e) => RequestMinimize();
+
+    internal async void RequestMinimize()
+    {
+        if (_minimizeRequestInProgress)
+        {
+            return;
+        }
+
+        _minimizeRequestInProgress = true;
+        try
+        {
+            if (MinimizeToTrayRequested is null || !await MinimizeToTrayRequested())
+            {
+                WindowState = WindowState.Minimized;
+            }
+        }
+        finally
+        {
+            _minimizeRequestInProgress = false;
+        }
+    }
 
     private void CloseClick(object? sender, RoutedEventArgs e)
         => Close();
@@ -559,7 +588,7 @@ public partial class MainWindow : Window
         var host = new EngineHost(provider, sink, store);
 
         // The design-time factory feeds the view model a settings service too, so the
-        // 允许手柄操作 preference behaves here exactly as it does in the running app.
+        // 劫持手柄按键 preference behaves here exactly as it does in the running app.
         return (new MainWindowViewModel(host, store, settings: new ThemeService()), host);
     }
 }

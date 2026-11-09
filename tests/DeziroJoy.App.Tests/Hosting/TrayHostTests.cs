@@ -150,11 +150,11 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
-    public async Task The_Handover_Helper_Gives_Up_After_The_Bounded_Budget()
+    public async Task The_Handover_Helper_Rolls_Back_After_The_Bounded_Budget()
     {
         var fixture = BuildTray(daemonReachable: true);
 
-        await TrayHost.HandOverToRenderAsync(
+        var handedOver = await TrayHost.HandOverToRenderAsync(
             fixture.Daemon,
             fixture.Render,
             () => fixture.Order.Add("release"),
@@ -166,19 +166,71 @@ public sealed class TrayHostTests : IDisposable
             static () => Task.CompletedTask,
             TimeSpan.Zero,
             () => fixture.Order.Add("shutdown"),
-            fixture.Lifetime);
+            fixture.Lifetime,
+            () =>
+            {
+                fixture.Order.Add("reacquire");
+                return true;
+            });
 
+        Assert.False(handedOver);
         Assert.Equal(1, fixture.Polls);
         Assert.Equal(0, fixture.Delays);
-        Assert.Contains("shutdown", fixture.Order);
+        Assert.Contains("reacquire", fixture.Order);
+        Assert.DoesNotContain("shutdown", fixture.Order);
+    }
+
+    [AvaloniaFact]
+    public async Task The_Handover_Helper_Rolls_Back_When_Releasing_The_Lease_Fails()
+    {
+        var fixture = BuildTray(daemonReachable: true);
+
+        var handedOver = await TrayHost.HandOverToRenderAsync(
+            fixture.Daemon,
+            fixture.Render,
+            () => throw new InvalidOperationException("release failed"),
+            (_, _, _) =>
+            {
+                fixture.Order.Add("poll");
+                return Task.FromResult(true);
+            },
+            static () => Task.CompletedTask,
+            TimeSpan.Zero,
+            () => fixture.Order.Add("shutdown"),
+            fixture.Lifetime,
+            () =>
+            {
+                fixture.Order.Add("reacquire");
+                return true;
+            });
+
+        Assert.False(handedOver);
+        Assert.Equal(0, fixture.Polls);
+        Assert.DoesNotContain("spawn-render", fixture.Order);
+        Assert.Contains("reacquire", fixture.Order);
+        Assert.DoesNotContain("shutdown", fixture.Order);
+    }
+
+    [AvaloniaFact]
+    public void Tray_Exit_Does_Not_Retire_When_The_Render_Process_Cannot_Be_Stopped()
+    {
+        var fixture = BuildTray();
+        fixture.RenderHandle.SurvivesKill = true;
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+        Assert.Single(fixture.Shutdowns);
+
+        Click(Item("退出"));
+
+        Assert.Single(fixture.Shutdowns);
+        Assert.Equal(DaemonSupervisionState.StoppedGracefully, fixture.Daemon.State);
+        Assert.Equal(RenderSupervisionState.StopFailed, fixture.Render.State);
+        Assert.True(fixture.Render.IsAlive);
     }
 
     [AvaloniaFact]
     public void The_Show_Route_Retires_Only_After_The_Render_Answers()
     {
-        // Retiring at spawn time is the silent failure: the render is still arbitrating the
-        // lock the tray has not released yet, so it exits with no GUI. The tray stays resident
-        // until the render proves its window is up.
         var answers = new Queue<bool>([false, false, true]);
         var fixture = BuildTray(
             daemonReachable: true,
@@ -195,10 +247,8 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Show_Route_Stops_Polling_When_The_Render_Exits()
+    public void The_Show_Route_Stops_Polling_When_The_Render_Exits_And_Keeps_The_Tray()
     {
-        // A render that died mid-poll can never answer, so the route must stop polling and
-        // retire instead of spinning out its whole budget on a dead child.
         FakeProcessHandle? handle = null;
         var fixture = BuildTray(
             daemonReachable: true,
@@ -214,15 +264,13 @@ public sealed class TrayHostTests : IDisposable
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(1, fixture.Polls);
-        Assert.Single(fixture.Shutdowns);
+        Assert.Empty(fixture.Shutdowns);
+        Assert.Contains("reacquire", fixture.Order);
     }
 
     [AvaloniaFact]
-    public void The_Show_Route_Gives_Up_After_The_Bounded_Budget()
+    public void The_Show_Route_Gives_Up_After_The_Bounded_Budget_Without_Losing_The_Tray()
     {
-        // A render that never answers must not hold the tray open forever. A zero budget is
-        // exhausted by the first failed pass, which makes the bound deterministic without a
-        // real clock: exactly one attempt, then retire.
         var fixture = BuildTray(
             daemonReachable: true,
             showPoll: static (_, _, _) => Task.FromResult(false),
@@ -233,7 +281,9 @@ public sealed class TrayHostTests : IDisposable
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(1, fixture.Polls);
-        Assert.Single(fixture.Shutdowns);
+        Assert.Empty(fixture.Shutdowns);
+        Assert.Equal(1, fixture.RenderHandle.KillCalls);
+        Assert.Contains("reacquire", fixture.Order);
     }
 
     [AvaloniaFact]
@@ -244,6 +294,28 @@ public sealed class TrayHostTests : IDisposable
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
 
+        Assert.Equal(1, fixture.Launcher.Started.Count(start => start.Info.Arguments.Contains("--gui")));
+    }
+
+    [AvaloniaFact]
+    public void Concurrent_Show_Requests_Share_One_Render_Handover()
+    {
+        var answer = new TaskCompletionSource<bool>();
+        var fixture = BuildTray(
+            daemonReachable: true,
+            showPoll: (_, _, _) => answer.Task);
+
+        Click(Item("显示主窗口"));
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, fixture.Launcher.Started.Count(start => start.Info.Arguments.Contains("--gui")));
+        Assert.Equal(1, fixture.Polls);
+
+        answer.SetResult(true);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(fixture.Shutdowns);
         Assert.Equal(1, fixture.Launcher.Started.Count(start => start.Info.Arguments.Contains("--gui")));
     }
 
@@ -268,12 +340,19 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Exiting_From_The_Tray_Stops_The_Daemon_Kills_The_Render_And_Shuts_Down()
+    public void Exiting_From_The_Tray_Gracefully_Stops_The_Daemon_Kills_The_Render_And_Shuts_Down()
     {
-        // The shutdown is recorded rather than performed: Shutdown() on a lifetime reaches the
-        // shared headless Application, which would take every later test's input with it.
         var launcher = new FakeLauncher { Daemon = new FakeProcessHandle(), Render = new FakeProcessHandle() };
-        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => false);
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: _ =>
+            {
+                launcher.Daemon!.RaiseExited();
+                return Task.FromResult(true);
+            });
         var render = new RenderSupervisor(launcher.Start, () => { });
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var shutdownRequested = false;
@@ -291,16 +370,176 @@ public sealed class TrayHostTests : IDisposable
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
-
         Click(Item("退出"));
 
         Assert.True(tray.IsExiting);
-        Assert.Equal(1, launcher.Daemon!.KillCalls);
-        Assert.True(launcher.Daemon.EntireTree);
+        Assert.Equal(0, launcher.Daemon!.KillCalls);
         Assert.Equal(1, launcher.Daemon.WaitCalls);
+        Assert.Equal(DaemonSupervisionState.StoppedGracefully, daemon.State);
         Assert.Equal(1, launcher.Render!.KillCalls);
         Assert.True(launcher.Render.EntireTree);
         Assert.True(shutdownRequested);
+    }
+
+    [AvaloniaFact]
+    public void The_Daemon_Supervisor_Kills_An_Owned_Child_Only_After_Graceful_Stop_Fails()
+    {
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: static _ => Task.FromResult(false));
+        daemon.EnsureRunning();
+
+        Assert.True(daemon.Stop());
+
+        Assert.Equal(1, launcher.Daemon!.KillCalls);
+        Assert.Equal(DaemonSupervisionState.Killed, daemon.State);
+    }
+
+    [AvaloniaFact]
+    public void The_Daemon_Supervisor_Kills_An_Owned_Child_When_The_Graceful_Wait_Times_Out()
+    {
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: static _ => Task.FromResult(true),
+            stopTimeout: TimeSpan.Zero);
+        daemon.EnsureRunning();
+
+        Assert.True(daemon.Stop());
+
+        Assert.Equal(2, launcher.Daemon!.WaitCalls);
+        Assert.Equal(1, launcher.Daemon.KillCalls);
+        Assert.Equal(DaemonSupervisionState.Killed, daemon.State);
+    }
+
+    [AvaloniaFact]
+    public void A_Failed_Daemon_Stop_Keeps_The_Owned_Handle_For_A_Retry()
+    {
+        var launcher = new FakeLauncher
+        {
+            Daemon = new FakeProcessHandle { SurvivesKill = true },
+        };
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: static _ => Task.FromResult(false),
+            stopTimeout: TimeSpan.Zero);
+        daemon.EnsureRunning();
+
+        Assert.False(daemon.Stop());
+        Assert.True(daemon.IsRunning);
+        Assert.Equal(DaemonSupervisionState.StopFailed, daemon.State);
+
+        launcher.Daemon!.SurvivesKill = false;
+
+        Assert.True(daemon.Stop());
+        Assert.Equal(2, launcher.Daemon.KillCalls);
+        Assert.Equal(DaemonSupervisionState.Killed, daemon.State);
+    }
+
+    [AvaloniaFact]
+    public void A_Failed_Render_Stop_Keeps_The_Handle_And_Does_Not_Report_Success()
+    {
+        var launcher = new FakeLauncher
+        {
+            Render = new FakeProcessHandle { SurvivesKill = true },
+        };
+        var render = new RenderSupervisor(launcher.Start);
+        render.Show();
+
+        Assert.False(render.Stop());
+        Assert.True(render.IsAlive);
+        Assert.Equal(RenderSupervisionState.StopFailed, render.State);
+
+        launcher.Render!.SurvivesKill = false;
+
+        Assert.True(render.Stop());
+        Assert.False(render.IsAlive);
+        Assert.Equal(RenderSupervisionState.Stopped, render.State);
+    }
+
+    [AvaloniaFact]
+    public void Disposing_The_Daemon_Supervisor_Does_Not_Stop_The_Resident_Daemon()
+    {
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: static _ => Task.FromResult(true));
+        daemon.EnsureRunning();
+
+        daemon.Dispose();
+
+        Assert.Equal(0, launcher.Daemon!.KillCalls);
+        Assert.False(launcher.Daemon.HasExited);
+    }
+
+    [AvaloniaFact]
+    public void A_Failed_Remote_Daemon_Stop_Keeps_The_Render_And_Tray_Alive()
+    {
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle(), Render = new FakeProcessHandle() };
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => true,
+            () => true,
+            requestShutdown: static _ => Task.FromResult(false));
+        var render = new RenderSupervisor(launcher.Start, () => { });
+        var lifetime = new ClassicDesktopStyleApplicationLifetime();
+        var shutdowns = 0;
+        var tray = TrayHost.InstallTray(
+            _application,
+            lifetime,
+            new ThemeService(_directory),
+            daemon,
+            render,
+            shutdown: () => shutdowns++,
+            showPoll: static (_, _, _) => Task.FromResult(true),
+            pollDelay: static () => Task.CompletedTask);
+        _fixtures.Add(new TrayFixture(tray, lifetime, launcher, daemon, render, launcher.Daemon!, launcher.Render!, [], [], []));
+
+        Click(Item("显示主窗口"));
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(1, shutdowns);
+
+        Click(Item("退出"));
+
+        Assert.Equal(1, shutdowns);
+        Assert.Equal(0, launcher.Render!.KillCalls);
+        Assert.False(launcher.Render.HasExited);
+        Assert.Equal(DaemonSupervisionState.StopFailed, daemon.State);
+    }
+
+    [AvaloniaFact]
+    public void An_Elevated_Daemon_Still_Starting_Is_Not_Mistaken_For_No_Daemon()
+    {
+        var launcher = new FakeLauncher();
+        var shutdownRequests = 0;
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => true,
+            () => false,
+            requestShutdown: _ =>
+            {
+                shutdownRequests++;
+                return Task.FromResult(false);
+            });
+        daemon.EnsureRunning();
+
+        Assert.False(daemon.Stop());
+        Assert.Equal(1, shutdownRequests);
     }
 
     [AvaloniaFact]
@@ -391,8 +630,9 @@ public sealed class TrayHostTests : IDisposable
         // to hosting an engine of its own.
         var fixture = BuildTray(
             daemonLaunchesSucceed: false,
-            showPoll: static (_, _, _) => Task.FromResult(true),
-            pollDelay: static () => Task.CompletedTask);
+            showPoll: static (_, _, _) => Task.FromResult(false),
+            pollDelay: static () => Task.CompletedTask,
+            pollBudget: TimeSpan.Zero);
 
         Click(Item("显示主窗口"));
         Dispatcher.UIThread.RunJobs();
@@ -444,7 +684,9 @@ public sealed class TrayHostTests : IDisposable
         Action? releaseInstance = null,
         Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>>? showPoll = null,
         Func<Task>? pollDelay = null,
-        TimeSpan? pollBudget = null)
+        TimeSpan? pollBudget = null,
+        Func<CancellationToken, Task<bool>>? daemonShutdown = null,
+        Func<bool>? reacquireInstance = null)
     {
         var order = new List<string>();
         var launcher = new FakeLauncher
@@ -456,7 +698,22 @@ public sealed class TrayHostTests : IDisposable
         };
         var elevation = new FakeElevation();
 
-        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => false, () => daemonReachable);
+        var daemon = new DaemonSupervisor(
+            elevation,
+            launcher.Start,
+            () => false,
+            () => daemonReachable,
+            requestShutdown: async cancellationToken =>
+            {
+                order.Add("stop-daemon");
+                var stopped = daemonShutdown is null || await daemonShutdown(cancellationToken);
+                if (stopped)
+                {
+                    launcher.Daemon?.RaiseExited();
+                }
+
+                return stopped;
+            });
         var shows = new List<string>();
         var render = new RenderSupervisor(launcher.Start, () => shows.Add("show"));
 
@@ -491,7 +748,12 @@ public sealed class TrayHostTests : IDisposable
                 order.Add("delay");
                 return pollDelay is null ? Task.CompletedTask : pollDelay();
             },
-            pollBudget: pollBudget);
+            pollBudget: pollBudget,
+            reacquireInstance: () =>
+            {
+                order.Add("reacquire");
+                return reacquireInstance?.Invoke() ?? true;
+            });
 
         var fixture = new TrayFixture(
             tray,
@@ -627,11 +889,16 @@ public sealed class TrayHostTests : IDisposable
 
         public bool EntireTree { get; private set; }
 
+        public bool SurvivesKill { get; set; }
+
         public void Kill(bool entireTree)
         {
             KillCalls++;
             EntireTree = entireTree;
-            RaiseExited();
+            if (!SurvivesKill)
+            {
+                RaiseExited();
+            }
         }
 
         public Task WaitForExitAsync(CancellationToken cancellationToken)

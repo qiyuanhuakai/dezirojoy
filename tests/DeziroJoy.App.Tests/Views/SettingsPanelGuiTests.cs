@@ -103,6 +103,41 @@ public sealed class SettingsPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void Tray_Preferences_Are_Independent_And_Persist_Through_The_View_Model()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
+        var panel = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        var close = panel.FindControl<CheckBox>("CloseToTrayBox")!;
+        var minimize = panel.FindControl<CheckBox>("MinimizeToTrayBox")!;
+
+        Assert.Equal("关闭后退出到托盘", close.Content);
+        Assert.Equal("最小化后退出到托盘", minimize.Content);
+        Assert.True(close.IsChecked);
+        Assert.True(minimize.IsChecked);
+
+        close.IsChecked = false;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(TrayPreference(viewModel, "CloseToTrayEnabled"));
+        Assert.True(TrayPreference(viewModel, "MinimizeToTrayEnabled"));
+
+        minimize.IsChecked = false;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(TrayPreference(viewModel, "MinimizeToTrayEnabled"));
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.False(reloaded.CloseToTrayEnabled);
+        Assert.False(reloaded.MinimizeToTrayEnabled);
+    }
+
+    private static bool TrayPreference(MainWindowViewModel viewModel, string name)
+        => Assert.IsType<bool>(viewModel.GetType().GetProperty(name)?.GetValue(viewModel));
+
+    [AvaloniaFact]
     public void The_Gamepad_Hijack_Toggle_Is_Named_For_What_It_Does()
     {
         var (window, _, _, _) = BuildWindow();

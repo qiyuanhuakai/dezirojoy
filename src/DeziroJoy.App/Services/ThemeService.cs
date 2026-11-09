@@ -10,8 +10,8 @@ namespace DeziroJoy.App.Services;
 /// <summary>
 /// Owns the persisted app preferences in <c>settings.json</c> beside the profile store
 /// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
-/// choice and whether the gamepad may drive the UI. A missing or corrupt file
-/// falls back to the documented defaults rather than throwing.
+/// choice, gamepad UI ownership and the independent close/minimize tray policies.
+/// A missing or corrupt file falls back to the documented defaults rather than throwing.
 /// </summary>
 /// <remarks>
 /// The variant is applied from code rather than declared on the Application
@@ -61,12 +61,20 @@ public sealed class ThemeService
     /// </summary>
     public bool GamepadNavigationEnabled => _settings.GamepadNavigationEnabled;
 
+    /// <summary>Whether closing the window hands the resident role to the tray.</summary>
+    public bool CloseToTrayEnabled => _settings.CloseToTrayEnabled;
+
+    /// <summary>Whether minimizing the window hands the resident role to the tray.</summary>
+    public bool MinimizeToTrayEnabled => _settings.MinimizeToTrayEnabled;
+
     /// <summary>
     /// Reads the persisted preferences. Any unreadable, malformed or unknown
     /// value degrades to the documented default rather than throwing.
     /// </summary>
     public ThemeVariant Load()
     {
+        _settings = new AppSettings();
+
         try
         {
             if (File.Exists(_settingsPath))
@@ -79,6 +87,9 @@ public sealed class ThemeService
         {
         }
         catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
         {
         }
 
@@ -120,6 +131,28 @@ public sealed class ThemeService
         _settings = _settings with { GamepadNavigationEnabled = enabled };
         Save();
         GamepadNavigationChanged?.Invoke(enabled);
+    }
+
+    public void SetCloseToTrayEnabled(bool enabled)
+    {
+        if (_settings.CloseToTrayEnabled == enabled)
+        {
+            return;
+        }
+
+        _settings = _settings with { CloseToTrayEnabled = enabled };
+        Save();
+    }
+
+    public void SetMinimizeToTrayEnabled(bool enabled)
+    {
+        if (_settings.MinimizeToTrayEnabled == enabled)
+        {
+            return;
+        }
+
+        _settings = _settings with { MinimizeToTrayEnabled = enabled };
+        Save();
     }
 
     /// <summary>
@@ -187,6 +220,10 @@ public sealed class ThemeService
         public ThemeVariant? Theme { get; init; }
 
         public bool GamepadNavigationEnabled { get; init; } = true;
+
+        public bool CloseToTrayEnabled { get; init; } = true;
+
+        public bool MinimizeToTrayEnabled { get; init; } = true;
 
         /// <summary>
         /// The retired leader pair. Kept so an old settings.json still deserializes and can

@@ -161,6 +161,38 @@ public sealed class GuiActivationServerTests
     }
 
     [Fact]
+    public async Task A_Readiness_Probe_Accepts_Only_The_Expected_Process_Role()
+    {
+        var identity = NewIdentity();
+        using var tray = new GuiActivationServer(identity, role: GuiInstanceRole.Tray);
+
+        Assert.True(await GuiActivationClient.TryProbeAsync(
+            identity,
+            GuiInstanceRole.Tray,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken));
+        Assert.False(await GuiActivationClient.TryProbeAsync(
+            identity,
+            GuiInstanceRole.Render,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_Show_Failure_Returns_A_Refusal_Instead_Of_Dropping_The_Connection()
+    {
+        var identity = NewIdentity();
+        using var server = new GuiActivationServer(identity);
+        server.ShowRequested += () => throw new InvalidOperationException("window is closing");
+
+        await using var pipe = await ConnectAsync(identity);
+        var ack = await RoundTripAsync(pipe, new GuiShowRequest(GuiActivationContract.ProtocolVersion));
+
+        Assert.False(ack.Accepted);
+        Assert.Contains("window is closing", ack.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_Connect_Timeout_Covers_The_Winner_Startup_Window()
     {
         Assert.True(

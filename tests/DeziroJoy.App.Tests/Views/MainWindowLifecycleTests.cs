@@ -5,6 +5,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
+using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
@@ -18,15 +19,33 @@ namespace DeziroJoy.App.Tests.Views;
 /// The main window is a releasable presentation resource, not the owner of the runtime.
 /// Closing it must detach everything it attached - both timers, both host sampling
 /// subscriptions, the view-model listener - drop callbacks that were already queued, and
-/// leave the engine running: the Windows daemon and the Linux local engine keep mapping with
-/// no window open. A window built afterwards starts from a clean slate, so a
+/// leave the presentation host running: production mapping belongs to the daemon and continues
+/// with no window open. A window built afterwards starts from a clean slate, so a
 /// destroy/recreate cycle never stacks a second set of subscriptions.
 /// </summary>
-public sealed class MainWindowLifecycleTests
+public sealed class MainWindowLifecycleTests : IDisposable
 {
     private const string DeviceId = "pad-01";
 
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1.0 / 64.0);
+
+    private readonly string _directory = Path.Combine(
+        Path.GetTempPath(),
+        "dezirojoy-window-lifecycle-tests",
+        Guid.NewGuid().ToString("N"));
+
+    public MainWindowLifecycleTests() => Directory.CreateDirectory(_directory);
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+    }
 
     private static (MainWindow Window, MainWindowViewModel ViewModel, EngineHost Host, FakeGamepadProvider Provider) BuildWindow()
     {
@@ -170,35 +189,228 @@ public sealed class MainWindowLifecycleTests
         Assert.True(viewModel.IsPhysicalInputInScope, "the new window must open with physical input in scope");
     }
 
-    /// <summary>
-    /// The render process is stateless and the window owns it: closing the window spawns the
-    /// tray process (which takes over the instance lock, the activation channel and the daemon
-    /// supervision) and then shuts the lifetime down - unsaved drafts are discarded by design,
-    /// the daemon keeps mapping with no window open, and the tray is resident exactly for the
-    /// window-less stretches.
-    /// </summary>
     [AvaloniaFact]
-    public void Closing_The_Window_Spawns_The_Tray_And_Ends_The_Render_Process()
+    public void Closing_With_Close_To_Tray_Acknowledges_The_Tray_Before_Ending_The_Render_Process()
+    {
+        var themes = new ThemeService(_directory);
+        var fixture = BuildRender(themes);
+
+        Assert.Equal(ShutdownMode.OnExplicitShutdown, fixture.Lifetime.ShutdownMode);
+        fixture.Window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(["spawn", "release", "probe", "shutdown"], fixture.Events);
+        Assert.Contains("--tray", Assert.Single(fixture.Spawned).Arguments, StringComparison.Ordinal);
+        Assert.False(fixture.Window.IsVisible);
+        Assert.Equal(0, fixture.Tray.KillCalls);
+    }
+
+    [AvaloniaFact]
+    public void Closing_With_Close_To_Tray_Disabled_Stops_The_Daemon_Without_Spawning_A_Tray()
+    {
+        var themes = new ThemeService(_directory);
+        themes.SetCloseToTrayEnabled(false);
+        var fixture = BuildRender(themes);
+
+        fixture.Window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(["stop-daemon", "shutdown"], fixture.Events);
+        Assert.Empty(fixture.Spawned);
+        Assert.False(fixture.Window.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void Ordinary_Minimize_Keeps_The_Render_Process_And_Daemon_Alive()
+    {
+        var themes = new ThemeService(_directory);
+        themes.SetMinimizeToTrayEnabled(false);
+        var fixture = BuildRender(themes);
+
+        fixture.Window.RequestMinimize();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(WindowState.Minimized, fixture.Window.WindowState);
+        Assert.True(fixture.Window.IsVisible);
+        Assert.Empty(fixture.Events);
+        Assert.Empty(fixture.Spawned);
+    }
+
+    [AvaloniaFact]
+    public void A_Failed_Minimize_Handover_Restores_And_Keeps_The_Window()
+    {
+        var themes = new ThemeService(_directory);
+        var fixture = BuildRender(themes, probe: () => Task.FromResult(false));
+
+        fixture.Window.RequestMinimize();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(WindowState.Normal, fixture.Window.WindowState);
+        Assert.True(fixture.Window.IsVisible);
+        Assert.Equal(1, fixture.Tray.KillCalls);
+        Assert.Equal(["spawn", "release", "probe", "reacquire"], fixture.Events);
+        Assert.Empty(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void Minimize_To_Tray_Hands_Over_Even_When_Close_To_Tray_Is_Disabled()
+    {
+        var themes = new ThemeService(_directory);
+        themes.SetCloseToTrayEnabled(false);
+        var fixture = BuildRender(themes);
+
+        fixture.Window.RequestMinimize();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(["spawn", "release", "probe", "shutdown"], fixture.Events);
+        Assert.DoesNotContain("stop-daemon", fixture.Events);
+        Assert.False(fixture.Window.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void A_Failed_Tray_Handover_Rolls_Back_And_Keeps_The_Window()
+    {
+        var themes = new ThemeService(_directory);
+        var fixture = BuildRender(themes, probe: () => Task.FromResult(false));
+
+        fixture.Window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, fixture.Tray.KillCalls);
+        Assert.Equal(["spawn", "release", "probe", "reacquire"], fixture.Events);
+        Assert.True(fixture.Window.IsVisible);
+        Assert.Empty(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public void Concurrent_Close_And_Minimize_Share_One_Tray_Handover()
+    {
+        var themes = new ThemeService(_directory);
+        var probe = new TaskCompletionSource<bool>();
+        var fixture = BuildRender(themes, probe: () => probe.Task);
+
+        fixture.Window.Close();
+        fixture.Window.RequestMinimize();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(fixture.Spawned);
+        Assert.Equal(1, fixture.Events.Count(entry => entry == "probe"));
+
+        probe.SetResult(true);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Single(fixture.Shutdowns);
+        Assert.Single(fixture.Spawned);
+    }
+
+    [AvaloniaFact]
+    public void A_Failed_Daemon_Stop_Keeps_The_Window_Open_For_Retry()
+    {
+        var themes = new ThemeService(_directory);
+        themes.SetCloseToTrayEnabled(false);
+        var stops = 0;
+        var fixture = BuildRender(themes, stopDaemon: () => Task.FromResult(++stops > 1));
+
+        fixture.Window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(fixture.Window.IsVisible);
+        Assert.Empty(fixture.Shutdowns);
+        Assert.Empty(fixture.Spawned);
+        Assert.Equal(["stop-daemon"], fixture.Events);
+
+        fixture.Window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(fixture.Window.IsVisible);
+        Assert.Single(fixture.Shutdowns);
+        Assert.Equal(["stop-daemon", "stop-daemon", "shutdown"], fixture.Events);
+    }
+
+    private static RenderFixture BuildRender(
+        ThemeService themes,
+        Func<Task<bool>>? probe = null,
+        Func<Task<bool>>? stopDaemon = null)
     {
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var (_, viewModel, host, _) = BuildWindow();
-        var spawned = new List<ProcessStartInfo>();
-        var shutdowns = new List<int>();
-        bool SpawnTray(ProcessStartInfo info) { spawned.Add(info); return true; }
+        var tray = new FakeTrayProcess();
+        var fixture = new RenderFixture(lifetime, tray);
 
         var window = RenderProcess.InstallWindow(
-            lifetime, viewModel, host, null!, SpawnTray,
-            shutdown: () => shutdowns.Add(shutdowns.Count + 1));
+            lifetime,
+            viewModel,
+            host,
+            themes,
+            spawnTray: info =>
+            {
+                fixture.Spawned.Add(info);
+                fixture.Events.Add("spawn");
+                return tray;
+            },
+            shutdown: () =>
+            {
+                fixture.Shutdowns.Add(1);
+                fixture.Events.Add("shutdown");
+            },
+            releaseInstance: () => fixture.Events.Add("release"),
+            reacquireInstance: () =>
+            {
+                fixture.Events.Add("reacquire");
+                return true;
+            },
+            probe: (_, _, _, _) =>
+            {
+                fixture.Events.Add("probe");
+                return probe?.Invoke() ?? Task.FromResult(true);
+            },
+            pollDelay: static () => Task.CompletedTask,
+            handoverBudget: TimeSpan.Zero,
+            stopDaemon: () =>
+            {
+                fixture.Events.Add("stop-daemon");
+                return stopDaemon?.Invoke() ?? Task.FromResult(true);
+            });
+        fixture.Window = window;
+        return fixture;
+    }
 
-        Assert.Equal(ShutdownMode.OnExplicitShutdown, lifetime.ShutdownMode);
-        Assert.Empty(spawned);
+    private sealed class RenderFixture(
+        ClassicDesktopStyleApplicationLifetime lifetime,
+        FakeTrayProcess tray)
+    {
+        public ClassicDesktopStyleApplicationLifetime Lifetime { get; } = lifetime;
 
-        window.Close();
-        Dispatcher.UIThread.RunJobs();
+        public MainWindow Window { get; set; } = null!;
 
-        Assert.Single(spawned);
-        Assert.Contains("--tray", spawned[0].Arguments, StringComparison.Ordinal);
-        Assert.Single(shutdowns);
-        Assert.False(window.IsVisible, "the render process's window is gone with the process");
+        public FakeTrayProcess Tray { get; } = tray;
+
+        public List<ProcessStartInfo> Spawned { get; } = [];
+
+        public List<int> Shutdowns { get; } = [];
+
+        public List<string> Events { get; } = [];
+    }
+
+    private sealed class FakeTrayProcess : IProcessHandle
+    {
+        public bool HasExited { get; private set; }
+
+        public int KillCalls { get; private set; }
+
+        public event Action? Exited;
+
+        public void Kill(bool entireTree)
+        {
+            KillCalls++;
+            HasExited = true;
+            Exited?.Invoke();
+        }
+
+        public Task WaitForExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Dispose()
+        {
+        }
     }
 }
