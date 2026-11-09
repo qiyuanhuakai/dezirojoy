@@ -99,12 +99,18 @@ public static class DaemonHost
         composition.Host.PresetSwitchRequested += (_, slot) =>
             daemon.RequestPresetSlotSwitch(slot);
 
+        // Materialize the four slots before restoring the one global active slot.
+        composition.Host.RefreshPresence();
+
         // Resume the mapping the user last asked for before the pipe opens, so a GUI that
         // never connects still gets the persisted configuration.
         daemon.ResumeDesiredState();
 
         using var pipeCts = new CancellationTokenSource();
+        using var shutdown = new ManualResetEventSlim();
         var pipeTask = ServePipeAsync(daemon, pipeCts.Token);
+        var presenceTask = MonitorPresenceAsync(composition.Host, pipeCts.Token);
+        daemon.ShutdownRequested += () => shutdown.Set();
 
         composition.Host.RefreshPresence();
 
@@ -140,13 +146,46 @@ public static class DaemonHost
         // process tests may signal us as soon as they observe it without racing registration.
         Console.WriteLine(BuildStartupSummary(composition, DefaultInterval));
 
-        // Park the main thread; a signal handler does the real shutdown.
-        Thread.Sleep(Timeout.Infinite);
+        // The IPC shutdown path wakes the main thread only after its acknowledgement was
+        // written. Signal handlers retain their explicit-exit behaviour on Unix.
+        shutdown.Wait();
+        pipeCts.Cancel();
+        Shutdown(composition);
+        Task.WaitAll([pipeTask, presenceTask], TimeSpan.FromSeconds(5));
+        Console.Out.Flush();
 
         terminate?.Dispose();
         hangup?.Dispose();
 
         return 0;
+    }
+
+    private static async Task MonitorPresenceAsync(EngineHost host, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (host.IsRunning)
+                {
+                    host.RefreshPresence();
+                }
+                else
+                {
+                    host.SamplePresence();
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine($"[DeziroJoy] presence monitor error: {exception.Message}");
+            }
+        }
     }
     /// <summary>
     /// Reconciles device presence and renders the startup summary. Returns the text so the
@@ -343,7 +382,17 @@ public static class DaemonHost
     {
         private readonly EngineComposition _composition;
 
-        public EngineHostAdapter(EngineComposition composition) => _composition = composition;
+        public EngineHostAdapter(EngineComposition composition)
+        {
+            _composition = composition;
+            _composition.Host.Sampled += ForwardSample;
+            _composition.Host.PresenceSampled += ForwardSample;
+        }
+
+        public event Action<string, DeziroJoy.Core.Input.IGamepadState>? InputSampled;
+
+        private void ForwardSample(object? sender, ControllerSampledEventArgs args)
+            => InputSampled?.Invoke(args.Runtime.Descriptor.DeviceId, args.State);
 
         public bool IsRunning => _composition.Host.IsRunning;
 
@@ -365,9 +414,23 @@ public static class DaemonHost
         public IReadOnlyList<string> ConnectedDeviceIds
             => _composition.Host.Controllers.Select(runtime => runtime.Descriptor.DeviceId).ToList();
 
+        public IReadOnlyList<ConnectedDeviceSnapshot> ConnectedDevices
+            => _composition.Host.Controllers.Select(runtime => new ConnectedDeviceSnapshot(
+                runtime.Descriptor.DeviceId,
+                runtime.Descriptor.Name,
+                runtime.Descriptor.Layout)).ToList();
+
+        public event Action? DevicesChanged
+        {
+            add => _composition.Host.ControllersChanged += value;
+            remove => _composition.Host.ControllersChanged -= value;
+        }
+
         public GamepadProfile? GetProfile(string deviceId)
             => _composition.Host.Controllers.SingleOrDefault(
                 runtime => string.Equals(runtime.Descriptor.DeviceId, deviceId, StringComparison.Ordinal))?.Profile;
+
+        public void SamplePresence() => _composition.Host.SamplePresence();
 
         public void Start() => _composition.Host.Start(DaemonHost.DefaultInterval);
 
@@ -378,6 +441,9 @@ public static class DaemonHost
         public void SetInjectionSuspended(bool suspended) => _composition.Host.SetInjectionSuspended(suspended);
 
         public void Reload(string deviceId, GamepadProfile profile) => _composition.Host.Reload(deviceId, profile);
+
+        public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
+            => _composition.Host.SwitchPresetSlot(slot, profiles);
     }
 
     private static string DescribeElevation(EngineComposition composition)

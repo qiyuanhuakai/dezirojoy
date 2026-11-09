@@ -1,4 +1,5 @@
 using DeziroJoy.App.Services;
+using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 
 namespace DeziroJoy.App.Ipc;
@@ -37,7 +38,17 @@ public interface IDaemonHost
 
     IReadOnlyList<string> ConnectedDeviceIds { get; }
 
+    IReadOnlyList<ConnectedDeviceSnapshot> ConnectedDevices { get; }
+
+    event Action? DevicesChanged;
+
+    /// <summary>Raised for both running ticks and stopped-state presence samples.</summary>
+    event Action<string, IGamepadState>? InputSampled;
+
     GamepadProfile? GetProfile(string deviceId);
+
+    /// <summary>Polls current input without advancing mapping, also used to prime a new subscriber.</summary>
+    void SamplePresence();
 
     /// <summary>
     /// Starts the mapping loop, acquiring the injection mutex. Throws
@@ -53,7 +64,12 @@ public interface IDaemonHost
 
     /// <summary>Swaps the active profile of one connected device.</summary>
     void Reload(string deviceId, GamepadProfile profile);
+
+    /// <summary>Atomically moves every supplied runtime to the same app-wide slot.</summary>
+    void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles);
 }
+
+public sealed record ConnectedDeviceSnapshot(string DeviceId, string Name, GamepadLayout Layout);
 
 /// <summary>Time source, injected so the daemon instance id is deterministic under test.</summary>
 public interface IClock
@@ -75,4 +91,5 @@ public sealed record DaemonState(
     bool MappingEnabled,
     string ProfileName,
     string ProfileJson,
-    long Revision);
+    long Revision,
+    int ActivePresetSlot = PresetStore.MinSlot);

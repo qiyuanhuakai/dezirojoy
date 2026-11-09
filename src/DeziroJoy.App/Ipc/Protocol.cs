@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DeziroJoy.Core.Input;
 
 namespace DeziroJoy.App.Ipc;
 
@@ -43,10 +44,8 @@ public static class IpcErrorCodes
 }
 
 /// <summary>
-/// One message on the mapping control channel. The union is closed: exactly the twelve
-/// messages of section 4.4, each carrying only the fields its own semantics need -
-/// there is no envelope that forces every field onto every message. The
-/// <c>kind</c> discriminator is written by the serializer, not by hand.
+/// One message on the mapping control channel. Each message carries only the fields its
+/// own semantics need; the <c>kind</c> discriminator is written by the serializer.
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(HelloMessage), "hello")]
@@ -58,8 +57,10 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
+[JsonDerivedType(typeof(ShutdownDaemonMessage), "shutdown-daemon")]
 [JsonDerivedType(typeof(MutationAckMessage), "mutation-ack")]
 [JsonDerivedType(typeof(StateChangedMessage), "state-changed")]
+[JsonDerivedType(typeof(InputSampleMessage), "input-sample")]
 [JsonDerivedType(typeof(ErrorMessage), "error")]
 public abstract record IpcMessage;
 
@@ -67,9 +68,15 @@ public abstract record IpcMessage;
 /// GUI to daemon: handshake. <see cref="ProtocolVersion"/> is what the client speaks,
 /// so the daemon can refuse a version it does not implement instead of guessing;
 /// <see cref="ClientInstanceId"/> identifies this GUI run, and <see cref="SessionId"/>
-/// lets the Windows daemon reject a client from another session.
+/// lets the Windows daemon reject a client from another session. Input samples are opt-in:
+/// older clients omit the flag and therefore never receive a message kind they do not know.
 /// </summary>
-public sealed record HelloMessage(string ClientId, int ProtocolVersion, string ClientInstanceId, int SessionId) : IpcMessage;
+public sealed record HelloMessage(
+    string ClientId,
+    int ProtocolVersion,
+    string ClientInstanceId,
+    int SessionId,
+    bool SubscribeInputSamples = false) : IpcMessage;
 
 /// <summary>
 /// Daemon to GUI: handshake answer. <see cref="Accepted"/> is false when the versions
@@ -111,7 +118,7 @@ public sealed record StopMessage(string RequestId) : IpcMessage;
 /// <summary>GUI to daemon: pause or resume dispatch without stopping the mapping loop.</summary>
 public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : IpcMessage;
 
-/// <summary>GUI to daemon: suspend dispatch while the mapping editor owns physical input.</summary>
+/// <summary>GUI to daemon: suspend dispatch while this connection's explicit hijack lease owns input.</summary>
 public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
 
 /// <summary>
@@ -128,6 +135,9 @@ public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspend
 /// </para>
 /// </summary>
 public sealed record SwitchPresetSlotMessage(string RequestId, string DeviceId, int Slot) : IpcMessage;
+
+/// <summary>GUI/tray to daemon: release held input and exit the resident process.</summary>
+public sealed record ShutdownDaemonMessage(string RequestId) : IpcMessage;
 
 /// <summary>
 /// Daemon to GUI: a mutation has been settled. <see cref="RequestId"/> echoes the
@@ -156,6 +166,38 @@ public sealed record StateChangedMessage(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RequestId = null)
     : IpcMessage;
 
+/// <summary>
+/// Daemon to opted-in GUI: one changed physical input state. Sample sequence numbers are
+/// independent of snapshot revisions and may skip when a slow connection coalesces frames.
+/// </summary>
+public sealed record InputSampleMessage(
+    string DaemonInstanceId,
+    long Sequence,
+    string DeviceId,
+    GamepadButtonMask PressedButtons,
+    float LeftStickX,
+    float LeftStickY,
+    float RightStickX,
+    float RightStickY,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<int>? ExtraButtons = null)
+    : IpcMessage
+{
+    public GamepadState ToGamepadState() => GamepadState.Create(
+        PressedButtons,
+        LeftStickX,
+        LeftStickY,
+        RightStickX,
+        RightStickY,
+        ExtraButtons);
+
+    public bool Matches(IGamepadState state) => PressedButtons == state.PressedButtons
+        && LeftStickX == state.LeftStickX
+        && LeftStickY == state.LeftStickY
+        && RightStickX == state.RightStickX
+        && RightStickY == state.RightStickY
+        && (ExtraButtons ?? Array.Empty<int>()).SequenceEqual(state.ExtraButtons);
+}
+
 /// <summary>Daemon to GUI: the request failed; <see cref="RequestId"/> echoes the request.</summary>
 public sealed record ErrorMessage(string RequestId, string ErrorCode, string Message) : IpcMessage;
 
@@ -180,6 +222,9 @@ public sealed record StateSnapshot(
 {
     /// <summary>The active profile body at <see cref="Revision"/>, used to rebase GUI drafts.</summary>
     public string? ProfileJson { get; init; }
+
+    /// <summary>Real devices currently owned by the daemon, in stable provider order.</summary>
+    public IReadOnlyList<ConnectedDeviceSnapshot> Devices { get; init; } = [];
 }
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>

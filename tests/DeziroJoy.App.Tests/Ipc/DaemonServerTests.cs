@@ -28,6 +28,7 @@ internal sealed class FakeClock : IClock
 internal sealed class FakeDaemonHost : IDaemonHost
 {
     private readonly List<string> _deviceIds = [];
+    private readonly Dictionary<string, ConnectedDeviceSnapshot> _devices = new(StringComparer.Ordinal);
     private readonly Dictionary<string, GamepadProfile> _profiles = new(StringComparer.Ordinal);
 
     public bool IsRunning { get; private set; }
@@ -59,9 +60,48 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public IReadOnlyList<string> ConnectedDeviceIds => _deviceIds;
 
+    public IReadOnlyList<ConnectedDeviceSnapshot> ConnectedDevices
+        => _deviceIds.Select(deviceId => _devices[deviceId]).ToList();
+
+    public event Action? DevicesChanged;
+
+    public event Action<string, IGamepadState>? InputSampled;
+
+    public string? FailReloadDevice { get; set; }
+
+    public string? PresenceDeviceId { get; set; }
+
+    public IGamepadState PresenceState { get; set; } = GamepadState.Neutral;
+
+    public void PublishInputSample(string deviceId, IGamepadState state)
+        => InputSampled?.Invoke(deviceId, state);
+
+    public void SamplePresence()
+    {
+        if (PresenceDeviceId is not null)
+        {
+            PublishInputSample(PresenceDeviceId, PresenceState);
+        }
+    }
+
     public GamepadProfile? GetProfile(string deviceId) => _profiles.GetValueOrDefault(deviceId);
 
-    public void AddDevice(string deviceId) => _deviceIds.Add(deviceId);
+    public void AddDevice(
+        string deviceId,
+        string name = "Test Controller",
+        GamepadLayout layout = GamepadLayout.Xbox)
+    {
+        _deviceIds.Add(deviceId);
+        _devices[deviceId] = new ConnectedDeviceSnapshot(deviceId, name, layout);
+        DevicesChanged?.Invoke();
+    }
+
+    public void RemoveDevice(string deviceId)
+    {
+        _deviceIds.Remove(deviceId);
+        _devices.Remove(deviceId);
+        DevicesChanged?.Invoke();
+    }
 
     public void Start()
     {
@@ -91,8 +131,38 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public void Reload(string deviceId, GamepadProfile profile)
     {
+        if (deviceId == FailReloadDevice)
+        {
+            throw new InvalidOperationException("injected reload failure");
+        }
+
         ReloadedDevices.Add(deviceId);
         _profiles[deviceId] = profile;
+    }
+
+    public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
+    {
+        var previous = profiles.Keys.ToDictionary(deviceId => deviceId, GetProfile, StringComparer.Ordinal);
+        try
+        {
+            foreach (var (deviceId, profile) in profiles)
+            {
+                Reload(deviceId, profile);
+            }
+        }
+        catch
+        {
+            FailReloadDevice = null;
+            foreach (var (deviceId, profile) in previous)
+            {
+                if (profile is not null && ReloadedDevices.Contains(deviceId))
+                {
+                    Reload(deviceId, profile);
+                }
+            }
+
+            throw;
+        }
     }
 }
 
@@ -151,6 +221,149 @@ internal sealed class ScriptedStream : Stream
             _written.Add(buffer[offset + i]);
         }
     }
+
+    public override bool CanRead => true;
+
+    public override bool CanWrite => true;
+
+    public override bool CanSeek => false;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+}
+
+/// <summary>A bidirectional scripted stream whose writer and end-of-stream can be held by a test.</summary>
+internal sealed class BlockingWriteStream : Stream
+{
+    private readonly object _gate = new();
+    private readonly Queue<byte> _script = new();
+    private readonly List<byte> _written = [];
+    private readonly TaskCompletionSource _writeBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _releaseWrites = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _blockWrites;
+    private bool _finishedReading;
+
+    public Task WriteBlocked => _writeBlocked.Task;
+
+    public void Script(IpcMessage message)
+    {
+        var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(message));
+        var prefix = new byte[PipeFraming.LengthPrefixBytes];
+        BinaryPrimitives.WriteInt32LittleEndian(prefix, payload.Length);
+        lock (_gate)
+        {
+            foreach (var value in prefix.Concat(payload))
+            {
+                _script.Enqueue(value);
+            }
+        }
+    }
+
+    public void BlockFurtherWrites() => _blockWrites = true;
+
+    public void ReleaseWrites()
+    {
+        _blockWrites = false;
+        _releaseWrites.TrySetResult();
+    }
+
+    public void Finish()
+    {
+        _finishedReading = true;
+        _finished.TrySetResult();
+    }
+
+    public IReadOnlyList<IpcMessage> WrittenMessages()
+    {
+        byte[] bytes;
+        lock (_gate)
+        {
+            bytes = [.. _written];
+        }
+
+        var messages = new List<IpcMessage>();
+        var offset = 0;
+        while (offset + PipeFraming.LengthPrefixBytes <= bytes.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset, PipeFraming.LengthPrefixBytes));
+            offset += PipeFraming.LengthPrefixBytes;
+            if (offset + length > bytes.Length)
+            {
+                break;
+            }
+
+            messages.Add(IpcSerializer.Deserialize(Encoding.UTF8.GetString(bytes, offset, length)));
+            offset += length;
+        }
+
+        return messages;
+    }
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            if (_script.Count > 0)
+            {
+                var taken = 0;
+                while (taken < buffer.Length && _script.Count > 0)
+                {
+                    buffer.Span[taken++] = _script.Dequeue();
+                }
+
+                return taken;
+            }
+
+            if (_finishedReading)
+            {
+                return 0;
+            }
+        }
+
+        await _finished.Task.WaitAsync(cancellationToken);
+        return 0;
+    }
+
+    public override async ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        if (_blockWrites)
+        {
+            _writeBlocked.TrySetResult();
+            await _releaseWrites.Task.WaitAsync(cancellationToken);
+        }
+
+        lock (_gate)
+        {
+            foreach (var value in buffer.Span)
+            {
+                _written.Add(value);
+            }
+        }
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+    public override void Write(byte[] buffer, int offset, int count)
+        => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
     public override bool CanRead => true;
 
@@ -258,6 +471,54 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Device_Changes_Push_Real_Identity_Without_A_Configuration_Revision()
+    {
+        var (server, _, host) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+        host.HasController = true;
+
+        host.AddDevice("ds4-1", "DualShock 4 Wireless Controller", GamepadLayout.DualShock);
+
+        var push = Assert.Single(pushes);
+        Assert.Equal(0, push.Snapshot.Revision);
+        Assert.Equal(1, push.Snapshot.Sequence);
+        var device = Assert.Single(push.Snapshot.Devices);
+        Assert.Equal("ds4-1", device.DeviceId);
+        Assert.Equal("DualShock 4 Wireless Controller", device.Name);
+        Assert.Equal(GamepadLayout.DualShock, device.Layout);
+
+        host.HasController = false;
+        host.RemoveDevice("ds4-1");
+        Assert.Equal(2, pushes.Count);
+        Assert.Empty(pushes[1].Snapshot.Devices);
+        await server.ProcessAsync(new GetStateMessage("verify"));
+    }
+
+    [Fact]
+    public async Task Input_Samples_Publish_Only_Changes_With_A_Monotonic_Independent_Sequence()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        var stateSequence = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("before"))).Snapshot.Sequence;
+        var samples = new List<InputSampleMessage>();
+        server.InputSampled += samples.Add;
+        var neutral = GamepadState.Create(GamepadButtonMask.None, 0, 0, 0, 0, [301]);
+
+        host.PublishInputSample("pad-1", neutral);
+        host.PublishInputSample("pad-1", neutral);
+        host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0.5f, 0, 0, 0, [301]));
+        host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0.5f, 0, 0, 0, [301]));
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal([1, 2], samples.Select(sample => sample.Sequence).ToArray());
+        Assert.Equal(GamepadButtonMask.A, samples[1].PressedButtons);
+        Assert.Equal(stateSequence, Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("verify"))).Snapshot.Sequence);
+    }
+
+    [Fact]
     public async Task Apply_Stores_The_Profile_Body_And_Bumps_The_Revision()
     {
         var (server, store, host) = CreateRunning();
@@ -335,6 +596,46 @@ public class DaemonServerTests
         var push = Assert.Single(pushes);
         Assert.Equal(2, push.Snapshot.ActivePresetSlot);
         Assert.Equal(1, push.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task Failed_Switch_Rolls_Back_And_Keeps_The_Previous_Global_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var deviceId in new[] { "pad-1", "pad-2" })
+        {
+            presets.SaveSlot(deviceId, 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Original {deviceId}",
+                DeviceId = deviceId,
+            });
+            presets.SaveSlot(deviceId, 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Replacement {deviceId}",
+                DeviceId = deviceId,
+            });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        host.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        host.Reload("pad-2", presets.LoadSlot("pad-2", 1)!);
+        host.FailReloadDevice = "pad-2";
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-rollback", "pad-1", 2)));
+
+        Assert.False(ack.Accepted);
+        Assert.Equal("preset-switch-failed", ack.ErrorCode);
+        Assert.Equal("Original pad-1", host.GetProfile("pad-1")!.Name);
+        Assert.Equal("Original pad-2", host.GetProfile("pad-2")!.Name);
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("verify")));
+        Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+        Assert.Equal(0, snapshot.Snapshot.Revision);
     }
 
     [Fact]
@@ -559,6 +860,40 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Restart_Restores_The_Persisted_Global_Preset_Slot_And_Its_Profiles()
+    {
+        var stateStore = NewStore();
+        var profileStore = new InMemoryProfileStore();
+        var presets = new PresetStore(profileStore);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Primary",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 3, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Third",
+            DeviceId = "pad-1",
+        });
+        var clock = new FakeClock();
+        var firstHost = new FakeDaemonHost();
+        firstHost.AddDevice("pad-1");
+        var first = CreateServer(firstHost, stateStore, clock, profileStore);
+        await first.ProcessAsync(new SwitchPresetSlotMessage("switch", "pad-1", 3));
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var secondHost = new FakeDaemonHost();
+        secondHost.AddDevice("pad-1");
+        var second = CreateServer(secondHost, stateStore, clock, profileStore);
+        second.ResumeDesiredState();
+
+        Assert.Equal(3, stateStore.Load()!.ActivePresetSlot);
+        Assert.Equal("Third", secondHost.GetProfile("pad-1")!.Name);
+        var snapshot = Assert.IsType<StateChangedMessage>(await second.ProcessAsync(new GetStateMessage("state")));
+        Assert.Equal(3, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
     public async Task A_Leader_Request_From_Inside_The_Daemon_Moves_The_App_Wide_Slot()
     {
         var store = new InMemoryProfileStore();
@@ -658,6 +993,26 @@ public class DaemonServerTests
         var snapshot = Assert.IsType<StateChangedMessage>(
             await server.ProcessAsync(new GetStateMessage("req-state")));
         Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task Shutdown_Is_Acknowledged_Before_The_Transport_Requests_Process_Exit()
+    {
+        var (server, _, _) = CreateRunning();
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage("tray", IpcContract.ProtocolVersion, "tray-1", IpcSession.Current));
+        stream.Script(new ShutdownDaemonMessage("shutdown-1"));
+        var requested = false;
+        server.ShutdownRequested += () =>
+        {
+            requested = true;
+            Assert.Contains("shutdown-1", stream.WrittenText());
+            Assert.Contains("\"Accepted\":true", stream.WrittenText());
+        };
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        Assert.True(requested);
     }
 
     [Fact]
@@ -929,6 +1284,100 @@ public class DaemonServerTests
         Assert.True(host.IsRunning);
         Assert.Equal(0, host.StopCalls);
         Assert.Contains("hello-ack", stream.WrittenText());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task Input_Samples_Are_Opt_In_So_Legacy_Clients_Never_See_The_New_Kind(
+        bool subscribe,
+        bool expectSample)
+    {
+        var (server, _, host) = CreateRunning();
+        host.PresenceDeviceId = "pad-1";
+        host.PresenceState = GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0);
+        host.PublishInputSample(host.PresenceDeviceId, host.PresenceState);
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage(
+            "gui-1",
+            IpcContract.ProtocolVersion,
+            "client-1",
+            IpcSession.Current,
+            subscribe));
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+        for (var attempt = 0; expectSample && attempt < 200 && !stream.WrittenText().Contains("input-sample", StringComparison.Ordinal); attempt++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Contains("hello-ack", stream.WrittenText());
+        Assert.Equal(expectSample, stream.WrittenText().Contains("input-sample", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_Blocked_Writer_Preserves_Per_Device_Baselines_Analog_Values_And_Button_Edges()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        var stream = new BlockingWriteStream();
+        stream.Script(new HelloMessage(
+            "gui-1",
+            IpcContract.ProtocolVersion,
+            "client-1",
+            IpcSession.Current,
+            SubscribeInputSamples: true));
+        var serving = server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        try
+        {
+            for (var attempt = 0;
+                attempt < 200 && !stream.WrittenMessages().Any(message => message is HelloAckMessage);
+                attempt++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Contains(stream.WrittenMessages(), message => message is HelloAckMessage);
+            stream.BlockFurtherWrites();
+            host.PublishInputSample("pad-1", GamepadState.Neutral);
+            await stream.WriteBlocked.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            host.PublishInputSample("pad-2", GamepadState.Neutral);
+            host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.None, 0.25f, 0, 0, 0));
+            host.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.None, -0.5f, 0, 0, 0));
+            host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0.25f, 0, 0, 0));
+            host.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, -0.5f, 0, 0, 0));
+            host.PublishInputSample("pad-1", GamepadState.Neutral);
+            host.PublishInputSample("pad-2", GamepadState.Neutral);
+            stream.ReleaseWrites();
+
+            for (var attempt = 0;
+                attempt < 200 && stream.WrittenMessages().OfType<InputSampleMessage>().Count() != 8;
+                attempt++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+        }
+        finally
+        {
+            stream.ReleaseWrites();
+            stream.Finish();
+        }
+
+        await serving;
+        var samples = stream.WrittenMessages().OfType<InputSampleMessage>().ToList();
+        Assert.Equal(8, samples.Count);
+        Assert.Equal(
+            ["pad-1", "pad-2", "pad-1", "pad-2", "pad-1", "pad-2", "pad-1", "pad-2"],
+            samples.Select(sample => sample.DeviceId).ToArray());
+        Assert.Equal(
+            [GamepadButtonMask.None, GamepadButtonMask.None, GamepadButtonMask.None, GamepadButtonMask.None,
+                GamepadButtonMask.A, GamepadButtonMask.B, GamepadButtonMask.None, GamepadButtonMask.None],
+            samples.Select(sample => sample.PressedButtons).ToArray());
+        Assert.Equal(0.25f, samples[2].LeftStickX);
+        Assert.Equal(-0.5f, samples[3].LeftStickX);
+        Assert.Equal(Enumerable.Range(1, 8).Select(value => (long)value), samples.Select(sample => sample.Sequence));
     }
 
     [Fact]

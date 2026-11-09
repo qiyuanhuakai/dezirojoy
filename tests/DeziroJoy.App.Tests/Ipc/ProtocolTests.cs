@@ -9,8 +9,8 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Ipc;
 
 /// <summary>
-/// The version-1 mapping IPC contract: pipe identity, the nine messages of section 4.4,
-/// the full snapshot, and the serializer that carries them. Wire shape only - no pipe,
+/// The version-1 mapping IPC contract: pipe identity, the messages of section 4.4,
+/// full snapshots and input samples, and the serializer that carries them. Wire shape only - no pipe,
 /// no daemon, no client.
 /// </summary>
 public class ProtocolTests
@@ -43,7 +43,12 @@ public class ProtocolTests
     [Fact]
     public void Hello_Round_Trips_With_The_Client_Protocol_Version_And_Instance()
     {
-        var message = new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-instance-1", IpcSession.Current);
+        var message = new HelloMessage(
+            "gui-1",
+            IpcContract.ProtocolVersion,
+            "client-instance-1",
+            IpcSession.Current,
+            SubscribeInputSamples: true);
 
         var restored = Assert.IsType<HelloMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
@@ -51,6 +56,16 @@ public class ProtocolTests
         Assert.Equal(message, restored);
         Assert.Equal(IpcContract.ProtocolVersion, restored.ProtocolVersion);
         Assert.Equal("client-instance-1", restored.ClientInstanceId);
+        Assert.True(restored.SubscribeInputSamples);
+    }
+
+    [Fact]
+    public void A_Legacy_Hello_Without_The_Input_Subscription_Does_Not_Subscribe()
+    {
+        var restored = Assert.IsType<HelloMessage>(IpcSerializer.Deserialize(
+            $"{{\"kind\":\"hello\",\"ClientId\":\"gui-old\",\"ProtocolVersion\":{IpcContract.ProtocolVersion},\"ClientInstanceId\":\"old\",\"SessionId\":0}}"));
+
+        Assert.False(restored.SubscribeInputSamples);
     }
 
     [Fact]
@@ -181,6 +196,18 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void ShutdownDaemon_Round_Trips()
+    {
+        var message = new ShutdownDaemonMessage("shutdown-1");
+
+        var restored = Assert.IsType<ShutdownDaemonMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.Equal(message, restored);
+        Assert.Contains("shutdown-daemon", IpcSerializer.Serialize(message));
+    }
+
+    [Fact]
     public void MutationAck_Echoes_The_Request_Id_Across_The_Wire()
     {
         var request = new ApplyConfigurationMessage("req-42", 7, "Xbox Default", ProfileJson());
@@ -234,7 +261,11 @@ public class ProtocolTests
         var restored = Assert.IsType<StateChangedMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
-        Assert.Equal(message, restored);
+        Assert.Equal(message.DaemonInstanceId, restored.DaemonInstanceId);
+        Assert.Equal(message.Snapshot.Sequence, restored.Snapshot.Sequence);
+        Assert.Equal(message.Snapshot.Revision, restored.Snapshot.Revision);
+        Assert.Equal(message.Snapshot.InjectedEvents, restored.Snapshot.InjectedEvents);
+        Assert.Empty(restored.Snapshot.Devices);
     }
 
     [Fact]
@@ -260,12 +291,19 @@ public class ProtocolTests
             InjectedEvents: 1000,
             BlockedEvents: 5,
             HasController: true,
-            ActivePresetSlot: 3));
+            ActivePresetSlot: 3)
+        {
+            Devices = [new ConnectedDeviceSnapshot("pad-1", "Xbox Wireless Controller", GamepadLayout.Xbox)],
+        });
 
         var restored = Assert.IsType<StateChangedMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
         Assert.Equal(3, restored.Snapshot.ActivePresetSlot);
+        var device = Assert.Single(restored.Snapshot.Devices);
+        Assert.Equal("pad-1", device.DeviceId);
+        Assert.Equal("Xbox Wireless Controller", device.Name);
+        Assert.Equal(GamepadLayout.Xbox, device.Layout);
     }
 
     [Fact]
@@ -287,9 +325,11 @@ public class ProtocolTests
         var restored = Assert.IsType<StateChangedMessage>(
             IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
 
-        Assert.Equal(message, restored);
+        Assert.Equal(message.DaemonInstanceId, restored.DaemonInstanceId);
+        Assert.Equal(message.Snapshot.Sequence, restored.Snapshot.Sequence);
         Assert.Null(restored.Snapshot.LastError);
         Assert.Null(restored.Snapshot.InjectorIntegrity);
+        Assert.Empty(restored.Snapshot.Devices);
     }
 
     [Fact]
@@ -308,6 +348,33 @@ public class ProtocolTests
         Assert.Equal("daemon-instance-1", restoredBefore.DaemonInstanceId);
         Assert.Equal("daemon-instance-2", restoredAfter.DaemonInstanceId);
         Assert.NotEqual(restoredBefore.DaemonInstanceId, restoredAfter.DaemonInstanceId);
+    }
+
+    [Fact]
+    public void InputSample_Round_Trips_Buttons_Axes_And_Raw_Codes()
+    {
+        var message = new InputSampleMessage(
+            "daemon-instance-1",
+            42,
+            "evdev:pad",
+            GamepadButtonMask.A | GamepadButtonMask.DPadLeft,
+            0.25f,
+            -0.5f,
+            0.75f,
+            -1f,
+            [301, 302]);
+
+        var restored = Assert.IsType<InputSampleMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+        var state = restored.ToGamepadState();
+
+        Assert.Equal(message.DaemonInstanceId, restored.DaemonInstanceId);
+        Assert.Equal(42, restored.Sequence);
+        Assert.Equal("evdev:pad", restored.DeviceId);
+        Assert.Equal(GamepadButtonMask.A | GamepadButtonMask.DPadLeft, state.PressedButtons);
+        Assert.Equal(0.25f, state.LeftStickX);
+        Assert.Equal(-0.5f, state.LeftStickY);
+        Assert.Equal([301, 302], state.ExtraButtons);
     }
 
     [Fact]

@@ -55,22 +55,40 @@ public sealed class DaemonController : IAsyncDisposable
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly object _pendingGate = new();
+    private readonly object _snapshotGate = new();
+    private readonly object _inputGate = new();
     private readonly Dictionary<string, TaskCompletionSource<IpcMessage>> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InputSampleMessage> _inputSamples = new(StringComparer.Ordinal);
     private readonly SnapshotSequenceTracker _sequence = new();
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly TimeSpan _heartbeatInterval;
+    private readonly TimeSpan _reconnectDelay;
 
     private IDaemonChannel? _channel;
     private CancellationTokenSource? _lifetime;
     private Task? _receiver;
+    private Task? _heartbeat;
+    private Task? _reconnector;
     private string? _daemonInstanceId;
     private long _nextRequestId;
+    private long _lastInputSequence;
     private int _resyncRunning;
+    private int _reconnectRunning;
+    private int _shutdownRequested;
     private bool _disposed;
 
-    public DaemonController(IDaemonEndpoint endpoint, TimeSpan? requestTimeout = null)
+    public DaemonController(
+        IDaemonEndpoint endpoint,
+        TimeSpan? requestTimeout = null,
+        TimeSpan? heartbeatInterval = null,
+        TimeSpan? reconnectDelay = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         _endpoint = endpoint;
         _requestTimeout = requestTimeout ?? DefaultRequestTimeout;
+        _heartbeatInterval = heartbeatInterval ?? TimeSpan.FromSeconds(5);
+        _reconnectDelay = reconnectDelay ?? TimeSpan.FromSeconds(1);
         ClientInstanceId = Guid.NewGuid().ToString("N");
     }
 
@@ -88,9 +106,34 @@ public sealed class DaemonController : IAsyncDisposable
 
     public event Action<StateSnapshot>? SnapshotChanged;
 
+    public event Action<InputSampleMessage>? InputSampled;
+
+    /// <summary>The latest sample per device, including samples received during the handshake.</summary>
+    public IReadOnlyList<InputSampleMessage> InputSamples
+    {
+        get { lock (_inputGate) { return _inputSamples.Values.ToArray(); } }
+    }
+
+    public event Action? Connected;
+
     public event Action? Disconnected;
 
     public async Task<StateSnapshot> ConnectAsync(CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        Interlocked.Exchange(ref _shutdownRequested, 0);
+        await _connectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await ConnectCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connectGate.Release();
+        }
+    }
+
+    private async Task<StateSnapshot> ConnectCoreAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (State == DaemonConnectionState.Connected && Snapshot is not null)
@@ -123,7 +166,12 @@ public sealed class DaemonController : IAsyncDisposable
 
             var hello = await ExchangeDirectAsync(
                 channel,
-                new HelloMessage("DeziroJoy.GUI", IpcContract.ProtocolVersion, ClientInstanceId, IpcSession.Current),
+                new HelloMessage(
+                    "DeziroJoy.GUI",
+                    IpcContract.ProtocolVersion,
+                    ClientInstanceId,
+                    IpcSession.Current,
+                    SubscribeInputSamples: true),
                 message => message is HelloAckMessage,
                 timeout.Token).ConfigureAwait(false);
             var ack = (HelloAckMessage)hello;
@@ -134,6 +182,7 @@ public sealed class DaemonController : IAsyncDisposable
 
             _daemonInstanceId = ack.DaemonInstanceId;
             Revision = ack.Revision;
+            ResetInputSamples();
 
             var requestId = NextRequestId();
             var state = await ExchangeDirectAsync(
@@ -147,10 +196,12 @@ public sealed class DaemonController : IAsyncDisposable
                 throw new DaemonHandshakeException("the daemon instance changed during the handshake");
             }
 
-            AdoptAuthoritative(initial);
+            AdoptAuthoritative(initial, reset: true);
             State = DaemonConnectionState.Connected;
             LastError = null;
             _receiver = Task.Run(() => ReceiveLoopAsync(channel, lifetime.Token), CancellationToken.None);
+            _heartbeat = Task.Run(() => HeartbeatLoopAsync(lifetime.Token), CancellationToken.None);
+            Connected?.Invoke();
             return initial.Snapshot;
         }
         catch
@@ -173,8 +224,7 @@ public sealed class DaemonController : IAsyncDisposable
             var response = await completion.Task.WaitAsync(_requestTimeout, cancellationToken).ConfigureAwait(false);
             if (response is StateChangedMessage state)
             {
-                AdoptAuthoritative(state);
-                return state.Snapshot;
+                return AdoptAuthoritative(state) ? state.Snapshot : Snapshot!;
             }
 
             if (response is ErrorMessage error)
@@ -216,6 +266,46 @@ public sealed class DaemonController : IAsyncDisposable
 
     public Task<MutationResult> SwitchPresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SwitchPresetSlotMessage(requestId, deviceId, slot), cancellationToken);
+
+    public async Task<MutationResult> ShutdownDaemonAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Exchange(ref _shutdownRequested, 1);
+        MutationResult result;
+        try
+        {
+            result = await MutateAsync(requestId => new ShutdownDaemonMessage(requestId), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _shutdownRequested, 0);
+            StartReconnect();
+            throw;
+        }
+
+        if (result.Outcome != MutationOutcome.Accepted)
+        {
+            Interlocked.Exchange(ref _shutdownRequested, 0);
+            StartReconnect();
+        }
+
+        return result;
+    }
+
+    public async Task<bool> RequestShutdownAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await ShutdownDaemonAsync(cancellationToken).ConfigureAwait(false);
+            return result.Outcome == MutationOutcome.Accepted;
+        }
+        catch (Exception exception) when (exception
+            is InvalidOperationException or DaemonDisconnectedException or TimeoutException
+            or OperationCanceledException or IOException or ObjectDisposedException)
+        {
+            return false;
+        }
+    }
 
     private async Task<MutationResult> MutateAsync(
         Func<string, IpcMessage> build,
@@ -299,11 +389,74 @@ public sealed class DaemonController : IAsyncDisposable
         while (true)
         {
             var message = await channel.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+            if (message is InputSampleMessage sample)
+            {
+                HandleInputSample(sample);
+                continue;
+            }
+
             if (isAnswer(message))
             {
                 return message;
             }
         }
+    }
+
+    private async Task HeartbeatLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(_heartbeatInterval, cancellationToken).ConfigureAwait(false);
+                await GetStateAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            LastError = exception.Message;
+            EnterDisconnected();
+        }
+    }
+
+    private void StartReconnect()
+    {
+        if (_disposed || Volatile.Read(ref _shutdownRequested) != 0
+            || Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _reconnector = Task.Run(async () =>
+        {
+            try
+            {
+                while (!_disposed && Volatile.Read(ref _shutdownRequested) == 0)
+                {
+                    try
+                    {
+                        await Task.Delay(_reconnectDelay, _shutdown.Token).ConfigureAwait(false);
+                        await ConnectAsync(_shutdown.Token).ConfigureAwait(false);
+                        return;
+                    }
+                    catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception exception)
+                    {
+                        LastError = exception.Message;
+                    }
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _reconnectRunning, 0);
+            }
+        }, CancellationToken.None);
     }
 
     private async Task ReceiveLoopAsync(IDaemonChannel channel, CancellationToken cancellationToken)
@@ -344,6 +497,8 @@ public sealed class DaemonController : IAsyncDisposable
             case ErrorMessage error:
                 CompletePending(error.RequestId, error);
                 return true;
+            case InputSampleMessage sample:
+                return HandleInputSample(sample);
             case StateChangedMessage state when state.DaemonInstanceId != _daemonInstanceId:
                 return false;
             case StateChangedMessage { RequestId: not null } answer:
@@ -358,25 +513,37 @@ public sealed class DaemonController : IAsyncDisposable
 
     private bool HandlePush(StateChangedMessage push)
     {
-        switch (_sequence.Evaluate(push.Snapshot.Sequence))
+        lock (_snapshotGate)
         {
-            case SnapshotDisposition.Fresh:
-                Adopt(push);
-                return true;
-            case SnapshotDisposition.Stale:
-                return true;
-            case SnapshotDisposition.Gap:
-                TriggerResync();
-                return true;
-            default:
-                throw new DaemonProtocolException($"unknown snapshot disposition for sequence {push.Snapshot.Sequence}");
+            switch (_sequence.Evaluate(push.Snapshot.Sequence))
+            {
+                case SnapshotDisposition.Fresh:
+                    Adopt(push);
+                    return true;
+                case SnapshotDisposition.Stale:
+                    return true;
+                case SnapshotDisposition.Gap:
+                    TriggerResync();
+                    return true;
+                default:
+                    throw new DaemonProtocolException($"unknown snapshot disposition for sequence {push.Snapshot.Sequence}");
+            }
         }
     }
 
-    private void AdoptAuthoritative(StateChangedMessage state)
+    private bool AdoptAuthoritative(StateChangedMessage state, bool reset = false)
     {
-        _sequence.Adopt(state.Snapshot.Sequence);
-        Adopt(state);
+        lock (_snapshotGate)
+        {
+            if (!reset && Snapshot is { } current && state.Snapshot.Sequence < current.Sequence)
+            {
+                return false;
+            }
+
+            _sequence.Adopt(state.Snapshot.Sequence);
+            Adopt(state);
+            return true;
+        }
     }
 
     private void Adopt(StateChangedMessage state)
@@ -384,6 +551,37 @@ public sealed class DaemonController : IAsyncDisposable
         Snapshot = state.Snapshot;
         Revision = state.Snapshot.Revision;
         SnapshotChanged?.Invoke(state.Snapshot);
+    }
+
+    private void ResetInputSamples()
+    {
+        lock (_inputGate)
+        {
+            _inputSamples.Clear();
+            _lastInputSequence = 0;
+        }
+    }
+
+    private bool HandleInputSample(InputSampleMessage sample)
+    {
+        if (sample.DaemonInstanceId != _daemonInstanceId)
+        {
+            return false;
+        }
+
+        lock (_inputGate)
+        {
+            if (sample.Sequence <= _lastInputSequence)
+            {
+                return true;
+            }
+
+            _lastInputSequence = sample.Sequence;
+            _inputSamples[sample.DeviceId] = sample;
+        }
+
+        InputSampled?.Invoke(sample);
+        return true;
     }
 
     private void TriggerResync()
@@ -413,9 +611,15 @@ public sealed class DaemonController : IAsyncDisposable
 
     private void EnterDisconnected()
     {
+        if (_disposed || State != DaemonConnectionState.Connected)
+        {
+            return;
+        }
+
         State = DaemonConnectionState.Disconnected;
         FailPending();
         Disconnected?.Invoke();
+        StartReconnect();
     }
 
     private TaskCompletionSource<IpcMessage> RegisterPending(string requestId)
@@ -520,6 +724,20 @@ public sealed class DaemonController : IAsyncDisposable
             }
         }
 
+        var heartbeat = _heartbeat;
+        _heartbeat = null;
+        if (heartbeat is not null)
+        {
+            try
+            {
+                await heartbeat.WaitAsync(_requestTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException exception)
+            {
+                LastError = exception.Message;
+            }
+        }
+
         lifetime?.Dispose();
     }
 
@@ -531,10 +749,25 @@ public sealed class DaemonController : IAsyncDisposable
         }
 
         _disposed = true;
+        await _shutdown.CancelAsync().ConfigureAwait(false);
+        if (_reconnector is not null)
+        {
+            try
+            {
+                await _reconnector.WaitAsync(_requestTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException exception)
+            {
+                LastError = exception.Message;
+            }
+        }
+
         await CleanupConnectionAsync().ConfigureAwait(false);
         State = DaemonConnectionState.Disconnected;
         FailPending();
         _sendGate.Dispose();
         _mutationGate.Dispose();
+        _connectGate.Dispose();
+        _shutdown.Dispose();
     }
 }

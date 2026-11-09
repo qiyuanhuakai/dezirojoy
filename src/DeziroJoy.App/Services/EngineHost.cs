@@ -29,6 +29,7 @@ public sealed class EngineHost : IDisposable
     private readonly IGamepadProvider _provider;
     private readonly IOutputSink _sink;
     private readonly IProfileStore _profileStore;
+    private readonly PresetStore _presets;
     private readonly Dictionary<string, ControllerRuntime> _runtimes = [];
     private readonly Dictionary<string, int> _absenceTicks = [];
     private readonly Lock _sync = new();
@@ -37,6 +38,7 @@ public sealed class EngineHost : IDisposable
     private volatile bool _running;
     private volatile bool _injectionSuspended;
     private volatile int _injectionVerdict;
+    private int _presenceVersion;
 
     private const int InjectionVerdictPending = 0;
     private const int InjectionVerdictHeld = 1;
@@ -69,12 +71,17 @@ public sealed class EngineHost : IDisposable
         _provider = provider;
         _sink = sink;
         _profileStore = profileStore;
+        _presets = new PresetStore(profileStore);
         _injectionMutexName = injectionMutexName ?? DefaultInjectionMutexNameResolver();
     }
 
     public bool IsMappingEnabled { get; private set; } = true;
 
     public bool IsRunning => _running;
+
+    public int ActivePresetSlot { get; private set; } = PresetStore.MinSlot;
+
+    public event Action? ControllersChanged;
 
     public IReadOnlyList<ControllerRuntime> Controllers
     {
@@ -102,8 +109,8 @@ public sealed class EngineHost : IDisposable
     /// carrying the target slot. <see cref="Platform.CommandDispatcher"/> never injects a
     /// <see cref="SwitchPresetCommand"/> - the host owns the switch - so this is how the
     /// tick's request reaches it: at most one raise per tick, the first request in tick
-    /// order winning when one tick named several. The host holds no preset store; it only
-    /// defers the request to whoever listens.
+    /// order winning when one tick named several. The host owns the runtime slot and store;
+    /// this event lets the daemon or view model perform the same atomic switch path.
     /// </summary>
     public event EventHandler<int>? PresetSwitchRequested;
 
@@ -111,9 +118,11 @@ public sealed class EngineHost : IDisposable
     public void TickOnce(TimeSpan delta)
     {
         int? presetSwitch = null;
+        bool presenceChanged;
 
         lock (_sync)
         {
+            var initialPresenceVersion = _presenceVersion;
             var connected = _provider.GetConnected();
             var present = new HashSet<string>(StringComparer.Ordinal);
 
@@ -141,6 +150,12 @@ public sealed class EngineHost : IDisposable
             }
 
             ReconcileAbsence(present, DeviceAbsenceGraceTicks);
+            presenceChanged = initialPresenceVersion != _presenceVersion;
+        }
+
+        if (presenceChanged)
+        {
+            ControllersChanged?.Invoke();
         }
 
         // Raised after the tick's command loop completes and outside the lock: the host
@@ -160,8 +175,10 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void RefreshPresence()
     {
+        bool presenceChanged;
         lock (_sync)
         {
+            var initialPresenceVersion = _presenceVersion;
             var connected = _provider.GetConnected();
             var present = new HashSet<string>(StringComparer.Ordinal);
 
@@ -172,6 +189,12 @@ public sealed class EngineHost : IDisposable
             }
 
             ReconcileAbsence(present, graceTicks: 0);
+            presenceChanged = initialPresenceVersion != _presenceVersion;
+        }
+
+        if (presenceChanged)
+        {
+            ControllersChanged?.Invoke();
         }
     }
 
@@ -198,11 +221,9 @@ public sealed class EngineHost : IDisposable
     }
 
     /// <summary>
-    /// True while the mapping editor is open. The engine keeps sampling - the UI navigates by
-    /// physical button either way - but injects nothing, so a press picks the mapping to edit
-    /// instead of also firing its binding. This is the editor's hijack, deliberately separate
-    /// from <see cref="IsMappingEnabled"/>, which is the user's own pause and drives its own
-    /// checkbox.
+    /// True while an explicit GUI hijack lease owns physical input. The engine keeps sampling
+    /// so the UI can navigate, but dispatches nothing. This is deliberately separate from
+    /// <see cref="IsMappingEnabled"/>, the user's independent mapping pause.
     /// </summary>
     public bool IsInjectionSuspended => _injectionSuspended;
 
@@ -242,8 +263,10 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public void SamplePresence()
     {
+        bool presenceChanged;
         lock (_sync)
         {
+            var initialPresenceVersion = _presenceVersion;
             var connected = _provider.GetConnected();
             var present = new HashSet<string>(StringComparer.Ordinal);
 
@@ -264,6 +287,12 @@ public sealed class EngineHost : IDisposable
             }
 
             ReconcileAbsence(present, graceTicks: 0);
+            presenceChanged = initialPresenceVersion != _presenceVersion;
+        }
+
+        if (presenceChanged)
+        {
+            ControllersChanged?.Invoke();
         }
     }
 
@@ -274,8 +303,50 @@ public sealed class EngineHost : IDisposable
         {
             if (_runtimes.TryGetValue(deviceId, out var runtime))
             {
-                runtime.Reload(profile);
+                runtime.Reload(profile with { PresetSlot = ActivePresetSlot });
             }
+        }
+    }
+
+    /// <summary>
+    /// Switches every supplied device as one transaction. If any reload fails, runtimes
+    /// already touched are restored before the exception escapes and the global slot stays
+    /// unchanged. New devices created afterwards also inherit the selected slot.
+    /// </summary>
+    public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
+    {
+        if (slot is < PresetStore.MinSlot or > PresetStore.MaxSlot)
+        {
+            throw new ArgumentOutOfRangeException(nameof(slot));
+        }
+
+        ArgumentNullException.ThrowIfNull(profiles);
+        lock (_sync)
+        {
+            var previous = new Dictionary<string, (ControllerRuntime Runtime, GamepadProfile Profile)>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var (deviceId, profile) in profiles)
+                {
+                    ArgumentNullException.ThrowIfNull(profile);
+                    if (_runtimes.TryGetValue(deviceId, out var runtime))
+                    {
+                        previous.Add(deviceId, (runtime, runtime.Profile));
+                        runtime.Reload(profile with { PresetSlot = slot });
+                    }
+                }
+            }
+            catch
+            {
+                foreach (var (deviceId, prior) in previous)
+                {
+                    prior.Runtime.Reload(prior.Profile);
+                }
+
+                throw;
+            }
+
+            ActivePresetSlot = slot;
         }
     }
 
@@ -482,9 +553,10 @@ public sealed class EngineHost : IDisposable
                 return existing;
             }
 
-            var profile = _profileStore.Load(descriptor.DeviceId) ?? DefaultProfileLibrary.CreateDefault(descriptor);
+            var profile = _presets.EnsureDefaults(descriptor, ActivePresetSlot) with { PresetSlot = ActivePresetSlot };
             var runtime = new ControllerRuntime(descriptor, profile, _sink);
             _runtimes[descriptor.DeviceId] = runtime;
+            _presenceVersion++;
 
             return runtime;
         }
@@ -538,6 +610,7 @@ public sealed class EngineHost : IDisposable
             {
                 runtime.Engine.Reset();
                 runtime.Dispatcher.ReleaseAll();
+                _presenceVersion++;
             }
         }
     }

@@ -134,6 +134,39 @@ public class PresetStoreTests
         Assert.Equal([2], store.SlotsInUse("pad-1"));
     }
 
+    [Fact]
+    public void EnsureDefaults_Initializes_Four_Independent_Slots_On_First_Use()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var descriptor = new GamepadDescriptor("pad-1", "Xbox Wireless Controller");
+
+        var active = store.EnsureDefaults(descriptor, activeSlot: 3);
+
+        Assert.Equal([1, 2, 3, 4], store.SlotsInUse("pad-1"));
+        Assert.Equal("preset3:pad-1", active.DeviceId);
+        for (var slot = 2; slot <= 4; slot++)
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+            Assert.Equal(PresetStore.KeyFor("pad-1", slot), profile.DeviceId);
+            Assert.Equal(store.LoadSlot("pad-1", 1)!.Mappings.Count, profile.Mappings.Count);
+        }
+    }
+
+    [Fact]
+    public void EnsureDefaults_Preserves_Customized_Slots()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var descriptor = new GamepadDescriptor("pad-1", "DualShock 4");
+        store.SaveSlot("pad-1", 2, SlotProfile("Custom", "pad-1"));
+
+        store.EnsureDefaults(descriptor);
+
+        Assert.Equal("Custom", store.LoadSlot("pad-1", 2)!.Name);
+        Assert.Equal([1, 2, 3, 4], store.SlotsInUse("pad-1"));
+    }
+
     // ---- Legacy leader migration ------------------------------------------
 
     [Fact]

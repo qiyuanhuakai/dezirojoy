@@ -27,26 +27,33 @@ public sealed partial class DaemonServer
     private const string NoPresetConfigurationErrorCode = "no-configuration";
     private const string LeaderPresetSwitchRequestId = "leader-key";
     private readonly Lock _sync = new();
+    private readonly Lock _inputGate = new();
+    private readonly Dictionary<string, InputSampleMessage> _lastInputSamples = new(StringComparer.Ordinal);
     private readonly DaemonState? _restored;
     private readonly HashSet<string> _injectionSuspensions = new(StringComparer.Ordinal);
 
     private long _revision;
     private long _sequence;
+    private long _inputSequence;
     private string _profileName = string.Empty;
     private string _profileJson = string.Empty;
     private string? _lastError;
     private bool _desiredEnabled;
     private bool _injectionSuspended;
 
-    /// <summary>
-    /// The one active preset slot the whole app reads: a switch moves every connected
-    /// device at once, so the slot is app-wide rather than per-device state. In-memory
-    /// only - a restart resumes at slot 1, exactly as an unmigrated profile reads.
-    /// </summary>
+    /// <summary>The one persisted, app-wide preset slot every connected device follows.</summary>
     private int _activePresetSlot = 1;
 
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
+
+    /// <summary>Raised only when physical input changes; consumers must not block the engine.</summary>
+    public event Action<InputSampleMessage>? InputSampled;
+
+    /// <summary>Raised by the transport after the shutdown acknowledgement is written.</summary>
+    public event Action? ShutdownRequested;
+
+    internal void RequestShutdown() => ShutdownRequested?.Invoke();
 
     /// <summary>Changes on every daemon start, so a GUI can tell a restarted daemon apart.</summary>
     public string DaemonInstanceId { get; }
@@ -66,6 +73,8 @@ public sealed partial class DaemonServer
         _presetStore = new PresetStore(profileStore);
         _stateStore = stateStore;
         DaemonInstanceId = $"daemon-{(clock ?? new SystemClock()).UtcNow.Ticks:x16}";
+        _host.DevicesChanged += OnDevicesChanged;
+        _host.InputSampled += OnInputSampled;
 
         _restored = stateStore.Load();
         if (_restored is not null)
@@ -74,6 +83,9 @@ public sealed partial class DaemonServer
             _profileName = _restored.ProfileName;
             _profileJson = _restored.ProfileJson;
             _revision = _restored.Revision;
+            _activePresetSlot = _restored.ActivePresetSlot is >= PresetStore.MinSlot and <= PresetStore.MaxSlot
+                ? _restored.ActivePresetSlot
+                : PresetStore.MinSlot;
         }
         else
         {
@@ -141,6 +153,9 @@ public sealed partial class DaemonServer
 
             case SwitchPresetSlotMessage switchSlot:
                 return HandleSwitchPresetSlot(switchSlot);
+
+            case ShutdownDaemonMessage shutdown:
+                return new MutationAckMessage(shutdown.RequestId, true, CurrentRevision(), CurrentSequence());
 
             default:
                 // The union is closed and the deserializer rejects unknown kinds, so this is
@@ -218,6 +233,14 @@ public sealed partial class DaemonServer
             // An apply lands in the device's active preset slot, not the bare device key:
             // slot 1 keeps the legacy key, every other slot is stored under its preset key.
             var applyDeviceId = SnapshotDeviceFor(profile.DeviceId);
+            var rebound = !string.IsNullOrWhiteSpace(profile.DeviceId)
+                && applyDeviceId is not null
+                && applyDeviceId != profile.DeviceId;
+            if (rebound)
+            {
+                profile = profile with { DeviceId = applyDeviceId };
+            }
+
             if (applyDeviceId is null)
             {
                 _profileStore.Save(profile);
@@ -233,7 +256,7 @@ public sealed partial class DaemonServer
             ReloadTargetDevice(profile);
 
             _profileName = apply.ProfileName;
-            _profileJson = apply.ProfileJson;
+            _profileJson = rebound ? ProfileSerializer.Serialize(profile) : apply.ProfileJson;
             _lastError = null;
             _revision++;
             PublishStateChange();
@@ -243,18 +266,19 @@ public sealed partial class DaemonServer
     }
 
     /// <summary>
-    /// The device a snapshot describes: the applied profile's own when it names one,
-    /// otherwise the first connected device - the same device <see cref="ReloadTargetDevice"/>
-    /// reloads and <see cref="BuildSnapshot"/> reads its fallback profile from.
+    /// The current apply target. A connected profile device keeps ownership; if it disconnected,
+    /// the edit moves to the first remaining device instead of succeeding against absent hardware.
+    /// With no connected device the named device remains available for offline persistence.
     /// </summary>
     private string? SnapshotDeviceFor(string? profileDeviceId)
     {
-        if (!string.IsNullOrWhiteSpace(profileDeviceId))
+        var connected = _host.ConnectedDeviceIds;
+        if (!string.IsNullOrWhiteSpace(profileDeviceId)
+            && (connected.Count == 0 || connected.Contains(profileDeviceId, StringComparer.Ordinal)))
         {
             return profileDeviceId;
         }
 
-        var connected = _host.ConnectedDeviceIds;
         return connected.Count > 0 ? connected[0] : null;
     }
 
@@ -325,16 +349,28 @@ public sealed partial class DaemonServer
 
             bodyProfile ??= _presetStore.LoadSlot(request.DeviceId, request.Slot);
 
+            try
+            {
+                _host.SwitchPresetSlot(
+                    request.Slot,
+                    holders.ToDictionary(holder => holder.DeviceId, holder => holder.Profile, StringComparer.Ordinal));
+            }
+            catch (Exception exception)
+            {
+                return new MutationAckMessage(
+                    request.RequestId,
+                    false,
+                    _revision,
+                    _sequence,
+                    "preset-switch-failed",
+                    $"preset switch rolled back: {exception.Message}");
+            }
+
             _activePresetSlot = request.Slot;
             if (bodyProfile is not null)
             {
                 _profileName = bodyProfile.Name;
                 _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = bodyDeviceId });
-            }
-
-            foreach (var (deviceId, profile) in holders)
-            {
-                _host.Reload(deviceId, profile);
             }
 
             _revision++;
@@ -518,11 +554,66 @@ public sealed partial class DaemonServer
     private void PublishStateChange()
     {
         _sequence++;
-        _stateStore.Save(new DaemonState(_desiredEnabled, _profileName, _profileJson, _revision));
+        _stateStore.Save(new DaemonState(_desiredEnabled, _profileName, _profileJson, _revision, _activePresetSlot));
 
         var message = new StateChangedMessage(DaemonInstanceId, BuildSnapshot());
         StateChanged?.Invoke(message);
         PublishToConnections(message);
+    }
+
+    private void OnDevicesChanged()
+    {
+        lock (_inputGate)
+        {
+            var connected = _host.ConnectedDeviceIds;
+            foreach (var deviceId in _lastInputSamples.Keys.Where(id => !connected.Contains(id, StringComparer.Ordinal)).ToList())
+            {
+                _lastInputSamples.Remove(deviceId);
+            }
+        }
+
+        lock (_sync)
+        {
+            _sequence++;
+            var message = new StateChangedMessage(DaemonInstanceId, BuildSnapshot());
+            StateChanged?.Invoke(message);
+            PublishToConnections(message);
+        }
+    }
+
+    private void ResetInputSampleBaselines()
+    {
+        lock (_inputGate)
+        {
+            _lastInputSamples.Clear();
+        }
+    }
+
+    private void OnInputSampled(string deviceId, DeziroJoy.Core.Input.IGamepadState state)
+    {
+        InputSampleMessage message;
+        lock (_inputGate)
+        {
+            if (_lastInputSamples.TryGetValue(deviceId, out var previous) && previous.Matches(state))
+            {
+                return;
+            }
+
+            message = new InputSampleMessage(
+                DaemonInstanceId,
+                ++_inputSequence,
+                deviceId,
+                state.PressedButtons,
+                state.LeftStickX,
+                state.LeftStickY,
+                state.RightStickX,
+                state.RightStickY,
+                state.ExtraButtons.Count > 0 ? state.ExtraButtons.ToArray() : null);
+            _lastInputSamples[deviceId] = message;
+        }
+
+        InputSampled?.Invoke(message);
+        PublishInputSample(message);
     }
 
     private StateSnapshot BuildSnapshot()
@@ -530,12 +621,43 @@ public sealed partial class DaemonServer
         var profileName = _profileName;
         var profileJson = _profileJson;
         var connected = _host.ConnectedDeviceIds;
-        if (string.IsNullOrEmpty(profileJson)
-            && connected.Count > 0
-            && _host.GetProfile(connected[0]) is { } profile)
+        if (connected.Count > 0)
         {
-            profileName = profile.Name;
-            profileJson = ProfileSerializer.Serialize(profile);
+            string? profileDeviceId = null;
+            var malformedProfile = false;
+            if (!string.IsNullOrEmpty(profileJson))
+            {
+                try
+                {
+                    profileDeviceId = ProfileSerializer.Deserialize(profileJson).DeviceId;
+                }
+                catch (JsonException)
+                {
+                    malformedProfile = true;
+                }
+            }
+
+            var targetDeviceId = profileDeviceId is not null
+                && connected.Contains(profileDeviceId, StringComparer.Ordinal)
+                    ? profileDeviceId
+                    : connected[0];
+            var targetDisconnected = profileDeviceId is not null
+                && !connected.Contains(profileDeviceId, StringComparer.Ordinal);
+            if (malformedProfile || targetDisconnected || string.IsNullOrEmpty(profileJson))
+            {
+                var profile = _host.GetProfile(targetDeviceId)
+                    ?? _presetStore.LoadSlot(targetDeviceId, _activePresetSlot);
+                if (profile is not null)
+                {
+                    profileName = profile.Name;
+                    profileJson = ProfileSerializer.Serialize(profile with { DeviceId = targetDeviceId });
+                }
+                else
+                {
+                    profileName = string.Empty;
+                    profileJson = string.Empty;
+                }
+            }
         }
 
         return new StateSnapshot(
@@ -553,6 +675,7 @@ public sealed partial class DaemonServer
             ActivePresetSlot: _activePresetSlot)
         {
             ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
+            Devices = _host.ConnectedDevices,
         };
     }
 }

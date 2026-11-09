@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Channels;
 
 namespace DeziroJoy.App.Ipc;
 
@@ -80,7 +81,14 @@ public sealed partial class DaemonServer
                         return;
                     }
 
+                    connection.InputSamplesEnabled = hello.SubscribeInputSamples;
                     handshakeAccepted = true;
+                    if (connection.InputSamplesEnabled)
+                    {
+                        ResetInputSampleBaselines();
+                        _host.SamplePresence();
+                    }
+
                     continue;
                 }
 
@@ -94,6 +102,11 @@ public sealed partial class DaemonServer
 
                 var response = await ProcessAsync(request, connection.Id).ConfigureAwait(false);
                 await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+                if (request is ShutdownDaemonMessage && response is MutationAckMessage { Accepted: true })
+                {
+                    RequestShutdown();
+                    return;
+                }
             }
         }
         finally
@@ -141,52 +154,123 @@ public sealed partial class DaemonServer
     private static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint processId);
 
     /// <summary>
-    /// One client connection. Writes are serialised by a semaphore so a push raised on
-    /// another connection's thread can never interleave with this connection's own response.
+    /// One client connection with a single ordered writer. Responses and pushed snapshots
+    /// share the same queue, so concurrent publishers cannot reorder sequence numbers. Only
+    /// consecutive samples from one device with identical digital buttons coalesce: analog traffic
+    /// cannot build a backlog, while devices and every press/release transition remain distinct.
     /// </summary>
     private sealed class Connection : IDisposable
     {
-        private readonly SemaphoreSlim _writeGate = new(1, 1);
+        private readonly Channel<Outbound> _outbound = Channel.CreateUnbounded<Outbound>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        private readonly object _inputGate = new();
         private readonly Stream _stream;
+        private readonly Task _writer;
+        private InputSampleSlot? _lastQueuedInputSample;
 
         public string Id { get; } = Guid.NewGuid().ToString("N");
 
-        public Connection(Stream stream) => _stream = stream;
+        public volatile bool InputSamplesEnabled;
+
+        public Connection(Stream stream)
+        {
+            _stream = stream;
+            _writer = Task.Run(WriteLoopAsync, CancellationToken.None);
+        }
 
         public async Task SendAsync(IpcMessage message, CancellationToken cancellationToken)
         {
-            var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(message));
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_outbound.Writer.TryWrite(new Outbound(message, completion, cancellationToken)))
+            {
+                throw new EndOfStreamException();
+            }
 
-            await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                await PipeFraming.WriteFrameAsync(_stream, payload, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                _writeGate.Release();
-            }
+            await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        /// <summary>Queues a push without blocking the thread that raised the state change.</summary>
         public void Post(IpcMessage message)
+            => _outbound.Writer.TryWrite(new Outbound(message, null, CancellationToken.None));
+
+        public void PostInputSample(InputSampleMessage message)
         {
-            _ = Task.Run(
-                async () =>
+            Outbound outbound;
+            lock (_inputGate)
+            {
+                if (_lastQueuedInputSample is { } queued && queued.CanCoalesce(message))
                 {
-                    try
-                    {
-                        await SendAsync(message, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (Exception)
-                    {
-                        // A dead peer is reaped by its own ServeConnectionAsync loop.
-                    }
-                },
-                CancellationToken.None);
+                    queued.Message = message;
+                    return;
+                }
+
+                var slot = new InputSampleSlot(message);
+                _lastQueuedInputSample = slot;
+                outbound = Outbound.ForInputSample(slot);
+            }
+
+            _outbound.Writer.TryWrite(outbound);
         }
 
-        public void Dispose() => _writeGate.Dispose();
+        private InputSampleMessage TakeInputSample(InputSampleSlot slot)
+        {
+            lock (_inputGate)
+            {
+                if (ReferenceEquals(_lastQueuedInputSample, slot))
+                {
+                    _lastQueuedInputSample = null;
+                }
+
+                return slot.Message;
+            }
+        }
+
+        private async Task WriteLoopAsync()
+        {
+            await foreach (var item in _outbound.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                var message = item.InputSample is { } slot ? TakeInputSample(slot) : item.Message;
+                if (message is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(message));
+                    await PipeFraming.WriteFrameAsync(_stream, payload, item.CancellationToken).ConfigureAwait(false);
+                    item.Completion?.TrySetResult();
+                }
+                catch (Exception exception)
+                {
+                    item.Completion?.TrySetException(exception);
+                    // Keep draining: a response queued behind a failed push must also
+                    // complete, or ServeConnectionAsync would wait on it forever.
+                }
+            }
+        }
+
+        public void Dispose() => _outbound.Writer.TryComplete();
+
+        private sealed class InputSampleSlot(InputSampleMessage message)
+        {
+            public InputSampleMessage Message { get; set; } = message;
+
+            public bool CanCoalesce(InputSampleMessage other)
+                => string.Equals(Message.DeviceId, other.DeviceId, StringComparison.Ordinal)
+                    && Message.PressedButtons == other.PressedButtons
+                    && (Message.ExtraButtons ?? Array.Empty<int>()).SequenceEqual(
+                        other.ExtraButtons ?? Array.Empty<int>());
+        }
+
+        private sealed record Outbound(
+            IpcMessage? Message,
+            TaskCompletionSource? Completion,
+            CancellationToken CancellationToken,
+            InputSampleSlot? InputSample = null)
+        {
+            public static Outbound ForInputSample(InputSampleSlot slot)
+                => new(null, null, CancellationToken.None, slot);
+        }
     }
 
     private void PublishToConnections(StateChangedMessage message)
@@ -200,6 +284,23 @@ public sealed partial class DaemonServer
         foreach (var connection in connections)
         {
             connection.Post(message);
+        }
+    }
+
+    private void PublishInputSample(InputSampleMessage message)
+    {
+        List<Connection> connections;
+        lock (_connectionsGate)
+        {
+            connections = [.. _connections];
+        }
+
+        foreach (var connection in connections)
+        {
+            if (connection.InputSamplesEnabled)
+            {
+                connection.PostInputSample(message);
+            }
         }
     }
 }
