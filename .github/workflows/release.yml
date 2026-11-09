@@ -36,6 +36,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The Windows packaging script derives every path from its own location
+      # ($PSScriptRoot), and this workflow is its only caller. Recompute that
+      # derivation here on every leg: a walk one level short lands on tools/ and
+      # each joined path gains a spurious tools\ segment - the beta.1 run failed
+      # with ...\tools\tools\Packaging\win\DeziroJoy.iss on both Windows RIDs.
+      # The check is static, so it needs no toolchain and runs on any runner.
+      - name: Verify packaging path derivation (static)
+        shell: bash
+        run: |
+          set -euo pipefail
+          script='tools/Packaging/win/build-and-verify.ps1'
+          test -f "$script" || { echo "missing $script"; exit 1; }
+
+          # tools/Packaging/win is the script's own directory; the repository
+          # root derivation must walk exactly back to the repository root.
+          walk="$(grep -oP "\\\$repoRoot = .*Join-Path \\\$PSScriptRoot '\K[^']*" "$script" || true)"
+          if [ -z "$walk" ]; then
+            echo "no repository root derivation found in $script"
+            exit 1
+          fi
+          resolved='tools/Packaging/win'
+          IFS='/' read -r -a segments <<< "$walk"
+          for segment in "${segments[@]}"; do
+            if [ "$segment" != '..' ]; then
+              echo "unexpected segment '$segment' in repository root derivation"
+              exit 1
+            fi
+            resolved="$(dirname "$resolved")"
+          done
+          if [ "$resolved" != '.' ]; then
+            echo "repository root derives to '$resolved', expected the repository root"
+            exit 1
+          fi
+
+          # Every repository-relative path the script joins onto that root must
+          # exist, or the Windows runner fails mid-build with a missing file.
+          while read -r rel; do
+            if [ ! -e "$rel" ]; then
+              echo "path referenced by $script missing from the repository: $rel"
+              exit 1
+            fi
+          done < <(grep -oP "Join-Path \\\$repoRoot '\K[^']*" "$script" || true)
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -112,15 +155,17 @@ jobs:
 
       # Inno Setup 6 ships on the windows-latest image. The script is driven entirely
       # by ISCC /D defines, so the step only passes the version, the RID and the two
-      # absolute paths. For win-x64 it also runs the silent install / verify /
-      # uninstall cycle against a throwaway directory; a win-arm64 setup.exe is an
-      # ARM64 binary and cannot execute on the x64 runner, so that RID gets the
-      # compile and the PE architecture check only (the same cross-compilation
-      # convention the binary smoke step above uses for linux-arm64).
+      # absolute paths. The script itself resolves everything from its own location,
+      # so the call works from any working directory. For win-x64 it also runs the
+      # silent install / verify / uninstall cycle against a throwaway directory; a
+      # win-arm64 setup.exe is an ARM64 binary and cannot execute on the x64 runner,
+      # so that RID gets the compile and the PE architecture check only (the same
+      # cross-compilation convention the binary smoke step above uses for
+      # linux-arm64).
       - name: Build and verify the installer (Inno Setup)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./tools/Packaging/win/build-and-verify.ps1 -Version '${{ steps.version.outputs.version }}' -Rid '${{ matrix.rid }}' -PublishDir 'publish/${{ matrix.rid }}'
+        run: "& '${{ github.workspace }}/tools/Packaging/win/build-and-verify.ps1' -Version '${{ steps.version.outputs.version }}' -Rid '${{ matrix.rid }}' -PublishDir '${{ github.workspace }}/publish/${{ matrix.rid }}'"
 
       # dpkg-deb from the ubuntu-latest image builds the package. The payload contract
       # (complete /opt/dezirojoy, the icon, the desktop entry, and nothing under /etc)
