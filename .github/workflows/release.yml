@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, without the leading v (e.g. 0.0.1-alpha.1-preview)'
+        description: 'Version to release, without the leading v (e.g. 0.0.1-beta.1-preview)'
         required: true
 
 permissions:
@@ -294,37 +294,34 @@ jobs:
         shell: bash
         run: |
           cat > body.md <<'NOTES'
-          ## DeziroJoy vVERSION (alpha preview)
+          ## DeziroJoy vVERSION (beta preview)
 
-          本版聚焦预设与映射编辑的可靠性：预设编辑按槽独立持久化、数量不再限于四个且可
-          手动新增，预设选择器重绘为横向圆角动态卡片条；映射编辑为跨类型组合提供方向选择
-          与显示，重复触发在长 tick 下按相位补齐、不丢单位。仍属 alpha 预览版，
-          欢迎按 [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
+          本版起发布正式安装包而非压缩包：Windows 为 per-user 安装器（setup.exe），
+          Linux 为 .deb 软件包，安装与卸载都走系统标准途径。键位选择器重画为分类
+          导航加六列紧凑网格；托盘到 GUI 的交接在可靠性与响应延迟上均有修复。仍属
+          beta 预览版，欢迎按 [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
 
           ### 本版更新
 
-          - **预设按槽独立持久化**：此前预设编辑只存在于运行中的引擎，切换槽位后提交即丢失；
-            现在每次本地提交（编辑 / 删除 / 灵敏度 / 恢复默认 / 导入）都写入当前活动槽，
-            与 daemon 的应用路径一致，切走再切回编辑仍在。多客户端场景下每个 daemon 快照
-            到达时重新对齐全量槽位，第二个 GUI 客户端能看到另一个客户端新增的槽位
-          - **预设数量开放、可手动新增**：预设槽位不再限于四个——初始仍物化 1–4，任何正数
-            槽位均有效；「＋ 新增」按钮把当前配置复制为一份独立新槽，可立即切换、重启后仍在，
-            Leader 键的槽位选项随之覆盖新增槽
-          - **横向圆角动态卡片条**：预设选择器从手柄模型右侧的竖列改为中列 Tab 控件上方的
-            通栏横向圆角卡片条，按动态集合渲染、一张卡片对一个已存槽位；选中 / hover /
-            pressed / focus 状态不只靠颜色区分（强调色表面、描边、半粗文字、圆点与
-            engagement 下划线）；长名称以省略号收尾、完整名称在 tooltip；超出宽度横向滚动
-            而不换行，卡片条高度恒定，模型保持 DESIGN 4.6 的响应式缩放，最小窗口下模型
-            反而比旧竖列方案更宽
-          - **跨类型映射方向选择与显示**：摇杆驱动数字目标（单键 / 组合键 / 鼠标键 / 特殊键）、
-            按键驱动鼠标移动 / 滚轮两类跨组合，在「类型」旁显示四方向选择器；所选方向随一次
-            原子提交落入 ButtonBinding.Direction / StickBinding.Direction，重新打开编辑器
-            保持；编辑器标题与映射行摘要用方向选择器同样的字（上 / 下 / 左 / 右）显示方向，
-            上下左右不再不可见；原生组合不出现该行，也不会写入被忽略的方向
-          - **重复触发长 tick 补齐与相位隔离**：daemon 卡顿或休眠恢复后的一个长 tick 里，
-            单击重复与长按重复都按该 tick 实际经过的间隔全部补足，不丢单位；补齐只发生在
-            各自相位内——单击重复相位只补单击重复，不会触发按互斥规则惰化的长按，即使手工
-            编辑的配置同时设置了两种重复间隔
+          - **正式安装包（Windows EXE / Linux .deb）**：发布产物从压缩包改为原生
+            安装包。Windows 用 Inno Setup 构建 per-user 安装器：无 UAC 提示，默认
+            装到 `%LOCALAPPDATA%\Programs\DeziroJoy`，x64 安装包亦可经模拟运行于
+            Windows on ARM；Linux 用 dpkg-deb 构建 .deb：装到 `/opt/dezirojoy` 并
+            注册应用菜单入口，依赖（X11、fontconfig、ICU 等）随包声明，`sudo apt
+            install ./<deb>` 一并解析。两个平台的安装器都不注册自启动、计划任务或
+            udev 规则，卸载也不删除用户配置；每个产物仍附 sha256 校验和
+          - **键位分类导航与六列紧凑网格**：「或从列表选择」从六类堆叠的四列长列表
+            改为分类导航加紧凑网格：顶部六个等宽段切换分类，网格只显示当前类的按键，
+            按内容排满成列——短分类共享一行，长分类最多六列，宽扁的编辑卡不再为长
+            列表牺牲宽度。选择跟随键位：切换手势、载入或重置后自动打开所选键所在的
+            分类，选中项始终可见；分类导航条环绕而非滚动，正文 ScrollViewer 保持
+            唯一滚动区，选中勾标占据固定条带，长标签不会压到勾标
+          - **托盘交接可靠性与响应优化**：激活服务器在 Dispose 前排空在途 Show
+            ack，即将退场的持有者仍能应答第二次启动（此前约 17s 失败）；Linux
+            激活通道改用每实例抽象 Unix socket 加发现文件，退场持有者不再误删
+            继任者的 socket，也不再有陈旧 socket 堆积；客户端在 ConnectTimeout
+            内重读发现并重试，陈旧端点不再让第二次启动提前失败；渲染 / 托盘角色
+            探测暂停从 100ms 缩短到 40ms，实测交接约 30ms、退场后二次启动约 125ms
 
           ### 下载
 
@@ -342,6 +339,10 @@ jobs:
           安装目录中的 `unins000.exe`，Linux 用 `sudo dpkg -r dezirojoy`。Linux 安装请用
           `sudo apt install ./DeziroJoy_PACKAGEVERSION_amd64.deb`（arm64 替换文件名）
           而非 `dpkg -i`：依赖（X11、fontconfig、ICU 等）会一并解析，`dpkg -i` 不会。
+
+          安装器未做代码签名。Windows 上首次运行未签名的 setup.exe 可能弹出
+          SmartScreen「Windows 已保护你的电脑」提示，属预期行为：选择「更多信息 →
+          仍要运行」即可继续安装。
 
           Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，
           桌面发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要
@@ -362,11 +363,15 @@ jobs:
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1244 项，
-          1239 通过、0 失败、5 项 Windows 专属跳过；release.yml 已通过 actionlint。
+          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1264 项，
+          1259 通过、0 失败、5 项 Windows 专属跳过；release.yml 已通过 actionlint；
+          本地另以 dpkg-deb 构建 linux-x64 安装包，校验 control 元数据与载荷完整性，
+          并从解包位置冒烟运行 daemon（完整安装 / 卸载循环与 Windows Inno 安装器
+          需对应平台运行器，由 Release workflow 验证）。
           Windows / Ubuntu 双平台 CI、四 RID 自包含安装包（Windows Inno per-user
           EXE / Linux dpkg-deb .deb）构建与安装验证由 Release workflow 执行；
-          本轮未进行 Windows 真机或物理手柄实测，不以自动化测试替代人工验收。
+          本轮未进行 Windows 真机、物理手柄或人工 GUI 实测，不以自动化测试替代
+          人工验收。
           人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
