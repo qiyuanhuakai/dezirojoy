@@ -386,6 +386,67 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task Interleaved_Daemon_Devices_Keep_Independent_Navigation_And_Capture_Edges()
+    {
+        var pipeName = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1", "Controller One");
+        daemonHost.AddDevice("pad-2", "Controller Two");
+        var store = new InMemoryProfileStore();
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var acceptTask = DaemonHost.ServePipeAsync(server, serverCancellation.Token, pipeName);
+        await using var controller = new DaemonController(new PipeEndpoint(pipeName));
+
+        try
+        {
+            await controller.ConnectAsync(TestContext.Current.CancellationToken);
+            var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+            await using var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
+            await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+            await WaitForSuspension(daemonHost, true);
+            Assert.Empty(viewModel.Controllers);
+
+            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-2", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.SelectedSource is ButtonBinding { Button: GamepadButton.A });
+
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.None, 0.6f, 0, 0, 0));
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, 0.7f, 0, 0, 0));
+            await WaitForCondition(() => viewModel.SelectedSource is ButtonBinding { Button: GamepadButton.B });
+
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, 0.8f, 0, 0, 0));
+            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, 0.9f, 0, 0, 0));
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.SelectedSource is ButtonBinding { Button: GamepadButton.A });
+
+            viewModel.AddMappingCommand.Execute(null);
+            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-2", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.None, 0.5f, 0, 0, 0));
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.A && !viewModel.Editor.IsCapturingButton);
+
+            viewModel.Editor.ToggleCaptureButtonCommand.Execute(null);
+            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.None, 0.5f, 0, 0, 0));
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, 0.6f, 0, 0, 0));
+            await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.B && !viewModel.Editor.IsCapturingButton);
+
+            Assert.True(daemonHost.IsInjectionSuspended);
+        }
+        finally
+        {
+            await serverCancellation.CancelAsync();
+            await acceptTask;
+            serverCancellation.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task Daemon_Save_Uses_The_Snapshot_Device_And_Active_Slot_Without_A_Local_Runtime()
     {
         var context = await CreateDaemonPresetViewModel();

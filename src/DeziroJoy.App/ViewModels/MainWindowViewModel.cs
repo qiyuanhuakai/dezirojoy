@@ -85,17 +85,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private const float StickNavigationThreshold = 0.5f;
 
-    private string? _navigationDeviceId;
+    private readonly Dictionary<string, GamepadState> _navigationBaselines = new(StringComparer.Ordinal);
 
     private string? _daemonInputDeviceId;
-
-    private GamepadButtonMask _navigationButtons;
-
-    private readonly SortedSet<int> _navigationExtra = [];
-
-    private bool _navigationLeftDeflected;
-
-    private bool _navigationRightDeflected;
 
     public MainWindowViewModel(
         EngineHost host,
@@ -512,11 +504,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Forgets the navigation baseline so the next sample starts from a clean slate.</summary>
     private void ResetNavigationBaseline()
     {
-        _navigationDeviceId = null;
-        _navigationButtons = default;
-        _navigationExtra.Clear();
-        _navigationLeftDeflected = false;
-        _navigationRightDeflected = false;
+        _navigationBaselines.Clear();
     }
 
     [RelayCommand]
@@ -1071,7 +1059,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public void ApplySample(ControllerSampledEventArgs args)
     {
         SyncControllers();
-        Navigate(args.State);
+        Navigate(args.State, args.Runtime.Descriptor.DeviceId);
 
         if (ActiveController is null)
         {
@@ -1090,7 +1078,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public void ApplyPresenceSample(ControllerSampledEventArgs args)
     {
         SyncControllers();
-        Navigate(args.State);
+        Navigate(args.State, args.Runtime.Descriptor.DeviceId);
 
         if (ActiveController is null)
         {
@@ -1117,7 +1105,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         _daemonInputDeviceId = sample.DeviceId;
         var state = sample.ToGamepadState();
-        Navigate(state);
+        Navigate(state, sample.DeviceId);
         Visualizer.Update(state);
         Visualizer.SetConnected(true);
     }
@@ -1197,7 +1185,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// navigate. Both are scoped to a visible, active mapping tab, so out of scope the sample
     /// only feeds the visualizer.
     /// </summary>
-    private void Navigate(IGamepadState state)
+    private void Navigate(IGamepadState state, string? deviceId)
     {
         // Off means the active mapping owns every press. Even a visible editor must not
         // capture or navigate behind the user's back; highlighting still stays live.
@@ -1212,6 +1200,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        deviceId ??= ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
         if (IsEditing)
         {
             // Keyboard capture owns the input while it is armed. A gamepad button is not a
@@ -1220,48 +1209,60 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             if (Editor.IsCapturingKey)
             {
                 Editor.CaptureGamepadSample(state);
-                RememberNavigation(state);
+                RememberNavigation(state, deviceId);
                 return;
             }
 
             // Button capture is armed: the press becomes the mapping's source.
-            if (Editor.CaptureGamepadSample(state))
+            if (CaptureGamepadSample(state, deviceId))
             {
-                RememberNavigation(state);
+                RememberNavigation(state, deviceId);
                 return;
             }
         }
 
-        NavigateByPhysicalInput(state);
+        NavigateByPhysicalInput(state, deviceId);
+    }
+
+    private bool CaptureGamepadSample(IGamepadState state, string? deviceId)
+    {
+        if (!Editor.IsCapturingButton || deviceId is null)
+        {
+            return Editor.CaptureGamepadSample(state);
+        }
+
+        var previous = _navigationBaselines.GetValueOrDefault(deviceId, GamepadState.Neutral);
+        Editor.IsCapturingButton = false;
+        Editor.CaptureGamepadSample(previous);
+        Editor.IsCapturingButton = true;
+        return Editor.CaptureGamepadSample(state);
     }
 
     /// <summary>
     /// Handles a newly pressed button or deflected stick while the explicit hijack lease is
-    /// active. With the editor open the press switches the configured element; otherwise it
-    /// only selects that element. Only press edges count, and the first sample establishes a
-    /// baseline so a button already held is not treated as a new press.
+    /// active. Every device has an independent baseline, so interleaved samples cannot erase
+    /// another pad's edges. Each device's first sample establishes a baseline without navigating.
     /// </summary>
-    private void NavigateByPhysicalInput(IGamepadState state)
+    private void NavigateByPhysicalInput(IGamepadState state, string? deviceId)
     {
-        var deviceId = ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
-
         if (deviceId is null)
         {
-            // No pad: forget the baseline so the next connection starts from a clean slate.
-            _navigationDeviceId = null;
+            _navigationBaselines.Clear();
             return;
         }
 
-        if (!string.Equals(deviceId, _navigationDeviceId, StringComparison.Ordinal))
+        if (!_navigationBaselines.TryGetValue(deviceId, out var previous))
         {
             RememberNavigation(state, deviceId);
             return;
         }
 
-        var buttonEdges = state.PressedButtons & ~_navigationButtons;
-        var extraEdges = state.ExtraButtons.Where(code => !_navigationExtra.Contains(code)).ToList();
-        var leftEdge = IsDeflected(state.LeftStickX, state.LeftStickY) && !_navigationLeftDeflected;
-        var rightEdge = IsDeflected(state.RightStickX, state.RightStickY) && !_navigationRightDeflected;
+        var buttonEdges = state.PressedButtons & ~previous.PressedButtons;
+        var extraEdges = state.ExtraButtons.Where(code => !previous.ExtraButtons.Contains(code)).ToList();
+        var leftEdge = IsDeflected(state.LeftStickX, state.LeftStickY)
+            && !IsDeflected(previous.LeftStickX, previous.LeftStickY);
+        var rightEdge = IsDeflected(state.RightStickX, state.RightStickY)
+            && !IsDeflected(previous.RightStickX, previous.RightStickY);
 
         RememberNavigation(state, deviceId);
 
@@ -1283,20 +1284,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SelectSource(source);
     }
 
-    /// <summary>Records the current sample as the navigation baseline.</summary>
-    private void RememberNavigation(IGamepadState state, string? deviceId = null)
+    /// <summary>Records the current sample as only this device's navigation/capture baseline.</summary>
+    private void RememberNavigation(IGamepadState state, string? deviceId)
     {
-        _navigationDeviceId = deviceId ?? ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
-        _navigationButtons = state.PressedButtons;
-
-        _navigationExtra.Clear();
-        foreach (var code in state.ExtraButtons)
+        if (deviceId is not null)
         {
-            _navigationExtra.Add(code);
+            _navigationBaselines[deviceId] = GamepadState.Create(
+                state.PressedButtons,
+                state.LeftStickX,
+                state.LeftStickY,
+                state.RightStickX,
+                state.RightStickY,
+                state.ExtraButtons);
         }
-
-        _navigationLeftDeflected = IsDeflected(state.LeftStickX, state.LeftStickY);
-        _navigationRightDeflected = IsDeflected(state.RightStickX, state.RightStickY);
     }
 
     private static bool IsDeflected(float x, float y)
@@ -1390,6 +1390,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             if (wasConnected)
             {
+                _navigationBaselines.Clear();
                 ActiveController = null;
                 ActiveProfile = null;
                 Mappings.Clear();
@@ -1578,9 +1579,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _daemonInputDeviceId = snapshot.Devices.Count > 0 ? snapshot.Devices[0].DeviceId : null;
         }
 
-        if (!snapshot.HasController)
+        foreach (var deviceId in _navigationBaselines.Keys
+            .Where(id => !snapshot.Devices.Any(device => device.DeviceId == id))
+            .ToList())
         {
-            _navigationDeviceId = null;
+            _navigationBaselines.Remove(deviceId);
         }
 
         Visualizer.SetConnected(snapshot.HasController);
@@ -1661,7 +1664,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         DaemonSnapshot = null;
         _daemonInputDeviceId = null;
-        _navigationDeviceId = null;
+        _navigationBaselines.Clear();
         IsEngineRunning = false;
         IsMappingEnabled = false;
         MappingOwner = MappingOwner.None;
