@@ -325,6 +325,9 @@ internal sealed class RenderWindowCoordinator
 
         if (reclaimed)
         {
+            // This render is the live holder again: its endpoint must replace any dead successor's
+            // entry in discovery, so a second launch can still wake the surviving window.
+            GuiActivationServer.ActiveInstance?.RepublishEndpoint();
             Trace.WriteLine("[DeziroJoy] tray handover rolled back; this render reclaimed the instance lease");
             return TrayHandoverOutcome.RolledBack;
         }

@@ -738,6 +738,13 @@ internal static class TrayHost
             Trace.WriteLine($"[DeziroJoy] render handover lease rollback failed: {exception.Message}");
         }
 
+        if (reclaimed)
+        {
+            // The tray is the live holder again: re-assert its endpoint in discovery so a second
+            // launch reaches the surviving tray, not the render successor that just failed.
+            GuiActivationServer.ActiveInstance?.RepublishEndpoint();
+        }
+
         Trace.WriteLine($"[DeziroJoy] render handover rolled back; instance lease reclaimed: {reclaimed}");
         return false;
     }

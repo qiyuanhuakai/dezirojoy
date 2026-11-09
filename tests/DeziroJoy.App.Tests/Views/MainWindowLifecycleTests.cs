@@ -283,6 +283,47 @@ public sealed class MainWindowLifecycleTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void A_Rolled_Back_Tray_Handover_Republishes_The_Surviving_Render()
+    {
+        // The discovery file is a Linux-only channel; on Windows the well-known named pipe is
+        // always current, so there is nothing to republish.
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var themes = new ThemeService(_directory);
+        var identity = new GuiInstanceIdentity(
+            Path.Combine(_directory, "republish.lock"),
+            "DeziroJoy.Test.Republish." + Guid.NewGuid().ToString("N"));
+
+        // The render's activation server is the active instance, as the launcher sets it.
+        var activation = GuiActivationServer.StartActive(identity);
+        try
+        {
+            activation.ShowRequested += () => Task.CompletedTask;
+            activation.BeginServing();
+            var published = File.ReadAllText(identity.DiscoveryPath).Trim();
+
+            // A successor took over discovery and then died before this render retired.
+            File.WriteAllText(identity.DiscoveryPath, "DeziroJoy.Dead.Successor.Endpoint");
+
+            var fixture = BuildRender(themes, probe: () => Task.FromResult(false));
+            fixture.Window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(fixture.Window.IsVisible);
+            Assert.Equal(
+                published,
+                File.ReadAllText(identity.DiscoveryPath).Trim());
+        }
+        finally
+        {
+            activation.Dispose();
+        }
+    }
+
+    [AvaloniaFact]
     public void Closing_After_A_Third_Party_Takes_The_Lease_Retires_Only_The_Unlocked_Render()
     {
         var themes = new ThemeService(_directory);

@@ -304,4 +304,74 @@ public sealed class GuiActivationServerTests
             Assert.Equal(1, shows);
         }
     }
+
+    [Fact]
+    public async Task A_Second_Launch_Waits_For_The_Current_Holder_Instead_Of_Exiting_On_A_Stale_Endpoint()
+    {
+        // A previous holder left a stale endpoint in discovery (a crash runs no cleanup), and the
+        // current leaseholder has taken the lock but not begun serving. A second launch must keep
+        // waiting inside the connect budget for the live channel - not exit on the stale refusal.
+        var identity = NewIdentity();
+        File.WriteAllText(identity.DiscoveryPath, "DeziroJoy.Stale.Predecessor.Endpoint");
+
+        var show = GuiActivationClient.TryShowAsync(
+            identity,
+            new GuiActivationOptions(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)),
+            TestContext.Current.CancellationToken);
+
+        // The stale endpoint must not end the launch: it is still waiting, re-reading discovery.
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            show.WaitAsync(TimeSpan.FromMilliseconds(400), TestContext.Current.CancellationToken));
+
+        // The leaseholder finishes starting and publishes its channel; the launch reaches it now.
+        using var winner = GuiActivationServer.CreatePending(identity);
+        var shows = 0;
+        winner.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+        winner.BeginServing();
+
+        Assert.True(await show, "the launch must reach the holder once it publishes, not exit on the stale endpoint");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public async Task A_Reclaimed_Holder_Republishes_So_Launches_Reach_It_Not_The_Dead_Successor()
+    {
+        // A successor published its endpoint and then died (a crash runs no cleanup), leaving a dead
+        // endpoint in discovery. The surviving holder reclaimed the lease and must take it back.
+        var identity = NewIdentity();
+        using var holder = new GuiActivationServer(identity, role: GuiInstanceRole.Render);
+        var shows = 0;
+        holder.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+
+        // While discovery names the dead successor, no launch can reach the surviving holder. This
+        // state only exists on Linux, where the endpoint is discovered; Windows always uses the
+        // well-known pipe of the live holder.
+        if (OperatingSystem.IsLinux())
+        {
+            File.WriteAllText(identity.DiscoveryPath, "DeziroJoy.Dead.Successor.Endpoint");
+            var blocked = await GuiActivationClient.TryShowAsync(
+                identity,
+                new GuiActivationOptions(TimeSpan.FromMilliseconds(400), TimeSpan.FromSeconds(2)),
+                TestContext.Current.CancellationToken);
+            Assert.False(blocked, "a dead successor endpoint must not let a launch reach the surviving holder");
+        }
+
+        // The holder reclaims the lease and re-asserts its endpoint over the dead successor's.
+        holder.RepublishEndpoint();
+
+        var shown = await GuiActivationClient.TryShowAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+        Assert.True(shown, "the reclaimed holder must be reachable once it republishes");
+        Assert.Equal(1, shows);
+    }
 }

@@ -238,6 +238,7 @@ public sealed class GuiActivationServer : IDisposable
 
     private IActivationListener? _listener;
     private Task? _acceptLoop;
+    private string? _endpoint;
     private bool _disposed;
 
     public GuiActivationServer(
@@ -291,6 +292,16 @@ public sealed class GuiActivationServer : IDisposable
     }
 
     /// <summary>
+    /// Creates a server that neither serves nor becomes the active instance until
+    /// <see cref="BeginServing"/> is called. Models a leaseholder that has taken the instance lock
+    /// but not yet published its channel, without disturbing the process-wide active instance.
+    /// </summary>
+    internal static GuiActivationServer CreatePending(
+        GuiInstanceIdentity identity,
+        GuiInstanceRole role = GuiInstanceRole.Render)
+        => new(identity, null, autoStart: false, role);
+
+    /// <summary>
     /// Starts accepting activation connections. Called once the GUI can actually answer a Show
     /// request, so a launch arriving while the runtime and window are still being built waits
     /// for the live listener instead of being refused. On Linux this is also the moment the
@@ -309,6 +320,7 @@ public sealed class GuiActivationServer : IDisposable
             try
             {
                 _listener = CreateListener(endpoint);
+                _endpoint = endpoint;
                 PublishEndpoint(_identity, endpoint);
             }
             catch (Exception exception) when (exception is IOException or SocketException or UnauthorizedAccessException)
@@ -375,6 +387,11 @@ public sealed class GuiActivationServer : IDisposable
                 // A listener that will not close must not block process exit either.
             }
         }
+
+        // Only the endpoint owner clears discovery, and only once it has stopped serving: a
+        // retiring holder whose successor already published leaves that publish in place, while a
+        // full exit removes the now-dead entry so a fresh winner starts from a clean slate.
+        ClearEndpointIfOwner();
 
         _lifetime.Dispose();
         _serving.Dispose();
@@ -596,6 +613,50 @@ public sealed class GuiActivationServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Re-asserts this server's endpoint in the discovery file. Called when a holder that lost the
+    /// lease during a handover reclaims it after the successor died or was rolled back: discovery
+    /// must name the surviving holder again, not the dead successor. A no-op unless this server is
+    /// actually serving (Linux only; Windows has no discovery).
+    /// </summary>
+    internal void RepublishEndpoint()
+    {
+        var endpoint = _endpoint;
+        if (_disposed || endpoint is null)
+        {
+            return;
+        }
+
+        PublishEndpoint(_identity, endpoint);
+    }
+
+    /// <summary>
+    /// Removes the discovery entry only when it still names this server's own endpoint - that is,
+    /// this process is the endpoint owner exiting with no successor (a full exit). A holder that
+    /// retired in favour of a successor, or yielded to a third party, leaves the newer publish
+    /// untouched so it never deletes a live holder's entry. Linux only; Windows has no discovery.
+    /// </summary>
+    private void ClearEndpointIfOwner()
+    {
+        var endpoint = _endpoint;
+        if (OperatingSystem.IsWindows() || endpoint is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (string.Equals(ReadEndpoint(_identity), endpoint, StringComparison.Ordinal))
+            {
+                File.Delete(_identity.DiscoveryPath);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort: an entry that cannot be removed is simply overwritten by the next holder.
+        }
+    }
+
     internal static byte[] Serialize<T>(T message)
         => JsonSerializer.SerializeToUtf8Bytes(message, IpcSerializer.Options);
 
@@ -732,6 +793,9 @@ internal static class GuiActivationClient
     /// </summary>
     private const int Attempts = 3;
 
+    /// <summary>Floor for one connect attempt so a nearly-spent budget still gets a fair try.</summary>
+    private static readonly TimeSpan MinConnectBudget = TimeSpan.FromMilliseconds(25);
+
     private static readonly IActivationPortal Portal =
         OperatingSystem.IsWindows()
             ? new NamedPipePortal()
@@ -815,9 +879,12 @@ internal static class GuiActivationClient
 
     /// <summary>
     /// Connects to the current holder. Windows connects straight to the well-known pipe, blocking
-    /// up to <paramref name="connectTimeout"/> while the winner finishes starting. Linux waits for
-    /// the holder to publish its per-instance endpoint, then connects the abstract socket. Exposed
-    /// internally so tests can drive a raw exchange against a live server on either platform.
+    /// up to <paramref name="connectTimeout"/> while the winner finishes starting. Linux re-reads
+    /// discovery and retries within <paramref name="connectTimeout"/>: an absent endpoint, or one
+    /// that refuses the connection (a retired/crashed holder, or a winner that has taken the lease
+    /// but not begun serving yet), is not a failure - the current holder may still be publishing.
+    /// Only when nothing live answers within the budget does this raise, which the caller turns
+    /// into a plain "unreachable". Exposed internally so tests can drive a raw exchange.
     /// </summary>
     internal static async Task<Stream> ConnectAsync(
         GuiInstanceIdentity identity,
@@ -830,7 +897,7 @@ internal static class GuiActivationClient
                 .ConfigureAwait(false);
         }
 
-        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var elapsed = Stopwatch.StartNew();
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -839,17 +906,26 @@ internal static class GuiActivationClient
             if (endpoint is not null)
             {
                 var remaining = connectTimeout - elapsed.Elapsed;
-                if (remaining < TimeSpan.FromMilliseconds(1))
+                if (remaining < MinConnectBudget)
                 {
-                    remaining = TimeSpan.FromMilliseconds(1);
+                    remaining = MinConnectBudget;
                 }
 
-                return await Portal.ConnectAsync(endpoint, remaining, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    return await Portal.ConnectAsync(endpoint, remaining, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (IsTransient(exception, cancellationToken))
+                {
+                    // A stale or not-yet-live endpoint: fall through, re-read discovery and retry
+                    // inside the connect budget rather than giving up on a single refusal.
+                }
             }
 
             if (elapsed.Elapsed >= connectTimeout)
             {
-                throw new TimeoutException("no activation endpoint was published within the connect budget");
+                throw new TimeoutException("no live activation endpoint answered within the connect budget");
             }
 
             await Task.Delay(GuiActivationServer.DiscoveryPollInterval, cancellationToken).ConfigureAwait(false);
