@@ -16,10 +16,14 @@
       ArchitecturesInstallIn64BitMode: those two decide where a setup may install.
     * The compiled setup.exe is the x86 bootstrap Inno Setup always emits, whatever
       the payload architecture is.
-    * For win-x64, the setup is silently installed into a throwaway directory, the
-      installed DeziroJoy.exe and its version are asserted, and it is then silently
-      uninstalled with the install directory, the uninstall registry key and the
-      shortcuts asserted gone.
+    * For win-x64, the setup is silently installed into a throwaway directory. The
+      install is waited for twice - first the setup process, whose own exit code
+      (never a stale $LASTEXITCODE) decides success, then the installed artefact
+      itself under a bounded timeout - the installed DeziroJoy.exe and its version
+      are asserted, and it is then silently uninstalled with the install directory,
+      the uninstall registry key and the shortcuts asserted gone. Any install
+      failure or missing artefact prints the Inno install log tail and every
+      directory the payload could have landed in before failing.
 
   Inno Setup 6 compiles a 32-bit x86 setup bootstrap for every architecture: the
   loader is architecture-neutral, and the payload plus ArchitecturesAllowed decide
@@ -196,21 +200,125 @@ if ($Rid -ne 'win-x64') {
 }
 
 # --- silent install into a throwaway directory --------------------------------------
+# The compiled setup.exe is Inno's x86 bootstrap: it extracts the real Setup program
+# into TEMP and waits for it to terminate before returning its exit code, so waiting
+# on the bootstrap process already covers the whole install. That wait is still not
+# trusted alone here: the beta.1 run (42672692136) saw this call return exit code 0
+# about 140 ms after the bootstrap check with nothing installed, which no documented
+# Inno exit path produces - SetupLdr only exits 0 after a successful Setup child, and
+# every failure path in it exits non-zero. (That `&` waits at all is not in doubt
+# either: the 37-second ISCC compile above is waited for the same way in this very
+# step.) Whether the process never entered the install or the check raced it cannot
+# be told apart from outside, so completion is established twice: Start-Process -Wait
+# for the process, whose own ExitCode - not a possibly stale $LASTEXITCODE - decides
+# success, and then a bounded poll for the installed artefact, which is what the rest
+# of the verification actually depends on. A genuinely broken install therefore fails
+# at the poll timeout with the log tail and directory listing below, never by
+# silently skipping the check.
+$installTimeoutSeconds = 180
+$installPollMilliseconds = 250
+
 $installDir = Join-Path $env:TEMP ("DeziroJoy-Install-{0}" -f [guid]::NewGuid().ToString('N'))
 $installLog = Join-Path $env:TEMP ("DeziroJoy-Install-{0}.log" -f [guid]::NewGuid().ToString('N'))
 $uninstallLog = Join-Path $env:TEMP ("DeziroJoy-Uninstall-{0}.log" -f [guid]::NewGuid().ToString('N'))
+$exe = Join-Path $installDir 'DeziroJoy.exe'
+
+function Show-InnoLogTail([string]$LogPath, [string]$What) {
+  # The Inno install/uninstall log is the only record of what the setup actually did
+  # (destination directory, per-file results, exit path). The beta.1 run deleted both
+  # logs unread in its cleanup and failed with nothing but an empty directory
+  # listing, so every failure path below prints the log tail before cleaning up.
+  if (Test-Path $LogPath) {
+    Write-Host "--- $What log (tail): $LogPath ---"
+    Get-Content $LogPath -Tail 40
+    Write-Host "--- end $What log ---"
+  }
+  else {
+    Write-Host "no $What log was produced at $LogPath"
+  }
+}
+
+function Invoke-InnoSilent([string]$FilePath, [string[]]$Arguments, [string]$LogPath, [string]$What) {
+  # Runs an Inno setup or uninstaller silently, waits for the process it started, and
+  # decides success from that process's own exit code. On any failure the matching
+  # log tail is printed before the error propagates.
+  try {
+    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -Wait -PassThru
+  }
+  catch {
+    Write-Host "$What could not be started: $($_.Exception.Message)"
+    Show-InnoLogTail $LogPath $What
+    throw
+  }
+  if ($process.ExitCode -ne 0) {
+    Show-InnoLogTail $LogPath $What
+    throw "$What failed with exit code $($process.ExitCode)"
+  }
+}
+
+function Show-InstallDiagnostics([string]$Reason) {
+  # Everything an "exit code 0 but DeziroJoy.exe is not there" failure needs: the
+  # install log tail, the throwaway directory, and the per-user default directory the
+  # setup falls back to if /DIR were ever ignored, plus the publish payload.
+  Write-Host "silent install did not produce $exe`: $Reason"
+  Show-InnoLogTail $installLog 'silent install'
+  foreach ($dir in @($installDir, (Join-Path $env:LOCALAPPDATA 'Programs\DeziroJoy'), $publish)) {
+    if (Test-Path $dir) {
+      Write-Host "--- $dir ---"
+      Get-ChildItem -Path $dir -ErrorAction SilentlyContinue | Select-Object -First 20 |
+        Format-Table Mode, Length, LastWriteTime, Name -AutoSize | Out-String | Write-Host
+    }
+    else {
+      Write-Host "$dir does not exist"
+    }
+  }
+}
+
+# The per-user uninstall registration Inno writes at the end of a successful install.
+# The same key is asserted gone after the uninstall below, so requiring it here is the
+# script's own model of "the install finished": Inno creates it only once the files
+# and shortcuts are in place, so the checks below cannot race a half-finished copy.
+# Both registry views are checked so the wait does not depend on the bitness of the
+# pwsh running this script.
+$uninstallKeyPaths = @(
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1',
+  'HKCU:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1'
+)
+function Test-InstallCompleted {
+  (Test-Path $exe) -and (@($uninstallKeyPaths | Where-Object { Test-Path $_ }).Count -gt 0)
+}
 
 try {
-  & $setupExePath /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installDir" "/LOG=$installLog"
-  if ($LASTEXITCODE -ne 0) {
-    if (Test-Path $installLog) { Get-Content $installLog -Tail 40 }
-    throw "silent install failed with exit code $LASTEXITCODE"
-  }
+  Invoke-InnoSilent $setupExePath @(
+    '/VERYSILENT'
+    '/SUPPRESSMSGBOXES'
+    '/NORESTART'
+    "/DIR=$installDir"
+    "/LOG=$installLog"
+  ) $installLog 'silent install'
 
-  $exe = Join-Path $installDir 'DeziroJoy.exe'
+  # Second wait: the install itself, not just the process that launched it. The
+  # process wait above covers the documented Inno flow; this covers every way it
+  # could return early, and turns a silent "exit 0, nothing installed" into a
+  # bounded, diagnosable failure.
+  $startedAt = Get-Date
+  $deadline = $startedAt.AddSeconds($installTimeoutSeconds)
+  $lastReport = $null
+  while (-not (Test-InstallCompleted) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds $installPollMilliseconds
+    $elapsed = ((Get-Date) - $startedAt).TotalSeconds
+    if ($null -eq $lastReport -or ($elapsed - $lastReport) -ge 15) {
+      $lastReport = $elapsed
+      Write-Host ("waiting for the install to finish... {0:n0}s of {1}s" -f $elapsed, $installTimeoutSeconds)
+    }
+  }
   if (-not (Test-Path $exe)) {
-    Get-ChildItem -Path $installDir -ErrorAction SilentlyContinue | Select-Object -First 20
+    Show-InstallDiagnostics "setup exited 0 but no DeziroJoy.exe appeared within $installTimeoutSeconds s"
     throw "DeziroJoy.exe missing after silent install"
+  }
+  if (-not (@($uninstallKeyPaths | Where-Object { Test-Path $_ }).Count -gt 0)) {
+    Show-InstallDiagnostics "DeziroJoy.exe appeared but the uninstall registry key never did within $installTimeoutSeconds s"
+    throw "uninstall registry key missing after silent install"
   }
   $productVersion = (Get-Item $exe).VersionInfo.ProductVersion
   Write-Host "installed ProductVersion: $productVersion"
@@ -230,11 +338,12 @@ try {
     Select-Object -First 1
   if (-not $uninstaller) { throw "unins*.exe missing in $installDir" }
 
-  & $uninstaller.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/LOG=$uninstallLog"
-  if ($LASTEXITCODE -ne 0) {
-    if (Test-Path $uninstallLog) { Get-Content $uninstallLog -Tail 40 }
-    throw "silent uninstall failed with exit code $LASTEXITCODE"
-  }
+  Invoke-InnoSilent $uninstaller.FullName @(
+    '/VERYSILENT'
+    '/SUPPRESSMSGBOXES'
+    '/NORESTART'
+    "/LOG=$uninstallLog"
+  ) $uninstallLog 'silent uninstall'
 
   if (Test-Path $installDir) {
     Get-ChildItem -Path $installDir -Recurse -ErrorAction SilentlyContinue | Select-Object -First 20
@@ -260,5 +369,10 @@ try {
   Write-Host "silent install and uninstall verified for $setupExeName"
 }
 finally {
+  # Every failure path above prints its log tails and directory listings before this
+  # runs. The throwaway install directory is removed here as well, so a failed or
+  # interrupted run does not leave a half-installed payload or uninstaller behind;
+  # after a successful uninstall it is already gone and this is a no-op.
   Remove-Item -Path $installLog, $uninstallLog -ErrorAction SilentlyContinue
+  Remove-Item -Path $installDir -Recurse -Force -ErrorAction SilentlyContinue
 }

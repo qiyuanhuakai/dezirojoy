@@ -157,11 +157,14 @@ jobs:
       # by ISCC /D defines, so the step only passes the version, the RID and the two
       # absolute paths. The script itself resolves everything from its own location,
       # so the call works from any working directory. For win-x64 it also runs the
-      # silent install / verify / uninstall cycle against a throwaway directory; a
-      # win-arm64 setup.exe is an ARM64 binary and cannot execute on the x64 runner,
-      # so that RID gets the compile and the PE architecture check only (the same
-      # cross-compilation convention the binary smoke step above uses for
-      # linux-arm64).
+      # silent install / verify / uninstall cycle against a throwaway directory. A
+      # win-arm64 setup.exe is the same x86 bootstrap Inno Setup always emits - the
+      # loader is architecture-neutral whatever the payload is (verified 0x014C on
+      # both Windows RIDs in beta.1 run 42670117262), so it would execute on the x64
+      # runner - but its ArchitecturesAllowed=arm64 refuses to install there and the
+      # ARM64 payload cannot execute, so that RID gets the compile and the PE
+      # architecture checks only (the same cross-compilation convention the binary
+      # smoke step above uses for linux-arm64).
       - name: Build and verify the installer (Inno Setup)
         if: runner.os == 'Windows'
         shell: pwsh
