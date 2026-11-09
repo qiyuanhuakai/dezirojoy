@@ -434,10 +434,10 @@ public sealed class MappingSurfaceTests
         Assert.Equal(MappingDescriptions.Button(GamepadButton.LeftTrigger), report.Text);
     }
 
-    // ---- Key picker: headers are sections, options are key caps -------------
+    // ---- Key picker: the navigator leads, options are key caps -------------
 
     [AvaloniaFact]
-    public void Key_Picker_Headers_Are_Sections_Not_Rows()
+    public void Key_Picker_Categories_Are_Navigator_Segments_Not_Grid_Rows()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
@@ -449,19 +449,38 @@ public sealed class MappingSurfaceTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
+        var nav = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryNav")!;
         var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
-        var headerLabel = grid.GetVisualDescendants().OfType<TextBlock>()
-            .First(text => text.Classes.Contains("pickerHeaderLabel"));
+
+        // A category is a navigator segment, not one of the grid's option rows: it lives
+        // outside the key grid and is a RadioButton rather than a key-cap button, so it can
+        // never take the hover or selected treatment an option row takes.
+        var segment = nav.GetVisualDescendants().OfType<RadioButton>()
+            .First(button => button.IsChecked == true);
+        var segmentLabel = segment.GetVisualDescendants().OfType<TextBlock>().First();
+
+        Assert.False(
+            grid.GetVisualDescendants().Any(visual => ReferenceEquals(visual, segment)),
+            "a category must be a navigator segment, not a row inside the key grid");
+        Assert.IsNotType<Button>(segment);
+        Assert.Contains("keyCategorySegment", segment.Classes);
+
+        // The segment reads as chrome rather than as content: the checked one wears the
+        // accent and a heavier weight, where an option keeps the plain control foreground.
+        Assert.Equal(Token(segment.ActualThemeVariant, "AccentBrush"), ColorOf(segmentLabel.Foreground));
+        Assert.Equal(FontWeight.SemiBold, segmentLabel.FontWeight);
+
+        // An option is a key cap: a focusable button at least 32px tall carrying the
+        // key-cap surface, labeled in the control foreground. The resting cap is the one to
+        // read: the selected one wears the accent by design.
         var optionButton = grid.GetVisualDescendants().OfType<Button>()
-            .First(button => button.DataContext is KeyPickerItem);
+            .Select(button => (Button: button, Option: button.DataContext as KeyPickerItem))
+            .First(pair => pair.Option is not null
+                && !ReferenceEquals(pair.Option, viewModel.Editor.ActiveSelectedKeyOption))
+            .Button;
         var optionLabel = optionButton.GetVisualDescendants().OfType<TextBlock>()
             .First(text => text.Classes.Contains("keyCapLabel"));
 
-        Assert.Empty(headerLabel.GetVisualAncestors().OfType<Button>());
-        Assert.True(
-            headerLabel.FontSize < optionLabel.FontSize,
-            $"header {headerLabel.FontSize}pt must be smaller than option {optionLabel.FontSize}pt");
-        Assert.Equal(Token(headerLabel.ActualThemeVariant, "HintTextBrush"), ColorOf(headerLabel.Foreground));
         Assert.Equal(Token(optionButton.ActualThemeVariant, "ControlForegroundBrush"), ColorOf(optionLabel.Foreground));
         Assert.True(optionButton.Focusable);
         Assert.True(optionButton.Bounds.Height >= 32, $"option button is only {optionButton.Bounds.Height}px tall");

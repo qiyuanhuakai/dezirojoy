@@ -703,13 +703,23 @@ public sealed class MainWindowGuiTests
         SampleHelper.Sample(viewModel, host);
         Click(ModelElement(window, "ButtonA"), window);
 
-        var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
-        var groups = grid.Items.OfType<KeyCategoryGroup>().ToArray();
+        // The categories live on the navigator, which leads the compact grid: one group per
+        // category, in the picker's own order, and every key the picker offers.
+        var nav = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryNav")!;
+        var groups = nav.Items.OfType<KeyCategoryGroup>().ToArray();
 
         Assert.Equal(
             ["面部按键", "肩键与扳机", "摇杆", "十字键", "系统键", "扩展按键"],
             groups.Select(group => group.Name));
         Assert.Equal(Enum.GetValues<GamepadKey>().Length, groups.Sum(group => group.Keys.Count));
+
+        // The grid below the navigator shows the active category's keys, so the grouped
+        // model and the rendered grid can never drift apart.
+        var grid = EditorPanelOf(window).FindControl<ItemsControl>("KeyCategoryGrid")!;
+        var active = viewModel.Editor.ActiveKeyCategory!;
+
+        Assert.Same(active, nav.Items.OfType<KeyCategoryGroup>().Single(group => group.IsActive));
+        Assert.Equal(active.Keys.Count, grid.ItemCount);
     }
 
     [AvaloniaFact]
