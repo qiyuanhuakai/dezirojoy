@@ -388,11 +388,10 @@ public sealed class GuiActivationServer : IDisposable
             }
         }
 
-        // Only the endpoint owner clears discovery, and only once it has stopped serving: a
-        // retiring holder whose successor already published leaves that publish in place, while a
-        // full exit removes the now-dead entry so a fresh winner starts from a clean slate.
-        ClearEndpointIfOwner();
-
+        // Discovery is deliberately never deleted on exit. A read-then-delete here could not be
+        // made atomic with a successor's publish, so it could erase a just-published endpoint and
+        // wedge second launches. Instead a stale entry is replaced atomically by the next
+        // publisher, and the client retries past a stale name until then.
         _lifetime.Dispose();
         _serving.Dispose();
     }
@@ -628,33 +627,6 @@ public sealed class GuiActivationServer : IDisposable
         }
 
         PublishEndpoint(_identity, endpoint);
-    }
-
-    /// <summary>
-    /// Removes the discovery entry only when it still names this server's own endpoint - that is,
-    /// this process is the endpoint owner exiting with no successor (a full exit). A holder that
-    /// retired in favour of a successor, or yielded to a third party, leaves the newer publish
-    /// untouched so it never deletes a live holder's entry. Linux only; Windows has no discovery.
-    /// </summary>
-    private void ClearEndpointIfOwner()
-    {
-        var endpoint = _endpoint;
-        if (OperatingSystem.IsWindows() || endpoint is null)
-        {
-            return;
-        }
-
-        try
-        {
-            if (string.Equals(ReadEndpoint(_identity), endpoint, StringComparison.Ordinal))
-            {
-                File.Delete(_identity.DiscoveryPath);
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Best-effort: an entry that cannot be removed is simply overwritten by the next holder.
-        }
     }
 
     internal static byte[] Serialize<T>(T message)

@@ -374,4 +374,64 @@ public sealed class GuiActivationServerTests
         Assert.True(shown, "the reclaimed holder must be reachable once it republishes");
         Assert.Equal(1, shows);
     }
+
+    [Fact]
+    public async Task A_Retiring_Holder_Never_Removes_Discovery_So_The_Successors_Publish_Survives()
+    {
+        // A retiring holder must never delete discovery: a read-then-delete could erase a
+        // successor's just-published endpoint during the handover race (old holder disposing while
+        // the new leaseholder publishes), wedging later second launches. The entry is left for the
+        // successor / next publisher, and the client retries past a stale name meanwhile.
+        var identity = NewIdentity();
+        using var holder = new GuiActivationServer(identity, role: GuiInstanceRole.Render);
+        using var successor = new GuiActivationServer(identity, role: GuiInstanceRole.Tray);
+        var shows = 0;
+        successor.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+
+        string? successorEndpoint = OperatingSystem.IsLinux()
+            ? File.ReadAllText(identity.DiscoveryPath).Trim()
+            : null;
+
+        // The holder retires (disposing its channel) while the successor owns discovery.
+        holder.Dispose();
+
+        if (successorEndpoint is not null)
+        {
+            Assert.Equal(successorEndpoint, File.ReadAllText(identity.DiscoveryPath).Trim());
+        }
+
+        var shown = await GuiActivationClient.TryShowAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+        Assert.True(shown, "the successor must stay reachable after the holder retired");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public void A_Full_Exit_Leaves_Its_Discovery_Entry_For_The_Next_Publisher_To_Replace()
+    {
+        // The discovery file is a Linux-only channel; Windows always uses the live well-known pipe.
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var identity = NewIdentity();
+        string endpoint;
+        using (var holder = new GuiActivationServer(identity))
+        {
+            holder.ShowRequested += () => Task.CompletedTask;
+            endpoint = File.ReadAllText(identity.DiscoveryPath).Trim();
+        }
+
+        // A full exit does not delete the entry: the next publisher atomically replaces it, and a
+        // launch tolerates the stale name through the stale retry until then. (Any delete-on-dispose
+        // - the old read-then-delete cleanup - would drop the file here.)
+        Assert.Equal(endpoint, File.ReadAllText(identity.DiscoveryPath).Trim());
+    }
 }
