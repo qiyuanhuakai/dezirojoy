@@ -1,53 +1,16 @@
-using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
-using DeziroJoy.App.ViewModels;
 
 namespace DeziroJoy.App.Views.Controls;
 
+/// <summary>
+/// The global preset selector: a horizontal strip of data-driven cards over the mapping
+/// tab. The view model owns the bindable slot collection (<see cref="ViewModels.MainWindowViewModel.PresetSlots"/>)
+/// and the active flag on each item, so the view needs no code-behind bookkeeping - the
+/// active class rides on <c>PresetSlotItem.IsActive</c> and the switch/add commands bind
+/// straight through.
+/// </summary>
 public partial class PresetSlotSelector : UserControl
 {
-    private MainWindowViewModel? _viewModel;
-
-    public PresetSlotSelector()
-    {
-        AvaloniaXamlLoader.Load(this);
-        DataContextChanged += OnDataContextChanged;
-    }
-
-    private void OnDataContextChanged(object? sender, EventArgs e)
-    {
-        if (_viewModel is not null)
-        {
-            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
-        }
-
-        _viewModel = DataContext as MainWindowViewModel;
-
-        if (_viewModel is not null)
-        {
-            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-        }
-
-        RefreshActiveSlot();
-    }
-
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(MainWindowViewModel.ActivePresetSlot))
-        {
-            RefreshActiveSlot();
-        }
-    }
-
-    private void RefreshActiveSlot()
-    {
-        for (var slot = 1; slot <= 4; slot++)
-        {
-            if (this.FindControl<Button>($"PresetSlot{slot}Button") is { } button)
-            {
-                button.Classes.Set("active", _viewModel?.ActivePresetSlot == slot);
-            }
-        }
-    }
+    public PresetSlotSelector() => AvaloniaXamlLoader.Load(this);
 }

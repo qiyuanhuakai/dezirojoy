@@ -991,8 +991,11 @@ public sealed class MainWindowGuiTests
         var editor = window.FindControl<Border>("EditorPanel")!;
 
         // The card keeps the 60px the 480 -> 420 stage shrink releases (DESIGN 4.3.7): 218
-        // now, where the old stage left it 158, at the window's minimum size.
-        Assert.Equal(218d, editor.Bounds.Height);
+        // was, and 162 is now that the global preset strip rides above the tab surface and
+        // the editor row - the star row that absorbs slack - funds it. The stage row is
+        // untouched, so the model keeps its full DESIGN 4.6 sizing, and the body still
+        // scrolls at this height (the reachability test below pins that).
+        Assert.Equal(162d, editor.Bounds.Height);
     }
 
     [AvaloniaFact]
