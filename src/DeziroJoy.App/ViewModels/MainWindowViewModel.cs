@@ -535,40 +535,41 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             DeviceId = PresetStore.KeyFor(deviceId, nextSlot),
         });
 
-        RefreshPresetSlots(deviceId, force: true);
+        ReconcilePresetSlots(deviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
         await SwitchPresetSlot(nextSlot);
     }
 
     /// <summary>
-    /// Rebuilds <see cref="PresetSlots"/> from the store for one device and keeps the leader
-    /// slot options in step with it. A repeat call for the same device only moves the active
-    /// flag; <paramref name="force"/> rebuilds after a slot is added. With no device the
+    /// Reconciles <see cref="PresetSlots"/> against the store for one device and keeps the
+    /// leader slot options in step. The stored slot set is re-read on every call, so a slot
+    /// another client added while this one runs is picked up on the next daemon snapshot; the
+    /// items and the collection are rebuilt only when that set actually changed, so a stream
+    /// of snapshots that add nothing costs one enumeration and no churn. With no device the
     /// collection is emptied and the leader options fall back to the initial four.
     /// </summary>
-    private void RefreshPresetSlots(string? deviceId, bool force = false)
+    private void ReconcilePresetSlots(string? deviceId)
     {
-        if (!force && deviceId == _presetSlotDeviceId && PresetSlots.Count > 0)
+        IReadOnlyList<int> slots = deviceId is null ? [] : _presets.SlotsInUse(deviceId);
+
+        if (deviceId == _presetSlotDeviceId
+            && PresetSlots.Select(item => item.Slot).SequenceEqual(slots))
         {
-            MarkActivePresetSlot(ActivePresetSlot);
             return;
         }
 
         _presetSlotDeviceId = deviceId;
         PresetSlots.Clear();
-
-        var slots = new List<int>();
         if (deviceId is not null)
         {
-            foreach (var slot in _presets.SlotsInUse(deviceId))
+            foreach (var slot in slots)
             {
                 var name = _presets.LoadSlot(deviceId, slot)?.Name ?? $"预设 {slot}";
                 PresetSlots.Add(new PresetSlotItem(slot, name));
-                slots.Add(slot);
             }
         }
 
         UpdateLeaderSlotOptions(slots);
-        MarkActivePresetSlot(ActivePresetSlot);
     }
 
     /// <summary>Moves the active flag onto the item for <paramref name="slot"/>, if present.</summary>
@@ -585,15 +586,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// leader key can flip between a slot the user just added. Falls back to the initial four
     /// while no device is in scope, matching the editor's own default.
     /// </summary>
-    private void UpdateLeaderSlotOptions(List<int> slots)
+    private void UpdateLeaderSlotOptions(IReadOnlyList<int> slots)
     {
         Editor.SpecialSlotOptions = slots.Count > 0 ? slots : [1, 2, 3, 4];
     }
 
-    /// <summary>Daemon-mode counterpart of activating a controller: sync the slot list to the snapshot's device.</summary>
+    /// <summary>
+    /// Daemon-mode counterpart of activating a controller: reconcile the slot list against the
+    /// store for the snapshot's device - another client may have added a slot since the last
+    /// snapshot - and move the active flag to whatever slot the snapshot reports.
+    /// </summary>
     private void SyncPresetSlotsForDaemon()
     {
-        RefreshPresetSlots(PersistenceDeviceId);
+        ReconcilePresetSlots(PersistenceDeviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
     }
 
     partial void OnIsPhysicalInputInScopeChanged(bool value)
@@ -1568,7 +1574,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ReloadSensitivityPanels();
         RefreshMappings();
         MigrateLegacyLeader(runtime.Descriptor.DeviceId);
-        RefreshPresetSlots(runtime.Descriptor.DeviceId, force: true);
+        ReconcilePresetSlots(runtime.Descriptor.DeviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
     }
 
     internal async Task<bool> ApplyProfile(GamepadProfile updated)
