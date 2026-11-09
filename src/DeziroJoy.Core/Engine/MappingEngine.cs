@@ -424,11 +424,23 @@ public sealed class MappingEngine
 
         // The drain mirrors the state machine's own ordering: a release edge ends the cycle
         // before any repeat is considered, so a release tick whose step carries RepeatElapsed
-        // past the interval must not emit a long-press after the button is already up. The
+        // past the interval must not emit a repeat after the button is already up. The
         // button being down is also what keeps the catch-up drain working on a held tick.
+        // Each repeat phase drains its own interval, so one long tick emits every repeat it
+        // covers instead of one: the state machine has already emitted the first, and this
+        // fills in the rest. The phases never share a tick - click auto-repeat and the
+        // long-press are mutually exclusive - so a ClickRepeating tick must never emit the
+        // long-press a hand-edited profile may have left configured alongside the repeat.
         if (button.Gesture is { } configured && isPressed)
         {
-            while (gesture.TryDequeueRepeat(configured))
+            while (gesture.Phase == GesturePhase.ClickRepeating
+                   && gesture.TryDequeueClickRepeat(configured))
+            {
+                Tap(mapping, button, GestureKind.Click, current, deltaSeconds, commands);
+            }
+
+            while (gesture.Phase == GesturePhase.LongPressActive
+                   && gesture.TryDequeueRepeat(configured))
             {
                 Tap(mapping, button, GestureKind.LongPress, current, deltaSeconds, commands);
             }

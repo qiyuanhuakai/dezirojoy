@@ -1,4 +1,5 @@
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using Xunit;
 
@@ -192,5 +193,43 @@ public class MappingDescriptionsTests
 
         Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Aggressive), mouse.CurveHint);
         Assert.Equal(MappingDescriptions.ScrollCurve(ResponseCurve.Responsive), scroll.CurveHint);
+    }
+
+    [Fact]
+    public void The_Source_Description_Names_The_Direction_With_The_Pickers_Own_Label()
+    {
+        // The two cross combinations carry a direction, and the description names it with
+        // the direction picker's own labels, so the editor header and the mapping rows can
+        // never disagree with the picker about which deflection a mapping uses.
+        Assert.Equal(
+            "左摇杆（上）",
+            MappingDescriptions.Source(new StickBinding(GamepadStick.Left) { Direction = InputDirection.Up }));
+        Assert.Equal(
+            "A 键（右）",
+            MappingDescriptions.Source(new ButtonBinding(GamepadButton.A) { Direction = InputDirection.Right }));
+
+        foreach (var direction in Enum.GetValues<InputDirection>())
+        {
+            var label = DirectionCategories.Label(direction);
+
+            Assert.Contains(
+                label,
+                MappingDescriptions.Source(new StickBinding(GamepadStick.Left) { Direction = direction }));
+            Assert.Contains(
+                label,
+                MappingDescriptions.Source(new ButtonBinding(GamepadButton.A) { Direction = direction }));
+        }
+    }
+
+    [Fact]
+    public void A_Native_Combination_Reads_As_The_Source_Alone()
+    {
+        // A direction is meaningless for a native pairing and none is written, so the
+        // description carries no direction either - 上/下/左/右 stays invisible exactly
+        // where it has no meaning.
+        Assert.Equal("左摇杆", MappingDescriptions.Source(new StickBinding(GamepadStick.Left)));
+        Assert.Equal("右摇杆", MappingDescriptions.Source(new StickBinding(GamepadStick.Right)));
+        Assert.Equal("A 键", MappingDescriptions.Source(new ButtonBinding(GamepadButton.A)));
+        Assert.Equal("十字键 ←", MappingDescriptions.Source(new ButtonBinding(GamepadButton.DPadLeft)));
     }
 }

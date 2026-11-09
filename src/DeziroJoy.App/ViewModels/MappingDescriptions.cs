@@ -33,10 +33,20 @@ public static class MappingDescriptions
 
     public static string Source(InputBinding binding) => binding switch
     {
-        ButtonBinding button => Button(button.Button, button.Code),
-        StickBinding stick => Stick(stick.Stick),
+        ButtonBinding button => $"{Button(button.Button, button.Code)}{DirectionSuffix(button.Direction)}",
+        StickBinding stick => $"{Stick(stick.Stick)}{DirectionSuffix(stick.Direction)}",
         _ => binding.ToString() ?? string.Empty,
     };
+
+    /// <summary>
+    /// The direction a source carries, named exactly as the direction picker names it, so the
+    /// editor's header and the mapping rows can never disagree with the picker about which
+    /// deflection a mapping uses. Only the two cross combinations carry one - a stick driving
+    /// a digital target, a button driving a continuous one - so a native pairing reads as the
+    /// source alone.
+    /// </summary>
+    private static string DirectionSuffix(InputDirection? direction)
+        => direction is { } value ? $"（{DirectionCategories.Label(value)}）" : string.Empty;
 
     public static string Target(MappingTarget target) => target switch
     {

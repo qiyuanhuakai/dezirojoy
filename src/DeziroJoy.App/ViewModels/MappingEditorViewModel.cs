@@ -62,7 +62,6 @@ public partial class MappingEditorViewModel : ObservableObject
     private ButtonPickerItem? _selectedButtonOption;
     private KeyPickerItem? _selectedKeyOption;
     private KeyPickerItem? _activeSelectedKeyOption;
-    private DirectionPickerItem? _selectedDirectionOption;
     private GestureActionOption? _selectedDoubleClickOption;
     private GestureActionOption? _selectedLongPressOption;
     private InputDirection? _loadedDirection;
@@ -524,10 +523,13 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>
     /// Direction for the two cross combinations. Ignored elsewhere, where a direction is
     /// meaningless: a stick driving mouse move / wheel consumes both axes, and a button
-    /// driving a key / combo / mouse button has no axis to deflect.
+    /// driving a key / combo / mouse button has no axis to deflect. The source description
+    /// names the direction, so it is notified here too: the editor header must follow the
+    /// choice the moment it is made, not at the next unrelated notification.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedDirectionOption))]
+    [NotifyPropertyChangedFor(nameof(SourceDescription))]
     private InputDirection _selectedDirection = InputDirection.Up;
 
     /// <summary>
@@ -741,28 +743,31 @@ public partial class MappingEditorViewModel : ObservableObject
     /// True when the current source x target pair cannot work without a direction, so the
     /// picker has to be shown. A stick is an axis, so driving a digital target from it needs
     /// to know which deflection presses; a button is binary, so driving a continuous target
-    /// from it needs to know which way it deflects.
+    /// from it needs to know which way it deflects. Every digital target counts for the
+    /// stick - key, combo, mouse button and special key alike - because the engine rejects
+    /// a directionless stick driving any of them.
     /// </summary>
     public bool NeedsDirection => SourceIsStick
-        ? TargetKind is MappingTargetKind.KeyPress or MappingTargetKind.KeyCombo or MappingTargetKind.MouseButton
+        ? TargetKind is MappingTargetKind.KeyPress or MappingTargetKind.KeyCombo
+            or MappingTargetKind.MouseButton or MappingTargetKind.SpecialKey
         : TargetKind is MappingTargetKind.MouseMove or MappingTargetKind.WheelScroll;
 
     public bool ShowDirectionPicker => NeedsDirection;
 
-    /// <summary>The selected direction picker row, kept in step with <see cref="SelectedDirection"/>.</summary>
+    /// <summary>
+    /// The selected direction picker row, read from <see cref="SelectedDirection"/> rather
+    /// than cached, so a loaded or reset direction shows its own row instead of the one the
+    /// previous edit left behind: reopening a mapping always displays the direction it saved.
+    /// </summary>
     public DirectionPickerItem? SelectedDirectionOption
     {
-        get => _selectedDirectionOption;
+        get => DirectionOptions.FirstOrDefault(option => option.Direction == SelectedDirection);
         set
         {
-            if (value is null || EqualityComparer<DirectionPickerItem?>.Default.Equals(value, _selectedDirectionOption))
+            if (value is not null)
             {
-                return;
+                SelectedDirection = value.Direction;
             }
-
-            _selectedDirectionOption = value;
-            SelectedDirection = value.Direction;
-            OnPropertyChanged(nameof(SelectedDirectionOption));
         }
     }
 

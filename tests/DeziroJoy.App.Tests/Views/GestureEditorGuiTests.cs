@@ -118,6 +118,26 @@ public sealed class GestureEditorGuiTests
         => EditorPanelOf(window).GetLogicalDescendants().OfType<Button>()
             .First(button => button.DataContext is KeyPickerItem item && item.Key == key);
 
+    private static void ChooseDirection(Window window, InputDirection direction)
+    {
+        var editor = (MappingEditorViewModel)EditorPanelOf(window).DataContext!;
+        var combo = EditorPanelOf(window).FindControl<ComboBox>("DirectionCombo")!;
+        combo.SelectedItem = editor.DirectionOptions.First(option => option.Direction == direction);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    private static void AssertDirectionShown(Window window, MainWindowViewModel viewModel, InputDirection direction)
+    {
+        // Both the editor's state and the picker row on screen carry the direction, so a
+        // reopened mapping never shows the previous edit's choice.
+        Assert.Equal(direction, viewModel.Editor.SelectedDirection);
+        Assert.Equal(
+            direction,
+            Assert.IsType<DirectionPickerItem>(
+                EditorPanelOf(window).FindControl<ComboBox>("DirectionCombo")!.SelectedItem).Direction);
+    }
+
     private static void ExpandKeyList(Window window)
     {
         var expander = EditorPanelOf(window).FindControl<Expander>("KeyPickerExpander")!;
@@ -619,6 +639,179 @@ public sealed class GestureEditorGuiTests
         // the default profile's A -> Esc mapping, so the loaded value must survive.
         Assert.Equal(MappingTargetKind.KeyPress, viewModel.Editor.ClickSlot.TargetKind);
         Assert.Equal(GamepadKey.Escape, viewModel.Editor.ClickSlot.SelectedKey);
+    }
+
+    // ---- The direction picker for the cross combinations ---------------------
+
+    [AvaloniaFact]
+    public void The_Direction_Picker_Appears_For_A_Stick_Driving_A_Digital_Target()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+
+        var panel = EditorPanelOf(window);
+        var row = panel.FindControl<StackPanel>("DirectionRow")!;
+
+        // The loaded mapping is the stick driving the wheel, which consumes both axes:
+        // there is no direction to choose until the target becomes a digital one.
+        Assert.False(row.IsVisible);
+
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        Assert.True(row.IsVisible, "a stick driving a key needs a direction");
+
+        var combo = panel.FindControl<ComboBox>("DirectionCombo")!;
+        Assert.Equal(4, combo.ItemCount);
+        Assert.Equal(
+            ["上", "下", "左", "右"],
+            combo.Items.Cast<DirectionPickerItem>().Select(item => item.Label));
+
+        // A native pairing takes the row away again: a stick driving mouse move has no
+        // direction, so offering one would only configure a value the engine ignores.
+        ChooseTargetKind(window, MappingTargetKind.MouseMove);
+        Assert.False(row.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void The_Direction_Picker_Appears_For_A_Button_Driving_A_Continuous_Target()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        var panel = EditorPanelOf(window);
+        var row = panel.FindControl<StackPanel>("DirectionRow")!;
+
+        // A drives a key in the default profile, and a key has no axis to deflect.
+        Assert.False(row.IsVisible);
+
+        foreach (var kind in new[] { MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll })
+        {
+            ChooseTargetKind(window, kind);
+            Assert.True(row.IsVisible, $"a button driving {kind} needs a direction");
+        }
+
+        // The pick writes through to the mapping's source, and the source description
+        // names the direction the picker was given.
+        Assert.Equal(4, panel.FindControl<ComboBox>("DirectionCombo")!.ItemCount);
+        ChooseDirection(window, InputDirection.Right);
+
+        Assert.Equal(InputDirection.Right, viewModel.Editor.SelectedDirection);
+        Assert.Equal(
+            InputDirection.Right,
+            Assert.IsType<ButtonBinding>(viewModel.Editor.BuildSource()).Direction);
+        Assert.Equal("A 键（右）", viewModel.Editor.SourceDescription);
+    }
+
+    [AvaloniaFact]
+    public void A_Committed_Direction_Survives_Commit_And_Reopen()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        ChooseKey(window, GamepadKey.W);
+        ChooseDirection(window, InputDirection.Right);
+
+        Assert.Equal("左摇杆（右）", viewModel.Editor.SourceDescription);
+
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        var committed = viewModel.ActiveProfile!.Mappings
+            .First(mapping => mapping.Source is StickBinding { Stick: GamepadStick.Left });
+
+        Assert.Equal(InputDirection.Right, Assert.IsType<StickBinding>(committed.Source).Direction);
+
+        // The mapping row names the direction too, so 上/下/左/右 is no longer invisible
+        // once the editor is closed.
+        var row = viewModel.Mappings.First(r => r.Entry == committed);
+        Assert.Equal("左摇杆（右）", row.SourceText);
+
+        // Reopen the saved mapping: the direction comes back, both in the editor's state
+        // and in the picker row that displays it.
+        Click(Model(window).FindControl<Control>("LeftStickPad")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        AssertDirectionShown(window, viewModel, InputDirection.Right);
+        Assert.Equal("左摇杆（右）", viewModel.Editor.SourceDescription);
+    }
+
+    [AvaloniaFact]
+    public void Reopening_Different_Mappings_Shows_Each_Ones_Saved_Direction()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+
+        // First mapping: the left stick presses W when pushed right.
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        ChooseKey(window, GamepadKey.W);
+        ChooseDirection(window, InputDirection.Right);
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        // Second mapping on the other stick, with its own different direction.
+        Click(Model(window).FindControl<Control>("RightStickPad")!, window);
+        Assert.True(viewModel.IsEditing);
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        ChooseKey(window, GamepadKey.K);
+        ChooseDirection(window, InputDirection.Left);
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        // Reopen each in turn: the picker shows the direction that mapping saved, never
+        // the one the previous edit chose.
+        Click(Model(window).FindControl<Control>("LeftStickPad")!, window);
+        Assert.True(viewModel.IsEditing);
+        AssertDirectionShown(window, viewModel, InputDirection.Right);
+
+        Click(Model(window).FindControl<Control>("RightStickPad")!, window);
+        Assert.True(viewModel.IsEditing);
+        AssertDirectionShown(window, viewModel, InputDirection.Left);
+    }
+
+    [AvaloniaFact]
+    public void A_Stick_Bound_To_A_Special_Key_Commits_With_Its_Direction()
+    {
+        // A special key is a digital target: without a direction the engine refuses the
+        // whole mapping at application time, so the picker has to appear and the commit
+        // has to carry the choice.
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+        ChooseTargetKind(window, MappingTargetKind.SpecialKey);
+
+        var row = EditorPanelOf(window).FindControl<StackPanel>("DirectionRow")!;
+        Assert.True(row.IsVisible, "a stick driving a special key needs a direction");
+
+        ChooseDirection(window, InputDirection.Left);
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        var committed = viewModel.ActiveProfile!.Mappings
+            .First(mapping => mapping.Source is StickBinding { Stick: GamepadStick.Left });
+
+        Assert.IsType<SpecialKeyTarget>(committed.Target);
+        Assert.Equal(InputDirection.Left, Assert.IsType<StickBinding>(committed.Source).Direction);
+
+        // Reopening keeps the direction on both the state and the picker row.
+        Click(Model(window).FindControl<Control>("LeftStickPad")!, window);
+        Assert.True(viewModel.IsEditing);
+        AssertDirectionShown(window, viewModel, InputDirection.Left);
+    }
+
+    [AvaloniaFact]
+    public void Choosing_A_Direction_Refreshes_The_Bound_Header()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+
+        Assert.Equal("左摇杆（上）", viewModel.Editor.SourceDescription);
+
+        // The header TextBlock the panel binds SourceDescription to, captured before the
+        // choice so the assertion is on the rendered control, not on the getter.
+        var header = EditorPanelOf(window).GetLogicalDescendants().OfType<TextBlock>()
+            .First(text => text.Text == viewModel.Editor.SourceDescription);
+
+        var raised = new List<string>();
+        viewModel.Editor.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
+        ChooseDirection(window, InputDirection.Right);
+
+        Assert.Equal("左摇杆（右）", header.Text);
+        Assert.Contains(nameof(MappingEditorViewModel.SourceDescription), raised);
+        Assert.Equal("左摇杆（右）", viewModel.Editor.SourceDescription);
     }
 
     // ---- Commit applies every slot in one entry ------------------------------
