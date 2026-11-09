@@ -1,83 +1,149 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
              x:Class="DeziroJoy.App.Views.Controls.PresetSlotSelector"
              x:DataType="vm:MainWindowViewModel">
     <UserControl.Styles>
-        <Style Selector="Button.presetSlot">
+
+        <!-- One preset: a wide, short rounded card, sized by the style rather than by its
+             text so every card in the row is identical. The list is data-driven - the view
+             model owns one bindable item per stored slot - so nothing here knows a fixed
+             slot count. The active state is a bound class (PresetSlotItem.IsActive), not
+             code-behind bookkeeping. -->
+        <Style Selector="Button.presetCard">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
-            <Setter Property="CornerRadius" Value="18" />
-            <Setter Property="Width" Value="36" />
-            <Setter Property="Height" Value="36" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="0,3" />
-            <Setter Property="FontSize" Value="13" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusLg}" />
+            <Setter Property="Padding" Value="7,0" />
+            <Setter Property="FontSize" Value="12" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+            <!-- State changes are transitions, not instant flips, and they only touch
+                 brushes and opacity: nothing here moves the card or resizes it, so a
+                 pointer sweep across the row never shifts a target mid-click. -->
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                    <BrushTransition Property="BorderBrush" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                </Transitions>
+            </Setter>
         </Style>
 
-        <Style Selector="Button.presetSlot:pointerover">
+        <!-- Hover wears the hover wash and an accent border; the accent edge is what makes
+             it readable in both themes without relying on the wash alone. -->
+        <Style Selector="Button.presetCard:pointerover">
             <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
-        </Style>
-
-        <Style Selector="Button.presetSlot:focus">
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
 
-        <Style Selector="Button.presetSlot.active">
+        <!-- Pressed dims the whole card: a shape-and-weight cue, not a second colour. -->
+        <Style Selector="Button.presetCard:pressed">
+            <Setter Property="Opacity" Value="0.85" />
+        </Style>
+
+        <!-- Keyboard focus rings the card in the accent. Only the brush changes, so the
+             focused card keeps one box and its content never shifts. -->
+        <Style Selector="Button.presetCard:focus">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- Active: accent surface, accent edge, accent ink and semibold - plus the dot
+             below, so the selection survives a colour-blind reading. -->
+        <Style Selector="Button.presetCard.active">
             <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
+
+        <!-- The active marker. Always laid out - a resting card keeps the dot's space - so
+             selecting a card never reflows its label; only its opacity animates. -->
+        <Style Selector="Ellipse.presetDot">
+            <Setter Property="Width" Value="8" />
+            <Setter Property="Height" Value="8" />
+            <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" />
+                </Transitions>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.presetCard.active Ellipse.presetDot">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
     </UserControl.Styles>
 
-    <Border Background="{DynamicResource SubtleBrush}"
-            BorderBrush="{DynamicResource ControlBorderBrush}"
-            BorderThickness="1" CornerRadius="18" Padding="8,10">
-        <StackPanel>
-            <TextBlock Text="全局预设" FontSize="12" FontWeight="SemiBold"
-                       Foreground="{DynamicResource TextPrimaryBrush}"
-                       HorizontalAlignment="Center" />
-            <TextBlock Text="切换整个应用" FontSize="10" TextWrapping="Wrap" TextAlignment="Center"
-                       Foreground="{DynamicResource HintTextBrush}" Margin="0,3,0,6" />
+    <!-- The strip: one rounded bar, wide and short, spanning the full width of the mapping
+         tab above the model stage. Cards flow horizontally inside a scroll viewer - the row
+         scrolls sideways rather than wrapping to a second row, so the strip keeps one
+         height and never grows over the model or the editor below. -->
+    <Border Background="{DynamicResource CardBrush}"
+            BorderBrush="{DynamicResource CardBorderBrush}"
+            BorderThickness="1" CornerRadius="{DynamicResource CornerRadiusXl}"
+            Padding="10,4" Height="56">
+        <Grid ColumnDefinitions="Auto,*,Auto">
 
-            <Button x:Name="PresetSlot1Button" Classes="presetSlot" Content="1"
-                    Command="{Binding SwitchPresetSlotCommand}"
-                    ToolTip.Tip="切换整个应用到全局预设 1"
-                    AutomationProperties.Name="全局预设 1">
-                <Button.CommandParameter>
-                    <sys:Int32>1</sys:Int32>
-                </Button.CommandParameter>
+            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,0,0">
+                <TextBlock Text="全局预设" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                <TextBlock Text="切换整个应用" FontSize="10" Margin="0,2,0,0"
+                           Foreground="{DynamicResource HintTextBrush}" />
+            </StackPanel>
+
+            <ScrollViewer Grid.Column="1" Margin="10,0"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled"
+                          VerticalContentAlignment="Center"
+                          Focusable="False">
+                <ItemsControl ItemsSource="{Binding PresetSlots}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="6" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PresetSlotItem">
+                            <Button Classes="presetCard" Width="94" Height="30"
+                                    Classes.active="{Binding IsActive}"
+                                    Command="{Binding DataContext.(vm:MainWindowViewModel).SwitchPresetSlotCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                    CommandParameter="{Binding Slot}"
+                                    AutomationProperties.Name="{Binding Slot, StringFormat='全局预设 {0}'}"
+                                    ToolTip.Tip="{Binding Name, StringFormat='切换整个应用：{0}'}">
+                                <StackPanel Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center">
+                                    <Ellipse Classes="presetDot" />
+                                    <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Text>
+                                            <MultiBinding StringFormat="{}{0} · {1}">
+                                                <Binding Path="Slot" />
+                                                <Binding Path="Name" />
+                                            </MultiBinding>
+                                        </TextBlock.Text>
+                                    </TextBlock>
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- The explicit add control. It sits outside the scroll viewer so it stays
+                 reachable however many presets the row holds. -->
+            <Button Grid.Column="2" Classes="presetCard presetAdd" Height="30" Margin="0,0,2,0"
+                    Command="{Binding AddPresetCommand}"
+                    AutomationProperties.Name="新增全局预设"
+                    ToolTip.Tip="复制当前配置为新的独立预设并切换到它">
+                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
+                    <TextBlock Text="+" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Foreground="{DynamicResource AccentBrush}" />
+                    <TextBlock Text="新增" VerticalAlignment="Center" />
+                </StackPanel>
             </Button>
-            <Button x:Name="PresetSlot2Button" Classes="presetSlot" Content="2"
-                    Command="{Binding SwitchPresetSlotCommand}"
-                    ToolTip.Tip="切换整个应用到全局预设 2"
-                    AutomationProperties.Name="全局预设 2">
-                <Button.CommandParameter>
-                    <sys:Int32>2</sys:Int32>
-                </Button.CommandParameter>
-            </Button>
-            <Button x:Name="PresetSlot3Button" Classes="presetSlot" Content="3"
-                    Command="{Binding SwitchPresetSlotCommand}"
-                    ToolTip.Tip="切换整个应用到全局预设 3"
-                    AutomationProperties.Name="全局预设 3">
-                <Button.CommandParameter>
-                    <sys:Int32>3</sys:Int32>
-                </Button.CommandParameter>
-            </Button>
-            <Button x:Name="PresetSlot4Button" Classes="presetSlot" Content="4"
-                    Command="{Binding SwitchPresetSlotCommand}"
-                    ToolTip.Tip="切换整个应用到全局预设 4"
-                    AutomationProperties.Name="全局预设 4">
-                <Button.CommandParameter>
-                    <sys:Int32>4</sys:Int32>
-                </Button.CommandParameter>
-            </Button>
-        </StackPanel>
+        </Grid>
     </Border>
 </UserControl>

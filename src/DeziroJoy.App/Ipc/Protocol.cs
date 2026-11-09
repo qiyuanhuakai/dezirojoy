@@ -124,10 +124,11 @@ public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspend
 /// <summary>
 /// GUI to daemon: switch the active preset slot. The slot is app-wide rather than
 /// per-device: the daemon reloads every connected device that holds a stored profile
-/// in the target slot, and the one active slot the whole app reads moves with it. A
-/// slot outside 1..4 is refused with an <see cref="ErrorMessage"/> instead of a
-/// mutation ack, and so is a switch when devices are connected but none of them holds
-/// the target slot.
+/// in the target slot, and the one active slot the whole app reads moves with it. Slots
+/// have no upper bound - the initial four and any slot the user added since are ordinary
+/// targets - but a slot below <see cref="DeziroJoy.Core.Profiles.PresetStore.MinSlot"/>
+/// is refused with an <see cref="ErrorMessage"/> instead of a mutation ack, and so is a
+/// switch when devices are connected but none of them holds the target slot.
 /// <para>
 /// <see cref="DeviceId"/> still travels on the wire but the daemon ignores it: a
 /// switch no longer names a device. It is kept for soft compatibility with existing

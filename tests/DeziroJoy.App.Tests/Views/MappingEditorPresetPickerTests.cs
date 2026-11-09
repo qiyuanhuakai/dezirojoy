@@ -1,6 +1,7 @@
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
@@ -20,9 +21,12 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// The global preset selector beside the gamepad model and the special-key target editor in
-/// the mapping panel. Preset buttons switch the whole application's active slot through the
-/// window view model; the special-key editor's two slots remain Leader-key parameters.
+/// The global preset selector above the gamepad model and the special-key target editor in
+/// the mapping panel. The selector is a data-driven horizontal strip: the window view model
+/// owns one bindable item per stored slot, so the cards the strip renders follow the store
+/// rather than a fixed count. Preset cards switch the whole application's active slot
+/// through the window view model; the special-key editor's two slots remain Leader-key
+/// parameters.
 /// </summary>
 public sealed class MappingEditorPresetPickerTests
 {
@@ -71,8 +75,18 @@ public sealed class MappingEditorPresetPickerTests
     private static PresetSlotSelector PresetSelector(Window window)
         => window.FindControl<PresetSlotSelector>("GlobalPresetSelector")!;
 
-    private static Button PresetSlot(Window window, int slot)
-        => PresetSelector(window).FindControl<Button>($"PresetSlot{slot}Button")!;
+    /// <summary>The preset cards the strip renders, in the order they are laid out.</summary>
+    private static List<Button> PresetCards(PresetSlotSelector selector)
+        => selector.GetVisualDescendants().OfType<Button>()
+            .Where(button => button.Classes.Contains("presetCard") && !button.Classes.Contains("presetAdd"))
+            .OrderBy(button => button.Bounds.X)
+            .ToList();
+
+    private static Button PresetCard(PresetSlotSelector selector, int slot)
+        => PresetCards(selector).Single(button => Equals(button.CommandParameter, slot));
+
+    private static Button AddPresetButton(PresetSlotSelector selector)
+        => selector.GetVisualDescendants().OfType<Button>().Single(button => button.Classes.Contains("presetAdd"));
 
     private static Rect RectInWindow(Control control, Window window)
     {
@@ -116,9 +130,11 @@ public sealed class MappingEditorPresetPickerTests
     // ---- The global preset selector -----------------------------------------
 
     [AvaloniaFact]
-    public void The_Global_Preset_Selector_Offers_Four_Round_Focusable_Slots_Without_Opening_The_Editor()
+    public void The_Global_Preset_Selector_Offers_One_Horizontal_Card_Per_Stored_Slot()
     {
-        var (window, viewModel, _, _, _) = BuildWindow();
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
         window.UpdateLayout();
 
         var selector = PresetSelector(window);
@@ -127,93 +143,190 @@ public sealed class MappingEditorPresetPickerTests
         Assert.Contains(selector.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "全局预设");
         Assert.Contains(selector.GetVisualDescendants().OfType<TextBlock>(), text => text.Text == "切换整个应用");
 
+        // One card per item in the dynamic collection - never a hardcoded four.
+        var cards = PresetCards(selector);
+        Assert.Equal(viewModel.PresetSlots.Count, cards.Count);
+        Assert.Equal(4, cards.Count);
+
         for (var slot = 1; slot <= 4; slot++)
         {
-            var button = PresetSlot(window, slot);
+            var card = PresetCard(selector, slot);
 
-            Assert.True(button.IsVisible, $"slot {slot} must be offered");
-            Assert.True(button.Focusable, $"slot {slot} must be reachable by keyboard");
-            Assert.True(button.Bounds.Height >= 32, $"slot {slot} is only {button.Bounds.Height}px tall");
-            Assert.Equal(slot.ToString(CultureInfo.InvariantCulture), button.Content);
+            Assert.True(card.IsVisible, $"slot {slot} must be offered");
+            Assert.True(card.Focusable, $"slot {slot} must be reachable by keyboard");
+            Assert.True(card.Bounds.Height >= 28, $"slot {slot} is only {card.Bounds.Height}px tall");
+            Assert.Equal($"全局预设 {slot}", Avalonia.Automation.AutomationProperties.GetName(card));
+            Assert.Contains(slot.ToString(CultureInfo.InvariantCulture), CardText(card));
         }
+
+        // Wide and short cards on one row: equal Y, ascending X.
+        var first = cards[0].Bounds;
+        foreach (var card in cards)
+        {
+            Assert.Equal(first.Y, card.Bounds.Y);
+            Assert.True(card.Bounds.Width > card.Bounds.Height, "a card must be wider than it is tall");
+        }
+
+        Assert.Equal(
+            cards.Select(card => card.Bounds.X).OrderBy(x => x).ToList(),
+            cards.Select(card => card.Bounds.X).ToList());
+        Assert.True(cards[0].Bounds.Width > 80, $"a card is only {cards[0].Bounds.Width}px wide");
     }
 
+    private static string CardText(Button card)
+        => string.Concat(card.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text));
+
+    private static bool IsDescendantOf(Visual control, Visual ancestor)
+        => control.GetVisualAncestors().Contains(ancestor);
+
     [AvaloniaFact]
-    public void The_Active_Global_Preset_Slot_Is_Highlighted_With_The_Accent_Fill()
+    public void The_Active_Global_Preset_Card_Is_Marked_Beyond_Colour()
     {
-        var (window, viewModel, _, _, _) = BuildWindow();
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
         window.UpdateLayout();
 
-        var active = PresetSlot(window, 1);
-        var resting = PresetSlot(window, 2);
+        var selector = PresetSelector(window);
+        var active = PresetCard(selector, 1);
+        var resting = PresetCard(selector, 2);
 
         Assert.Equal(1, viewModel.ActivePresetSlot);
         Assert.Contains("active", active.Classes);
         Assert.DoesNotContain("active", resting.Classes);
+
+        // Colour carries the selection, and so does weight and the marker dot: the active
+        // card is semibold with its dot fully opaque, the resting card is not.
+        Assert.Equal(FontWeight.SemiBold, CardLabel(active).FontWeight);
+        Assert.NotEqual(FontWeight.SemiBold, CardLabel(resting).FontWeight);
+        Assert.Equal(1d, DotOf(active).Opacity);
+        Assert.Equal(0d, DotOf(resting).Opacity);
+
         Assert.Equal(Token(active.ActualThemeVariant, "AccentSurfaceBrush"), ColorOf(active.Background));
         Assert.NotEqual(ColorOf(active.Background), ColorOf(resting.Background));
     }
 
-    [AvaloniaFact]
-    public void Every_Global_Preset_Button_Binds_The_Command_And_An_Integer_Parameter()
-    {
-        var (window, viewModel, _, _, _) = BuildWindow();
+    private static Ellipse DotOf(Button card)
+        => card.GetVisualDescendants().OfType<Ellipse>().Single();
 
-        for (var slot = 1; slot <= 4; slot++)
+    private static TextBlock CardLabel(Button card)
+        => card.GetVisualDescendants().OfType<TextBlock>().Last();
+
+    [AvaloniaFact]
+    public void Every_Global_Preset_Card_Binds_The_Command_And_An_Integer_Parameter()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var selector = PresetSelector(window);
+        Assert.Equal(viewModel.PresetSlots.Count, PresetCards(selector).Count);
+
+        foreach (var item in viewModel.PresetSlots)
         {
-            var button = PresetSlot(window, slot);
-            Assert.Same(viewModel.SwitchPresetSlotCommand, button.Command);
-            Assert.Equal(slot, Assert.IsType<int>(button.CommandParameter));
+            var card = PresetCard(selector, item.Slot);
+            Assert.Same(viewModel.SwitchPresetSlotCommand, card.Command);
+            Assert.Equal(item.Slot, Assert.IsType<int>(card.CommandParameter));
         }
     }
 
     [AvaloniaFact]
-    public void Clicking_Each_Global_Preset_Slot_Switches_The_Whole_View_Model()
+    public void The_Add_Button_Binds_The_Add_Command_And_Stays_Outside_The_Scroll()
+    {
+        var (window, viewModel, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var selector = PresetSelector(window);
+        var add = AddPresetButton(selector);
+
+        Assert.Same(viewModel.AddPresetCommand, add.Command);
+        Assert.Equal("新增全局预设", Avalonia.Automation.AutomationProperties.GetName(add));
+
+        var scroller = selector.GetVisualDescendants().OfType<ScrollViewer>().Single();
+        Assert.False(IsDescendantOf(add, scroller), "the add control must stay reachable however many presets the row holds");
+    }
+
+    [AvaloniaFact]
+    public void Clicking_Each_Global_Preset_Card_Switches_The_Whole_View_Model()
     {
         var (window, viewModel, host, provider, store) = BuildWindow();
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
         SaveAllPresets(viewModel, store);
+        window.UpdateLayout();
+
+        var selector = PresetSelector(window);
 
         foreach (var slot in new[] { 2, 3, 4, 1 })
         {
-            Click(PresetSlot(window, slot), window);
+            Click(PresetCard(selector, slot), window);
 
             Assert.Equal(slot, viewModel.ActivePresetSlot);
-            for (var candidate = 1; candidate <= 4; candidate++)
+            foreach (var item in viewModel.PresetSlots)
             {
-                Assert.Equal(candidate == slot, PresetSlot(window, candidate).Classes.Contains("active"));
+                Assert.Equal(item.Slot == slot, PresetCard(selector, item.Slot).Classes.Contains("active"));
             }
         }
     }
 
     [AvaloniaFact]
-    public async Task Adding_A_Preset_Extends_The_Bindable_Slot_Collection_And_The_Leader_Options()
+    public async Task Adding_A_Preset_Extends_The_Strip_And_The_Leader_Options()
     {
-        var (window, viewModel, host, provider, store) = BuildWindow();
+        var (window, viewModel, host, provider, _) = BuildWindow();
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
 
+        var selector = PresetSelector(window);
         Assert.Equal(4, viewModel.PresetSlots.Count);
+        Assert.Equal(4, PresetCards(selector).Count);
 
         await viewModel.AddPresetCommand.ExecuteAsync(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(5, viewModel.ActivePresetSlot);
         Assert.Equal(5, viewModel.PresetSlots.Count);
+        Assert.Equal(5, PresetCards(selector).Count);
         Assert.Contains(5, viewModel.Editor.SpecialSlotOptions);
+        Assert.Contains("active", PresetCard(selector, 5).Classes);
     }
 
     [AvaloniaFact]
-    public void A_Focused_Global_Preset_Slot_Can_Be_Switched_With_The_Keyboard()
+    public void Clicking_The_Add_Button_Creates_And_Switches_To_A_New_Preset()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        Click(AddPresetButton(PresetSelector(window)), window);
+
+        for (var i = 0; i < 50 && viewModel.PresetSlots.Count < 5; i++)
+        {
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        Assert.Equal(5, viewModel.PresetSlots.Count);
+        Assert.Equal(5, viewModel.ActivePresetSlot);
+        Assert.Equal(5, PresetCards(PresetSelector(window)).Count);
+    }
+
+    [AvaloniaFact]
+    public void A_Focused_Global_Preset_Card_Can_Be_Switched_With_The_Keyboard()
     {
         var (window, viewModel, host, provider, store) = BuildWindow();
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
         SaveAllPresets(viewModel, store);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
 
         window.Focus();
-        var button = PresetSlot(window, 2);
-        Assert.True(button.Focus());
+        var card = PresetCard(PresetSelector(window), 2);
+        Assert.True(card.Focus());
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
@@ -223,7 +336,7 @@ public sealed class MappingEditorPresetPickerTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(2, viewModel.ActivePresetSlot);
-        Assert.Contains("active", button.Classes);
+        Assert.Contains("active", card.Classes);
     }
 
     [AvaloniaFact]
@@ -234,17 +347,19 @@ public sealed class MappingEditorPresetPickerTests
 
         var editor = EditorPanelOf(window);
         Assert.Null(editor.FindControl<Border>("PresetPickerRow"));
-        for (var slot = 1; slot <= 4; slot++)
-        {
-            Assert.Null(editor.FindControl<Button>($"PresetSlot{slot}Button"));
-        }
+        Assert.DoesNotContain(editor.GetVisualDescendants().OfType<Button>(),
+            button => button.Classes.Contains("presetCard") || button.Classes.Contains("presetAdd"));
 
-        Assert.True(PresetSelector(window).IsVisible);
-        Assert.DoesNotContain(PresetSelector(window).GetVisualAncestors().OfType<MappingEditorPanel>(), _ => true);
+        // The strip is a column-level host above the tab surface: it stays out of the
+        // editor and out of every tab, so switching presets never disturbs an open draft.
+        var selector = PresetSelector(window);
+        Assert.True(selector.IsVisible);
+        Assert.DoesNotContain(selector.GetVisualAncestors().OfType<MappingEditorPanel>(), _ => true);
+        Assert.False(IsDescendantOf(selector, window.FindControl<TabControl>("MainTabs")!));
     }
 
     [AvaloniaFact]
-    public void At_The_Minimum_Size_The_Selector_Stays_Right_Of_The_Model_And_Clear_Of_The_Editor()
+    public void At_The_Minimum_Size_The_Strip_Sits_Above_The_Model_And_Clear_Of_The_Editor()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
         window.Width = 1180;
@@ -256,15 +371,28 @@ public sealed class MappingEditorPresetPickerTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
+        var selector = PresetSelector(window);
         var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
         var modelViewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
         var modelRect = RectInWindow(modelViewbox, window);
-        var selectorRect = RectInWindow(PresetSelector(window), window);
+        var selectorRect = RectInWindow(selector, window);
         var editorRect = RectInWindow(window.FindControl<Border>("EditorPanel")!, window);
 
-        Assert.True(selectorRect.Left >= modelRect.Right,
-            $"selector starts at {selectorRect.Left}, but the model ends at {modelRect.Right}");
-        Assert.False(Overlaps(selectorRect, editorRect), "the global selector must not cover the mapping editor");
+        // The strip rides above the tab surface in the centre column, so the wide-short
+        // cards get the column's whole width instead of a narrow gutter beside the model,
+        // and nothing it hosts can land on the model or the editor below.
+        Assert.True(selectorRect.Bottom <= modelRect.Top,
+            $"the strip ends at {selectorRect.Bottom} but the model starts at {modelRect.Top}");
+        Assert.True(selectorRect.Width >= 500, $"the strip is only {selectorRect.Width}px wide");
+        Assert.False(Overlaps(selectorRect, editorRect), "the strip must not cover the mapping editor");
+        Assert.False(IsDescendantOf(selector, window.FindControl<TabControl>("MainTabs")!),
+            "the strip is a column-level host above the tabs, not a child of the tab surface");
+
+        // The strip's height is funded by the editor row - the star row that absorbs slack -
+        // not by the stage row: the model keeps its full DESIGN 4.6 sizing at the minimum
+        // window, and the editor keeps a scrolling body at its reduced height.
+        Assert.Equal(566d, modelRect.Width);
+        Assert.Equal(162d, window.FindControl<Border>("EditorPanel")!.Bounds.Height);
 
         var hits = model.GetVisualDescendants()
             .OfType<Control>()
@@ -274,14 +402,68 @@ public sealed class MappingEditorPresetPickerTests
             .ToList();
         Assert.NotEmpty(hits);
 
-        for (var slot = 1; slot <= 4; slot++)
+        foreach (var card in PresetCards(selector))
         {
-            var slotRect = RectInWindow(PresetSlot(window, slot), window);
+            var cardRect = RectInWindow(card, window);
             foreach (var hit in hits)
             {
-                Assert.False(Overlaps(slotRect, RectInWindow(hit, window)),
-                    $"slot {slot} overlaps the model's hit target {hit.Name}");
+                Assert.False(Overlaps(cardRect, RectInWindow(hit, window)),
+                    $"a preset card overlaps the model's hit target {hit.Name}");
             }
+        }
+    }
+
+    [AvaloniaFact]
+    public void Beyond_The_Available_Width_The_Row_Scrolls_Sideways_Without_Growing()
+    {
+        var (window, viewModel, host, provider, store) = BuildWindow();
+        window.Width = 1180;
+        window.Height = 780;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        SaveAllPresets(viewModel, store);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var selector = PresetSelector(window);
+        var before = selector.Bounds.Height;
+
+        // Two more presets than the minimum-width row can show at once.
+        for (var i = 0; i < 2; i++)
+        {
+            var expected = viewModel.PresetSlots.Count + 1;
+            viewModel.AddPresetCommand.Execute(null);
+            for (var spin = 0; spin < 50 && viewModel.PresetSlots.Count < expected; spin++)
+            {
+                Dispatcher.UIThread.RunJobs();
+            }
+        }
+
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var cards = PresetCards(selector);
+        Assert.Equal(6, cards.Count);
+
+        var scroller = selector.GetVisualDescendants().OfType<ScrollViewer>().Single();
+        Assert.True(scroller.Extent.Width > scroller.Viewport.Width,
+            $"the row must scroll sideways (extent {scroller.Extent.Width}, viewport {scroller.Viewport.Width})");
+
+        // Sideways scrolling, never a second row: the strip keeps its height, so the model
+        // and the editor below keep theirs, and no card is clipped.
+        Assert.Equal(before, selector.Bounds.Height);
+        Assert.Equal(30d, cards[0].Bounds.Height);
+        Assert.True(cards[0].Bounds.Bottom <= selector.Bounds.Height - selector.Padding.Bottom - 1,
+            "the first card must stay fully inside the strip");
+
+        // Every card, scrolled or not, stays a real switch target.
+        foreach (var card in cards)
+        {
+            Assert.True(card.IsVisible);
+            Assert.True(card.Focusable);
         }
     }
 
