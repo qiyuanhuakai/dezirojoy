@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeziroJoy.Core.Input;
@@ -718,12 +719,37 @@ public partial class MappingEditorViewModel : ObservableObject
     public ObservableCollection<KeyPickerItem> KeyOptions { get; } = [];
 
     /// <summary>
-    /// The categorized key picker as the grid shows it: one group per category, in the
-    /// picker's own order. The groups hold the very same <see cref="KeyPickerItem"/>
-    /// instances the flat <see cref="KeyOptions"/> list carries, so the grid and the lookup
-    /// never disagree about what a key is.
+    /// The categorized key picker as the navigator and the grid show it: one group per
+    /// category, in the picker's own order. The groups hold the very same
+    /// <see cref="KeyPickerItem"/> instances the flat <see cref="KeyOptions"/> list carries, so
+    /// the grid and the lookup never disagree about what a key is.
     /// </summary>
     public ObservableCollection<KeyCategoryGroup> KeyCategoryGroups { get; } = [];
+
+    /// <summary>
+    /// The category the key grid currently shows, and the one its navigator segment has
+    /// checked. It follows the selection: the picker's job is to put the selected key in
+    /// view, so a gesture switch or a reload landing on another slot's key opens that key's
+    /// category rather than the one the previous browse left behind. A click on a segment
+    /// moves it too - the segment writes its check onto its group, and the group's change is
+    /// adopted here.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActiveKeyCategoryColumns))]
+    private KeyCategoryGroup? _activeKeyCategory;
+
+    /// <summary>
+    /// How many columns the active category's grid lays its keys out in. A short category
+    /// shares one row - 面部按键's four caps do not float in a half-empty grid - and a long
+    /// one is capped at <see cref="KeyPickerMaxColumns"/> so the card's width is spent on the
+    /// grid itself instead of on a handful of over-wide caps: a denser grid is a shorter one,
+    /// and a shorter grid is a shorter scroll.
+    /// </summary>
+    public int ActiveKeyCategoryColumns =>
+        Math.Min(Math.Max(ActiveKeyCategory?.Keys.Count ?? 1, 1), KeyPickerMaxColumns);
+
+    /// <summary>The most columns a key-cap row may use, however many keys its category has.</summary>
+    private const int KeyPickerMaxColumns = 6;
 
     /// <summary>Source type shown by the selector; the single place the user picks button vs stick.</summary>
     public MappingSourceKind SourceKind
@@ -1159,6 +1185,12 @@ public partial class MappingEditorViewModel : ObservableObject
         ClickRepeatInterval = 0f;
         DoubleClickAction = null;
         LongPressAction = null;
+
+        // The picker's category follows the selection, so a reopened editor opens on the key
+        // that is selected rather than on the browse the previous edit left behind. The active
+        // option is often unchanged by a reset - the default key is the default key - and the
+        // follow in SetActiveSelectedKeyOption would then never run, so it is called directly.
+        FollowActiveKeyCategory(CurrentActiveKeyOption());
     }
 
     /// <summary>
@@ -1529,6 +1561,61 @@ public partial class MappingEditorViewModel : ObservableObject
 
         _activeSelectedKeyOption = option;
         OnPropertyChanged(nameof(ActiveSelectedKeyOption));
+        FollowActiveKeyCategory(option);
+    }
+
+    /// <summary>
+    /// Opens the category the newly selected key lives in. Every path that moves the active
+    /// selection - a cap click, a gesture switch, a load, a reset - lands here, so the
+    /// selected key is always the one in view.
+    /// </summary>
+    private void FollowActiveKeyCategory(KeyPickerItem? option)
+    {
+        if (option is null)
+        {
+            return;
+        }
+
+        var group = KeyCategoryGroups.FirstOrDefault(
+            candidate => candidate.Keys.Any(item => item.Key == option.Key));
+
+        if (group is not null)
+        {
+            ActiveKeyCategory = group;
+        }
+    }
+
+    partial void OnActiveKeyCategoryChanged(KeyCategoryGroup? value)
+    {
+        // The navigator mirrors the selection: the newly active category's segment is checked
+        // and every other one is unchecked, so a programmatic move - a gesture switch landing
+        // on a key in another category - marks the same segment a click would.
+        foreach (var group in KeyCategoryGroups)
+        {
+            if (!ReferenceEquals(group, value))
+            {
+                group.IsActive = false;
+            }
+        }
+
+        if (value is not null)
+        {
+            value.IsActive = true;
+        }
+    }
+
+    /// <summary>
+    /// A navigator segment was checked by pointer or by keyboard: its category becomes the one
+    /// the grid shows. Unchecking is ignored - exactly one category is shown at a time, and
+    /// <see cref="OnActiveKeyCategoryChanged"/> is what clears the rest.
+    /// </summary>
+    private void OnKeyCategoryGroupPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(KeyCategoryGroup.IsActive)
+            && sender is KeyCategoryGroup { IsActive: true } group)
+        {
+            ActiveKeyCategory = group;
+        }
     }
 
     [RelayCommand]
@@ -1618,12 +1705,18 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Groups the flat <see cref="KeyOptions"/> rows by category for the grid. The groups
+    /// Rebuilds the category groups from the flat <see cref="KeyOptions"/> rows. The groups
     /// hold the same item instances the flat list carries, so a selection made through one
-    /// is the selection the other reports.
+    /// is the selection the other reports. The navigator subscribes to each new group, so a
+    /// segment's check reaches the editor.
     /// </summary>
     private void RebuildKeyCategoryGroups()
     {
+        foreach (var stale in KeyCategoryGroups)
+        {
+            stale.PropertyChanged -= OnKeyCategoryGroupPropertyChanged;
+        }
+
         KeyCategoryGroups.Clear();
 
         KeyCategoryGroup? group = null;
@@ -1633,6 +1726,7 @@ public partial class MappingEditorViewModel : ObservableObject
             if (item.IsHeader)
             {
                 group = new KeyCategoryGroup(item.Label);
+                group.PropertyChanged += OnKeyCategoryGroupPropertyChanged;
                 KeyCategoryGroups.Add(group);
             }
             else
@@ -1640,6 +1734,10 @@ public partial class MappingEditorViewModel : ObservableObject
                 group?.Keys.Add(item);
             }
         }
+
+        // The first category leads until a selection says otherwise; the active option is
+        // synced right after this and follows its key into the right group.
+        ActiveKeyCategory = KeyCategoryGroups.FirstOrDefault();
     }
 
     private static KeyPickerItem KeyOptionFor(GamepadKey key)

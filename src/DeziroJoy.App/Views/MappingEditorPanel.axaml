@@ -10,8 +10,8 @@
         The mapping editor's card content. The gesture switcher leads: 单击 / 双击 / 长按 are
         three equal peers, and the one target editor below it is bound to Editor.ActiveSlot, so
         the same controls configure whichever slot the switcher has selected. The optional
-        categorized key grid sits in a collapsed expander, so the editor opens compact and the
-        model above it stays in view.
+        key picker sits in a collapsed expander - a category navigator over one compact grid of
+        key caps - so the editor opens compact and the model above it stays in view.
 
         The card frame itself - its border, background, slide/fade motion and visibility -
         stays on the EditorPanel border in MainWindow, so this panel is only the content that
@@ -33,9 +33,11 @@
     <UserControl.Styles>
         <!-- A plain ItemsControl wraps each item in a ContentPresenter whose content
              alignment defaults to Left, which would leave every key cap at its label's
-             width instead of filling its quarter of the grid. The generated containers
-             stretch, so the caps do. -->
-        <Style Selector="ItemsControl ContentPresenter">
+             width instead of filling its cell of the grid. The generated containers
+             stretch, so the caps do. The selector is scoped to the key grid: the category
+             navigator's segments are RadioButtons that must keep their label's width, or
+             every segment would claim the navigator's whole width, one per row. -->
+        <Style Selector="ItemsControl.keyGrid ContentPresenter">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="VerticalContentAlignment" Value="Stretch" />
         </Style>
@@ -48,11 +50,49 @@
             <Setter Property="Padding" Value="8" />
         </Style>
 
+        <!-- The category navigator: one segmented row where every category is an equal peer,
+             the same idiom - and the same surface language - as the gesture switcher above.
+             The checked segment carries the accent surface, so the category whose keys are on
+             screen is never in doubt. Segments wrap rather than scroll: the navigator must
+             stay reachable without a second scrollbar, and six short names fit the card's
+             width on one row at every size the window allows. -->
+        <Style Selector="RadioButton.keyCategorySegment">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="{DynamicResource CornerRadiusSm}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="RadioButton.keyCategorySegment:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="RadioButton.keyCategorySegment:checked">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
         <!-- A key cap: a focusable button that keeps one box in every state. Its surface is
              the design system's own key-cap border, washed by the selection, and the check
              glyph fades in beside the label, so the selected state never rests on colour
              alone. The alignment is explicit because the Button theme's own Left alignment
-             would leave every cap at its label's width instead of filling its quarter of
+             would leave every cap at its label's width instead of filling its cell of
              the grid. -->
         <Style Selector="Button.keyCap">
             <Setter Property="Background" Value="Transparent" />
@@ -285,12 +325,16 @@
 
                 <!-- The optional categorized key grid. Collapsed by default so the editor
                      opens compact; expanding it reveals the grid without moving anything
-                     above it out of view, and the selection survives both states. One
-                     section per category, each a four-column grid of key caps that fills
-                     the card's full width: the caps are the long way to a key, so they get
-                     the room the card has instead of a narrow scrolling column. The grid
-                     owns no scrollbar - the editor body above scrolls it - so a selection
-                     never snaps the list to the top. -->
+                     above it out of view, and the selection survives both states. Inside, a
+                     category navigator leads and one compact grid of key caps follows: the
+                     card is wide and short, so stacking all six categories as one long list
+                     would trade the card's width for a scroll the user pays on every key.
+                     Instead the navigator spends the width - every category one segment away,
+                     always reachable, never scrolled past - and the grid shows the chosen
+                     category's keys packed as densely as its labels allow. The grid owns no
+                     scrollbar - the editor body above scrolls it - so a selection never
+                     snaps the list to the top, and the category follows the selection, so the
+                     key that is selected is the key that is in view. -->
                 <Expander x:Name="KeyPickerExpander" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                           IsExpanded="{Binding KeyPickerExpanded, Mode=TwoWay}"
                           IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=KeyPress|KeyCombo}">
@@ -298,37 +342,52 @@
                         <TextBlock Classes="fieldLabel" Text="或从列表选择" Margin="0" />
                     </Expander.Header>
                     <Border Classes="pickerWell" IsEnabled="{Binding ActiveTargetEditable}">
-                        <ItemsControl x:Name="KeyCategoryGrid" ItemsSource="{Binding KeyCategoryGroups}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:KeyCategoryGroup">
-                                    <StackPanel Margin="0,0,0,10">
-                                        <TextBlock Classes="pickerHeaderLabel" Text="{Binding Name}" Margin="2,0,0,4" />
-                                        <ItemsControl ItemsSource="{Binding Keys}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <UniformGrid Columns="4" />
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:KeyPickerItem">
-                                                    <Button Classes="keyCap"
-                                                             Loaded="OnKeyCapLoaded" Click="OnKeyCapClick">
-                                                        <Panel>
-                                                            <Border Classes="keyCap" />
-                                                            <TextBlock Classes="keyCapLabel" Text="{Binding Label}"
-                                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                                            <TextBlock Classes="keyCapCheck" Text="✓"
-                                                                        HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                                        Margin="0,1,5,0" />
-                                                        </Panel>
-                                                    </Button>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <StackPanel>
+                            <ItemsControl x:Name="KeyCategoryNav" ItemsSource="{Binding KeyCategoryGroups}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:KeyCategoryGroup">
+                                        <RadioButton Classes="keyCategorySegment" GroupName="KeyCategoryNav"
+                                                     Content="{Binding Name}"
+                                                     IsChecked="{Binding IsActive, Mode=TwoWay}"
+                                                     AutomationProperties.Name="{Binding Name}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <ItemsControl x:Name="KeyCategoryGrid" Classes="keyGrid"
+                                          ItemsSource="{Binding ActiveKeyCategory.Keys}" Margin="0,8,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="{Binding ActiveKeyCategoryColumns}" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:KeyPickerItem">
+                                        <Button Classes="keyCap"
+                                                 Loaded="OnKeyCapLoaded" Click="OnKeyCapClick">
+                                            <!-- The label and the check glyph share the cap
+                                                 without overlapping: the glyph owns a reserved
+                                                 strip at the right, so a long name such as
+                                                 PageDown never runs under it however densely
+                                                 the grid packs the row. -->
+                                            <Grid ColumnDefinitions="*,14">
+                                                <Border Classes="keyCap" Grid.ColumnSpan="2" />
+                                                <TextBlock Grid.Column="0" Classes="keyCapLabel" Text="{Binding Label}"
+                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                <TextBlock Grid.Column="1" Classes="keyCapCheck" Text="✓"
+                                                            HorizontalAlignment="Center" VerticalAlignment="Top"
+                                                            Margin="0,1,0,0" />
+                                            </Grid>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </Border>
                 </Expander>
 
