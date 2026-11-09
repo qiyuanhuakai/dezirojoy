@@ -9,7 +9,11 @@
              text so every card in the row is identical. The list is data-driven - the view
              model owns one bindable item per stored slot - so nothing here knows a fixed
              slot count. The active state is a bound class (PresetSlotItem.IsActive), not
-             code-behind bookkeeping. -->
+             code-behind bookkeeping.
+
+             Declaration order matters: for a descendant selector Avalonia weighs only the
+             subject, so the resting styles below are declared first and every state rule
+             that targets the same element comes after it. -->
         <Style Selector="Button.presetCard">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
@@ -32,35 +36,24 @@
             </Setter>
         </Style>
 
-        <!-- Hover wears the hover wash and an accent border; the accent edge is what makes
-             it readable in both themes without relying on the wash alone. -->
-        <Style Selector="Button.presetCard:pointerover">
-            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        <!-- The engagement underline: a bar under the label, always laid out so it costs no
+             layout shift, that fades in for hover and lights fully for keyboard focus. It
+             is the non-colour half of every pointer and keyboard state: a resting card
+             keeps the bar's space at zero opacity, so the card never reflows when a state
+             arrives, and the bar itself - not a brush - is what tells the states apart.
+             It carries no transition of its own: a state indicator must answer the moment
+             the pointer or the focus arrives. -->
+        <Style Selector="Border.presetUnderline">
+            <Setter Property="Height" Value="2" />
+            <Setter Property="CornerRadius" Value="1" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="0" />
         </Style>
 
-        <!-- Pressed dims the whole card: a shape-and-weight cue, not a second colour. -->
-        <Style Selector="Button.presetCard:pressed">
-            <Setter Property="Opacity" Value="0.85" />
-        </Style>
-
-        <!-- Keyboard focus rings the card in the accent. Only the brush changes, so the
-             focused card keeps one box and its content never shifts. -->
-        <Style Selector="Button.presetCard:focus">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-
-        <!-- Active: accent surface, accent edge, accent ink and semibold - plus the dot
-             below, so the selection survives a colour-blind reading. -->
-        <Style Selector="Button.presetCard.active">
-            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-
-        <!-- The active marker. Always laid out - a resting card keeps the dot's space - so
-             selecting a card never reflows its label; only its opacity animates. -->
+        <!-- The active marker dot. Like the underline it is always laid out, and unlike it
+             it animates: the dot is decoration riding on the selection, not a state the
+             user is waiting on. -->
         <Style Selector="Ellipse.presetDot">
             <Setter Property="Width" Value="8" />
             <Setter Property="Height" Value="8" />
@@ -74,15 +67,69 @@
             </Setter>
         </Style>
 
+        <!-- Hover wears the hover wash and an accent border, and grows the engagement
+             underline below the label at half strength: the underline is the non-colour
+             cue, so the hover state survives a colour-blind reading and is visible on the
+             active card too, whose wash and edge the resting hover would not change. -->
+        <Style Selector="Button.presetCard:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.presetCard:pointerover Border.presetUnderline">
+            <Setter Property="Opacity" Value="0.5" />
+        </Style>
+
+        <!-- Pressed dims the whole card: a shape-and-weight cue, not a second colour. -->
+        <Style Selector="Button.presetCard:pressed">
+            <Setter Property="Opacity" Value="0.85" />
+        </Style>
+
+        <!-- Keyboard focus rings the card in the accent and lights the engagement
+             underline at full strength. Only brushes and opacity change, so the focused
+             card keeps one box and its content never shifts; the full-strength underline
+             is what tells focus from hover without relying on colour. -->
+        <Style Selector="Button.presetCard:focus">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.presetCard:focus Border.presetUnderline">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- Active: accent surface, accent edge, accent ink and semibold - plus the dot,
+             so the selection survives a colour-blind reading. -->
+        <Style Selector="Button.presetCard.active">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
         <Style Selector="Button.presetCard.active Ellipse.presetDot">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- The active card must still answer the pointer and the keyboard: its edge steps
+             to the hover accent and the engagement underline appears, so an active card
+             under the cursor or the focus is never indistinguishable from a resting one. -->
+        <Style Selector="Button.presetCard.active:pointerover">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.presetCard.active:pointerover Border.presetUnderline">
+            <Setter Property="Opacity" Value="0.5" />
+        </Style>
+
+        <Style Selector="Button.presetCard.active:focus Border.presetUnderline">
             <Setter Property="Opacity" Value="1" />
         </Style>
     </UserControl.Styles>
 
-    <!-- The strip: one rounded bar, wide and short, spanning the full width of the mapping
-         tab above the model stage. Cards flow horizontally inside a scroll viewer - the row
-         scrolls sideways rather than wrapping to a second row, so the strip keeps one
-         height and never grows over the model or the editor below. -->
+    <!-- The strip: one rounded bar, wide and short, spanning the full width of the centre
+         column above the tab surface. Cards flow horizontally inside a scroll viewer - the
+         row scrolls sideways rather than wrapping to a second row, so the strip keeps one
+         height and never grows over the tabs, the model or the editor below. -->
     <Border Background="{DynamicResource CardBrush}"
             BorderBrush="{DynamicResource CardBorderBrush}"
             BorderThickness="1" CornerRadius="{DynamicResource CornerRadiusXl}"
@@ -115,17 +162,27 @@
                                     CommandParameter="{Binding Slot}"
                                     AutomationProperties.Name="{Binding Slot, StringFormat='全局预设 {0}'}"
                                     ToolTip.Tip="{Binding Name, StringFormat='切换整个应用：{0}'}">
-                                <StackPanel Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center">
-                                    <Ellipse Classes="presetDot" />
-                                    <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
-                                        <TextBlock.Text>
-                                            <MultiBinding StringFormat="{}{0} · {1}">
-                                                <Binding Path="Slot" />
-                                                <Binding Path="Name" />
-                                            </MultiBinding>
-                                        </TextBlock.Text>
-                                    </TextBlock>
-                                </StackPanel>
+                                <!-- A bounded Grid, not a horizontal StackPanel: the label's
+                                     star column is what limits its measure to the card's
+                                     content width, so a long generated name ("Xbox 布局默认
+                                     配置 · 预设 5") ellipsizes inside the card instead of
+                                     painting over its neighbours. The full name rides on the
+                                     tooltip. -->
+                                <Grid RowDefinitions="*,Auto">
+                                    <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
+                                        <Ellipse Grid.Column="0" Classes="presetDot" />
+                                        <TextBlock Grid.Column="1" Margin="5,0,0,0" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis">
+                                            <TextBlock.Text>
+                                                <MultiBinding StringFormat="{}{0} · {1}">
+                                                    <Binding Path="Slot" />
+                                                    <Binding Path="Name" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </Grid>
+                                    <Border Grid.Row="1" Classes="presetUnderline" />
+                                </Grid>
                             </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -138,11 +195,14 @@
                     Command="{Binding AddPresetCommand}"
                     AutomationProperties.Name="新增全局预设"
                     ToolTip.Tip="复制当前配置为新的独立预设并切换到它">
-                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
-                    <TextBlock Text="+" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
-                               Foreground="{DynamicResource AccentBrush}" />
-                    <TextBlock Text="新增" VerticalAlignment="Center" />
-                </StackPanel>
+                <Grid RowDefinitions="*,Auto">
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
+                        <TextBlock Text="+" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource AccentBrush}" />
+                        <TextBlock Text="新增" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Border Grid.Row="1" Classes="presetUnderline" />
+                </Grid>
             </Button>
         </Grid>
     </Border>

@@ -68,7 +68,6 @@ public sealed class MappingEditorPresetPickerTests
 
     private static Control ModelElement(Window window, string name)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
-
     private static MappingEditorPanel EditorPanelOf(Window window)
         => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
 
@@ -176,6 +175,36 @@ public sealed class MappingEditorPresetPickerTests
     private static string CardText(Button card)
         => string.Concat(card.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text));
 
+    /// <summary>The engagement underline: the always-laid-out bar that fades in for hover and lights fully for focus.</summary>
+    private static Border Underline(Button card)
+        => card.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("presetUnderline"));
+
+    /// <summary>The card's label - the one text it carries.</summary>
+    private static TextBlock PresetLabel(Button card)
+        => card.GetVisualDescendants().OfType<TextBlock>().Single();
+
+    /// <summary>Parks the pointer over a control, like a user sweeping the row.</summary>
+    private static void Hover(Control target, Window window)
+    {
+        window.UpdateLayout();
+        var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
+        window.MouseMove(point, RawInputModifiers.None);
+        Settle(window);
+    }
+
+    /// <summary>
+    /// Runs the layout and the animation clock: the state cues ride on opacity transitions,
+    /// so the render timer has to tick before the settled value is observable.
+    /// </summary>
+    private static void Settle(Window window)
+    {
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(30);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
     private static bool IsDescendantOf(Visual control, Visual ancestor)
         => control.GetVisualAncestors().Contains(ancestor);
 
@@ -197,8 +226,8 @@ public sealed class MappingEditorPresetPickerTests
 
         // Colour carries the selection, and so does weight and the marker dot: the active
         // card is semibold with its dot fully opaque, the resting card is not.
-        Assert.Equal(FontWeight.SemiBold, CardLabel(active).FontWeight);
-        Assert.NotEqual(FontWeight.SemiBold, CardLabel(resting).FontWeight);
+        Assert.Equal(FontWeight.SemiBold, PresetLabel(active).FontWeight);
+        Assert.NotEqual(FontWeight.SemiBold, PresetLabel(resting).FontWeight);
         Assert.Equal(1d, DotOf(active).Opacity);
         Assert.Equal(0d, DotOf(resting).Opacity);
 
@@ -208,6 +237,79 @@ public sealed class MappingEditorPresetPickerTests
 
     private static Ellipse DotOf(Button card)
         => card.GetVisualDescendants().OfType<Ellipse>().Single();
+
+    // ---- Pointer and keyboard state cues ------------------------------------
+
+    [AvaloniaFact]
+    public void A_Hovered_Resting_Card_Grows_An_Engagement_Underline()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Settle(window);
+
+        var card = PresetCard(PresetSelector(window), 2);
+        Assert.Equal(0d, Underline(card).Opacity);
+
+        Hover(card, window);
+
+        // The pointer is over the card, and the answer is not only a brush: the engagement
+        // underline grows to half strength under the label. The wash and the accent edge
+        // ride along (their transitions cannot be pinned to a settled value headlessly, so
+        // the underline is the deterministic half of the hover state).
+        Assert.True(card.IsPointerOver, "the pointer must be over the hovered card");
+        Assert.Equal(0.5d, Underline(card).Opacity);
+    }
+
+    [AvaloniaFact]
+    public void A_Focused_Resting_Card_Lights_The_Underline_At_Full_Strength()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Settle(window);
+
+        var card = PresetCard(PresetSelector(window), 2);
+        Assert.Equal(0d, Underline(card).Opacity);
+
+        Assert.True(card.Focus());
+        Settle(window);
+
+        // Focus is told apart from hover without colour: the underline lights fully while
+        // hover leaves it at half strength, so the focused card is identifiable without
+        // relying on the accent edge.
+        Assert.True(card.IsFocused, "the card must hold keyboard focus");
+        Assert.Equal(1d, Underline(card).Opacity);
+    }
+
+    [AvaloniaFact]
+    public void The_Active_Card_Still_Answers_Hover_And_Focus()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        Settle(window);
+
+        var active = PresetCard(PresetSelector(window), 1);
+        Assert.Contains("active", active.Classes);
+        Assert.Equal(1d, DotOf(active).Opacity);
+        Assert.Equal(0d, Underline(active).Opacity);
+
+        Hover(active, window);
+
+        // The active treatment already owns the wash and the edge, so the underline is what
+        // answers the pointer here: hovering the selected card is visible after all.
+        Assert.True(active.IsPointerOver, "the pointer must be over the active card");
+        Assert.Equal(0.5d, Underline(active).Opacity);
+
+        Assert.True(active.Focus());
+        Settle(window);
+
+        // Focus beats hover: the underline lights fully, so the focused card is the one the
+        // keyboard is driving even though it is also the selected one.
+        Assert.True(active.IsFocused, "the active card must hold keyboard focus");
+        Assert.Equal(1d, Underline(active).Opacity);
+    }
 
     private static TextBlock CardLabel(Button card)
         => card.GetVisualDescendants().OfType<TextBlock>().Last();
@@ -465,6 +567,50 @@ public sealed class MappingEditorPresetPickerTests
             Assert.True(card.IsVisible);
             Assert.True(card.Focusable);
         }
+    }
+
+    [AvaloniaFact]
+    public async Task Generated_Preset_Names_Trim_Inside_Their_Card()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        // A real AddPreset: the new slot copies the active profile and takes the generated
+        // name "Xbox 布局默认配置 · 预设 5" - far wider than one card.
+        await viewModel.AddPresetCommand.ExecuteAsync(null);
+        Settle(window);
+
+        var selector = PresetSelector(window);
+        var cards = PresetCards(selector);
+        Assert.Equal(5, cards.Count);
+
+        foreach (var card in cards)
+        {
+            var label = PresetLabel(card);
+            var available = card.Bounds.Width - card.Padding.Left - card.Padding.Right
+                - DotOf(card).Bounds.Width - label.Margin.Left;
+
+            // The label must stay inside its card's content area: a horizontal StackPanel
+            // measured the label unbounded and let it paint over the neighbouring cards.
+            Assert.True(label.Bounds.Width <= available + 0.5,
+                $"slot {card.CommandParameter} renders its label {label.Bounds.Width}px wide, but only {available}px fit inside the card");
+            Assert.True(label.Bounds.Right <= card.Bounds.Right - card.Padding.Right + 0.5,
+                $"slot {card.CommandParameter} lets its label spill past the card's right edge");
+            Assert.Equal(TextTrimming.CharacterEllipsis, label.TextTrimming);
+        }
+
+        // And the generated name really is longer than the space: the label is bounded to
+        // less than its natural width, so it trims rather than merely fitting.
+        var generated = PresetCard(selector, 5);
+        var generatedLabel = PresetLabel(generated);
+        var probe = new TextBlock { Text = generatedLabel.Text, FontSize = 12 };
+        probe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Assert.True(probe.DesiredSize.Width > generatedLabel.Bounds.Width + 20,
+            $"the generated name measures {probe.DesiredSize.Width}px but the label is {generatedLabel.Bounds.Width}px - it must actually trim");
+
+        // The full name stays reachable where it was trimmed away.
+        Assert.EndsWith("Xbox 布局默认配置 · 预设 5", Assert.IsType<string>(ToolTip.GetTip(generated)));
     }
 
     // ---- The special-key target editor --------------------------------------
