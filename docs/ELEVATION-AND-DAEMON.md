@@ -277,9 +277,9 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   主动 `ShutdownDaemon` 成功后客户端不再自动拉起 daemon。
 - **实时输入样本**：新 GUI 在 `Hello` 中显式订阅；旧客户端省略该可选字段，daemon 因而不向它发送
   新消息类型，协议仍保持版本 1。运行 tick 与停止后的 250ms 存在性采样都发布物理状态，重复状态不发送；
-  每连接只合并数字键状态相同的连续模拟量样本，所有按下/松开转换逐项保序，既不积压摇杆流量也不吞按键边沿。
-  样本序号独立于快照序号，合并造成的跳号不代表丢配置；GUI 只采用当前 daemon 实例的递增样本，
-  并用它驱动导航、捕获和可视化。
+  每连接只合并同一设备且数字键状态相同的连续模拟量样本，设备之间以及所有按下/松开转换逐项保序，
+  既不积压摇杆流量也不吞按键边沿。样本序号独立于快照序号，合并造成的跳号不代表丢配置；
+  GUI 只采用当前 daemon 实例的递增样本，并用它驱动导航、捕获和可视化。
 - **设备变化及时推送**：daemon 的存在性监视器在映射停止时也继续扫描；连接或断开只推进快照序号，
   不伪造配置 revision。新设备首次出现时初始化四个彼此独立的默认槽，旧槽内容不被覆盖。
 - **期望配置修订号**：`ApplyConfiguration` 与 `Start` 都带 GUI 认为当前的修订号。守护进程
@@ -291,7 +291,8 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   活动槽与 revision 保持原值，不能半切换。消息中的 `DeviceId` 保留在线上但服务端忽略，属于软兼容，
   协议版本不因此升级。Leader 键经 `EngineHost.PresetSwitchRequested` 由守护进程内部驱动同一标量，
   与 GUI 切换走同一条逻辑（tick 线程同步执行，与切换本身执行的重载相同）。GUI 保存与本地导入通过
-  `PresetStore.SaveSlot` 写当前活动槽；daemon 导入由 `ApplyConfiguration` 持久化当前槽，成功后不再二次写裸设备键。
+  `PresetStore.SaveSlot` 写当前活动槽；daemon 模式从权威 `Devices`/`ProfileJson` 解析目标设备，不依赖本地 runtime，
+  daemon 导入由 `ApplyConfiguration` 持久化当前槽，成功后不再二次写裸设备键。
 - **完整 profile JSON，不是路径**：配置随消息传输序列化后的 profile 本体。传路径会让
   守护进程去读一个 GUI 有权限而它未必有权限的位置，也会让"到底改没改"无法从消息本身判断。
 - **同一时刻只有一个未完成变更**：GUI 在收到上一条 `MutationAck` 之前，不发下一条

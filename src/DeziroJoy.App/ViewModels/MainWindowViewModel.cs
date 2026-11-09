@@ -908,12 +908,48 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void SaveProfile()
     {
-        if (ActiveController is null || ActiveProfile is null)
+        if (ActiveProfile is null || PersistenceDeviceId is not { } deviceId)
         {
             return;
         }
 
-        _presets.SaveSlot(ActiveController.Descriptor.DeviceId, ActivePresetSlot, ActiveProfile);
+        _presets.SaveSlot(deviceId, ActivePresetSlot, ActiveProfile);
+    }
+
+    private string? PersistenceDeviceId
+    {
+        get
+        {
+            if (_daemon is null)
+            {
+                return ActiveController?.Descriptor.DeviceId;
+            }
+
+            if (DaemonSnapshot is not { } snapshot)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.ProfileJson))
+            {
+                try
+                {
+                    var profileDeviceId = ProfileSerializer.Deserialize(snapshot.ProfileJson).DeviceId;
+                    if (!string.IsNullOrWhiteSpace(profileDeviceId)
+                        && (snapshot.Devices.Count == 0
+                            || snapshot.Devices.Any(device => device.DeviceId == profileDeviceId)))
+                    {
+                        return profileDeviceId;
+                    }
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // Snapshot adoption already reports malformed profile JSON; persistence stays unavailable.
+                }
+            }
+
+            return snapshot.Devices.Count > 0 ? snapshot.Devices[0].DeviceId : null;
+        }
     }
 
     [RelayCommand]
@@ -986,7 +1022,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        if (ActiveController is null)
+        if (PersistenceDeviceId is not { } deviceId)
         {
             SetTransferError("导入失败：请先连接手柄。");
             return;
@@ -1000,7 +1036,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var imported = result.Profile with { DeviceId = ActiveController.Descriptor.DeviceId };
+        var imported = result.Profile with { DeviceId = deviceId };
 
         _ = ApplyImportedProfile(imported, result);
     }
@@ -1009,9 +1045,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (await ApplyProfile(imported))
         {
-            if (_daemon is null && ActiveController is not null)
+            if (_daemon is null)
             {
-                _presets.SaveSlot(ActiveController.Descriptor.DeviceId, ActivePresetSlot, imported);
+                _presets.SaveSlot(imported.DeviceId!, ActivePresetSlot, imported);
             }
 
             Report(result);

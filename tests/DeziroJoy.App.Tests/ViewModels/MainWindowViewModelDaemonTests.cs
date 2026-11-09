@@ -386,26 +386,39 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task Daemon_Save_Uses_The_Snapshot_Device_And_Active_Slot_Without_A_Local_Runtime()
+    {
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        Assert.Null(viewModel.ActiveController);
+        Assert.Empty(viewModel.Controllers);
+        Assert.NotNull(viewModel.ActiveProfile);
+        await viewModel.SwitchPresetSlotCommand.ExecuteAsync(4);
+        var untouched = new Dictionary<int, string>
+        {
+            [1] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 1)!),
+            [2] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 2)!),
+            [3] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 3)!),
+        };
+        viewModel.ActiveProfile = viewModel.ActiveProfile with { Name = "Saved daemon slot four" };
+
+        viewModel.SaveProfileCommand.Execute(null);
+
+        Assert.Equal("Saved daemon slot four", context.Presets.LoadSlot("pad-1", 4)!.Name);
+        foreach (var (slot, expected) in untouched)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
+        }
+    }
+
+    [Fact]
     public async Task Daemon_Import_Saves_The_Active_Slot_Once_And_Does_Not_Overwrite_Slot_One()
     {
-        var daemonHost = new FakeDaemonHost { HasController = true };
-        daemonHost.AddDevice("pad-1");
-        var store = new InMemoryProfileStore();
-        var presets = new PresetStore(store);
-        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
-        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
-        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
-        var channel = new ServerChannel(server);
-        server.StateChanged += channel.Push;
-        server.InputSampled += channel.Push;
-        var controller = new DaemonController(new ServerEndpoint(channel));
-        await controller.ConnectAsync(TestContext.Current.CancellationToken);
-        var provider = new FakeGamepadProvider();
-        provider.Add("pad-1", "Xbox Wireless Controller");
-        provider.SetState("pad-1", GamepadState.Neutral);
-        var presentation = new EngineHost(provider, new RecordingOutputSink(), store);
-        await using var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
-        viewModel.SyncControllers();
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        var presets = context.Presets;
+        Assert.Null(viewModel.ActiveController);
+        Assert.Empty(viewModel.Controllers);
         await viewModel.SwitchPresetSlotCommand.ExecuteAsync(2);
         var untouched = new Dictionary<int, string>
         {
@@ -527,6 +540,26 @@ public sealed class MainWindowViewModelDaemonTests
         {
             viewModel.PropertyChanged -= OnPropertyChanged;
         }
+    }
+
+    private static async Task<(MainWindowViewModel ViewModel, PresetStore Presets)> CreateDaemonPresetViewModel()
+    {
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var channel = new ServerChannel(server);
+        server.StateChanged += channel.Push;
+        server.InputSampled += channel.Push;
+        var controller = new DaemonController(new ServerEndpoint(channel));
+        await controller.ConnectAsync(TestContext.Current.CancellationToken);
+        var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
+        return (viewModel, presets);
     }
 
     private static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost DaemonHost, ServerChannel Channel, DaemonServer Server)> CreateDaemonViewModel()

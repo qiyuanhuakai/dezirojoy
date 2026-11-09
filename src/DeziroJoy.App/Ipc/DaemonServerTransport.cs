@@ -156,8 +156,8 @@ public sealed partial class DaemonServer
     /// <summary>
     /// One client connection with a single ordered writer. Responses and pushed snapshots
     /// share the same queue, so concurrent publishers cannot reorder sequence numbers. Only
-    /// consecutive input samples with identical digital buttons coalesce: analog traffic cannot
-    /// build a backlog, while every press and release transition remains observable.
+    /// consecutive samples from one device with identical digital buttons coalesce: analog traffic
+    /// cannot build a backlog, while devices and every press/release transition remain distinct.
     /// </summary>
     private sealed class Connection : IDisposable
     {
@@ -197,7 +197,7 @@ public sealed partial class DaemonServer
             Outbound outbound;
             lock (_inputGate)
             {
-                if (_lastQueuedInputSample is { } queued && queued.HasSameDigitalState(message))
+                if (_lastQueuedInputSample is { } queued && queued.CanCoalesce(message))
                 {
                     queued.Message = message;
                     return;
@@ -255,8 +255,9 @@ public sealed partial class DaemonServer
         {
             public InputSampleMessage Message { get; set; } = message;
 
-            public bool HasSameDigitalState(InputSampleMessage other)
-                => Message.PressedButtons == other.PressedButtons
+            public bool CanCoalesce(InputSampleMessage other)
+                => string.Equals(Message.DeviceId, other.DeviceId, StringComparison.Ordinal)
+                    && Message.PressedButtons == other.PressedButtons
                     && (Message.ExtraButtons ?? Array.Empty<int>()).SequenceEqual(
                         other.ExtraButtons ?? Array.Empty<int>());
         }

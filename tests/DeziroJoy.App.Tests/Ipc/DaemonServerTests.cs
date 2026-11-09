@@ -245,6 +245,149 @@ internal sealed class ScriptedStream : Stream
     public override void SetLength(long value) => throw new NotSupportedException();
 }
 
+/// <summary>A bidirectional scripted stream whose writer and end-of-stream can be held by a test.</summary>
+internal sealed class BlockingWriteStream : Stream
+{
+    private readonly object _gate = new();
+    private readonly Queue<byte> _script = new();
+    private readonly List<byte> _written = [];
+    private readonly TaskCompletionSource _writeBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _releaseWrites = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _blockWrites;
+    private bool _finishedReading;
+
+    public Task WriteBlocked => _writeBlocked.Task;
+
+    public void Script(IpcMessage message)
+    {
+        var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(message));
+        var prefix = new byte[PipeFraming.LengthPrefixBytes];
+        BinaryPrimitives.WriteInt32LittleEndian(prefix, payload.Length);
+        lock (_gate)
+        {
+            foreach (var value in prefix.Concat(payload))
+            {
+                _script.Enqueue(value);
+            }
+        }
+    }
+
+    public void BlockFurtherWrites() => _blockWrites = true;
+
+    public void ReleaseWrites()
+    {
+        _blockWrites = false;
+        _releaseWrites.TrySetResult();
+    }
+
+    public void Finish()
+    {
+        _finishedReading = true;
+        _finished.TrySetResult();
+    }
+
+    public IReadOnlyList<IpcMessage> WrittenMessages()
+    {
+        byte[] bytes;
+        lock (_gate)
+        {
+            bytes = [.. _written];
+        }
+
+        var messages = new List<IpcMessage>();
+        var offset = 0;
+        while (offset + PipeFraming.LengthPrefixBytes <= bytes.Length)
+        {
+            var length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset, PipeFraming.LengthPrefixBytes));
+            offset += PipeFraming.LengthPrefixBytes;
+            if (offset + length > bytes.Length)
+            {
+                break;
+            }
+
+            messages.Add(IpcSerializer.Deserialize(Encoding.UTF8.GetString(bytes, offset, length)));
+            offset += length;
+        }
+
+        return messages;
+    }
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            if (_script.Count > 0)
+            {
+                var taken = 0;
+                while (taken < buffer.Length && _script.Count > 0)
+                {
+                    buffer.Span[taken++] = _script.Dequeue();
+                }
+
+                return taken;
+            }
+
+            if (_finishedReading)
+            {
+                return 0;
+            }
+        }
+
+        await _finished.Task.WaitAsync(cancellationToken);
+        return 0;
+    }
+
+    public override async ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        if (_blockWrites)
+        {
+            _writeBlocked.TrySetResult();
+            await _releaseWrites.Task.WaitAsync(cancellationToken);
+        }
+
+        lock (_gate)
+        {
+            foreach (var value in buffer.Span)
+            {
+                _written.Add(value);
+            }
+        }
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+    public override void Write(byte[] buffer, int offset, int count)
+        => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+    public override bool CanRead => true;
+
+    public override bool CanWrite => true;
+
+    public override bool CanSeek => false;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+}
+
 /// <summary>
 /// The daemon-side contract of docs/ELEVATION-AND-DAEMON.md section 4: versioned handshake,
 /// full snapshots, revision-guarded mutations, ack ordering, monotonic sequence, persistence
@@ -1170,6 +1313,71 @@ public class DaemonServerTests
 
         Assert.Contains("hello-ack", stream.WrittenText());
         Assert.Equal(expectSample, stream.WrittenText().Contains("input-sample", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_Blocked_Writer_Preserves_Per_Device_Baselines_Analog_Values_And_Button_Edges()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        var stream = new BlockingWriteStream();
+        stream.Script(new HelloMessage(
+            "gui-1",
+            IpcContract.ProtocolVersion,
+            "client-1",
+            IpcSession.Current,
+            SubscribeInputSamples: true));
+        var serving = server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+
+        try
+        {
+            for (var attempt = 0;
+                attempt < 200 && !stream.WrittenMessages().Any(message => message is HelloAckMessage);
+                attempt++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Contains(stream.WrittenMessages(), message => message is HelloAckMessage);
+            stream.BlockFurtherWrites();
+            host.PublishInputSample("pad-1", GamepadState.Neutral);
+            await stream.WriteBlocked.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            host.PublishInputSample("pad-2", GamepadState.Neutral);
+            host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.None, 0.25f, 0, 0, 0));
+            host.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.None, -0.5f, 0, 0, 0));
+            host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0.25f, 0, 0, 0));
+            host.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, -0.5f, 0, 0, 0));
+            host.PublishInputSample("pad-1", GamepadState.Neutral);
+            host.PublishInputSample("pad-2", GamepadState.Neutral);
+            stream.ReleaseWrites();
+
+            for (var attempt = 0;
+                attempt < 200 && stream.WrittenMessages().OfType<InputSampleMessage>().Count() != 8;
+                attempt++)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+        }
+        finally
+        {
+            stream.ReleaseWrites();
+            stream.Finish();
+        }
+
+        await serving;
+        var samples = stream.WrittenMessages().OfType<InputSampleMessage>().ToList();
+        Assert.Equal(8, samples.Count);
+        Assert.Equal(
+            ["pad-1", "pad-2", "pad-1", "pad-2", "pad-1", "pad-2", "pad-1", "pad-2"],
+            samples.Select(sample => sample.DeviceId).ToArray());
+        Assert.Equal(
+            [GamepadButtonMask.None, GamepadButtonMask.None, GamepadButtonMask.None, GamepadButtonMask.None,
+                GamepadButtonMask.A, GamepadButtonMask.B, GamepadButtonMask.None, GamepadButtonMask.None],
+            samples.Select(sample => sample.PressedButtons).ToArray());
+        Assert.Equal(0.25f, samples[2].LeftStickX);
+        Assert.Equal(-0.5f, samples[3].LeftStickX);
+        Assert.Equal(Enumerable.Range(1, 8).Select(value => (long)value), samples.Select(sample => sample.Sequence));
     }
 
     [Fact]
