@@ -763,6 +763,57 @@ public sealed class GestureEditorGuiTests
         AssertDirectionShown(window, viewModel, InputDirection.Left);
     }
 
+    [AvaloniaFact]
+    public void A_Stick_Bound_To_A_Special_Key_Commits_With_Its_Direction()
+    {
+        // A special key is a digital target: without a direction the engine refuses the
+        // whole mapping at application time, so the picker has to appear and the commit
+        // has to carry the choice.
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+        ChooseTargetKind(window, MappingTargetKind.SpecialKey);
+
+        var row = EditorPanelOf(window).FindControl<StackPanel>("DirectionRow")!;
+        Assert.True(row.IsVisible, "a stick driving a special key needs a direction");
+
+        ChooseDirection(window, InputDirection.Left);
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        var committed = viewModel.ActiveProfile!.Mappings
+            .First(mapping => mapping.Source is StickBinding { Stick: GamepadStick.Left });
+
+        Assert.IsType<SpecialKeyTarget>(committed.Target);
+        Assert.Equal(InputDirection.Left, Assert.IsType<StickBinding>(committed.Source).Direction);
+
+        // Reopening keeps the direction on both the state and the picker row.
+        Click(Model(window).FindControl<Control>("LeftStickPad")!, window);
+        Assert.True(viewModel.IsEditing);
+        AssertDirectionShown(window, viewModel, InputDirection.Left);
+    }
+
+    [AvaloniaFact]
+    public void Choosing_A_Direction_Refreshes_The_Bound_Header()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftStickPad");
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+
+        Assert.Equal("左摇杆（上）", viewModel.Editor.SourceDescription);
+
+        // The header TextBlock the panel binds SourceDescription to, captured before the
+        // choice so the assertion is on the rendered control, not on the getter.
+        var header = EditorPanelOf(window).GetLogicalDescendants().OfType<TextBlock>()
+            .First(text => text.Text == viewModel.Editor.SourceDescription);
+
+        var raised = new List<string>();
+        viewModel.Editor.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
+        ChooseDirection(window, InputDirection.Right);
+
+        Assert.Equal("左摇杆（右）", header.Text);
+        Assert.Contains(nameof(MappingEditorViewModel.SourceDescription), raised);
+        Assert.Equal("左摇杆（右）", viewModel.Editor.SourceDescription);
+    }
+
     // ---- Commit applies every slot in one entry ------------------------------
 
     [AvaloniaFact]

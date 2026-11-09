@@ -265,6 +265,58 @@ public class MappingEditorViewModelTests
     }
 
     [Fact]
+    public void A_Stick_Bound_To_A_Special_Key_Needs_A_Direction()
+    {
+        // A special key is a digital target like any other: the engine rejects a
+        // directionless stick driving one, so the editor has to offer the picker and
+        // write the choice into the mapping.
+        var editor = new MappingEditorViewModel
+        {
+            SourceKind = MappingSourceKind.Stick,
+            TargetKind = MappingTargetKind.SpecialKey,
+        };
+
+        Assert.True(editor.ShowDirectionPicker, "a stick driving a special key needs a direction");
+
+        editor.SelectedDirection = InputDirection.Left;
+
+        var source = Assert.IsType<StickBinding>(editor.BuildSource());
+        Assert.Equal(InputDirection.Left, source.Direction);
+
+        // The direction survives a round trip through a saved entry.
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = source,
+            Target = new SpecialKeyTarget(SpecialKeyKind.Precision),
+        });
+
+        Assert.Equal(MappingTargetKind.SpecialKey, editor.TargetKind);
+        Assert.Equal(InputDirection.Left, editor.SelectedDirection);
+        Assert.Equal(InputDirection.Left, Assert.IsType<StickBinding>(editor.BuildSource()).Direction);
+    }
+
+    [Fact]
+    public void Changing_The_Direction_Notifies_The_Source_Description()
+    {
+        var editor = new MappingEditorViewModel
+        {
+            SourceKind = MappingSourceKind.Stick,
+            TargetKind = MappingTargetKind.KeyPress,
+        };
+
+        var raised = new List<string>();
+        editor.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);
+
+        editor.SelectedDirection = InputDirection.Right;
+
+        // The header binds SourceDescription, so the choice has to announce it - not just
+        // the picker row - or the visible title keeps the old direction.
+        Assert.Contains(nameof(MappingEditorViewModel.SourceDescription), raised);
+        Assert.Contains(nameof(MappingEditorViewModel.SelectedDirectionOption), raised);
+        Assert.Contains("右", editor.SourceDescription);
+    }
+
+    [Fact]
     public void LoadFrom_Restores_A_Stick_Direction()
     {
         var entry = new MappingEntry
