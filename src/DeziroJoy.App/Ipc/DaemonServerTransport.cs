@@ -81,7 +81,14 @@ public sealed partial class DaemonServer
                         return;
                     }
 
+                    connection.InputSamplesEnabled = hello.SubscribeInputSamples;
                     handshakeAccepted = true;
+                    if (connection.InputSamplesEnabled)
+                    {
+                        ResetInputSampleBaselines();
+                        _host.SamplePresence();
+                    }
+
                     continue;
                 }
 
@@ -148,16 +155,22 @@ public sealed partial class DaemonServer
 
     /// <summary>
     /// One client connection with a single ordered writer. Responses and pushed snapshots
-    /// share the same queue, so concurrent publishers cannot reorder sequence numbers.
+    /// share the same queue, so concurrent publishers cannot reorder sequence numbers. Only
+    /// consecutive input samples with identical digital buttons coalesce: analog traffic cannot
+    /// build a backlog, while every press and release transition remains observable.
     /// </summary>
     private sealed class Connection : IDisposable
     {
         private readonly Channel<Outbound> _outbound = Channel.CreateUnbounded<Outbound>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        private readonly object _inputGate = new();
         private readonly Stream _stream;
         private readonly Task _writer;
+        private InputSampleSlot? _lastQueuedInputSample;
 
         public string Id { get; } = Guid.NewGuid().ToString("N");
+
+        public volatile bool InputSamplesEnabled;
 
         public Connection(Stream stream)
         {
@@ -179,13 +192,51 @@ public sealed partial class DaemonServer
         public void Post(IpcMessage message)
             => _outbound.Writer.TryWrite(new Outbound(message, null, CancellationToken.None));
 
+        public void PostInputSample(InputSampleMessage message)
+        {
+            Outbound outbound;
+            lock (_inputGate)
+            {
+                if (_lastQueuedInputSample is { } queued && queued.HasSameDigitalState(message))
+                {
+                    queued.Message = message;
+                    return;
+                }
+
+                var slot = new InputSampleSlot(message);
+                _lastQueuedInputSample = slot;
+                outbound = Outbound.ForInputSample(slot);
+            }
+
+            _outbound.Writer.TryWrite(outbound);
+        }
+
+        private InputSampleMessage TakeInputSample(InputSampleSlot slot)
+        {
+            lock (_inputGate)
+            {
+                if (ReferenceEquals(_lastQueuedInputSample, slot))
+                {
+                    _lastQueuedInputSample = null;
+                }
+
+                return slot.Message;
+            }
+        }
+
         private async Task WriteLoopAsync()
         {
             await foreach (var item in _outbound.Reader.ReadAllAsync().ConfigureAwait(false))
             {
+                var message = item.InputSample is { } slot ? TakeInputSample(slot) : item.Message;
+                if (message is null)
+                {
+                    continue;
+                }
+
                 try
                 {
-                    var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(item.Message));
+                    var payload = Encoding.UTF8.GetBytes(IpcSerializer.Serialize(message));
                     await PipeFraming.WriteFrameAsync(_stream, payload, item.CancellationToken).ConfigureAwait(false);
                     item.Completion?.TrySetResult();
                 }
@@ -200,10 +251,25 @@ public sealed partial class DaemonServer
 
         public void Dispose() => _outbound.Writer.TryComplete();
 
+        private sealed class InputSampleSlot(InputSampleMessage message)
+        {
+            public InputSampleMessage Message { get; set; } = message;
+
+            public bool HasSameDigitalState(InputSampleMessage other)
+                => Message.PressedButtons == other.PressedButtons
+                    && (Message.ExtraButtons ?? Array.Empty<int>()).SequenceEqual(
+                        other.ExtraButtons ?? Array.Empty<int>());
+        }
+
         private sealed record Outbound(
-            IpcMessage Message,
+            IpcMessage? Message,
             TaskCompletionSource? Completion,
-            CancellationToken CancellationToken);
+            CancellationToken CancellationToken,
+            InputSampleSlot? InputSample = null)
+        {
+            public static Outbound ForInputSample(InputSampleSlot slot)
+                => new(null, null, CancellationToken.None, slot);
+        }
     }
 
     private void PublishToConnections(StateChangedMessage message)
@@ -217,6 +283,23 @@ public sealed partial class DaemonServer
         foreach (var connection in connections)
         {
             connection.Post(message);
+        }
+    }
+
+    private void PublishInputSample(InputSampleMessage message)
+    {
+        List<Connection> connections;
+        lock (_connectionsGate)
+        {
+            connections = [.. _connections];
+        }
+
+        foreach (var connection in connections)
+        {
+            if (connection.InputSamplesEnabled)
+            {
+                connection.PostInputSample(message);
+            }
         }
     }
 }

@@ -121,6 +121,32 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Save_Profile_Writes_Only_The_Active_Preset_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        var presets = new PresetStore(store);
+        var untouched = new Dictionary<int, string>
+        {
+            [1] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 1)!),
+            [3] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 3)!),
+            [4] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 4)!),
+        };
+        vm.ActiveProfile = vm.ActiveProfile! with { Name = "Custom slot two" };
+
+        vm.SaveProfileCommand.Execute(null);
+
+        Assert.Equal("Custom slot two", presets.LoadSlot("xinput:0", 2)!.Name);
+        foreach (var (slot, expected) in untouched)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!));
+        }
+    }
+
+    [Fact]
     public void Reset_To_Default_Restores_The_Built_In_Profile()
     {
         var (vm, host, provider, _) = CreateHost();
@@ -532,6 +558,45 @@ public class MainWindowViewModelTests
             vm.ActiveProfile!.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Right }).Target);
         Assert.Equal(mouseTarget.Settings.MaxSpeed, vm.MouseSensitivity.MaxSpeed);
         Assert.NotEqual(5000f, vm.MouseSensitivity.MaxSpeed);
+    }
+
+    [Fact]
+    public async Task Import_From_Writes_Only_The_Active_Preset_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(3);
+        var presets = new PresetStore(store);
+        var untouched = new Dictionary<int, string>
+        {
+            [1] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 1)!),
+            [2] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 2)!),
+            [4] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 4)!),
+        };
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-import-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, ProfileSerializer.Serialize(new GamepadProfile
+        {
+            Name = "Imported slot three",
+            DeviceId = "another-device",
+            Mappings = [],
+        }));
+
+        try
+        {
+            vm.ImportFrom(path);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        Assert.Equal("Imported slot three", presets.LoadSlot("xinput:0", 3)!.Name);
+        foreach (var (slot, expected) in untouched)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!));
+        }
     }
 
     [Fact]

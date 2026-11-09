@@ -166,7 +166,15 @@ public static class DaemonHost
         {
             try
             {
-                host.RefreshPresence();
+                if (host.IsRunning)
+                {
+                    host.RefreshPresence();
+                }
+                else
+                {
+                    host.SamplePresence();
+                }
+
                 await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -374,7 +382,17 @@ public static class DaemonHost
     {
         private readonly EngineComposition _composition;
 
-        public EngineHostAdapter(EngineComposition composition) => _composition = composition;
+        public EngineHostAdapter(EngineComposition composition)
+        {
+            _composition = composition;
+            _composition.Host.Sampled += ForwardSample;
+            _composition.Host.PresenceSampled += ForwardSample;
+        }
+
+        public event Action<string, DeziroJoy.Core.Input.IGamepadState>? InputSampled;
+
+        private void ForwardSample(object? sender, ControllerSampledEventArgs args)
+            => InputSampled?.Invoke(args.Runtime.Descriptor.DeviceId, args.State);
 
         public bool IsRunning => _composition.Host.IsRunning;
 
@@ -411,6 +429,8 @@ public static class DaemonHost
         public GamepadProfile? GetProfile(string deviceId)
             => _composition.Host.Controllers.SingleOrDefault(
                 runtime => string.Equals(runtime.Descriptor.DeviceId, deviceId, StringComparison.Ordinal))?.Profile;
+
+        public void SamplePresence() => _composition.Host.SamplePresence();
 
         public void Start() => _composition.Host.Start(DaemonHost.DefaultInterval);
 

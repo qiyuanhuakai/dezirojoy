@@ -55,7 +55,10 @@ public sealed class DaemonController : IAsyncDisposable
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly object _pendingGate = new();
+    private readonly object _snapshotGate = new();
+    private readonly object _inputGate = new();
     private readonly Dictionary<string, TaskCompletionSource<IpcMessage>> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InputSampleMessage> _inputSamples = new(StringComparer.Ordinal);
     private readonly SnapshotSequenceTracker _sequence = new();
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -69,6 +72,7 @@ public sealed class DaemonController : IAsyncDisposable
     private Task? _reconnector;
     private string? _daemonInstanceId;
     private long _nextRequestId;
+    private long _lastInputSequence;
     private int _resyncRunning;
     private int _reconnectRunning;
     private int _shutdownRequested;
@@ -101,6 +105,14 @@ public sealed class DaemonController : IAsyncDisposable
     public string? LastError { get; private set; }
 
     public event Action<StateSnapshot>? SnapshotChanged;
+
+    public event Action<InputSampleMessage>? InputSampled;
+
+    /// <summary>The latest sample per device, including samples received during the handshake.</summary>
+    public IReadOnlyList<InputSampleMessage> InputSamples
+    {
+        get { lock (_inputGate) { return _inputSamples.Values.ToArray(); } }
+    }
 
     public event Action? Connected;
 
@@ -154,7 +166,12 @@ public sealed class DaemonController : IAsyncDisposable
 
             var hello = await ExchangeDirectAsync(
                 channel,
-                new HelloMessage("DeziroJoy.GUI", IpcContract.ProtocolVersion, ClientInstanceId, IpcSession.Current),
+                new HelloMessage(
+                    "DeziroJoy.GUI",
+                    IpcContract.ProtocolVersion,
+                    ClientInstanceId,
+                    IpcSession.Current,
+                    SubscribeInputSamples: true),
                 message => message is HelloAckMessage,
                 timeout.Token).ConfigureAwait(false);
             var ack = (HelloAckMessage)hello;
@@ -165,6 +182,7 @@ public sealed class DaemonController : IAsyncDisposable
 
             _daemonInstanceId = ack.DaemonInstanceId;
             Revision = ack.Revision;
+            ResetInputSamples();
 
             var requestId = NextRequestId();
             var state = await ExchangeDirectAsync(
@@ -371,6 +389,12 @@ public sealed class DaemonController : IAsyncDisposable
         while (true)
         {
             var message = await channel.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+            if (message is InputSampleMessage sample)
+            {
+                HandleInputSample(sample);
+                continue;
+            }
+
             if (isAnswer(message))
             {
                 return message;
@@ -473,6 +497,8 @@ public sealed class DaemonController : IAsyncDisposable
             case ErrorMessage error:
                 CompletePending(error.RequestId, error);
                 return true;
+            case InputSampleMessage sample:
+                return HandleInputSample(sample);
             case StateChangedMessage state when state.DaemonInstanceId != _daemonInstanceId:
                 return false;
             case StateChangedMessage { RequestId: not null } answer:
@@ -487,31 +513,37 @@ public sealed class DaemonController : IAsyncDisposable
 
     private bool HandlePush(StateChangedMessage push)
     {
-        switch (_sequence.Evaluate(push.Snapshot.Sequence))
+        lock (_snapshotGate)
         {
-            case SnapshotDisposition.Fresh:
-                Adopt(push);
-                return true;
-            case SnapshotDisposition.Stale:
-                return true;
-            case SnapshotDisposition.Gap:
-                TriggerResync();
-                return true;
-            default:
-                throw new DaemonProtocolException($"unknown snapshot disposition for sequence {push.Snapshot.Sequence}");
+            switch (_sequence.Evaluate(push.Snapshot.Sequence))
+            {
+                case SnapshotDisposition.Fresh:
+                    Adopt(push);
+                    return true;
+                case SnapshotDisposition.Stale:
+                    return true;
+                case SnapshotDisposition.Gap:
+                    TriggerResync();
+                    return true;
+                default:
+                    throw new DaemonProtocolException($"unknown snapshot disposition for sequence {push.Snapshot.Sequence}");
+            }
         }
     }
 
     private bool AdoptAuthoritative(StateChangedMessage state, bool reset = false)
     {
-        if (!reset && Snapshot is { } current && state.Snapshot.Sequence < current.Sequence)
+        lock (_snapshotGate)
         {
-            return false;
-        }
+            if (!reset && Snapshot is { } current && state.Snapshot.Sequence < current.Sequence)
+            {
+                return false;
+            }
 
-        _sequence.Adopt(state.Snapshot.Sequence);
-        Adopt(state);
-        return true;
+            _sequence.Adopt(state.Snapshot.Sequence);
+            Adopt(state);
+            return true;
+        }
     }
 
     private void Adopt(StateChangedMessage state)
@@ -519,6 +551,37 @@ public sealed class DaemonController : IAsyncDisposable
         Snapshot = state.Snapshot;
         Revision = state.Snapshot.Revision;
         SnapshotChanged?.Invoke(state.Snapshot);
+    }
+
+    private void ResetInputSamples()
+    {
+        lock (_inputGate)
+        {
+            _inputSamples.Clear();
+            _lastInputSequence = 0;
+        }
+    }
+
+    private bool HandleInputSample(InputSampleMessage sample)
+    {
+        if (sample.DaemonInstanceId != _daemonInstanceId)
+        {
+            return false;
+        }
+
+        lock (_inputGate)
+        {
+            if (sample.Sequence <= _lastInputSequence)
+            {
+                return true;
+            }
+
+            _lastInputSequence = sample.Sequence;
+            _inputSamples[sample.DeviceId] = sample;
+        }
+
+        InputSampled?.Invoke(sample);
+        return true;
     }
 
     private void TriggerResync()

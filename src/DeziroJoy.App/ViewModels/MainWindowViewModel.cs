@@ -87,6 +87,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private string? _navigationDeviceId;
 
+    private string? _daemonInputDeviceId;
+
     private GamepadButtonMask _navigationButtons;
 
     private readonly SortedSet<int> _navigationExtra = [];
@@ -125,11 +127,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_daemon is not null)
         {
             _daemon.SnapshotChanged += OnDaemonSnapshot;
+            _daemon.InputSampled += OnDaemonInputSample;
             _daemon.Connected += OnDaemonConnected;
             _daemon.Disconnected += OnDaemonDisconnected;
             if (_daemon.Snapshot is { } snapshot)
             {
                 OnDaemonSnapshot(snapshot);
+            }
+
+            foreach (var sample in _daemon.InputSamples)
+            {
+                OnDaemonInputSample(sample);
             }
         }
 
@@ -905,7 +913,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        _profileStore.Save(ActiveProfile);
+        _presets.SaveSlot(ActiveController.Descriptor.DeviceId, ActivePresetSlot, ActiveProfile);
     }
 
     [RelayCommand]
@@ -1001,7 +1009,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (await ApplyProfile(imported))
         {
-            _profileStore.Save(imported);
+            if (_daemon is null && ActiveController is not null)
+            {
+                _presets.SaveSlot(ActiveController.Descriptor.DeviceId, ActivePresetSlot, imported);
+            }
+
             Report(result);
         }
     }
@@ -1049,6 +1061,27 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         Visualizer.Update(args.State);
+        Visualizer.SetConnected(true);
+    }
+
+    private void OnDaemonInputSample(InputSampleMessage sample)
+    {
+        if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+        {
+            _uiContext.Post(_ => OnDaemonInputSample(sample), null);
+            return;
+        }
+
+        if (DaemonSnapshot is { } snapshot
+            && !snapshot.Devices.Any(device => device.DeviceId == sample.DeviceId))
+        {
+            return;
+        }
+
+        _daemonInputDeviceId = sample.DeviceId;
+        var state = sample.ToGamepadState();
+        Navigate(state);
+        Visualizer.Update(state);
         Visualizer.SetConnected(true);
     }
 
@@ -1173,7 +1206,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private void NavigateByPhysicalInput(IGamepadState state)
     {
-        var deviceId = ActiveController?.Descriptor.DeviceId;
+        var deviceId = ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
 
         if (deviceId is null)
         {
@@ -1216,7 +1249,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Records the current sample as the navigation baseline.</summary>
     private void RememberNavigation(IGamepadState state, string? deviceId = null)
     {
-        _navigationDeviceId = deviceId ?? ActiveController?.Descriptor.DeviceId;
+        _navigationDeviceId = deviceId ?? ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
         _navigationButtons = state.PressedButtons;
 
         _navigationExtra.Clear();
@@ -1492,6 +1525,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // disconnect.
         var wasConnected = HasController;
         HasController = snapshot.HasController;
+        if (!snapshot.Devices.Any(device => device.DeviceId == _daemonInputDeviceId))
+        {
+            _daemonInputDeviceId = snapshot.Devices.Count > 0 ? snapshot.Devices[0].DeviceId : null;
+        }
+
+        if (!snapshot.HasController)
+        {
+            _navigationDeviceId = null;
+        }
+
         Visualizer.SetConnected(snapshot.HasController);
         RefreshStatus(wasConnected && !snapshot.HasController);
     }
@@ -1558,6 +1601,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         DaemonSnapshot = null;
+        _daemonInputDeviceId = null;
+        _navigationDeviceId = null;
         IsEngineRunning = false;
         IsMappingEnabled = false;
         MappingOwner = MappingOwner.None;
@@ -1642,6 +1687,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_daemon is not null)
         {
             _daemon.SnapshotChanged -= OnDaemonSnapshot;
+            _daemon.InputSampled -= OnDaemonInputSample;
             _daemon.Connected -= OnDaemonConnected;
             _daemon.Disconnected -= OnDaemonDisconnected;
         }

@@ -245,7 +245,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 
 | 消息 | 方向 | 负载 | 语义 |
 |---|---|---|---|
-| `Hello` | GUI → daemon | 客户端标识、协议版本、实例 ID、Windows 会话 ID | 握手 |
+| `Hello` | GUI → daemon | 客户端标识、协议版本、实例 ID、Windows 会话 ID、可选输入样本订阅 | 握手 |
 | `HelloAck` | daemon → GUI | 实例 ID、协议版本、当前配置修订号 | 握手应答 |
 | `GetState` | GUI → daemon | — | 拉取全量快照 |
 | `ApplyConfiguration` | GUI → daemon | 期望配置修订号 + 完整 profile JSON | 提交配置变更 |
@@ -257,6 +257,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `ShutdownDaemon` | GUI/tray → daemon | 请求 ID | 释放输入并优雅退出常驻进程 |
 | `MutationAck` | daemon → GUI | 请求 ID、结果、新修订号、新序号 | 变更已被受理 |
 | `StateChanged` | daemon → GUI | 全量快照 | 状态推送 |
+| `InputSample` | daemon → 已订阅 GUI | 实例 ID、独立样本序号、设备 ID、按键/摇杆/额外按钮 | 将真实物理输入送往导航、捕获与可视化 |
 | `Error` | daemon → GUI | 请求 ID、错误码、可读信息 | 请求失败 |
 
 一致性规则：
@@ -272,7 +273,13 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   Xbox / DualShock / 通用布局，不再用“由常驻守护进程映射”代替设备身份。
 - **心跳、重连与有序推送**：客户端周期 `GetState`，兼作心跳与权威状态刷新；断线后串行重连并
   重新握手，实例 ID 与序号在新会话重新建立基线。每个 daemon 连接只有一个写队列，响应和推送
-  不会因并发线程不同而乱序。主动 `ShutdownDaemon` 成功后客户端不再自动拉起 daemon。
+  不会因并发线程不同而乱序。快照推送与权威应答在同一同步边界检查并采用，晚到应答不能覆盖更新快照。
+  主动 `ShutdownDaemon` 成功后客户端不再自动拉起 daemon。
+- **实时输入样本**：新 GUI 在 `Hello` 中显式订阅；旧客户端省略该可选字段，daemon 因而不向它发送
+  新消息类型，协议仍保持版本 1。运行 tick 与停止后的 250ms 存在性采样都发布物理状态，重复状态不发送；
+  每连接只合并数字键状态相同的连续模拟量样本，所有按下/松开转换逐项保序，既不积压摇杆流量也不吞按键边沿。
+  样本序号独立于快照序号，合并造成的跳号不代表丢配置；GUI 只采用当前 daemon 实例的递增样本，
+  并用它驱动导航、捕获和可视化。
 - **设备变化及时推送**：daemon 的存在性监视器在映射停止时也继续扫描；连接或断开只推进快照序号，
   不伪造配置 revision。新设备首次出现时初始化四个彼此独立的默认槽，旧槽内容不被覆盖。
 - **期望配置修订号**：`ApplyConfiguration` 与 `Start` 都带 GUI 认为当前的修订号。守护进程
@@ -283,7 +290,8 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   daemon 重启后恢复同一槽。所有可切换设备在同一宿主锁内重载；任一设备失败会回滚已经重载的设备，
   活动槽与 revision 保持原值，不能半切换。消息中的 `DeviceId` 保留在线上但服务端忽略，属于软兼容，
   协议版本不因此升级。Leader 键经 `EngineHost.PresetSwitchRequested` 由守护进程内部驱动同一标量，
-  与 GUI 切换走同一条逻辑（tick 线程同步执行，与切换本身执行的重载相同）。
+  与 GUI 切换走同一条逻辑（tick 线程同步执行，与切换本身执行的重载相同）。GUI 保存与本地导入通过
+  `PresetStore.SaveSlot` 写当前活动槽；daemon 导入由 `ApplyConfiguration` 持久化当前槽，成功后不再二次写裸设备键。
 - **完整 profile JSON，不是路径**：配置随消息传输序列化后的 profile 本体。传路径会让
   守护进程去读一个 GUI 有权限而它未必有权限的位置，也会让"到底改没改"无法从消息本身判断。
 - **同一时刻只有一个未完成变更**：GUI 在收到上一条 `MutationAck` 之前，不发下一条
@@ -317,7 +325,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `CurrentUserOnly`；同一用户的普通 GUI 与提权守护进程均可连接，其他用户不可写。
 - **同会话验证**：任何控制消息之前必须完成握手，拒绝后立即断开；Windows 上通过
   `GetNamedPipeClientProcessId` 取得真实对端 PID/SessionId，不信任客户端自报的会话字段。
-- **最小攻击面**：管道只暴露 4.4 节那 13 条映射控制消息，不提供任意代码执行、文件读写或
+- **最小攻击面**：管道只暴露 4.4 节那 14 条映射控制消息，不提供任意代码执行、文件读写或
   进程启动能力。`ShutdownDaemon` 只能请求本 daemon 按既定清理路径退出，不接受命令行或任意 PID。
 
 ### 4.7 第二个守护进程

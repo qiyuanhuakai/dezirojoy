@@ -65,7 +65,24 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public event Action? DevicesChanged;
 
+    public event Action<string, IGamepadState>? InputSampled;
+
     public string? FailReloadDevice { get; set; }
+
+    public string? PresenceDeviceId { get; set; }
+
+    public IGamepadState PresenceState { get; set; } = GamepadState.Neutral;
+
+    public void PublishInputSample(string deviceId, IGamepadState state)
+        => InputSampled?.Invoke(deviceId, state);
+
+    public void SamplePresence()
+    {
+        if (PresenceDeviceId is not null)
+        {
+            PublishInputSample(PresenceDeviceId, PresenceState);
+        }
+    }
 
     public GamepadProfile? GetProfile(string deviceId) => _profiles.GetValueOrDefault(deviceId);
 
@@ -333,6 +350,29 @@ public class DaemonServerTests
         Assert.Equal(2, pushes.Count);
         Assert.Empty(pushes[1].Snapshot.Devices);
         await server.ProcessAsync(new GetStateMessage("verify"));
+    }
+
+    [Fact]
+    public async Task Input_Samples_Publish_Only_Changes_With_A_Monotonic_Independent_Sequence()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+        var stateSequence = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("before"))).Snapshot.Sequence;
+        var samples = new List<InputSampleMessage>();
+        server.InputSampled += samples.Add;
+        var neutral = GamepadState.Create(GamepadButtonMask.None, 0, 0, 0, 0, [301]);
+
+        host.PublishInputSample("pad-1", neutral);
+        host.PublishInputSample("pad-1", neutral);
+        host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0.5f, 0, 0, 0, [301]));
+        host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0.5f, 0, 0, 0, [301]));
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal([1, 2], samples.Select(sample => sample.Sequence).ToArray());
+        Assert.Equal(GamepadButtonMask.A, samples[1].PressedButtons);
+        Assert.Equal(stateSequence, Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("verify"))).Snapshot.Sequence);
     }
 
     [Fact]
@@ -1101,6 +1141,35 @@ public class DaemonServerTests
         Assert.True(host.IsRunning);
         Assert.Equal(0, host.StopCalls);
         Assert.Contains("hello-ack", stream.WrittenText());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task Input_Samples_Are_Opt_In_So_Legacy_Clients_Never_See_The_New_Kind(
+        bool subscribe,
+        bool expectSample)
+    {
+        var (server, _, host) = CreateRunning();
+        host.PresenceDeviceId = "pad-1";
+        host.PresenceState = GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0);
+        host.PublishInputSample(host.PresenceDeviceId, host.PresenceState);
+        var stream = new ScriptedStream();
+        stream.Script(new HelloMessage(
+            "gui-1",
+            IpcContract.ProtocolVersion,
+            "client-1",
+            IpcSession.Current,
+            subscribe));
+
+        await server.ServeConnectionAsync(stream, TestContext.Current.CancellationToken);
+        for (var attempt = 0; expectSample && attempt < 200 && !stream.WrittenText().Contains("input-sample", StringComparison.Ordinal); attempt++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Contains("hello-ack", stream.WrittenText());
+        Assert.Equal(expectSample, stream.WrittenText().Contains("input-sample", StringComparison.Ordinal));
     }
 
     [Fact]

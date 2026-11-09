@@ -42,7 +42,13 @@ public interface IDaemonHost
 
     event Action? DevicesChanged;
 
+    /// <summary>Raised for both running ticks and stopped-state presence samples.</summary>
+    event Action<string, IGamepadState>? InputSampled;
+
     GamepadProfile? GetProfile(string deviceId);
+
+    /// <summary>Polls current input without advancing mapping, also used to prime a new subscriber.</summary>
+    void SamplePresence();
 
     /// <summary>
     /// Starts the mapping loop, acquiring the injection mutex. Throws

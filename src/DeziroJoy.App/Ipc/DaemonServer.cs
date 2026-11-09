@@ -27,11 +27,14 @@ public sealed partial class DaemonServer
     private const string NoPresetConfigurationErrorCode = "no-configuration";
     private const string LeaderPresetSwitchRequestId = "leader-key";
     private readonly Lock _sync = new();
+    private readonly Lock _inputGate = new();
+    private readonly Dictionary<string, InputSampleMessage> _lastInputSamples = new(StringComparer.Ordinal);
     private readonly DaemonState? _restored;
     private readonly HashSet<string> _injectionSuspensions = new(StringComparer.Ordinal);
 
     private long _revision;
     private long _sequence;
+    private long _inputSequence;
     private string _profileName = string.Empty;
     private string _profileJson = string.Empty;
     private string? _lastError;
@@ -43,6 +46,9 @@ public sealed partial class DaemonServer
 
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
+
+    /// <summary>Raised only when physical input changes; consumers must not block the engine.</summary>
+    public event Action<InputSampleMessage>? InputSampled;
 
     /// <summary>Raised by the transport after the shutdown acknowledgement is written.</summary>
     public event Action? ShutdownRequested;
@@ -68,6 +74,7 @@ public sealed partial class DaemonServer
         _stateStore = stateStore;
         DaemonInstanceId = $"daemon-{(clock ?? new SystemClock()).UtcNow.Ticks:x16}";
         _host.DevicesChanged += OnDevicesChanged;
+        _host.InputSampled += OnInputSampled;
 
         _restored = stateStore.Load();
         if (_restored is not null)
@@ -547,6 +554,15 @@ public sealed partial class DaemonServer
 
     private void OnDevicesChanged()
     {
+        lock (_inputGate)
+        {
+            var connected = _host.ConnectedDeviceIds;
+            foreach (var deviceId in _lastInputSamples.Keys.Where(id => !connected.Contains(id, StringComparer.Ordinal)).ToList())
+            {
+                _lastInputSamples.Remove(deviceId);
+            }
+        }
+
         lock (_sync)
         {
             _sequence++;
@@ -554,6 +570,41 @@ public sealed partial class DaemonServer
             StateChanged?.Invoke(message);
             PublishToConnections(message);
         }
+    }
+
+    private void ResetInputSampleBaselines()
+    {
+        lock (_inputGate)
+        {
+            _lastInputSamples.Clear();
+        }
+    }
+
+    private void OnInputSampled(string deviceId, DeziroJoy.Core.Input.IGamepadState state)
+    {
+        InputSampleMessage message;
+        lock (_inputGate)
+        {
+            if (_lastInputSamples.TryGetValue(deviceId, out var previous) && previous.Matches(state))
+            {
+                return;
+            }
+
+            message = new InputSampleMessage(
+                DaemonInstanceId,
+                ++_inputSequence,
+                deviceId,
+                state.PressedButtons,
+                state.LeftStickX,
+                state.LeftStickY,
+                state.RightStickX,
+                state.RightStickY,
+                state.ExtraButtons.Count > 0 ? state.ExtraButtons.ToArray() : null);
+            _lastInputSamples[deviceId] = message;
+        }
+
+        InputSampled?.Invoke(message);
+        PublishInputSample(message);
     }
 
     private StateSnapshot BuildSnapshot()

@@ -1,4 +1,5 @@
 using DeziroJoy.App.Ipc;
+using DeziroJoy.Core.Input;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Ipc;
@@ -22,7 +23,7 @@ public sealed class DaemonControllerTests
         Assert.True(endpoint.LastAllowLaunch);
         Assert.Collection(
             endpoint.Channel.Sent,
-            message => Assert.IsType<HelloMessage>(message),
+            message => Assert.True(Assert.IsType<HelloMessage>(message).SubscribeInputSamples),
             message => Assert.IsType<GetStateMessage>(message));
     }
 
@@ -196,6 +197,32 @@ public sealed class DaemonControllerTests
     }
 
     [Fact]
+    public async Task Input_Samples_Are_Cached_Stale_Frames_Dropped_And_Coalescing_Gaps_Accepted()
+    {
+        var endpoint = new FakeEndpoint();
+        await using var controller = new DaemonController(endpoint, heartbeatInterval: TimeSpan.FromSeconds(10));
+        await ConnectAsync(controller);
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        controller.InputSampled += sample =>
+        {
+            if (sample.Sequence == 5)
+            {
+                received.TrySetResult();
+            }
+        };
+
+        endpoint.Channel.Push(new InputSampleMessage("daemon-1", 3, "pad-1", GamepadButtonMask.None, 0, 0, 0, 0));
+        endpoint.Channel.Push(new InputSampleMessage("daemon-1", 2, "pad-1", GamepadButtonMask.B, 0, 0, 0, 0));
+        endpoint.Channel.Push(new InputSampleMessage("daemon-1", 5, "pad-1", GamepadButtonMask.A, 0.5f, 0, 0, 0));
+        await received.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+
+        var sample = Assert.Single(controller.InputSamples);
+        Assert.Equal(5, sample.Sequence);
+        Assert.Equal(GamepadButtonMask.A, sample.PressedButtons);
+        Assert.Equal(0.5f, sample.LeftStickX);
+    }
+
+    [Fact]
     public async Task A_Late_Authoritative_Answer_Does_Not_Roll_Back_A_Newer_Push()
     {
         var endpoint = new FakeEndpoint { InitialSequence = 5 };
@@ -221,6 +248,59 @@ public sealed class DaemonControllerTests
 
         Assert.Equal(6, returned.Sequence);
         Assert.Equal(6, controller.Snapshot!.Sequence);
+    }
+
+    [Fact]
+    public async Task Concurrent_Authoritative_Continuations_Cannot_Adopt_Over_A_Newer_Push()
+    {
+        const int ReadCount = 128;
+        var endpoint = new FakeEndpoint { InitialSequence = 5 };
+        await using var controller = new DaemonController(endpoint, heartbeatInterval: TimeSpan.FromSeconds(10));
+        await ConnectAsync(controller);
+        endpoint.Channel.OnSend = null;
+        var firstOlderAnswer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var newerPushAdopted = 0;
+        var rolledBack = 0;
+        controller.SnapshotChanged += snapshot =>
+        {
+            if (snapshot.Sequence == 6)
+            {
+                firstOlderAnswer.TrySetResult();
+            }
+
+            if (snapshot.Sequence == 7)
+            {
+                Volatile.Write(ref newerPushAdopted, 1);
+            }
+            else if (Volatile.Read(ref newerPushAdopted) != 0)
+            {
+                Interlocked.Exchange(ref rolledBack, 1);
+            }
+        };
+
+        var reads = Enumerable.Range(0, ReadCount)
+            .Select(_ => controller.GetStateAsync(TestContext.Current.CancellationToken))
+            .ToArray();
+        for (var attempt = 0;
+            attempt < 200 && endpoint.Channel.Sent.OfType<GetStateMessage>().Count() != ReadCount + 1;
+            attempt++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        var requests = endpoint.Channel.Sent.OfType<GetStateMessage>().Skip(1).ToList();
+        Assert.Equal(ReadCount, requests.Count);
+        foreach (var request in requests)
+        {
+            endpoint.Channel.Push(State("daemon-1", 6, request.RequestId));
+        }
+
+        await firstOlderAnswer.Task.WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+        endpoint.Channel.Push(State("daemon-1", 7));
+        await Task.WhenAll(reads).WaitAsync(TestTimeout, TestContext.Current.CancellationToken);
+
+        Assert.Equal(7, controller.Snapshot!.Sequence);
+        Assert.Equal(0, rolledBack);
     }
 
     [Fact]
