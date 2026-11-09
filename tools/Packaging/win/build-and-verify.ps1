@@ -5,6 +5,9 @@
     pwsh tools/Packaging/win/build-and-verify.ps1 `
       -Version 0.0.1-beta.1-preview -Rid win-x64 -PublishDir publish/win-x64
 
+  Every path is resolved from the script's own location ($PSScriptRoot), never from
+  the caller's working directory, so the invocation works from anywhere.
+
   What is verified here:
     * ISCC is resolved from PATH or a standard install directory, with a clear error
       listing everything that was tried when it is missing.
@@ -44,17 +47,29 @@ function Get-PeMachineType([string]$Path) {
   return [BitConverter]::ToUInt16($bytes, $peOffset + 4)
 }
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+# The script lives at tools/Packaging/win, so the repository root is three levels
+# up. Deriving it from $PSScriptRoot keeps every path below independent of the
+# caller's working directory; walking one level short lands on tools/ and each
+# joined path then gains a spurious tools\ segment, so assert the root itself.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
+if (-not (Test-Path (Join-Path $repoRoot 'DeziroJoy.slnx'))) {
+  throw "resolved path is not the repository root: $repoRoot"
+}
 $iss = Join-Path $repoRoot 'tools/Packaging/win/DeziroJoy.iss'
 $icon = Join-Path $repoRoot 'src/DeziroJoy.App/Assets/dezirojoy.ico'
 $setupExeName = "DeziroJoy-$Version-$Rid-setup.exe"
 $setupExePath = Join-Path $repoRoot $setupExeName
 
-if (-not (Test-Path $PublishDir)) {
-  $fallback = Join-Path $repoRoot $PublishDir
-  if (Test-Path $fallback) { $PublishDir = $fallback }
+# The Release workflow passes the publish directory relative to the repository
+# root; accept a repository-root-relative one as well so the script also works
+# when invoked from another working directory.
+$publish = $null
+foreach ($candidate in @($PublishDir, (Join-Path $repoRoot $PublishDir))) {
+  if (Test-Path $candidate) { $publish = (Resolve-Path $candidate).Path; break }
 }
-$publish = (Resolve-Path $PublishDir).Path
+if (-not $publish) {
+  throw "publish directory not found: $PublishDir (looked in the working directory and under $repoRoot)"
+}
 
 foreach ($required in @($iss, $icon)) {
   if (-not (Test-Path $required)) { throw "required file missing: $required" }
