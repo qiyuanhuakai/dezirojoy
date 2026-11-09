@@ -300,13 +300,7 @@ internal sealed class DaemonSupervisor : IDisposable
     {
         await using var controller = new DaemonController(new NamedPipeDaemonEndpoint());
         await controller.ConnectAsync(cancellationToken).ConfigureAwait(false);
-        var shutdown = typeof(DaemonController).GetMethod("RequestShutdownAsync");
-        if (shutdown?.Invoke(controller, [cancellationToken]) is not Task<bool> request)
-        {
-            return false;
-        }
-
-        return await request.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return await controller.RequestShutdownAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static void TryKill(IProcessHandle daemon)

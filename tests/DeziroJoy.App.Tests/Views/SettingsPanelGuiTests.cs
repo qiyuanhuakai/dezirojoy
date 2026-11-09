@@ -120,22 +120,19 @@ public sealed class SettingsPanelGuiTests : IDisposable
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.False(TrayPreference(viewModel, "CloseToTrayEnabled"));
-        Assert.True(TrayPreference(viewModel, "MinimizeToTrayEnabled"));
+        Assert.False(viewModel.CloseToTrayEnabled);
+        Assert.True(viewModel.MinimizeToTrayEnabled);
 
         minimize.IsChecked = false;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.False(TrayPreference(viewModel, "MinimizeToTrayEnabled"));
+        Assert.False(viewModel.MinimizeToTrayEnabled);
         var reloaded = new ThemeService(_directory);
         reloaded.Load();
         Assert.False(reloaded.CloseToTrayEnabled);
         Assert.False(reloaded.MinimizeToTrayEnabled);
     }
-
-    private static bool TrayPreference(MainWindowViewModel viewModel, string name)
-        => Assert.IsType<bool>(viewModel.GetType().GetProperty(name)?.GetValue(viewModel));
 
     [AvaloniaFact]
     public void The_Gamepad_Hijack_Toggle_Is_Named_For_What_It_Does()
