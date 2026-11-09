@@ -1,4 +1,3 @@
-using System.IO.Pipes;
 using System.Text.Json;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
@@ -22,22 +21,21 @@ public sealed class GuiActivationServerTests
             $"DeziroJoy.Test.Gui.Activation.{id}");
     }
 
-    private static async Task<NamedPipeClientStream> ConnectAsync(GuiInstanceIdentity identity)
-    {
-        var pipe = new NamedPipeClientStream(".", identity.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        return pipe;
-    }
+    private static Task<Stream> ConnectAsync(GuiInstanceIdentity identity)
+        => GuiActivationClient.ConnectAsync(
+            identity,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
 
-    private static async Task<GuiShowAck> RoundTripAsync(NamedPipeClientStream pipe, GuiShowRequest request)
+    private static async Task<GuiShowAck> RoundTripAsync(Stream stream, GuiShowRequest request)
     {
         var cancellation = TestContext.Current.CancellationToken;
 
         await PipeFraming.WriteFrameAsync(
-            pipe,
+            stream,
             JsonSerializer.SerializeToUtf8Bytes(request, IpcSerializer.Options),
             cancellation);
-        var payload = await PipeFraming.ReadFrameAsync(pipe, cancellation)
+        var payload = await PipeFraming.ReadFrameAsync(stream, cancellation)
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(5), cancellation);
         return JsonSerializer.Deserialize<GuiShowAck>(payload, IpcSerializer.Options)!;
@@ -93,14 +91,14 @@ public sealed class GuiActivationServerTests
 
         using var server = GuiActivationServer.StartActive(identity);
 
-        await using var early = new NamedPipeClientStream(
-            ".",
-            identity.PipeName,
-            PipeDirection.InOut,
-            PipeOptions.Asynchronous);
-
+        // Nothing is serving yet: a connect must time out rather than be answered by a
+        // half-built channel. On Linux the per-instance endpoint is not published until
+        // BeginServing, so this is exactly "the listener is not up yet".
         await Assert.ThrowsAsync<TimeoutException>(async () =>
-            await early.ConnectAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken));
+            await GuiActivationClient.ConnectAsync(
+                identity,
+                TimeSpan.FromMilliseconds(300),
+                TestContext.Current.CancellationToken));
 
         server.ShowRequested += () => Task.CompletedTask;
         server.BeginServing();
@@ -214,5 +212,226 @@ public sealed class GuiActivationServerTests
     public void The_Identity_Is_Stable_For_The_Current_Process()
     {
         Assert.Equal(GuiInstanceIdentity.ForCurrentProcess(), GuiInstanceIdentity.ForCurrentProcess());
+    }
+
+    [Fact]
+    public async Task An_In_Flight_Show_Is_Acked_Even_As_The_Holder_Retires()
+    {
+        // A launch that reaches a holder microseconds before it retires must still be answered:
+        // the drain lets the ack finish writing instead of cancelling it with the lifetime.
+        var identity = NewIdentity();
+        var server = new GuiActivationServer(identity);
+
+        try
+        {
+            var restoring = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseRestore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.ShowRequested += () =>
+            {
+                restoring.TrySetResult();
+                return releaseRestore.Task;
+            };
+
+            await using var client = await ConnectAsync(identity);
+            var exchange = RoundTripAsync(client, new GuiShowRequest(GuiActivationContract.ProtocolVersion));
+
+            // The handler is mid-restore; retire the holder before it can write the ack.
+            await restoring.Task;
+            var retire = Task.Run(() => server.Dispose(), TestContext.Current.CancellationToken);
+
+            releaseRestore.SetResult();
+            var ack = await exchange;
+
+            Assert.True(ack.Accepted, $"the show must be acked as the holder retires: {ack.Reason}");
+            await retire;
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task A_Retiring_Holder_Does_Not_Disturb_Its_Successors_Channel()
+    {
+        // The Linux bug this guards: a retiring holder must not delete the socket its successor
+        // now serves. Each holder owns a distinct channel, so the holder's exit leaves the
+        // successor reachable - a launch through discovery still gets its ack.
+        var identity = NewIdentity();
+        using var holder = new GuiActivationServer(identity, role: GuiInstanceRole.Tray);
+        using var successor = new GuiActivationServer(identity, role: GuiInstanceRole.Render);
+
+        var shows = 0;
+        successor.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+
+        holder.Dispose();
+
+        var shown = await GuiActivationClient.TryShowAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(shown, "the successor must remain reachable after the holder retired");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public async Task A_Launch_Always_Reaches_The_Current_Holder_Across_Handovers()
+    {
+        // Back-to-back handovers: each new holder publishes its own endpoint, the previous one
+        // retires, and a launch must land on the live holder every time - never a stale one.
+        var identity = NewIdentity();
+        for (var generation = 1; generation <= 3; generation++)
+        {
+            using var holder = new GuiActivationServer(identity);
+            var shows = 0;
+            holder.ShowRequested += () =>
+            {
+                shows++;
+                return Task.CompletedTask;
+            };
+
+            var shown = await GuiActivationClient.TryShowAsync(
+                identity,
+                GuiActivationOptions.Default,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(shown, $"generation {generation} must be reachable after the previous holder retired");
+            Assert.Equal(1, shows);
+        }
+    }
+
+    [Fact]
+    public async Task A_Second_Launch_Waits_For_The_Current_Holder_Instead_Of_Exiting_On_A_Stale_Endpoint()
+    {
+        // A previous holder left a stale endpoint in discovery (a crash runs no cleanup), and the
+        // current leaseholder has taken the lock but not begun serving. A second launch must keep
+        // waiting inside the connect budget for the live channel - not exit on the stale refusal.
+        var identity = NewIdentity();
+        File.WriteAllText(identity.DiscoveryPath, "DeziroJoy.Stale.Predecessor.Endpoint");
+
+        var show = GuiActivationClient.TryShowAsync(
+            identity,
+            new GuiActivationOptions(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)),
+            TestContext.Current.CancellationToken);
+
+        // The stale endpoint must not end the launch: it is still waiting, re-reading discovery.
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            show.WaitAsync(TimeSpan.FromMilliseconds(400), TestContext.Current.CancellationToken));
+
+        // The leaseholder finishes starting and publishes its channel; the launch reaches it now.
+        using var winner = GuiActivationServer.CreatePending(identity);
+        var shows = 0;
+        winner.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+        winner.BeginServing();
+
+        Assert.True(await show, "the launch must reach the holder once it publishes, not exit on the stale endpoint");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public async Task A_Reclaimed_Holder_Republishes_So_Launches_Reach_It_Not_The_Dead_Successor()
+    {
+        // A successor published its endpoint and then died (a crash runs no cleanup), leaving a dead
+        // endpoint in discovery. The surviving holder reclaimed the lease and must take it back.
+        var identity = NewIdentity();
+        using var holder = new GuiActivationServer(identity, role: GuiInstanceRole.Render);
+        var shows = 0;
+        holder.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+
+        // While discovery names the dead successor, no launch can reach the surviving holder. This
+        // state only exists on Linux, where the endpoint is discovered; Windows always uses the
+        // well-known pipe of the live holder.
+        if (OperatingSystem.IsLinux())
+        {
+            File.WriteAllText(identity.DiscoveryPath, "DeziroJoy.Dead.Successor.Endpoint");
+            var blocked = await GuiActivationClient.TryShowAsync(
+                identity,
+                new GuiActivationOptions(TimeSpan.FromMilliseconds(400), TimeSpan.FromSeconds(2)),
+                TestContext.Current.CancellationToken);
+            Assert.False(blocked, "a dead successor endpoint must not let a launch reach the surviving holder");
+        }
+
+        // The holder reclaims the lease and re-asserts its endpoint over the dead successor's.
+        holder.RepublishEndpoint();
+
+        var shown = await GuiActivationClient.TryShowAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+        Assert.True(shown, "the reclaimed holder must be reachable once it republishes");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public async Task A_Retiring_Holder_Never_Removes_Discovery_So_The_Successors_Publish_Survives()
+    {
+        // A retiring holder must never delete discovery: a read-then-delete could erase a
+        // successor's just-published endpoint during the handover race (old holder disposing while
+        // the new leaseholder publishes), wedging later second launches. The entry is left for the
+        // successor / next publisher, and the client retries past a stale name meanwhile.
+        var identity = NewIdentity();
+        using var holder = new GuiActivationServer(identity, role: GuiInstanceRole.Render);
+        using var successor = new GuiActivationServer(identity, role: GuiInstanceRole.Tray);
+        var shows = 0;
+        successor.ShowRequested += () =>
+        {
+            shows++;
+            return Task.CompletedTask;
+        };
+
+        string? successorEndpoint = OperatingSystem.IsLinux()
+            ? File.ReadAllText(identity.DiscoveryPath).Trim()
+            : null;
+
+        // The holder retires (disposing its channel) while the successor owns discovery.
+        holder.Dispose();
+
+        if (successorEndpoint is not null)
+        {
+            Assert.Equal(successorEndpoint, File.ReadAllText(identity.DiscoveryPath).Trim());
+        }
+
+        var shown = await GuiActivationClient.TryShowAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+        Assert.True(shown, "the successor must stay reachable after the holder retired");
+        Assert.Equal(1, shows);
+    }
+
+    [Fact]
+    public void A_Full_Exit_Leaves_Its_Discovery_Entry_For_The_Next_Publisher_To_Replace()
+    {
+        // The discovery file is a Linux-only channel; Windows always uses the live well-known pipe.
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var identity = NewIdentity();
+        string endpoint;
+        using (var holder = new GuiActivationServer(identity))
+        {
+            holder.ShowRequested += () => Task.CompletedTask;
+            endpoint = File.ReadAllText(identity.DiscoveryPath).Trim();
+        }
+
+        // A full exit does not delete the entry: the next publisher atomically replaces it, and a
+        // launch tolerates the stale name through the stale retry until then. (Any delete-on-dispose
+        // - the old read-then-delete cleanup - would drop the file here.)
+        Assert.Equal(endpoint, File.ReadAllText(identity.DiscoveryPath).Trim());
     }
 }

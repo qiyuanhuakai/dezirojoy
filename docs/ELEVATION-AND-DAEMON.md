@@ -237,6 +237,13 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `Global\` 前缀使它跨会话全机可见，GUI 与提升的守护进程因此竞争同一个槽位。
 - 管道**不承担**互斥语义，互斥体**不承担**通信语义。守护进程持有互斥体的时长，
   与它是否正在监听管道无关。
+- **GUI↔tray 激活通道是第四条独立通道**，与上面的 daemon 命令管道 `DeziroJoy.Mapping`
+  完全分离：它只做 GUI 单实例仲裁（二次启动 `Show`、交接角色探活），永不触碰 daemon。
+  Windows 用含会话身份的知名命名管道（`CurrentUserOnly`）；Linux 因命名管道会被映射到一个
+  会 `unlink` 的文件系统 socket、旧持有方退出会删掉继任方同一路径的 socket，改用**每实例唯一的
+  抽象 Unix socket** + 一个随锁路径派生的 discovery 文件，从而旧持有方退出既不 unlink 继任方
+  socket 也无 stale 堆积（抽象名随进程退出被内核回收）。详见 [`DESIGN.md`](../DESIGN.md)
+  常驻架构一节的“激活管道的跨进程所有权（Linux）”。
 
 ### 4.4 协议版本 1
 

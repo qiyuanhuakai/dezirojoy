@@ -325,6 +325,9 @@ internal sealed class RenderWindowCoordinator
 
         if (reclaimed)
         {
+            // This render is the live holder again: its endpoint must replace any dead successor's
+            // entry in discovery, so a second launch can still wake the surviving window.
+            GuiActivationServer.ActiveInstance?.RepublishEndpoint();
             Trace.WriteLine("[DeziroJoy] tray handover rolled back; this render reclaimed the instance lease");
             return TrayHandoverOutcome.RolledBack;
         }
@@ -366,7 +369,9 @@ internal static class RenderProcess
         reacquireInstance ??= DesktopLauncher.TryReacquireInstanceLease;
         probe ??= static (identity, role, options, cancellationToken)
             => GuiActivationClient.TryProbeAsync(identity, role, options, cancellationToken);
-        pollDelay ??= static () => Task.Delay(100);
+        // The render/tray role-probe pause. Short so close/minimize-to-tray hands over briskly;
+        // it is independent of the daemon probe, whose cadence is deliberately left untouched.
+        pollDelay ??= static () => Task.Delay(40);
         stopDaemon ??= () => Task.Run(() => daemon?.Stop() ?? true);
 
         lifetime.ShutdownMode = ShutdownMode.OnExplicitShutdown;
