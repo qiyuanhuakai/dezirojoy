@@ -147,7 +147,9 @@ internal sealed class FakeDaemonHost : IDaemonHost
         {
             foreach (var (deviceId, profile) in profiles)
             {
-                Reload(deviceId, profile);
+                // Mirror EngineHost.SwitchPresetSlot: the runtime is tagged with the slot it moves
+                // to, so a device left off the app-wide slot is observable through GetProfile.
+                Reload(deviceId, profile with { PresetSlot = slot });
             }
         }
         catch
@@ -1094,6 +1096,50 @@ public class DaemonServerTests
         Assert.Equal(3, LeaderOf(presets.LoadSlot("pad-1", 1)!).SlotB);
         var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
         Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task Deleting_A_Slot_A_Device_Is_Running_Moves_That_Device_Even_When_It_Is_Not_The_Active_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var deviceId in new[] { "pad-A", "pad-B" })
+        {
+            presets.EnsureDefaults(new GamepadDescriptor(deviceId, deviceId));
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-A");
+        host.AddDevice("pad-B");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        // 1. Delete B's non-active slot 2 (the app-wide slot is still 1).
+        Assert.True(Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d1", "pad-B", 2))).Accepted);
+        Assert.Equal([1, 3, 4], presets.SlotsInUse("pad-B"));
+
+        // 2. Select global slot 3 - both devices reload onto it.
+        await server.ProcessAsync(new SwitchPresetSlotMessage("s3", "pad-A", 3));
+        Assert.Equal(3, host.GetProfile("pad-B")!.PresetSlot);
+
+        // 3. Delete A's active slot 3: the app-wide slot moves to 2, but B lacks slot 2, so B
+        //    keeps running slot 3 (the supported missing-slot semantics).
+        Assert.True(Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d3", "pad-A", 3))).Accepted);
+        Assert.Equal(2, Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("g1"))).Snapshot.ActivePresetSlot);
+        Assert.Equal(3, host.GetProfile("pad-B")!.PresetSlot);
+
+        // 4. Now delete B's slot 3 - the very slot B is running, even though it is not the
+        //    app-wide active slot. B must be moved to a survivor rather than left executing a
+        //    profile whose storage was just removed.
+        Assert.True(Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d4", "pad-B", 3))).Accepted);
+        Assert.Equal([1, 4], presets.SlotsInUse("pad-B"));
+        Assert.Equal(1, host.GetProfile("pad-B")!.PresetSlot);
+        // The app-wide slot did not move - only B's runtime did.
+        Assert.Equal(2, Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("g2"))).Snapshot.ActivePresetSlot);
     }
 
     [Fact]

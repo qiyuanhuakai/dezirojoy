@@ -273,9 +273,12 @@ public sealed class PresetStore
     }
 
     /// <summary>
-    /// Creates any missing slot as an independent copy of the device's primary profile.
-    /// Existing slots are never overwritten. The returned profile is the one the runtime
-    /// should activate for <paramref name="activeSlot"/>.
+    /// Creates any missing slot as an independent copy of the device's primary profile, on the
+    /// device's first use only. Existing slots are never overwritten. The returned profile is
+    /// the one the runtime should activate for <paramref name="activeSlot"/>, tagged with the
+    /// slot it actually loaded; when the device lacks <paramref name="activeSlot"/> it falls
+    /// back to the primary anchor so a reconnect still succeeds without resurrecting a deleted
+    /// slot or moving the app-wide slot.
     /// </summary>
     public GamepadProfile EnsureDefaults(GamepadDescriptor descriptor, int activeSlot = MinSlot)
     {
@@ -312,8 +315,22 @@ public sealed class PresetStore
             }
         }
 
-        return LoadSlot(descriptor.DeviceId, activeSlot)
-            ?? throw new InvalidOperationException($"preset slot {activeSlot} was not initialized");
+        // A device that lacks the requested active slot - it deleted it, or never had it -
+        // reconnects to a surviving profile rather than failing runtime creation: fall back to
+        // the primary anchor, which is always ensured above. The returned profile carries the
+        // slot it actually loaded, so the runtime is tagged with the slot it truly runs; the
+        // deleted slot is not resurrected and the app-wide slot is not changed here.
+        if (LoadSlot(descriptor.DeviceId, activeSlot) is { } requested)
+        {
+            return requested with { PresetSlot = activeSlot };
+        }
+
+        if (LoadSlot(descriptor.DeviceId, MinSlot) is { } anchor)
+        {
+            return anchor with { PresetSlot = MinSlot };
+        }
+
+        throw new InvalidOperationException($"preset slot {MinSlot} was not initialized for {descriptor.DeviceId}");
     }
 
     /// <summary>

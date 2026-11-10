@@ -104,8 +104,30 @@ public partial class PresetSlotSelector : UserControl
     /// <summary>Moves real focus onto the strip control the view model's focus index names.</summary>
     private void ReflectPresetStripFocus()
     {
-        if (_viewModel is not { } vm || vm.PresetStripFocusIndex < 0)
+        if (_viewModel is not { } vm)
         {
+            return;
+        }
+
+        if (vm.PresetStripFocusIndex < 0)
+        {
+            // Exit: drop the strip's visual focus so the pad returns to the gamepad model and the
+            // strip no longer looks entered.
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel?.FocusManager?.GetFocusedElement() is Visual visual
+                && this.GetVisualDescendants().Contains(visual))
+            {
+                _reflectingFocus = true;
+                try
+                {
+                    (topLevel as InputElement)?.Focus();
+                }
+                finally
+                {
+                    _reflectingFocus = false;
+                }
+            }
+
             return;
         }
 

@@ -480,6 +480,71 @@ public class MainWindowViewModelTests
         Assert.Equal(1, vm.PresetStripFocusIndex);
     }
 
+    [Fact]
+    public async Task Deleting_A_Slot_The_Active_Controller_Is_Running_Moves_It_Even_When_Not_The_Active_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("pad-A", "Controller A");
+        provider.Add("pad-B", "Controller B");
+        provider.SetState("pad-A", GamepadState.Neutral);
+        provider.SetState("pad-B", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var presets = new PresetStore(store);
+
+        // A (the active controller) deletes its non-active slot 2.
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+        Assert.Equal([1, 3, 4], presets.SlotsInUse("pad-A"));
+
+        // Switch to slot 3 (both run it), then to slot 2 - A lacks slot 2, so A stays on slot 3
+        // while the app-wide slot moves to 2.
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(3);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        Assert.Equal(2, vm.ActivePresetSlot);
+        Assert.Equal(3, host.Controllers.Single(c => c.Descriptor.DeviceId == "pad-A").Profile.PresetSlot);
+
+        // Delete slot 3 - the slot A is actually running, though it is not the app-wide slot.
+        await vm.DeletePresetCommand.ExecuteAsync(3);
+        await vm.DeletePresetCommand.ExecuteAsync(3);
+
+        // A is moved to a survivor rather than left executing the just-deleted profile.
+        Assert.Equal([1, 4], presets.SlotsInUse("pad-A"));
+        Assert.Equal(1, host.Controllers.Single(c => c.Descriptor.DeviceId == "pad-A").Profile.PresetSlot);
+        Assert.Equal(2, vm.ActivePresetSlot);
+    }
+
+    [Fact]
+    public void The_Gamepad_Can_Enter_The_Preset_Strip_And_Reach_Delete_Without_External_Focus()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var presets = new PresetStore(store);
+
+        // No strip control is focused. The pad enters the strip with Guide, parking on the active
+        // card - no keyboard or pointer focus anywhere.
+        Assert.Equal(-1, vm.PresetStripFocusIndex);
+        PressPad(vm, host, provider, GamepadButtonMask.Guide);
+        Assert.Equal((PresetStripAction.Switch, 1), vm.PresetStripActionAt(vm.PresetStripFocusIndex));
+
+        // D-pad right twice lands on slot 2's delete badge (Switch1, Switch2, Delete2).
+        PressPad(vm, host, provider, GamepadButtonMask.DPadRight);
+        PressPad(vm, host, provider, GamepadButtonMask.DPadRight);
+        Assert.Equal((PresetStripAction.Delete, 2), vm.PresetStripActionAt(vm.PresetStripFocusIndex));
+
+        // A arms, A confirms - the delete happens purely by gamepad.
+        PressPad(vm, host, provider, GamepadButtonMask.A);
+        Assert.True(vm.PresetSlots.Single(item => item.Slot == 2).IsDeleteArmed);
+        PressPad(vm, host, provider, GamepadButtonMask.A);
+        Assert.Equal([1, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.Null(presets.LoadSlot("xinput:0", 2));
+
+        // Guide exits the strip, returning the pad to the gamepad model.
+        PressPad(vm, host, provider, GamepadButtonMask.Guide);
+        Assert.Equal(-1, vm.PresetStripFocusIndex);
+    }
+
     private static void PressPad(MainWindowViewModel vm, EngineHost host, FakeGamepadProvider provider, GamepadButtonMask mask)
     {
         // Release first so the press is a fresh edge the pad navigation can see.

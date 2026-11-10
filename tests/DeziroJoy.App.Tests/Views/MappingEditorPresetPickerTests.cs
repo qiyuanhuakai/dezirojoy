@@ -556,7 +556,7 @@ public sealed class MappingEditorPresetPickerTests
     }
 
     [AvaloniaFact]
-    public void The_Gamepad_Reaches_And_Activates_The_Delete_Badge_End_To_End()
+    public void The_Gamepad_Can_Enter_The_Preset_Strip_And_Delete_Without_External_Focus()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
         ConnectPad(provider);
@@ -567,28 +567,36 @@ public sealed class MappingEditorPresetPickerTests
         // The window is active with the mapping tab selected, so physical pad input is in scope.
         viewModel.SetPhysicalInputScope(true);
 
-        var selector = PresetSelector(window);
+        // No strip control is focused. Every step is a host tick the window dispatches to the view
+        // model (SampleHelper.Sample would double it against the window's own Sampled
+        // subscription), so each press is navigated exactly once - and nothing is focused
+        // programmatically: the pad alone enters and drives the strip.
+        Assert.Equal(-1, viewModel.PresetStripFocusIndex);
 
-        // Focus slot 3's delete badge; the view reports its position, so the pad now drives the
-        // strip rather than the gamepad model.
-        var badge = DeleteButton(selector, 3)!;
-        Assert.True(badge.Focus());
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
-        Assert.Equal((PresetStripAction.Delete, 3), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
+        // Guide enters the strip, parking the pad focus on the active card.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.Guide, 0, 0, 0, 0));
+        Assert.Equal((PresetStripAction.Switch, 1), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
 
-        // Drive the pad through the real path only - a host tick raises Sampled, the window
-        // dispatches it to the view model, and RunJobs runs that navigation - so each press is
-        // navigated exactly once (SampleHelper.Sample would double it against the window's own
-        // Sampled subscription).
+        // D-pad right twice reaches slot 2's delete badge (Switch1, Switch2, Delete2).
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadRight, 0, 0, 0, 0));
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadRight, 0, 0, 0, 0));
+        Assert.Equal((PresetStripAction.Delete, 2), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
+
+        // A arms, A confirms - the delete is reached and performed purely by gamepad.
         PadStep(host, provider, window, GamepadState.Neutral);
         PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
-        Assert.Equal(4, viewModel.PresetSlots.Count);
-        Assert.True(viewModel.PresetSlots.Single(item => item.Slot == 3).IsDeleteArmed);
-
+        Assert.True(viewModel.PresetSlots.Single(item => item.Slot == 2).IsDeleteArmed);
         PadStep(host, provider, window, GamepadState.Neutral);
         PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
-        Assert.Equal([1, 2, 4], viewModel.PresetSlots.Select(item => item.Slot));
+        Assert.Equal([1, 3, 4], viewModel.PresetSlots.Select(item => item.Slot));
+
+        // Guide exits the strip.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.Guide, 0, 0, 0, 0));
+        Assert.Equal(-1, viewModel.PresetStripFocusIndex);
     }
 
     private static void PadStep(EngineHost host, FakeGamepadProvider provider, Window window, IGamepadState state)

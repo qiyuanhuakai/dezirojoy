@@ -658,7 +658,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
         }
 
+        // Reconcile against the slot the active controller's runtime is actually running - it can
+        // differ from the app-wide scalar when this device lacks that slot - not only the global
+        // scalar, so a device left running the deleted slot is moved rather than abandoned.
+        var runtimeSlot = ActiveController.Profile.PresetSlot;
         var wasActive = slot == ActivePresetSlot;
+        var deviceRunsDeleted = runtimeSlot == slot;
 
         // Repair + delete on the store first, so the profile reloaded below is already repaired.
         var outcome = _presets.DeleteSlot(deviceId, slot);
@@ -673,21 +678,45 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var activeAfter = _presets.LoadSlot(deviceId, ActivePresetSlot);
-        var activeRepaired = !wasActive
-            && rollback.TryGetValue(ActivePresetSlot, out var activeBefore)
-            && activeAfter is not null
-            && activeBefore != activeAfter;
+        var surviving = inUse.Where(candidate => candidate != slot).ToList();
+        var fallback = surviving.Where(candidate => candidate < slot).DefaultIfEmpty(PresetStore.MinSlot).Max();
+
+        int deviceSlot;
+        GamepadProfile? reloadProfile = null;
+        var switchAll = false;
+
+        if (wasActive)
+        {
+            // The app-wide active slot was deleted: move the whole app to a survivor.
+            deviceSlot = fallback;
+            switchAll = true;
+        }
+        else if (deviceRunsDeleted)
+        {
+            // This device was running the deleted slot (it lacked the app-wide active slot): move
+            // just it to a survivor, leaving the app-wide slot where it is.
+            deviceSlot = fallback;
+            if (_presets.LoadSlot(deviceId, fallback) is { } survivor)
+            {
+                reloadProfile = survivor with { PresetSlot = fallback };
+            }
+        }
+        else
+        {
+            // The device runs some other slot; reload only if its own profile was repaired.
+            deviceSlot = runtimeSlot;
+            if (rollback.TryGetValue(runtimeSlot, out var runtimeBefore)
+                && _presets.LoadSlot(deviceId, runtimeSlot) is { } runtimeAfter
+                && runtimeBefore != runtimeAfter)
+            {
+                reloadProfile = runtimeAfter with { PresetSlot = runtimeSlot };
+            }
+        }
 
         try
         {
-            if (wasActive)
+            if (switchAll)
             {
-                var fallback = inUse
-                    .Where(candidate => candidate != slot && candidate < slot)
-                    .DefaultIfEmpty(PresetStore.MinSlot)
-                    .Max();
-
                 var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
                 foreach (var connected in _host.Controllers)
                 {
@@ -700,11 +729,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 _host.SwitchPresetSlot(fallback, profiles);
                 ActivePresetSlot = fallback;
             }
-            else if (activeRepaired && _host.Controllers.Any(c => c.Descriptor.DeviceId == deviceId))
+            else if (reloadProfile is not null && _host.Controllers.Any(c => c.Descriptor.DeviceId == deviceId))
             {
-                // The active slot is unchanged, but its profile was repaired: reload it into the
-                // running engine so it does not keep the stale leader.
-                _host.Reload(deviceId, activeAfter!);
+                _host.Reload(deviceId, reloadProfile);
             }
         }
         catch (Exception exception)
@@ -722,7 +749,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         MarkActivePresetSlot(ActivePresetSlot);
 
         if (ActiveController is { } controller
-            && _presets.LoadSlot(controller.Descriptor.DeviceId, ActivePresetSlot) is { } activeProfile)
+            && _presets.LoadSlot(controller.Descriptor.DeviceId, deviceSlot) is { } activeProfile)
         {
             ActiveProfile = activeProfile;
         }
@@ -881,6 +908,29 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 break;
         }
     }
+
+    /// <summary>
+    /// Enters the preset strip by gamepad, parking the focus on the active card (or the first
+    /// card when the device lacks the app-wide slot). This is the pad-only entry the Guide button
+    /// drives, so the strip is reachable without any keyboard or pointer focus.
+    /// </summary>
+    private void EnterPresetStrip()
+    {
+        for (var index = 0; index < PresetStripFocusCount; index++)
+        {
+            if (PresetStripActionAt(index) is { Action: PresetStripAction.Switch, Slot: var slot }
+                && slot == ActivePresetSlot)
+            {
+                PresetStripFocusIndex = index;
+                return;
+            }
+        }
+
+        PresetStripFocusIndex = 0;
+    }
+
+    /// <summary>Leaves the preset strip, returning the pad to the gamepad model.</summary>
+    private void ExitPresetStrip() => PresetStripFocusIndex = -1;
 
     /// <summary>
     /// Points the mapping editor's leader slot pickers at the device's current slots, so a
@@ -1678,10 +1728,26 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         RememberNavigation(state, deviceId);
 
-        // While a preset-strip control holds focus the pad drives the strip rather than the
-        // gamepad model: D-pad left/right move focus along it and A activates the focused
-        // control (switch / delete-with-confirm / add). This is the gamepad route to the strip
-        // and its delete badges, so they are reachable without the keyboard.
+        // The Guide button is the pad-only route into and out of the preset strip, reserved so it
+        // never also selects its own model element. It works from the normal initial state - no
+        // keyboard or pointer focus required - which is what makes the strip gamepad-reachable.
+        if (buttonEdges.Has(GamepadButton.Guide))
+        {
+            if (PresetStripFocusIndex >= 0)
+            {
+                ExitPresetStrip();
+            }
+            else
+            {
+                EnterPresetStrip();
+            }
+
+            return;
+        }
+
+        // While the preset strip is entered the pad drives it rather than the gamepad model:
+        // D-pad left/right move focus along it and A activates the focused control (switch /
+        // delete-with-confirm / add).
         if (PresetStripFocusIndex >= 0)
         {
             if (buttonEdges.Has(GamepadButton.A))
@@ -1966,7 +2032,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_daemon is null && ActiveController is { } controller)
         {
-            _host.Reload(controller.Descriptor.DeviceId, updated);
+            // A committed edit belongs to the active preset slot, so the reloaded runtime is
+            // tagged with it (Reload no longer re-tags on its own).
+            _host.Reload(controller.Descriptor.DeviceId, updated with { PresetSlot = ActivePresetSlot });
 
             // A committed edit belongs to the active preset slot, not only to the running
             // engine: writing it here is what keeps the slots independent and lets a switch
