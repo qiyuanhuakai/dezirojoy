@@ -65,6 +65,60 @@ public class GamepadVisualizerViewModelTests
         Assert.Equal(1.0, vm.RightMagnitude, 3);
     }
 
+    /// <summary>
+    /// The preview shares the mapping path's radial deadzone: resting drift and low-amplitude
+    /// noise park position AND magnitude at rest, so the caps cannot twitch around the centre
+    /// while the stick is untouched.
+    /// </summary>
+    [Fact]
+    public void Drift_Below_The_Preview_Deadzone_Parks_Position_And_Magnitude()
+    {
+        var vm = new GamepadVisualizerViewModel();
+
+        foreach (var (lx, ly, rx, ry) in new[]
+        {
+            (0.05f, 0.05f, -0.04f, 0.10f),
+            (0.1f, 0f, 0f, -0.12f),
+            (-0.14f, 0.02f, 0.03f, 0.13f),
+        })
+        {
+            vm.Update(GamepadState.Create(GamepadButtonMask.None, lx, ly, rx, ry));
+        }
+
+        Assert.Equal(0, vm.LeftStickX);
+        Assert.Equal(0, vm.LeftStickY);
+        Assert.Equal(0, vm.RightStickX);
+        Assert.Equal(0, vm.RightStickY);
+        Assert.Equal(0, vm.LeftMagnitude);
+        Assert.Equal(0, vm.RightMagnitude);
+    }
+
+    /// <summary>
+    /// The deadzone gates the preview, it does not damp it: full deflection passes through
+    /// unchanged and a push just past the threshold still moves the cap in real time, ramping
+    /// from zero rather than snapping.
+    /// </summary>
+    [Fact]
+    public void A_Clear_Push_Past_The_Deadzone_Still_Moves_The_Preview_In_Real_Time()
+    {
+        var vm = new GamepadVisualizerViewModel();
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.6f, 0.8f, 0f, -1f));
+
+        // Unit-magnitude deflection clears the deadzone untouched: the cap tracks the raw axes.
+        Assert.Equal(0.6, vm.LeftStickX, 6);
+        Assert.Equal(0.8, vm.LeftStickY, 6);
+        Assert.Equal(1.0, vm.LeftMagnitude, 6);
+        Assert.Equal(1.0, vm.RightMagnitude, 6);
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.2f, 0f, 0f, 0f));
+
+        Assert.True(vm.LeftStickX > 0, "a push past the deadzone must still move the cap");
+        Assert.True(vm.LeftStickX < 0.2, "the ramped deflection must stay below the raw push");
+        Assert.True(vm.LeftMagnitude > 0, "the magnitude must rise with the push");
+        Assert.True(vm.LeftMagnitude < 0.2, "the ramped magnitude must stay below the raw push");
+    }
+
     [Fact]
     public void Disconnect_Clears_The_State()
     {

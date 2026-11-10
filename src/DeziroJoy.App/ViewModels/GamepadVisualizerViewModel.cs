@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 
 namespace DeziroJoy.App.ViewModels;
@@ -9,6 +10,14 @@ namespace DeziroJoy.App.ViewModels;
 /// </summary>
 public partial class GamepadVisualizerViewModel : ObservableObject
 {
+    /// <summary>
+    /// Radial deadzone the preview shares with the mapping path's default stick deadzone.
+    /// Resting drift and low-amplitude noise below this fraction of full deflection park the
+    /// caps at rest instead of twitching them around the centre; a real push past it still
+    /// moves the cap in real time.
+    /// </summary>
+    public const float PreviewDeadZone = 0.15f;
+
     [ObservableProperty]
     private bool _isConnected;
 
@@ -126,12 +135,19 @@ public partial class GamepadVisualizerViewModel : ObservableObject
             RegisterExtraButton(code);
         }
 
-        LeftStickX = state.LeftStickX;
-        LeftStickY = state.LeftStickY;
-        RightStickX = state.RightStickX;
-        RightStickY = state.RightStickY;
-        LeftMagnitude = Math.Sqrt((state.LeftStickX * state.LeftStickX) + (state.LeftStickY * state.LeftStickY));
-        RightMagnitude = Math.Sqrt((state.RightStickX * state.RightStickX) + (state.RightStickY * state.RightStickY));
+        // The caps share the mapping path's radial deadzone: position and magnitude both pass
+        // through it, so a resting or noisy stick parks the cap and its brightness at rest
+        // instead of twitching them around the centre. No tween - above the deadzone the cap
+        // still tracks the raw axes every sample.
+        var (leftX, leftY) = StickMath.ApplyRadialDeadzone(state.LeftStickX, state.LeftStickY, PreviewDeadZone);
+        var (rightX, rightY) = StickMath.ApplyRadialDeadzone(state.RightStickX, state.RightStickY, PreviewDeadZone);
+
+        LeftStickX = leftX;
+        LeftStickY = leftY;
+        RightStickX = rightX;
+        RightStickY = rightY;
+        LeftMagnitude = Math.Sqrt((leftX * leftX) + (leftY * leftY));
+        RightMagnitude = Math.Sqrt((rightX * rightX) + (rightY * rightY));
     }
 
     /// <summary>

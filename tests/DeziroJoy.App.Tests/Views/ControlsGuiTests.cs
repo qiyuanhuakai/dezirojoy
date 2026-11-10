@@ -115,10 +115,13 @@ public sealed class ControlsGuiTests
 
         viewModel.Update(GamepadState.Create(default, 1f, -1f, -0.5f, 0.5f));
 
-        Assert.Equal(133d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(165d, Canvas.GetTop(leftThumb));
-        Assert.Equal(454d, Canvas.GetLeft(rightThumb));
-        Assert.Equal(190d, Canvas.GetTop(rightThumb));
+        // The caps ride the shared radial deadzone: the unit-diagonal left push ramps to
+        // 0.7071 and the 0.7071 right push to 0.4635, so the caps travel the ramped
+        // fraction of the 26px StickTravel rather than the raw axes.
+        Assert.Equal(125.3848, Canvas.GetLeft(leftThumb), 4);
+        Assert.Equal(157.3848, Canvas.GetTop(leftThumb), 4);
+        Assert.Equal(454.9503, Canvas.GetLeft(rightThumb), 4);
+        Assert.Equal(190.9503, Canvas.GetTop(rightThumb), 4);
     }
 
     [AvaloniaFact]
@@ -133,26 +136,28 @@ public sealed class ControlsGuiTests
         // Core's contract is positive stick Y = up; canvas Y grows downward, so a stick pushed
         // up must move the thumb UP the screen, to a smaller Canvas.Top. This sign is the whole
         // bug: adding instead of subtracting mirrored the preview against the physical stick.
+        // Full deflection rides the shared deadzone's ramp, whose float arithmetic lands a
+        // hair under 1: the sign is the contract, the sub-pixel epsilon is the ramp.
         viewModel.Update(GamepadState.Create(default, 0f, 1f, 0f, 1f));
 
-        Assert.Equal(113d, Canvas.GetTop(leftThumb));
-        Assert.Equal(177d, Canvas.GetTop(rightThumb));
+        Assert.Equal(113d, Canvas.GetTop(leftThumb), 4);
+        Assert.Equal(177d, Canvas.GetTop(rightThumb), 4);
 
         viewModel.Update(GamepadState.Create(default, 0f, -1f, 0f, -1f));
 
-        Assert.Equal(165d, Canvas.GetTop(leftThumb));
-        Assert.Equal(229d, Canvas.GetTop(rightThumb));
+        Assert.Equal(165d, Canvas.GetTop(leftThumb), 4);
+        Assert.Equal(229d, Canvas.GetTop(rightThumb), 4);
 
         // Horizontal is unambiguous on every platform: pushing right is a larger Canvas.Left.
         viewModel.Update(GamepadState.Create(default, 1f, 0f, 1f, 0f));
 
-        Assert.Equal(133d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(493d, Canvas.GetLeft(rightThumb));
+        Assert.Equal(133d, Canvas.GetLeft(leftThumb), 4);
+        Assert.Equal(493d, Canvas.GetLeft(rightThumb), 4);
 
         viewModel.Update(GamepadState.Create(default, -1f, 0f, -1f, 0f));
 
-        Assert.Equal(81d, Canvas.GetLeft(leftThumb));
-        Assert.Equal(441d, Canvas.GetLeft(rightThumb));
+        Assert.Equal(81d, Canvas.GetLeft(leftThumb), 4);
+        Assert.Equal(441d, Canvas.GetLeft(rightThumb), 4);
     }
 
     [AvaloniaFact]
