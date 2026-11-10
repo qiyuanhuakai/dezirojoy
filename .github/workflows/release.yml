@@ -79,6 +79,36 @@ jobs:
             fi
           done < <(grep -oP "Join-Path \\\$repoRoot '\K[^']*" "$script" || true)
 
+      # The Windows installer ships a Simplified Chinese interface built from Inno
+      # Setup's own ChineseSimplified.isl - which the Inno installer places in the
+      # compiler's Languages subdirectory, referenced as
+      # compiler:Languages\ChineseSimplified.isl (only Default.isl sits next to
+      # ISCC itself) - with English kept as the fallback (M30). Both languages are
+      # declared in the .iss [Languages] section, and the wizard's custom texts -
+      # the desktop-icon task and the launch-after-install entry - must be
+      # referenced through the language files ({cm:...}): a hard-coded English
+      # string there would stay English on a Chinese install. This is a static
+      # grep, so it needs no Inno install and fails before the publish instead of
+      # at the compile; build-and-verify.ps1 additionally checks the resolved
+      # ISCC's Languages\ChineseSimplified.isl and its message keys.
+      - name: Verify installer localization (static)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          iss='tools/Packaging/win/DeziroJoy.iss'
+          test -f "$iss" || { echo "missing $iss"; exit 1; }
+
+          grep -Pq '^\s*Name:\s*"english"\s*;\s*MessagesFile:\s*"compiler:Default\.isl"\s*$' "$iss" \
+            || { echo "$iss must keep English (compiler:Default.isl) as the fallback language"; exit 1; }
+          grep -Pq '^\s*Name:\s*"chinesesimplified"\s*;\s*MessagesFile:\s*"compiler:Languages\\ChineseSimplified\.isl"\s*$' "$iss" \
+            || { echo "$iss must declare Simplified Chinese (compiler:Languages\ChineseSimplified.isl)"; exit 1; }
+          grep -Pq '^\s*Name:\s*"desktopicon"\s*;\s*Description:\s*"\{cm:CreateDesktopIcon\}"' "$iss" \
+            || { echo "the desktopicon task must be localized through {cm:CreateDesktopIcon}"; exit 1; }
+          grep -Pq 'Description:\s*"\{cm:LaunchProgram,\{#MyAppName\}\}"' "$iss" \
+            || { echo "the launch-after-install entry must be localized through {cm:LaunchProgram,...}"; exit 1; }
+          echo "installer localization declared: english (fallback) + chinesesimplified, custom texts via {cm:...}"
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'

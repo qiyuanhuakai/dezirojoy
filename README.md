@@ -56,11 +56,13 @@ Linux 实验性说明：
 
 ### Windows
 
-双击 `setup.exe`，按向导完成即可。安装器为 per-user 模式：默认安装到
-`%LOCALAPPDATA%\Programs\DeziroJoy`，不需要管理员权限，也不注册开机自启动——
-登录自启动与提权常驻服务请在应用内「设置」中按需开启（见
-[docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md)）。卸载通过
-「设置 → 应用 → 已安装的应用」或安装目录中的 `unins000.exe`；卸载不会删除
+双击 `setup.exe`，按向导完成即可。安装器界面为简体中文——使用 Inno Setup
+自带的简体中文语言资源，不引入外部翻译文件；首次运行弹出语言选择对话框，
+系统语言非中文时可在其中切换 English，英文同时作为回退保留。安装器为
+per-user 模式：默认安装到 `%LOCALAPPDATA%\Programs\DeziroJoy`，不需要管理员
+权限，也不注册开机自启动——登录自启动与提权常驻服务请在应用内「设置」中按需
+开启（见 [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md)）。卸载
+通过「设置 → 应用 → 已安装的应用」或安装目录中的 `unins000.exe`；卸载不会删除
 `%APPDATA%\DeziroJoy` 下的配置。
 
 ### Linux

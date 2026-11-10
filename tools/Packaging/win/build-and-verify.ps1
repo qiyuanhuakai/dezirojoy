@@ -11,6 +11,15 @@
   What is verified here:
     * ISCC is resolved from PATH or a standard install directory, with a clear error
       listing everything that was tried when it is missing.
+    * The installer ships a Simplified Chinese interface built from Inno Setup's own
+      ChineseSimplified.isl, which the Inno installer places in the compiler's
+      Languages subdirectory (referenced as compiler:Languages\ChineseSimplified.isl;
+      only Default.isl sits next to ISCC itself), with English kept as the fallback,
+      and the wizard's custom texts (the desktop-icon task and the
+      launch-after-install entry) are referenced through the language files
+      ({cm:...}) instead of hard-coded English, so both languages cover them; the
+      Chinese resource file and the message keys it must define are verified
+      against the resolved ISCC before the compile.
     * The publish payload (DeziroJoy.exe) carries the machine type the RID implies
       (x64 / ARM64), and the .iss maps the RID to the matching ArchitecturesAllowed /
       ArchitecturesInstallIn64BitMode: those two decide where a setup may install.
@@ -166,6 +175,42 @@ $uninstallKeyPaths = @(
 )
 Write-Host "AppId: $resolvedAppId (uninstall key: $uninstallKeyName)"
 
+# --- verify the installer languages (M30) ------------------------------------------
+# The setup must ship a Simplified Chinese interface and keep English as the
+# fallback. Simplified Chinese comes from Inno Setup's own
+# ChineseSimplified.isl (LanguageID $0804), which the Inno installer places in
+# the compiler's Languages subdirectory - referenced as
+# compiler:Languages\ChineseSimplified.isl, because only Default.isl sits next
+# to ISCC itself - so no external translation file ships; with more than one
+# language declared, Setup shows the language dialog and preselects the system
+# locale, and English stays selectable there. Both entries must be in
+# [Languages] - dropping either the Chinese entry or the English fallback fails
+# here, before the compile.
+$languagesSection = [regex]::Match($issText, '(?ms)^\[Languages\][ \t]*\r?\n(.*?)(?=^\[|\z)').Groups[1].Value
+if (-not $languagesSection) {
+  throw "DeziroJoy.iss: no [Languages] section found"
+}
+if ($languagesSection -notmatch '(?m)^\s*Name:\s*"english"\s*;\s*MessagesFile:\s*"compiler:Default\.isl"\s*$') {
+  throw "DeziroJoy.iss: [Languages] must keep English via compiler:Default.isl as the fallback language"
+}
+if ($languagesSection -notmatch '(?m)^\s*Name:\s*"chinesesimplified"\s*;\s*MessagesFile:\s*"compiler:Languages\\ChineseSimplified\.isl"\s*$') {
+  throw "DeziroJoy.iss: [Languages] must declare Simplified Chinese via compiler:Languages\ChineseSimplified.isl (the .isl files live in the compiler's Languages subdirectory)"
+}
+
+# The wizard's custom texts - the desktop-icon task and the launch-after-install
+# entry - must be referenced through the language files with {cm:...} constants,
+# because a hard-coded English string there stays English on a Chinese install
+# and a missing message would print the constant itself. The keys used below are
+# exactly the ones the .iss references; the Chinese resource must define them
+# (checked against the resolved ISCC below).
+if ($issText -notmatch '(?m)^\s*Name:\s*"desktopicon"\s*;\s*Description:\s*"\{cm:CreateDesktopIcon\}"') {
+  throw "DeziroJoy.iss: the desktopicon task must be localized through {cm:CreateDesktopIcon}"
+}
+if ($issText -notmatch 'Description:\s*"\{cm:LaunchProgram,\{#MyAppName\}\}"') {
+  throw "DeziroJoy.iss: the launch-after-install entry must be localized through {cm:LaunchProgram,...}"
+}
+Write-Host "installer languages: english (fallback) + chinesesimplified; custom texts via {cm:CreateDesktopIcon} / {cm:LaunchProgram}"
+
 # --- resolve ISCC -----------------------------------------------------------------
 # windows-latest ships Inno Setup 6 on PATH. Fall back to the standard install
 # directories so the step also works on a runner image without the PATH entry.
@@ -195,6 +240,31 @@ Install Inno Setup 6 or newer, or add its directory to PATH.
 "@
 }
 Write-Host "ISCC: $iscc"
+
+# "compiler:Languages\ChineseSimplified.isl" resolves against ISCC's own
+# directory, so the Simplified Chinese interface is only as real as that file.
+# The .isl files ship in the Languages subdirectory next to ISCC (only
+# Default.isl sits in the root). Verify it is installed there and that it
+# defines the messages the installer's custom texts reference: an Inno install
+# stripped of language files, or a translation missing a key, would compile but
+# leave the affected pages showing the raw {cm:...} constant.
+$zhIsl = Join-Path (Split-Path -Parent $iscc) 'Languages\ChineseSimplified.isl'
+if (-not (Test-Path -LiteralPath $zhIsl)) {
+  throw @"
+Inno Setup's Simplified Chinese messages file not found at:
+  $zhIsl
+(compiler:Languages\ChineseSimplified.isl resolves next to ISCC, in its
+Languages subdirectory.) Install Inno Setup 6 or newer with its default
+language files, or add its directory to PATH.
+"@
+}
+$zhIslText = Get-Content -LiteralPath $zhIsl -Raw
+foreach ($message in @('CreateDesktopIcon', 'LaunchProgram')) {
+  if ($zhIslText -notmatch "(?m)^\s*$message\s*=") {
+    throw "ChineseSimplified.isl ($zhIsl) does not define the message '$message' that the installer's custom texts reference"
+  }
+}
+Write-Host "ChineseSimplified.isl: $zhIsl (defines CreateDesktopIcon and LaunchProgram)"
 
 # --- compile ----------------------------------------------------------------------
 & $iscc $iss `
