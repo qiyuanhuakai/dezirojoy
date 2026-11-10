@@ -587,8 +587,10 @@ public class MainWindowViewModelTests
 
         Assert.True(vm.Visualizer.IsAPressed);
         Assert.True(vm.Visualizer.IsDPadUpPressed);
-        Assert.Equal(0.5, vm.Visualizer.LeftStickX);
-        Assert.Equal(-0.5, vm.Visualizer.LeftStickY);
+        // The preview caps share the mapping path's radial deadzone, so this 0.7071 push
+        // reports the ramped 0.4635 rather than the raw 0.5.
+        Assert.Equal(0.4634517, vm.Visualizer.LeftStickX, 6);
+        Assert.Equal(-0.4634517, vm.Visualizer.LeftStickY, 6);
     }
 
     [Fact]

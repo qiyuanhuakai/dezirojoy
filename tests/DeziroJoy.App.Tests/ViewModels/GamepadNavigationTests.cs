@@ -422,8 +422,10 @@ public sealed class GamepadNavigationTests
         Assert.True(vm.Visualizer.IsConnected);
         Assert.True(vm.Visualizer.IsAPressed);
         Assert.True(vm.Visualizer.IsDPadUpPressed);
-        Assert.Equal(0.5, vm.Visualizer.LeftStickX);
-        Assert.Equal(-0.5, vm.Visualizer.LeftStickY);
+        // The preview caps share the mapping path's radial deadzone, so this 0.7071 push
+        // reports the ramped 0.4635: the visualizer is still live while stopped.
+        Assert.Equal(0.4634517, vm.Visualizer.LeftStickX, 6);
+        Assert.Equal(-0.4634517, vm.Visualizer.LeftStickY, 6);
     }
 
     [Fact]

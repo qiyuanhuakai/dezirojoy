@@ -367,12 +367,15 @@ public sealed class MainWindowViewModelDaemonTests
             // One sample drives navigation first and the visualizer second, so a wait on
             // the navigation alone can observe the half-finished sample: match the whole
             // target state the asserts below check.
+            // The 0.5 push reports the ramped 0.4117647 the shared preview deadzone
+            // produces; the poll only needs the sample to have landed, so a tight
+            // epsilon stands in for the exact float.
             await WaitForCondition(() => viewModel.SelectedSource is ButtonBinding { Button: GamepadButton.A }
                 && viewModel.Visualizer.IsAPressed
-                && viewModel.Visualizer.LeftStickX == 0.5f);
+                && Math.Abs(viewModel.Visualizer.LeftStickX - 0.4117647f) < 1e-6f);
 
             Assert.True(viewModel.Visualizer.IsAPressed);
-            Assert.Equal(0.5f, viewModel.Visualizer.LeftStickX);
+            Assert.Equal(0.4117647f, viewModel.Visualizer.LeftStickX, 6);
             Assert.True(daemonHost.IsInjectionSuspended);
 
             viewModel.AddMappingCommand.Execute(null);
