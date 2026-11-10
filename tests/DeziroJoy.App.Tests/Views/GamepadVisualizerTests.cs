@@ -1055,6 +1055,94 @@ public sealed class GamepadVisualizerTests
         }
     }
 
+    /// <summary>
+    /// The live preview shares the mapping path's radial deadzone (DESIGN.md 4.6): resting
+    /// drift and low-amplitude noise park every cap layer on its base coordinates at rest
+    /// opacity, so the caps neither twitch nor flicker while the stick is untouched.
+    /// </summary>
+    [AvaloniaFact]
+    public void Resting_Drift_Below_The_Deadzone_Parks_Every_Cap_Layer()
+    {
+        var viewModel = new GamepadVisualizerViewModel();
+        var control = new GamepadVisualizer { DataContext = viewModel };
+
+        // The rest pose the untouched model settles into: base coordinates, rest opacity.
+        var rest = new Dictionary<string, (double Left, double Top, double Opacity)>();
+        foreach (var side in new[] { "Left", "Right" })
+        {
+            foreach (var name in new[] { $"{side}StickThumb", $"{side}StickThumbSheen", $"{side}StickThumbTread", $"{side}StickThumbCentre" })
+            {
+                var layer = control.FindControl<Control>(name)!;
+                rest[name] = (Canvas.GetLeft(layer), Canvas.GetTop(layer), layer.Opacity);
+            }
+        }
+
+        foreach (var (lx, ly, rx, ry) in new[]
+        {
+            (0.05f, 0.05f, -0.04f, 0.10f),
+            (0.1f, 0f, 0f, -0.12f),
+            (-0.14f, 0.02f, 0.03f, 0.13f),
+        })
+        {
+            viewModel.Update(GamepadState.Create(GamepadButtonMask.None, lx, ly, rx, ry));
+        }
+
+        foreach (var (name, expected) in rest)
+        {
+            var layer = control.FindControl<Control>(name)!;
+            Assert.Equal(expected.Left, Canvas.GetLeft(layer), 6);
+            Assert.Equal(expected.Top, Canvas.GetTop(layer), 6);
+            Assert.Equal(expected.Opacity, layer.Opacity, 6);
+            Assert.Equal(0.55, layer.Opacity, 6);
+        }
+    }
+
+    /// <summary>
+    /// The deadzone gates the preview, it does not damp it: a clear push moves every cap layer
+    /// off its base coordinates in real time, and releasing back below the deadzone returns
+    /// the whole stack to exactly the rest pose - no residual twitch, no opacity flicker.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_Clear_Push_Moves_Every_Cap_Layer_And_The_Release_Parks_It_Again()
+    {
+        var viewModel = new GamepadVisualizerViewModel();
+        var control = new GamepadVisualizer { DataContext = viewModel };
+
+        var thumb = control.FindControl<Ellipse>("LeftStickThumb")!;
+        var sheen = control.FindControl<Control>("LeftStickThumbSheen")!;
+        var tread = control.FindControl<Control>("LeftStickThumbTread")!;
+        var centre = control.FindControl<Control>("LeftStickThumbCentre")!;
+
+        var restLeft = Canvas.GetLeft(thumb);
+        var restTop = Canvas.GetTop(thumb);
+
+        viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 1f, 0f, 0f, 0f));
+
+        Assert.True(Canvas.GetLeft(thumb) > restLeft, "a full push right must move the cap right");
+        Assert.Equal(restTop, Canvas.GetTop(thumb), 6);
+        Assert.Equal(1.0, thumb.Opacity, 6);
+
+        // Every material layer follows the cap: the sheen and tread keep the cap's
+        // coordinates, the centre keeps its +6 offset, and the opacity rides the magnitude.
+        Assert.Equal(Canvas.GetLeft(thumb), Canvas.GetLeft(sheen));
+        Assert.Equal(Canvas.GetTop(thumb), Canvas.GetTop(sheen));
+        Assert.Equal(Canvas.GetLeft(thumb), Canvas.GetLeft(tread));
+        Assert.Equal(Canvas.GetTop(thumb), Canvas.GetTop(tread));
+        Assert.Equal(Canvas.GetLeft(thumb) + 6, Canvas.GetLeft(centre));
+        Assert.Equal(Canvas.GetTop(thumb) + 6, Canvas.GetTop(centre));
+        Assert.Equal(thumb.Opacity, sheen.Opacity, 6);
+        Assert.Equal(thumb.Opacity, tread.Opacity, 6);
+        Assert.Equal(thumb.Opacity, centre.Opacity, 6);
+
+        viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 0.02f, -0.01f, 0f, 0f));
+
+        Assert.Equal(restLeft, Canvas.GetLeft(thumb), 6);
+        Assert.Equal(restTop, Canvas.GetTop(thumb), 6);
+        Assert.Equal(0.55, thumb.Opacity, 6);
+        Assert.Equal(restLeft, Canvas.GetLeft(sheen), 6);
+        Assert.Equal(restLeft, Canvas.GetLeft(centre) - 6, 6);
+    }
+
     [AvaloniaFact]
     public void Feedback_Changes_Brushes_Without_Changing_Control_Geometry()
     {
