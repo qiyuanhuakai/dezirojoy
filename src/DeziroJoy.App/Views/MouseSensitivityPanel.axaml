@@ -171,15 +171,10 @@
                         <ColumnDefinition Width="90" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准模式" VerticalAlignment="Center" Margin="0" />
-                    <ComboBox Grid.Column="1" x:Name="PrecisionModeCombo" HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding PrecisionModeOptions}"
-                              SelectedItem="{Binding SelectedPrecisionModeOption, Mode=TwoWay}">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:PrecisionModeOption">
-                                <TextBlock Text="{Binding Label}" />
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
+                    <TextBlock Grid.Column="1" x:Name="PrecisionModeReport" Classes="readout" VerticalAlignment="Center"
+                               Text="{Binding PrecisionModeLabel}" />
+                    <TextBlock Grid.Column="2" Classes="hint" HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Text="映射界面设置" />
                 </Grid>
                 <TextBlock x:Name="PrecisionModeHint" Classes="hint" Margin="150,0,0,14"
                            Text="触发方式随当前映射一起保存" />

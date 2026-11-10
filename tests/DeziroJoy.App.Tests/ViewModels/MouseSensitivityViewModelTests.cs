@@ -361,17 +361,36 @@ public class MouseSensitivityViewModelTests
     }
 
     [Fact]
-    public void Selecting_A_Precision_Mode_Option_Updates_The_Core_Setting()
+    public void The_Reported_Precision_Mode_Follows_The_Loaded_Setting()
     {
         var vm = new MouseSensitivityViewModel();
 
-        vm.SelectedPrecisionModeOption = vm.PrecisionModeOptions.Single(option => option.Value == PrecisionMode.Toggle);
+        // The panel is read-only: it reports the mode the mapping carries, labelled with the
+        // same Chinese semantics the mapping surface uses, not the Hold / Toggle enum names.
+        Assert.Equal(PrecisionMode.Hold, vm.PrecisionMode);
+        Assert.Equal("一直按住才触发", vm.PrecisionModeLabel);
 
+        vm.LoadFrom(new MouseStickSettings { PrecisionMode = PrecisionMode.Toggle });
         Assert.Equal(PrecisionMode.Toggle, vm.PrecisionMode);
+        Assert.Equal("按一下启用，再按一下取消", vm.PrecisionModeLabel);
         Assert.Equal(PrecisionMode.Toggle, vm.BuildSettings().PrecisionMode);
 
         vm.LoadFrom(new MouseStickSettings { PrecisionMode = PrecisionMode.Hold });
-        Assert.Equal(PrecisionMode.Hold, vm.SelectedPrecisionModeOption!.Value);
+        Assert.Equal(PrecisionMode.Hold, vm.PrecisionMode);
+        Assert.Equal("一直按住才触发", vm.PrecisionModeLabel);
+    }
+
+    [Fact]
+    public void The_Reported_Precision_Mode_Notifies_When_The_Loaded_Mode_Changes()
+    {
+        var vm = new MouseSensitivityViewModel();
+        var notified = new List<string>();
+        vm.PropertyChanged += (_, e) => notified.Add(e.PropertyName!);
+
+        vm.LoadFrom(new MouseStickSettings { PrecisionMode = PrecisionMode.Toggle });
+
+        Assert.Contains(nameof(MouseSensitivityViewModel.PrecisionModeLabel), notified);
+        Assert.Contains(nameof(MouseSensitivityViewModel.PrecisionMode), notified);
     }
 
     [Fact]
