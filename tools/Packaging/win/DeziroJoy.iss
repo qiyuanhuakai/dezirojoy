@@ -81,13 +81,15 @@ CloseApplications=yes
 
 [Languages]
 ; English is compiled into Setup itself and stays the fallback. Simplified Chinese
-; comes from Inno Setup's own ChineseSimplified.isl (LanguageID $0804), so no
-; external translation file ships - the compiler resolves "compiler:" against its
-; own directory. With more than one language declared, Setup shows the language
-; dialog (ShowLanguageDialog=auto) and preselects the system language; English
-; remains selectable there and is what an unknown locale falls back to.
+; comes from Inno Setup's own ChineseSimplified.isl (LanguageID $0804), which the
+; Inno installer places in the compiler's Languages subdirectory - hence the
+; "compiler:Languages\" prefix; only Default.isl sits next to ISCC itself - so no
+; external translation file ships. With more than one language declared, Setup
+; shows the language dialog (ShowLanguageDialog=auto) and preselects the system
+; language; English remains selectable there and is what an unknown locale falls
+; back to.
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "chinesesimplified"; MessagesFile: "compiler:ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

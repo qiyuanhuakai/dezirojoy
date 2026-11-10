@@ -278,12 +278,14 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   目录、断言 `DeziroJoy.exe` 与版本、静默卸载后断言安装目录 / 卸载注册项 / 快捷
   方式全部清理；ISCC 从 PATH 或标准安装路径解析，缺失时报错列出全部尝试过的位置
 - Windows：安装界面为简体中文（Inno Setup 自带的 `ChineseSimplified.isl`，
-  LanguageID $0804，不引入外部翻译文件），英文作为回退保留。静态断言：
-  `.iss` `[Languages]` 同时声明 `compiler:Default.isl` 与
-  `compiler:ChineseSimplified.isl`；任务 / 运行项的自定义文本（桌面图标、
+  LanguageID $0804，位于编译器 `Languages` 子目录，以
+  `compiler:Languages\ChineseSimplified.isl` 引用，不引入外部翻译文件），英文作为
+  回退保留。静态断言：`.iss` `[Languages]` 同时声明 `compiler:Default.isl` 与
+  `compiler:Languages\ChineseSimplified.isl`；任务 / 运行项的自定义文本（桌面图标、
   安装后运行）经 `{cm:CreateDesktopIcon}` / `{cm:LaunchProgram,...}` 引用语言
-  文件而非硬编码英文；ISCC 目录下的 `ChineseSimplified.isl` 真实存在且定义上述
-  消息键。release.yml 在发布前另有 `.iss` 侧的静态检查，失败不进入编译
+  文件而非硬编码英文；ISCC 目录 `Languages` 子目录下的 `ChineseSimplified.isl`
+  真实存在且定义上述消息键。release.yml 在发布前另有 `.iss` 侧的静态检查，失败
+  不进入编译
 - Linux：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
   元数据与 payload（完整 `/opt/dezirojoy`、`dezirojoy.ico`、desktop 入口），
   断言依赖含版本化 `libicu` 备选项（应用未启用 InvariantGlobalization，缺 ICU
