@@ -67,8 +67,8 @@ public class GamepadVisualizerViewModelTests
 
     /// <summary>
     /// The preview shares the mapping path's radial deadzone: resting drift and low-amplitude
-    /// noise park position AND magnitude at rest, so the caps cannot twitch around the centre
-    /// while the stick is untouched.
+    /// noise never arm a stick, so position AND magnitude stay parked at rest and the caps cannot
+    /// twitch around the centre while the stick is untouched.
     /// </summary>
     [Fact]
     public void Drift_Below_The_Preview_Deadzone_Parks_Position_And_Magnitude()
@@ -94,9 +94,10 @@ public class GamepadVisualizerViewModelTests
     }
 
     /// <summary>
-    /// The deadzone gates the preview, it does not damp it: full deflection passes through
-    /// unchanged and a push just past the threshold still moves the cap in real time, ramping
-    /// from zero rather than snapping.
+    /// The deadzone gates the preview, it does not damp it: a push past the threshold arms the
+    /// stick and lands the cap on the ramped deflection on the very sample it arrives - ramping
+    /// from the enter threshold rather than snapping from the raw axes, and staying below the raw
+    /// push.
     /// </summary>
     [Fact]
     public void A_Clear_Push_Past_The_Deadzone_Still_Moves_The_Preview_In_Real_Time()
@@ -105,18 +106,161 @@ public class GamepadVisualizerViewModelTests
 
         vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.6f, 0.8f, 0f, -1f));
 
-        // Unit-magnitude deflection clears the deadzone untouched: the cap tracks the raw axes.
+        // Unit-magnitude deflection clears the deadzone untouched: the cap jumps to the ramped axes.
         Assert.Equal(0.6, vm.LeftStickX, 6);
         Assert.Equal(0.8, vm.LeftStickY, 6);
         Assert.Equal(1.0, vm.LeftMagnitude, 6);
         Assert.Equal(1.0, vm.RightMagnitude, 6);
 
-        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.2f, 0f, 0f, 0f));
+        // A smaller push from rest still arms and lands below the raw push on the first sample.
+        var small = new GamepadVisualizerViewModel();
+        small.Update(GamepadState.Create(GamepadButtonMask.None, 0.2f, 0f, 0f, 0f));
 
-        Assert.True(vm.LeftStickX > 0, "a push past the deadzone must still move the cap");
-        Assert.True(vm.LeftStickX < 0.2, "the ramped deflection must stay below the raw push");
-        Assert.True(vm.LeftMagnitude > 0, "the magnitude must rise with the push");
-        Assert.True(vm.LeftMagnitude < 0.2, "the ramped magnitude must stay below the raw push");
+        Assert.True(small.LeftStickX > 0, "a push past the deadzone must still move the cap");
+        Assert.True(small.LeftStickX < 0.2, "the ramped deflection must stay below the raw push");
+        Assert.True(small.LeftMagnitude > 0, "the magnitude must rise with the push");
+        Assert.True(small.LeftMagnitude < 0.2, "the ramped magnitude must stay below the raw push");
+    }
+
+    /// <summary>
+    /// A long run of resting sensor noise - every reading under the enter deadzone - never arms a
+    /// stick, so the cap holds exact rest and, because the frame never changes, the preview makes
+    /// no canvas writes while it sits there.
+    /// </summary>
+    [Fact]
+    public void Resting_Noise_Never_Moves_The_Cap_Or_Repaints_The_Preview()
+    {
+        var vm = new GamepadVisualizerViewModel();
+        var frames = 0;
+        vm.PropertyChanged += (_, e) => { if (e.PropertyName is null or "") frames++; };
+
+        foreach (var (lx, ly) in new[]
+        {
+            (0.02f, -0.03f),
+            (-0.06f, 0.05f),
+            (0.09f, 0.08f),
+            (0.11f, -0.04f),
+            (0.03f, 0.12f),
+        })
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                vm.Update(GamepadState.Create(GamepadButtonMask.None, lx, ly, -lx, -ly));
+            }
+        }
+
+        Assert.Equal(0, vm.LeftStickX);
+        Assert.Equal(0, vm.LeftStickY);
+        Assert.Equal(0, vm.LeftMagnitude);
+        Assert.Equal(0, vm.RightMagnitude);
+        Assert.Equal(0, frames);
+    }
+
+    /// <summary>
+    /// A magnitude walking back and forth across the enter line is the exact case a hard deadzone
+    /// flickers on: it drops the cap to exact rest on every sub-threshold sample. The hysteresis
+    /// keeps the stick armed through the dips (they all sit above the 0.10 exit) and the filter
+    /// holds one small continuous offset, so the cap never parks at rest mid-noise and never pops
+    /// to a real deflection.
+    /// </summary>
+    [Fact]
+    public void Noise_Oscillating_Across_The_Deadzone_Line_Does_Not_Flicker_The_Cap()
+    {
+        var vm = new GamepadVisualizerViewModel();
+
+        var magnitudes = new[] { 0.16f, 0.14f, 0.17f, 0.13f, 0.16f, 0.12f, 0.15f, 0.18f, 0.11f, 0.16f };
+        var peak = 0.0;
+
+        for (var i = 0; i < magnitudes.Length; i++)
+        {
+            vm.Update(GamepadState.Create(GamepadButtonMask.None, magnitudes[i], 0f, 0f, 0f));
+            peak = Math.Max(peak, vm.LeftMagnitude);
+
+            if (i > 0)
+            {
+                Assert.True(vm.LeftMagnitude > 0,
+                    $"frame {i}: the smoothed cap must not park at exact rest mid-noise");
+            }
+        }
+
+        Assert.True(peak < 0.05, $"the cap must read the boundary noise as a small signal, peak was {peak}");
+    }
+
+    /// <summary>
+    /// A clear push answers on the sample it lands - the cap jumps to the ramped deflection rather
+    /// than easing in - and releasing below the deadzone glides it home over a few samples instead
+    /// of snapping, parking exactly at rest once the reading is centred.
+    /// </summary>
+    [Fact]
+    public void A_Push_Arms_Immediately_And_The_Release_Glides_The_Cap_Home()
+    {
+        var vm = new GamepadVisualizerViewModel();
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.5f, 0f, 0f, 0f));
+        Assert.Equal(0.4117647, vm.LeftStickX, 6);
+        Assert.Equal(0.4117647, vm.LeftMagnitude, 6);
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.05f, 0f, 0f, 0f));
+        var afterRelease = vm.LeftStickX;
+        Assert.True(afterRelease > 0 && afterRelease < 0.4117647, "the release must start gliding home, not snap");
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.05f, 0f, 0f, 0f));
+        Assert.True(vm.LeftStickX < afterRelease, "the cap must keep closing on centre");
+
+        vm.Update(GamepadState.Neutral);
+        Assert.Equal(0, vm.LeftStickX);
+        Assert.Equal(0, vm.LeftMagnitude);
+    }
+
+    /// <summary>
+    /// The exit threshold sits below the enter threshold so a stick that dips back toward centre
+    /// after a push stays armed: the cap eases toward centre through the dip and re-engages
+    /// smoothly when the push returns, rather than disarming and snapping back to full deflection
+    /// the way a single-threshold gate would.
+    /// </summary>
+    [Fact]
+    public void A_Stick_That_Dips_Toward_Centre_Stays_Armed_Instead_Of_Dropping_And_Re_Snapping()
+    {
+        var vm = new GamepadVisualizerViewModel();
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.5f, 0f, 0f, 0f));
+        Assert.Equal(0.4117647, vm.LeftStickX, 6);
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.12f, 0f, 0f, 0f));
+        Assert.True(vm.LeftStickX < 0.4117647 && vm.LeftStickX > 0, "the cap eases toward centre on the dip");
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.5f, 0f, 0f, 0f));
+        Assert.True(vm.LeftStickX > 0 && vm.LeftStickX < 0.4117647,
+            "re-engaging must ease from the dipped position, not snap back to full deflection");
+    }
+
+    /// <summary>
+    /// The stick frame is republished as one unit: a sample that moves both sticks raises a single
+    /// change notification, so the view redraws every layer from one consistent snapshot instead of
+    /// once per changed axis. A frame that has not changed - a cap parked at rest or holding still -
+    /// raises nothing, keeping the idle preview off the canvas.
+    /// </summary>
+    [Fact]
+    public void A_Moved_Frame_Republishes_Once_And_A_Parked_Cap_Republishes_Never()
+    {
+        var vm = new GamepadVisualizerViewModel();
+        var frames = 0;
+        vm.PropertyChanged += (_, e) => { if (e.PropertyName is null or "") frames++; };
+
+        for (var i = 0; i < 10; i++)
+        {
+            vm.Update(GamepadState.Neutral);
+        }
+        Assert.Equal(0, frames);
+
+        vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.5f, 0.5f, -0.5f, 0.5f));
+        Assert.Equal(1, frames);
+
+        for (var i = 0; i < 5; i++)
+        {
+            vm.Update(GamepadState.Create(GamepadButtonMask.None, 0.5f, 0.5f, -0.5f, 0.5f));
+        }
+        Assert.Equal(1, frames);
     }
 
     [Fact]

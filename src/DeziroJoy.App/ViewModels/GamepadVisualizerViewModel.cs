@@ -11,12 +11,28 @@ namespace DeziroJoy.App.ViewModels;
 public partial class GamepadVisualizerViewModel : ObservableObject
 {
     /// <summary>
-    /// Radial deadzone the preview shares with the mapping path's default stick deadzone.
-    /// Resting drift and low-amplitude noise below this fraction of full deflection park the
-    /// caps at rest instead of twitching them around the centre; a real push past it still
-    /// moves the cap in real time.
+    /// Raw deflection that arms a stick. Below it the cap is parked at rest; at or above it a
+    /// push takes hold. The ramp the armed cap tracks reuses the mapping path's default radial
+    /// deadzone (this same 0.15, <see cref="DeziroJoy.Core.Mapping.MouseStickSettings.DeadZone"/>),
+    /// so the preview and the mapping agree on where a stick starts to count.
     /// </summary>
-    public const float PreviewDeadZone = 0.15f;
+    public const float PreviewEnterDeadZone = 0.15f;
+
+    /// <summary>
+    /// Raw deflection that releases an armed stick. It sits below
+    /// <see cref="PreviewEnterDeadZone"/> so a magnitude hovering on the line - or a stick that
+    /// dips back toward centre after a push - stays armed instead of dropping out and re-arming
+    /// on the next sample. That gap is what stops the cap flickering at the edge of the deadzone.
+    /// </summary>
+    public const float PreviewExitDeadZone = 0.10f;
+
+    /// <summary>
+    /// Fraction of the way to the ramped target the cap travels per sample while a stick is
+    /// armed. A decisive push arms the stick and jumps straight to the target (timely response),
+    /// then this short time constant rides out the raw sensor noise while the stick is held and
+    /// glides the cap back to centre on release instead of snapping.
+    /// </summary>
+    public const double PreviewSmoothing = 0.5;
 
     [ObservableProperty]
     private bool _isConnected;
@@ -72,23 +88,22 @@ public partial class GamepadVisualizerViewModel : ObservableObject
     [ObservableProperty]
     private bool _isDPadRightPressed;
 
-    [ObservableProperty]
-    private double _leftStickX;
+    // The stick frame is published as one unit (see PublishSticks): the view redraws every cap
+    // layer from a single consistent snapshot. These are plain properties rather than
+    // [ObservableProperty] on purpose - the per-axis notifications they used to raise fired up to
+    // six times per sample and redrew the caps on half-old, half-new values, which is the layer
+    // desync the single-frame notification replaces.
+    public double LeftStickX { get; private set; }
 
-    [ObservableProperty]
-    private double _leftStickY;
+    public double LeftStickY { get; private set; }
 
-    [ObservableProperty]
-    private double _rightStickX;
+    public double RightStickX { get; private set; }
 
-    [ObservableProperty]
-    private double _rightStickY;
+    public double RightStickY { get; private set; }
 
-    [ObservableProperty]
-    private double _leftMagnitude;
+    public double LeftMagnitude { get; private set; }
 
-    [ObservableProperty]
-    private double _rightMagnitude;
+    public double RightMagnitude { get; private set; }
 
     /// <summary>
     /// Number of buttons the connected device declares, or null when it does not say. XInput's
@@ -107,6 +122,20 @@ public partial class GamepadVisualizerViewModel : ObservableObject
     /// model as "按键 N" pills so they are as clickable as any fixed element.
     /// </summary>
     public ObservableCollection<int> ExtraButtonCodes { get; } = [];
+
+    // Per-stick arm state and smoothed position, carried across samples so the hysteresis and the
+    // filter have memory. Both sticks start disarmed and centred.
+    private bool _leftArmed;
+
+    private bool _rightArmed;
+
+    private double _leftSmoothX;
+
+    private double _leftSmoothY;
+
+    private double _rightSmoothX;
+
+    private double _rightSmoothY;
 
     public void Update(IGamepadState state)
     {
@@ -135,19 +164,88 @@ public partial class GamepadVisualizerViewModel : ObservableObject
             RegisterExtraButton(code);
         }
 
-        // The caps share the mapping path's radial deadzone: position and magnitude both pass
-        // through it, so a resting or noisy stick parks the cap and its brightness at rest
-        // instead of twitching them around the centre. No tween - above the deadzone the cap
-        // still tracks the raw axes every sample.
-        var (leftX, leftY) = StickMath.ApplyRadialDeadzone(state.LeftStickX, state.LeftStickY, PreviewDeadZone);
-        var (rightX, rightY) = StickMath.ApplyRadialDeadzone(state.RightStickX, state.RightStickY, PreviewDeadZone);
+        AdvanceStick(state.LeftStickX, state.LeftStickY, ref _leftArmed, ref _leftSmoothX, ref _leftSmoothY);
+        AdvanceStick(state.RightStickX, state.RightStickY, ref _rightArmed, ref _rightSmoothX, ref _rightSmoothY);
+
+        PublishSticks(_leftSmoothX, _leftSmoothY, _rightSmoothX, _rightSmoothY);
+    }
+
+    /// <summary>
+    /// Advances one stick's arm state and smoothed position by a single sample. The raw axes pass
+    /// through a hysteresis gate (arm at <see cref="PreviewEnterDeadZone"/>, stay armed until the
+    /// magnitude falls under <see cref="PreviewExitDeadZone"/>); the armed cap then tracks the
+    /// shared radial-deadzone ramp, smoothed so resting noise cannot twitch it and a release
+    /// glides it home. Position and magnitude both read the smoothed vector, so the brightness
+    /// that rides the magnitude can never flicker out of step with the cap.
+    /// </summary>
+    private static void AdvanceStick(
+        float rawX, float rawY,
+        ref bool armed, ref double smoothX, ref double smoothY)
+    {
+        var magnitude = Math.Sqrt((rawX * rawX) + (rawY * rawY));
+
+        // An exactly-centred reading is mechanical rest - the neutral and disconnected pose. Park
+        // the cap instantly rather than gliding, so a dropped connection clears in a single frame
+        // and a stick resting dead-centre shows no residual drift.
+        if (rawX == 0f && rawY == 0f)
+        {
+            armed = false;
+            smoothX = 0;
+            smoothY = 0;
+            return;
+        }
+
+        // Hysteresis: the threshold a stick is measured against depends on the state it is already
+        // in, so a magnitude sitting on the enter line cannot toggle the cap on and off.
+        var wasArmed = armed;
+        armed = magnitude >= (wasArmed ? PreviewExitDeadZone : PreviewEnterDeadZone);
+
+        var (targetX, targetY) = armed
+            ? StickMath.ApplyRadialDeadzone(rawX, rawY, PreviewEnterDeadZone)
+            : (0.0, 0.0);
+
+        if (armed && !wasArmed)
+        {
+            // Arming is a decisive push: jump straight to the ramped deflection so the cap answers
+            // on the sample the push lands instead of easing in over several samples.
+            smoothX = targetX;
+            smoothY = targetY;
+        }
+        else
+        {
+            smoothX += (targetX - smoothX) * PreviewSmoothing;
+            smoothY += (targetY - smoothY) * PreviewSmoothing;
+        }
+    }
+
+    /// <summary>
+    /// Publishes the smoothed stick frame as a single consistent snapshot and raises one change
+    /// notification for the whole frame. The view turns that into exactly one redraw, so every
+    /// material layer is placed from the same position and magnitude. An unchanged frame (a stick
+    /// parked at rest) raises nothing, which keeps the idle preview off the canvas entirely.
+    /// </summary>
+    private void PublishSticks(double leftX, double leftY, double rightX, double rightY)
+    {
+        var leftMagnitude = Math.Sqrt((leftX * leftX) + (leftY * leftY));
+        var rightMagnitude = Math.Sqrt((rightX * rightX) + (rightY * rightY));
+
+        if (leftX == LeftStickX && leftY == LeftStickY
+            && rightX == RightStickX && rightY == RightStickY
+            && leftMagnitude == LeftMagnitude && rightMagnitude == RightMagnitude)
+        {
+            return;
+        }
 
         LeftStickX = leftX;
         LeftStickY = leftY;
         RightStickX = rightX;
         RightStickY = rightY;
-        LeftMagnitude = Math.Sqrt((leftX * leftX) + (leftY * leftY));
-        RightMagnitude = Math.Sqrt((rightX * rightX) + (rightY * rightY));
+        LeftMagnitude = leftMagnitude;
+        RightMagnitude = rightMagnitude;
+
+        // An empty property name is the INotifyPropertyChanged convention for "the object as a
+        // whole refreshed"; here it means the stick frame was republished as one unit.
+        OnPropertyChanged(string.Empty);
     }
 
     /// <summary>
