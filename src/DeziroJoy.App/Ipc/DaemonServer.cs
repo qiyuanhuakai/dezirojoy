@@ -88,11 +88,52 @@ public sealed partial class DaemonServer
             _activePresetSlot = _restored.ActivePresetSlot >= PresetStore.MinSlot
                 ? _restored.ActivePresetSlot
                 : PresetStore.MinSlot;
+
+            // The restored body is the last profile a client applied. A device whose slots
+            // predate the device-global special-key rule is converged here, before the pipe
+            // opens and any client can adopt the body, so no client ever sees - or writes
+            // back - a snapshot that predates the shared subset.
+            HealRestoredSpecialKeys();
         }
         else
         {
             // First run: map per the existing configuration, exactly as the daemon always has.
             _desiredEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Converges the restored body's device onto one device-global special-key subset and
+    /// re-reads the body from the healed active slot when the convergence changed it, so the
+    /// snapshot a first connecting client adopts already carries the shared subset. Runs once
+    /// at construction, before the control channel is served.
+    /// </summary>
+    private void HealRestoredSpecialKeys()
+    {
+        if (string.IsNullOrEmpty(_profileJson))
+        {
+            return;
+        }
+
+        string? deviceId;
+        try
+        {
+            deviceId = ProfileSerializer.Deserialize(_profileJson).DeviceId;
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceId) || !_presetStore.CanonicalizeSpecialKeys(deviceId))
+        {
+            return;
+        }
+
+        if (_presetStore.LoadSlot(deviceId, _activePresetSlot) is { } healed)
+        {
+            _profileName = healed.Name;
+            _profileJson = ProfileSerializer.Serialize(healed with { DeviceId = deviceId });
         }
     }
 
@@ -256,6 +297,14 @@ public sealed partial class DaemonServer
                     applyDeviceId,
                     _activePresetSlot,
                     profile);
+
+                // Special keys are device-global: the applied profile's special-key subset is
+                // fanned out to the device's other slots at store level, before the revision is
+                // bumped and the snapshot pushed, so every window converges on a device whose
+                // slots already agree - and a snapshot that predated the fan-out is never the
+                // one a client adopts and later writes back. The fan-out re-enters nothing, so
+                // the revision below is still this apply's only bump.
+                _presetStore.SyncSpecialKeys(applyDeviceId, profile);
             }
 
             ReloadTargetDevice(profile);

@@ -242,9 +242,37 @@ public class PresetStoreTests
         Assert.True(leader.Enabled);
         Assert.Equal(migrated, store.LoadSlot("pad-1", 2));
 
-        // The base profile stays in slot 1, untouched.
-        Assert.Equal("主配置", store.LoadSlot("pad-1", 1)!.Name);
-        Assert.Single(store.LoadSlot("pad-1", 1)!.Mappings);
+        // The leader is device-global, so the base profile in slot 1 gains the very same
+        // entry rather than staying leader-less; its own mapping is untouched.
+        var primary = store.LoadSlot("pad-1", 1)!;
+        Assert.Equal("主配置", primary.Name);
+        Assert.Equal(2, primary.Mappings.Count);
+        Assert.Contains(primary.Mappings, mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+        Assert.Contains(
+            primary.Mappings,
+            mapping => mapping.Target is KeyPressTarget { Key: GamepadKey.Enter });
+    }
+
+    [Fact]
+    public void Migrate_Propagates_The_Leader_To_Every_Slot_Of_The_Device()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        inner.Save(SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 3, SlotProfile("第三套", "pad-1"));
+        store.SaveSlot("pad-1", 4, SlotProfile("第四套", "pad-1"));
+
+        store.MigrateLegacyLeader("pad-1", GamepadButton.Back, LeaderMode.Press, null);
+
+        // Every slot carries the one leader entry, so the key flips presets identically
+        // whichever slot is active.
+        foreach (var slot in new[] { 1, 2, 3, 4 })
+        {
+            var leader = LeaderTarget(store.LoadSlot("pad-1", slot)!);
+            Assert.NotNull(leader);
+            Assert.Equal(1, leader!.SlotA);
+            Assert.Equal(2, leader.SlotB);
+        }
     }
 
     [Fact]
@@ -665,5 +693,584 @@ public class PresetStoreTests
         Assert.NotNull(gestureLeader);
         Assert.Equal(1, gestureLeader!.SlotA);
         Assert.Equal(3, gestureLeader.SlotB);
+    }
+
+    // ---- Device-global special keys -------------------------------------------
+
+    private static GamepadProfile SpecialSlotProfile(
+        string name,
+        string deviceId,
+        SpecialKeyTarget? precision = null,
+        SpecialKeyTarget? leader = null,
+        GamepadButton precisionButton = GamepadButton.RightBumper,
+        GamepadButton leaderButton = GamepadButton.Back)
+    {
+        var mappings = new List<MappingEntry>
+        {
+            new()
+            {
+                Source = new ButtonBinding(GamepadButton.B),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        };
+
+        if (precision is not null)
+        {
+            mappings.Add(new MappingEntry
+            {
+                Source = new ButtonBinding(precisionButton),
+                Target = precision,
+                Enabled = true,
+            });
+        }
+
+        if (leader is not null)
+        {
+            mappings.Add(new MappingEntry
+            {
+                Source = new ButtonBinding(leaderButton),
+                Target = leader,
+                Enabled = true,
+            });
+        }
+
+        return new GamepadProfile
+        {
+            Name = name,
+            DeviceId = deviceId,
+            Layout = GamepadLayout.Xbox,
+            Mappings = mappings,
+        };
+    }
+
+    private static readonly SpecialKeyTarget PrecisionKey = new(SpecialKeyKind.Precision, PrecisionMode.Toggle);
+
+    private static readonly SpecialKeyTarget LeaderKey =
+        new(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 1, SlotB: 2);
+
+    [Fact]
+    public void SyncSpecialKeys_Replaces_The_Subset_In_Every_Slot_Leaving_Other_Mappings_And_Ids_Untouched()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = SpecialSlotProfile(
+            "主配置",
+            "pad-1",
+            precision: PrecisionKey with { PrecisionMode = PrecisionMode.Hold },
+            leader: LeaderKey);
+        store.SaveSlot("pad-1", 1, canonical);
+
+        // Slot 2 keeps its own click mapping and a stale leader, and carries the same ids.
+        var slotTwoBefore = SpecialSlotProfile(
+            "第二套",
+            "pad-1",
+            precision: PrecisionKey,
+            leader: LeaderKey with { SlotB = 3 });
+        var idsBefore = slotTwoBefore.Mappings.Select(mapping => mapping.Id).ToArray();
+        store.SaveSlot("pad-1", 2, slotTwoBefore);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        var slotTwo = store.LoadSlot("pad-1", 2)!;
+        Assert.Equal("第二套", slotTwo.Name);
+
+        // Every special key now reads exactly as the canonical profile's do.
+        Assert.Equal(
+            PrecisionKey with { PrecisionMode = PrecisionMode.Hold },
+            slotTwo.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.RightBumper }).Target);
+        Assert.Equal(LeaderKey, slotTwo.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.Back }).Target);
+
+        // The slot's own mapping and every entry id survived untouched.
+        Assert.Contains(
+            slotTwo.Mappings,
+            mapping => mapping.Target is KeyPressTarget { Key: GamepadKey.Enter });
+        Assert.Equal(idsBefore, slotTwo.Mappings.Select(mapping => mapping.Id).ToArray());
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Removes_A_Special_Key_Every_Slot_No_Longer_Carries()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1", precision: PrecisionKey, leader: LeaderKey));
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile("第二套", "pad-1", precision: PrecisionKey, leader: LeaderKey));
+        store.SaveSlot("pad-1", 3, SpecialSlotProfile("第三套", "pad-1", precision: PrecisionKey, leader: LeaderKey));
+
+        // The leader was deleted from the active slot; the fan-out removes it everywhere.
+        store.SyncSpecialKeys("pad-1", SpecialSlotProfile("主配置", "pad-1", precision: PrecisionKey));
+
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+            Assert.Null(LeaderTarget(profile));
+            Assert.NotNull(profile.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.RightBumper }).Target as SpecialKeyTarget);
+        }
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Adds_A_Missing_Special_Key_To_Every_Slot()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = SpecialSlotProfile("主配置", "pad-1", leader: LeaderKey);
+        store.SaveSlot("pad-1", 1, canonical);
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, SlotProfile("第三套", "pad-1"));
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            Assert.Equal(LeaderKey, LeaderTarget(store.LoadSlot("pad-1", slot)!));
+        }
+
+        // The added entry leaves the slots' own mappings - and their ids - alone.
+        var slotTwo = store.LoadSlot("pad-1", 2)!;
+        Assert.Equal(2, slotTwo.Mappings.Count);
+        Assert.Contains(slotTwo.Mappings, mapping => mapping.Target is KeyPressTarget { Key: GamepadKey.Enter });
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Is_Idempotent()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = SpecialSlotProfile("主配置", "pad-1", precision: PrecisionKey, leader: LeaderKey);
+        store.SaveSlot("pad-1", 1, canonical);
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        store.SyncSpecialKeys("pad-1", canonical);
+        var afterFirst = ProfileSerializer.Serialize(store.LoadSlot("pad-1", 2)!);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        Assert.Equal(afterFirst, ProfileSerializer.Serialize(store.LoadSlot("pad-1", 2)!));
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Syncs_A_Gesture_Action_Without_Touching_The_Gesture_Timing()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+
+        // The canonical profile carries a leader on B's long press at its own timing.
+        var canonical = SlotProfile("主配置", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = 0.75f,
+                            LongPressAction = LeaderKey,
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 1, canonical);
+
+        // Slot 2 chose its own (shorter) long-press timing for the same button.
+        var slotTwo = SlotProfile("第二套", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = 0.25f,
+                            LongPressAction = LeaderKey with { SlotB = 4 },
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Space),
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 2, slotTwo);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        var synced = store.LoadSlot("pad-1", 2)!;
+        var gesture = synced.Mappings.Single().Source is ButtonBinding button ? button.Gesture : null;
+        Assert.NotNull(gesture);
+        Assert.Equal(LeaderKey, gesture!.LongPressAction);
+
+        // The slot's own timing and its own click target are untouched.
+        Assert.Equal(0.25f, gesture.LongPressThreshold);
+        Assert.IsType<KeyPressTarget>(synced.Mappings.Single().Target);
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Materializes_A_Gesture_The_Slot_Does_Not_Have()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = SlotProfile("主配置", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                            DoubleClickAction = LeaderKey,
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 1, canonical);
+
+        // Slot 2 maps the same button with no gesture at all, so the shared key could not be
+        // expressed there: the fan-out materializes the position at the pinned default.
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        var synced = store.LoadSlot("pad-1", 2)!;
+        var gesture = synced.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.B })
+            .Source is ButtonBinding button ? button.Gesture : null;
+        Assert.NotNull(gesture);
+        Assert.Equal(LeaderKey, gesture!.DoubleClickAction);
+        Assert.Equal(ButtonGesture.DefaultDoubleClickWindow, gesture.DoubleClickWindow);
+
+        // The slot's own click target is untouched.
+        Assert.IsType<KeyPressTarget>(synced.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.B }).Target);
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Only_Touches_The_Named_Device()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = SpecialSlotProfile("主配置", "pad-1", leader: LeaderKey);
+        store.SaveSlot("pad-1", 1, canonical);
+        store.SaveSlot("pad-2", 1, SlotProfile("别的设备", "pad-2"));
+        var otherBefore = ProfileSerializer.Serialize(store.LoadSlot("pad-2", 1)!);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        Assert.Equal(otherBefore, ProfileSerializer.Serialize(store.LoadSlot("pad-2", 1)!));
+        Assert.Null(LeaderTarget(store.LoadSlot("pad-2", 1)!));
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Keeps_A_Gesture_Key_Riding_On_An_Entry_Whose_Own_Target_Is_Another_Key()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+
+        // One button is a precision key on its click and a leader on its long press: two
+        // shared keys, two positions, one entry.
+        var canonical = SlotProfile("主配置", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                            LongPressAction = LeaderKey,
+                        },
+                    },
+                    Target = PrecisionKey,
+                    Enabled = true,
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 1, canonical);
+
+        var slotTwo = SlotProfile("第二套", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = 0.9f,
+                            LongPressAction = LeaderKey with { SlotB = 3 },
+                        },
+                    },
+                    Target = PrecisionKey,
+                    Enabled = true,
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 2, slotTwo);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        // Exactly one entry: both keys were updated in place rather than the gesture key being
+        // appended as a second entry for the same button.
+        var entry = Assert.Single(store.LoadSlot("pad-1", 2)!.Mappings);
+        Assert.Equal(PrecisionKey, entry.Target);
+        var gesture = Assert.IsType<ButtonBinding>(entry.Source).Gesture;
+        Assert.NotNull(gesture);
+        Assert.Equal(LeaderKey, gesture!.LongPressAction);
+
+        // The slot's own gesture timing survives.
+        Assert.Equal(0.9f, gesture.LongPressThreshold);
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Keeps_A_Gesture_Key_When_The_Entry_Own_Target_Key_Is_Removed()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+
+        // The shared set keeps only the long-press leader; the click's precision key is gone.
+        var canonical = SlotProfile("主配置", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                            LongPressAction = LeaderKey,
+                        },
+                    },
+                    Target = new NoneTarget(),
+                    Enabled = true,
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 1, canonical);
+
+        var slotTwo = SlotProfile("第二套", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                            LongPressAction = LeaderKey,
+                        },
+                    },
+                    Target = PrecisionKey,
+                    Enabled = true,
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 2, slotTwo);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        // The entry stays as a bare gesture whose click does nothing, so the shared leader it
+        // carries is not dropped with the removed precision key.
+        var entry = Assert.Single(store.LoadSlot("pad-1", 2)!.Mappings);
+        Assert.IsType<NoneTarget>(entry.Target);
+        var gesture = Assert.IsType<ButtonBinding>(entry.Source).Gesture;
+        Assert.Equal(LeaderKey, gesture!.LongPressAction);
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Matches_Extra_Buttons_By_Their_Raw_Code()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = new GamepadProfile
+        {
+            Name = "主配置",
+            DeviceId = "pad-1",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Extra, Code: 42),
+                    Target = PrecisionKey,
+                    Enabled = true,
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 1, canonical);
+        store.SaveSlot("pad-1", 2, new GamepadProfile
+        {
+            Name = "第二套",
+            DeviceId = "pad-1",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Extra, Code: 7),
+                    Target = PrecisionKey,
+                    Enabled = true,
+                },
+            ],
+        });
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        var synced = store.LoadSlot("pad-1", 2)!;
+        var buttons = synced.Mappings
+            .Select(mapping => mapping.Source)
+            .OfType<ButtonBinding>()
+            .ToArray();
+        // The other extra button's precision key is gone, and the shared one took its place.
+        Assert.Single(buttons);
+        Assert.Equal(42, buttons[0].Code);
+    }
+
+    [Fact]
+    public void CanonicalizeSpecialKeys_Prefers_The_Primary_Slot_And_Merges_Non_Primary_Only_Keys()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1", leader: LeaderKey));
+        // Slot 2 disagrees: a leader between other slots, and a precision key no other slot has.
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile(
+            "第二套",
+            "pad-1",
+            precision: PrecisionKey,
+            leader: LeaderKey with { SlotA = 2, SlotB = 3 }));
+        store.SaveSlot("pad-1", 3, SlotProfile("第三套", "pad-1"));
+
+        var changed = store.CanonicalizeSpecialKeys("pad-1");
+
+        Assert.True(changed);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+            // Slot 1's leader wins the conflict everywhere.
+            Assert.Equal(LeaderKey, LeaderTarget(profile));
+            // The precision key only slot 2 had is merged in, not dropped.
+            Assert.NotNull(profile.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.RightBumper }).Target as SpecialKeyTarget);
+        }
+    }
+
+    [Fact]
+    public void CanonicalizeSpecialKeys_Is_Idempotent()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1", leader: LeaderKey));
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile("第二套", "pad-1", leader: LeaderKey with { SlotB = 3 }));
+
+        Assert.True(store.CanonicalizeSpecialKeys("pad-1"));
+        var afterFirst = store.SlotsInUse("pad-1")
+            .ToDictionary(slot => slot, slot => ProfileSerializer.Serialize(store.LoadSlot("pad-1", slot)!));
+
+        Assert.False(store.CanonicalizeSpecialKeys("pad-1"));
+        foreach (var (slot, expected) in afterFirst)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(store.LoadSlot("pad-1", slot)!));
+        }
+    }
+
+    [Fact]
+    public void EnsureDefaults_Converges_Divergent_Slots_On_Reconnect()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var descriptor = new GamepadDescriptor("pad-1", "Xbox Wireless Controller");
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1", leader: LeaderKey));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, SpecialSlotProfile("第三套", "pad-1", leader: LeaderKey with { SlotB = 4 }));
+
+        var active = store.EnsureDefaults(descriptor, activeSlot: 2);
+
+        // The runtime is handed the converged profile, and every slot agrees.
+        Assert.Equal(LeaderKey, LeaderTarget(active));
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            Assert.Equal(LeaderKey, LeaderTarget(store.LoadSlot("pad-1", slot)!));
+        }
+
+        // A second reconnect rewrites nothing.
+        var before = store.SlotsInUse("pad-1")
+            .ToDictionary(slot => slot, slot => ProfileSerializer.Serialize(store.LoadSlot("pad-1", slot)!));
+        store.EnsureDefaults(descriptor, activeSlot: 2);
+        foreach (var (slot, expected) in before)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(store.LoadSlot("pad-1", slot)!));
+        }
+    }
+
+    [Fact]
+    public void Migrate_Merges_A_Special_Key_Only_The_Alternate_Profile_Had()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        inner.Save(SlotProfile("主配置", "pad-1"));
+        var alternate = SpecialSlotProfile("第二套", "leader-alternate:pad-1", precision: PrecisionKey);
+
+        store.MigrateLegacyLeader("pad-1", GamepadButton.Back, LeaderMode.Press, alternate);
+
+        // The alternate's precision key is merged into every slot rather than dropped, and
+        // the base profile's own mapping is still there.
+        foreach (var slot in new[] { 1, 2 })
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+            Assert.NotNull(profile.Mappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.RightBumper }).Target as SpecialKeyTarget);
+            Assert.NotNull(LeaderTarget(profile));
+        }
+    }
+
+    [Fact]
+    public void DeleteSlot_Keeps_The_Shared_Special_Keys_Identical_Across_Survivors()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var leader = LeaderKey with { SlotA = 1, SlotB = 3 };
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            store.SaveSlot("pad-1", slot, SpecialSlotProfile($"槽 {slot}", "pad-1", leader: leader));
+        }
+
+        store.DeleteSlot("pad-1", 2);
+
+        // The leader named slots 1 and 3, so the delete repairs nothing - and the shared key
+        // stays byte-identical across the survivors rather than drifting per slot.
+        foreach (var slot in new[] { 1, 3 })
+        {
+            Assert.Equal(leader, LeaderTarget(store.LoadSlot("pad-1", slot)!));
+        }
+    }
+
+    [Fact]
+    public void DeleteSlot_Repairs_The_Shared_Leader_Identically_In_Every_Survivor()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var leader = LeaderKey with { SlotA = 2, SlotB = 3 };
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            store.SaveSlot("pad-1", slot, SpecialSlotProfile($"槽 {slot}", "pad-1", leader: leader));
+        }
+
+        // Deleting slot 2 retargets the leader in every surviving slot, identically.
+        store.DeleteSlot("pad-1", 2);
+
+        var repaired = LeaderKey with { SlotA = 1, SlotB = 3 };
+        foreach (var slot in new[] { 1, 3 })
+        {
+            Assert.Equal(repaired, LeaderTarget(store.LoadSlot("pad-1", slot)!));
+        }
     }
 }

@@ -423,6 +423,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         _presets.MigrateLegacyLeader(deviceId, _legacyLeaderButton, _legacyLeaderMode, alternate);
         _settings?.ClearLegacyLeader();
+
+        // The convergence can include the slot this device is running - the shared leader now
+        // lives in every slot - so the runtime is reloaded from the store: the engine runs the
+        // migrated shape, and the profile the next edit commits from is no longer the
+        // pre-migration one, which would fan the shared keys back out of every slot.
+        if (_daemon is null
+            && ActiveController is { } controller
+            && controller.Descriptor.DeviceId == deviceId
+            && _presets.LoadSlot(deviceId, controller.Profile.PresetSlot) is { } migrated)
+        {
+            ActiveProfile = migrated;
+            _host.Reload(deviceId, migrated with { PresetSlot = controller.Profile.PresetSlot });
+            ReloadSensitivityPanels();
+            RefreshMappings();
+        }
     }
 
     /// <summary>Which preset slot (1 and up) is active for the device in scope.</summary>
@@ -2044,6 +2059,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             // away and back - or a restart - find the edit where it was made. In daemon mode
             // the daemon owns this persistence through its apply path, so it stays local.
             _presets.SaveSlot(controller.Descriptor.DeviceId, ActivePresetSlot, updated);
+
+            // Special keys are the one device-global part of a profile: an edit that added,
+            // changed or removed one is fanned out to the device's other slots at store level,
+            // leaving every other mapping where it was written. The fan-out writes the store
+            // directly - it never re-enters this path - so there is no recursion and no second
+            // revision to bump, and it is a no-op when the edit carried no special key.
+            _presets.SyncSpecialKeys(controller.Descriptor.DeviceId, updated);
         }
 
         ReloadSensitivityPanels();

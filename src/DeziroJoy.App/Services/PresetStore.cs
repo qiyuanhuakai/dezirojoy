@@ -31,6 +31,13 @@ public enum PresetDeleteOutcome
 /// device's own key, which is what lets an unmigrated profile read as the primary slot.
 /// Slots are open-ended - any positive slot number is valid - and the four a device is
 /// first materialized with are only the initial set, not a ceiling.
+/// <para>
+/// The slots are independent in every respect but one: the special keys - precision and
+/// leader <see cref="SpecialKeyTarget"/>s, whether they sit on a mapping's own target or
+/// on a button gesture's action - are device-global. Every write that lands a special key
+/// fans it out to the device's other slots (<see cref="SyncSpecialKeys"/>), and a device
+/// whose slots predate that rule is converged onto one subset (<see cref="CanonicalizeSpecialKeys"/>).
+/// </para>
 /// </summary>
 public sealed class PresetStore
 {
@@ -279,6 +286,10 @@ public sealed class PresetStore
     /// slot it actually loaded; when the device lacks <paramref name="activeSlot"/> it falls
     /// back to the primary anchor so a reconnect still succeeds without resurrecting a deleted
     /// slot or moving the app-wide slot.
+    /// <para>
+    /// Every call also converges the device's slots onto one device-global special-key subset
+    /// (<see cref="CanonicalizeSpecialKeys"/>), so the returned profile already carries it.
+    /// </para>
     /// </summary>
     public GamepadProfile EnsureDefaults(GamepadDescriptor descriptor, int activeSlot = MinSlot)
     {
@@ -314,6 +325,12 @@ public sealed class PresetStore
                 }
             }
         }
+
+        // Special keys are device-global, so every slot is converged onto one subset here:
+        // a fresh device's copies start identical and stay that way, and a device whose
+        // slots predate the sharing rule - or a store edited by hand - heals on reconnect.
+        // Idempotent, so a device already in agreement is not rewritten.
+        CanonicalizeSpecialKeys(descriptor.DeviceId);
 
         // A device that lacks the requested active slot - it deleted it, or never had it -
         // reconnects to a surviving profile rather than failing runtime creation: fall back to
@@ -396,7 +413,14 @@ public sealed class PresetStore
     /// One-time conversion of the legacy leader pair into the preset slots: the alternate
     /// (or a clone of the base profile when there is none) becomes slot 2 carrying one
     /// leader mapping that flips between slots 1 and 2, while the base profile stays slot
-    /// 1. Returns the migrated slot-2 profile, or null when there was nothing to migrate.
+    /// 1. Returns the migrated slot-2 profile as it stands after the device's slots have
+    /// been converged onto one special-key subset, or null when there was nothing to
+    /// migrate.
+    /// <para>
+    /// The leader is device-global, so the conversion propagates it to every slot rather
+    /// than writing it into slot 2 alone: slot 1 keeps priority for a leader it already
+    /// carried, and a special key only the alternate had is merged in rather than dropped.
+    /// </para>
     /// <para>
     /// Idempotent by shape: a slot-2 profile that already carries a leader entry for the
     /// button is returned as it stands, so a second run neither appends a duplicate entry
@@ -437,8 +461,436 @@ public sealed class PresetStore
             };
 
         SaveSlot(deviceId, 2, migrated);
-        return migrated;
+
+        // The leader is device-global, so the migration converges the whole device onto one
+        // special-key subset: the leader lands in every slot, slot 1 keeps priority for a
+        // leader it already carried, and a special key only the alternate (or any other
+        // non-primary slot) had is merged in rather than dropped.
+        CanonicalizeSpecialKeys(deviceId);
+
+        return LoadSlot(deviceId, 2);
     }
+
+    // ---- Device-global special keys -------------------------------------------
+
+    /// <summary>
+    /// Fans one profile's device-global special-key subset out to every slot of the device.
+    /// Each sibling slot keeps its own mappings and entry ids, but its special-key subset -
+    /// every precision and leader <see cref="SpecialKeyTarget"/>, on a mapping's own target
+    /// or on a gesture action - becomes exactly <paramref name="canonical"/>'s. This is the
+    /// write-time half of the sharing rule: an edit that adds, changes or removes a special
+    /// key lands in every preset at once, while every other mapping stays where it was
+    /// written.
+    /// <para>
+    /// Store-level and idempotent: a slot already carrying the subset is not re-saved, and
+    /// the fan-out never re-enters the apply path that called it, so no revision is bumped
+    /// twice and no snapshot is pushed from inside a write. The caller persists
+    /// <paramref name="canonical"/> to its own slot first; syncing it back onto that slot is
+    /// a no-op unless the profile carried the same key twice, which the rewrite normalizes.
+    /// </para>
+    /// </summary>
+    public void SyncSpecialKeys(string deviceId, GamepadProfile canonical)
+    {
+        ArgumentNullException.ThrowIfNull(canonical);
+
+        WriteSpecialKeys(deviceId, SlotsInUse(deviceId), ExtractSpecialKeys(canonical));
+    }
+
+    /// <summary>
+    /// Converges every slot of the device onto one device-global special-key subset - the
+    /// migration half of the sharing rule, for a device whose slots predate it or a store
+    /// edited by hand. Slot 1, the primary anchor, has priority; a special key that exists
+    /// only in a later slot is merged in rather than dropped, so a leader or precision key
+    /// no other slot carries survives. Where two slots place different kinds on the same
+    /// source at the same position - one click cannot be two special keys - the earlier slot
+    /// wins.
+    /// <para>
+    /// Idempotent by shape: a device already in agreement is not rewritten, so a reconnect
+    /// may run this on every connect. Returns whether any slot was rewritten.
+    /// </para>
+    /// </summary>
+    public bool CanonicalizeSpecialKeys(string deviceId)
+    {
+        var slots = SlotsInUse(deviceId);
+        if (slots.Count == 0)
+        {
+            return false;
+        }
+
+        var canonical = new Dictionary<SpecialKeyId, SpecialKeyValue>();
+        var placed = new HashSet<(GamepadButton Button, int Code, SpecialKeyPosition Position)>();
+
+        foreach (var slot in slots)
+        {
+            if (LoadSlot(deviceId, slot) is not { } profile)
+            {
+                continue;
+            }
+
+            foreach (var (id, value) in ExtractSpecialKeys(profile))
+            {
+                // An earlier slot already placed a special key on this source at this
+                // position; slot-1 priority means that one wins and this one is superseded.
+                if (placed.Add((id.Button, id.Code, id.Position)))
+                {
+                    canonical[id] = value;
+                }
+            }
+        }
+
+        return WriteSpecialKeys(deviceId, slots, canonical);
+    }
+
+    /// <summary>
+    /// Rewrites each listed slot's special-key subset to <paramref name="canonical"/>,
+    /// saving only the slots that actually changed. Returns whether any slot was rewritten.
+    /// </summary>
+    private bool WriteSpecialKeys(
+        string deviceId,
+        IReadOnlyList<int> slots,
+        IReadOnlyDictionary<SpecialKeyId, SpecialKeyValue> canonical)
+    {
+        var rewritten = false;
+
+        foreach (var slot in slots)
+        {
+            if (LoadSlot(deviceId, slot) is not { } stored)
+            {
+                continue;
+            }
+
+            var (updated, changed) = ApplySpecialKeys(stored, canonical);
+            if (changed)
+            {
+                SaveSlot(deviceId, slot, updated);
+                rewritten = true;
+            }
+        }
+
+        return rewritten;
+    }
+
+    /// <summary>
+    /// The device-global special keys one profile carries, keyed by identity and in profile
+    /// order. A key sits on a mapping's own target or on one of its gesture's two actions;
+    /// the first occurrence wins when a hand-edited profile carries the same key twice, so
+    /// the result stays deterministic.
+    /// </summary>
+    private static Dictionary<SpecialKeyId, SpecialKeyValue> ExtractSpecialKeys(GamepadProfile profile)
+    {
+        var keys = new Dictionary<SpecialKeyId, SpecialKeyValue>();
+
+        foreach (var mapping in profile.Mappings)
+        {
+            if (mapping.Source is not ButtonBinding button)
+            {
+                continue;
+            }
+
+            if (mapping.Target is SpecialKeyTarget target)
+            {
+                keys.TryAdd(
+                    new SpecialKeyId(button.Button, button.Code, target.Kind, SpecialKeyPosition.Target),
+                    new SpecialKeyValue(target, mapping.Enabled));
+            }
+
+            if (button.Gesture is not { } gesture)
+            {
+                continue;
+            }
+
+            if (gesture.DoubleClickAction is SpecialKeyTarget doubleClick)
+            {
+                keys.TryAdd(
+                    new SpecialKeyId(button.Button, button.Code, doubleClick.Kind, SpecialKeyPosition.DoubleClick),
+                    new SpecialKeyValue(doubleClick, Enabled: true));
+            }
+
+            if (gesture.LongPressAction is SpecialKeyTarget longPress)
+            {
+                keys.TryAdd(
+                    new SpecialKeyId(button.Button, button.Code, longPress.Kind, SpecialKeyPosition.LongPress),
+                    new SpecialKeyValue(longPress, Enabled: true));
+            }
+        }
+
+        return keys;
+    }
+
+    /// <summary>
+    /// One profile rewritten so its special-key subset is exactly <paramref name="canonical"/>'s.
+    /// A key the shared set carries is updated in place - a mapping's own target replaced, its
+    /// entry id and enabled state preserved; a key it no longer carries is removed - the whole
+    /// entry for a target key, since that entry's target IS the key, or just the action for a
+    /// gesture key, whose timing and re-fire-the-click fallback stay; a key the profile cannot
+    /// express in place is added, appended after the mappings it already had. Every other
+    /// mapping, and every entry id, comes back exactly as it went in.
+    /// </summary>
+    private static (GamepadProfile Profile, bool Changed) ApplySpecialKeys(
+        GamepadProfile profile, IReadOnlyDictionary<SpecialKeyId, SpecialKeyValue> canonical)
+    {
+        var changed = false;
+        var mappings = new List<MappingEntry>(profile.Mappings.Count);
+        var present = new HashSet<SpecialKeyId>();
+        var appendedGestures = new HashSet<(GamepadButton Button, int Code)>();
+
+        foreach (var mapping in profile.Mappings)
+        {
+            if (mapping.Source is not ButtonBinding button)
+            {
+                mappings.Add(mapping);
+                continue;
+            }
+
+            var desiredGesture = DesiredGesture(button.Gesture, canonical, button.Button, button.Code);
+            var gestureChanged = desiredGesture != button.Gesture;
+
+            if (mapping.Target is SpecialKeyTarget target)
+            {
+                var id = new SpecialKeyId(button.Button, button.Code, target.Kind, SpecialKeyPosition.Target);
+                present.Add(id);
+
+                if (canonical.TryGetValue(id, out var value))
+                {
+                    var entry = mapping;
+                    if (target != value.Target)
+                    {
+                        entry = entry with { Target = value.Target };
+                    }
+
+                    if (entry.Enabled != value.Enabled)
+                    {
+                        entry = entry with { Enabled = value.Enabled };
+                    }
+
+                    changed |= !ReferenceEquals(entry, mapping) || gestureChanged;
+                    mappings.Add(WithGesture(entry, button, desiredGesture));
+                }
+                else if (CarriesSpecialKey(desiredGesture))
+                {
+                    // The key is gone from the shared set, so the entry's own target goes with
+                    // it - but its gesture carries a shared key of its own that dropping the
+                    // entry would lose, so the entry stays as a bare gesture whose click does
+                    // nothing.
+                    changed = true;
+                    mappings.Add(WithGesture(mapping with { Target = new NoneTarget() }, button, desiredGesture));
+                }
+                else
+                {
+                    changed = true;
+                }
+            }
+            else
+            {
+                if (gestureChanged)
+                {
+                    changed = true;
+                    mappings.Add(mapping with { Source = button with { Gesture = desiredGesture } });
+                }
+                else
+                {
+                    mappings.Add(mapping);
+                }
+            }
+
+            // Whatever gesture this mapping ends up carrying marks its positions as present,
+            // so the add phase below never duplicates a key the profile already expresses -
+            // including a gesture key riding on an entry whose own target is another key.
+            if (desiredGesture is { } carried)
+            {
+                if (carried.DoubleClickAction is SpecialKeyTarget doubleClick)
+                {
+                    present.Add(new SpecialKeyId(button.Button, button.Code, doubleClick.Kind, SpecialKeyPosition.DoubleClick));
+                }
+
+                if (carried.LongPressAction is SpecialKeyTarget longPress)
+                {
+                    present.Add(new SpecialKeyId(button.Button, button.Code, longPress.Kind, SpecialKeyPosition.LongPress));
+                }
+            }
+        }
+
+        // Keys the shared set carries that this profile could not express in place.
+        foreach (var (id, value) in canonical)
+        {
+            if (present.Contains(id))
+            {
+                continue;
+            }
+
+            changed = true;
+
+            if (id.Position == SpecialKeyPosition.Target)
+            {
+                mappings.Add(new MappingEntry
+                {
+                    Source = new ButtonBinding(id.Button, id.Code),
+                    Target = value.Target,
+                    Enabled = value.Enabled,
+                });
+                continue;
+            }
+
+            // A gesture key on a button this profile does not map at all. One entry carries
+            // every key that button has, and its own click is 无功能 - no non-special mapping
+            // is invented for the slot.
+            if (appendedGestures.Add((id.Button, id.Code)))
+            {
+                mappings.Add(new MappingEntry
+                {
+                    Source = new ButtonBinding(id.Button, id.Code)
+                    {
+                        Gesture = DesiredGesture(null, canonical, id.Button, id.Code),
+                    },
+                    Target = new NoneTarget(),
+                    Enabled = true,
+                });
+            }
+        }
+
+        return (changed ? profile with { Mappings = [.. mappings] } : profile, changed);
+    }
+
+    /// <summary>One entry with its source's gesture replaced, or the entry itself when it already carries it.</summary>
+    private static MappingEntry WithGesture(MappingEntry entry, ButtonBinding button, ButtonGesture? gesture)
+        => gesture == button.Gesture ? entry : entry with { Source = button with { Gesture = gesture } };
+
+    /// <summary>
+    /// Whether a (already synchronized) gesture carries a special key of its own. Only a
+    /// canonical action survives <see cref="DesiredGesture"/>, so any special key it carries is
+    /// one the shared set names - which is what makes dropping the entry that owns the gesture
+    /// lose a shared key.
+    /// </summary>
+    private static bool CarriesSpecialKey(ButtonGesture? gesture)
+        => gesture is { } carried
+            && (carried.DoubleClickAction is SpecialKeyTarget || carried.LongPressAction is SpecialKeyTarget);
+
+    /// <summary>
+    /// The gesture a slot's button must carry so every shared gesture-position key for it is
+    /// present: the slot's own gesture when it has one - its timing, including a position it
+    /// deliberately left disabled, is the slot's own and stays - with only the actions
+    /// synchronized; a freshly materialized gesture at the pinned default timings when the
+    /// button has no gesture at all, which is the only way the shared key can be expressed
+    /// there. A position the shared set does not name keeps any non-special action it already
+    /// had and loses only a special-key action. The result equals the gesture the slot already
+    /// carries when nothing about it changes, so the caller can compare and skip the write.
+    /// </summary>
+    private static ButtonGesture? DesiredGesture(
+        ButtonGesture? existing,
+        IReadOnlyDictionary<SpecialKeyId, SpecialKeyValue> canonical,
+        GamepadButton button,
+        int code)
+    {
+        var doubleClick = SpecialKeyAt(canonical, button, code, SpecialKeyPosition.DoubleClick);
+        var longPress = SpecialKeyAt(canonical, button, code, SpecialKeyPosition.LongPress);
+
+        if (doubleClick is null && longPress is null)
+        {
+            if (existing is null)
+            {
+                return null;
+            }
+
+            var cleared = existing;
+            if (existing.DoubleClickAction is SpecialKeyTarget)
+            {
+                cleared = cleared with { DoubleClickAction = null };
+            }
+
+            if (existing.LongPressAction is SpecialKeyTarget)
+            {
+                cleared = cleared with { LongPressAction = null };
+            }
+
+            return cleared;
+        }
+
+        var gesture = existing ?? new ButtonGesture();
+
+        if (doubleClick is not null)
+        {
+            gesture = gesture with { DoubleClickAction = doubleClick };
+            if (existing is null)
+            {
+                gesture = gesture with { DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow };
+            }
+        }
+        else if (gesture.DoubleClickAction is SpecialKeyTarget)
+        {
+            gesture = gesture with { DoubleClickAction = null };
+        }
+
+        if (longPress is not null)
+        {
+            gesture = gesture with { LongPressAction = longPress };
+            if (existing is null)
+            {
+                gesture = gesture with { LongPressThreshold = ButtonGesture.DefaultLongPressThreshold };
+            }
+        }
+        else if (gesture.LongPressAction is SpecialKeyTarget)
+        {
+            gesture = gesture with { LongPressAction = null };
+        }
+
+        return gesture;
+    }
+
+    /// <summary>
+    /// The special key the shared set places on this source at this position, or null when it
+    /// places none. A well-formed set holds at most one kind per position - one action slot
+    /// cannot carry two special keys - and the first kind in declaration order wins if a set
+    /// ever disagreed with itself.
+    /// </summary>
+    private static SpecialKeyTarget? SpecialKeyAt(
+        IReadOnlyDictionary<SpecialKeyId, SpecialKeyValue> canonical,
+        GamepadButton button,
+        int code,
+        SpecialKeyPosition position)
+    {
+        foreach (var kind in new[] { SpecialKeyKind.Precision, SpecialKeyKind.Leader })
+        {
+            if (canonical.TryGetValue(new SpecialKeyId(button, code, kind, position), out var value))
+            {
+                return value.Target;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Where one device-global special key sits inside a profile: the mapping's own target, or
+    /// one of the button gesture's two actions. Two special keys that share a source button and
+    /// a <see cref="SpecialKeyKind"/> but sit in different positions are different keys - one
+    /// button can be a precision key on its click and a leader on its long press.
+    /// </summary>
+    private enum SpecialKeyPosition
+    {
+        /// <summary>The mapping's own <see cref="MappingEntry.Target"/>.</summary>
+        Target,
+
+        /// <summary>The gesture's <see cref="ButtonGesture.DoubleClickAction"/>.</summary>
+        DoubleClick,
+
+        /// <summary>The gesture's <see cref="ButtonGesture.LongPressAction"/>.</summary>
+        LongPress,
+    }
+
+    /// <summary>
+    /// The identity of one device-global special key: the physical button that triggers it -
+    /// the button plus the raw code that tells one extra button from another - its kind, and
+    /// the position it occupies. This is the key the fan-out and the migration match on.
+    /// </summary>
+    private readonly record struct SpecialKeyId(
+        GamepadButton Button, int Code, SpecialKeyKind Kind, SpecialKeyPosition Position);
+
+    /// <summary>
+    /// What one device-global special key carries: the target itself and, for a mapping's own
+    /// target, whether that mapping is enabled - a disabled special key is a different
+    /// configuration from an enabled one. Gesture actions carry no enabled flag of their own.
+    /// </summary>
+    private sealed record SpecialKeyValue(SpecialKeyTarget Target, bool Enabled);
 
     /// <summary>
     /// Whether the profile already carries a leader mapping for this button. Detection is
