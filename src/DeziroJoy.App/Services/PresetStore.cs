@@ -6,6 +6,25 @@ using DeziroJoy.Core.Profiles;
 namespace DeziroJoy.App.Services;
 
 /// <summary>
+/// Why <see cref="PresetStore.DeleteSlot"/> did or did not remove a slot. Every refusal is a
+/// state the caller can show the user; only <see cref="Deleted"/> changes the store.
+/// </summary>
+public enum PresetDeleteOutcome
+{
+    /// <summary>The slot's profile was removed and any Leader references to it were repaired.</summary>
+    Deleted,
+
+    /// <summary>Slot 1 is the device's own profile and the anchor every other slot reads from; it is never deletable.</summary>
+    PrimarySlot,
+
+    /// <summary>The device would be left with no preset at all; the last remaining slot is kept.</summary>
+    LastRemaining,
+
+    /// <summary>The slot already held nothing, so there was nothing to remove.</summary>
+    NothingStored,
+}
+
+/// <summary>
 /// The preset-slot service layer over <see cref="IProfileStore"/>: the slots of one
 /// device are stored beside each other under derived keys, so a leader key can flip
 /// between them and a reconnect restores whichever slot was saved. Slot 1 keeps the
@@ -58,6 +77,106 @@ public sealed class PresetStore
         ArgumentNullException.ThrowIfNull(profile);
 
         _store.Save(profile with { DeviceId = KeyFor(deviceId, slot) });
+    }
+
+    /// <summary>
+    /// Removes one slot's stored profile for a device and repairs every Leader mapping that
+    /// still pointed at it, so a delete can never leave a leader key flipping toward a slot
+    /// that no longer exists. The slot is gone from <see cref="SlotsInUse"/> the moment this
+    /// returns <see cref="PresetDeleteOutcome.Deleted"/>, and stays gone across a restart
+    /// because the delete reaches the backing store.
+    /// <para>
+    /// Slot 1 is the device's own profile and the anchor the rest of the system reads from -
+    /// the legacy migration base, the "unmigrated reads as primary" shape - so it is refused
+    /// outright rather than deleted, and a device is never left preset-less. A slot that holds
+    /// nothing is a no-op rather than an error. Leader repair runs before the delete, against
+    /// the slots that survive it: each surviving profile with a leader naming the deleted slot
+    /// is retargeted to the lowest surviving slot that keeps its two ends distinct, and a
+    /// leader with no distinct survivor left is dropped rather than left unswitchable.
+    /// </para>
+    /// </summary>
+    public PresetDeleteOutcome DeleteSlot(string deviceId, int slot)
+    {
+        ValidateSlot(slot);
+
+        var inUse = SlotsInUse(deviceId);
+        if (slot == MinSlot)
+        {
+            return PresetDeleteOutcome.PrimarySlot;
+        }
+
+        if (inUse.Count <= 1)
+        {
+            return PresetDeleteOutcome.LastRemaining;
+        }
+
+        if (!inUse.Contains(slot))
+        {
+            return PresetDeleteOutcome.NothingStored;
+        }
+
+        var surviving = inUse.Where(s => s != slot).ToList();
+        RepairLeaderReferences(deviceId, slot, surviving);
+
+        _store.Delete(KeyFor(deviceId, slot));
+        return PresetDeleteOutcome.Deleted;
+    }
+
+    /// <summary>
+    /// Rewrites every surviving profile's Leader mapping that named <paramref name="deletedSlot"/>
+    /// so it flips between two slots that still exist. The deleted end is retargeted to the
+    /// lowest surviving slot other than the mapping's surviving end; when only that one
+    /// surviving slot remains the leader has nowhere distinct to flip to, so the mapping is
+    /// dropped. Profiles untouched by the delete are never re-saved.
+    /// </summary>
+    private void RepairLeaderReferences(string deviceId, int deletedSlot, IReadOnlyList<int> surviving)
+    {
+        foreach (var slot in surviving)
+        {
+            var profile = LoadSlot(deviceId, slot);
+            if (profile is null)
+            {
+                continue;
+            }
+
+            var repaired = false;
+            var mappings = new List<MappingEntry>(profile.Mappings.Count);
+            foreach (var mapping in profile.Mappings)
+            {
+                if (mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader
+                    && (leader.SlotA == deletedSlot || leader.SlotB == deletedSlot))
+                {
+                    repaired = true;
+
+                    var other = leader.SlotA == deletedSlot ? leader.SlotB : leader.SlotA;
+                    var retarget = surviving.Where(candidate => candidate != other).DefaultIfEmpty(0).Min();
+                    if (retarget == 0)
+                    {
+                        // No distinct survivor: a leader that would flip a slot against itself
+                        // is dropped rather than written, matching the editor's own refusal.
+                        continue;
+                    }
+
+                    mappings.Add(mapping with
+                    {
+                        Target = leader with
+                        {
+                            SlotA = leader.SlotA == deletedSlot ? retarget : leader.SlotA,
+                            SlotB = leader.SlotB == deletedSlot ? retarget : leader.SlotB,
+                        },
+                    });
+                }
+                else
+                {
+                    mappings.Add(mapping);
+                }
+            }
+
+            if (repaired)
+            {
+                SaveSlot(deviceId, slot, profile with { Mappings = [.. mappings] });
+            }
+        }
     }
 
     /// <summary>

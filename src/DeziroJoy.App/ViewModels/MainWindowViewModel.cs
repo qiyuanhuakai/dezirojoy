@@ -92,6 +92,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>The device whose slots <see cref="PresetSlots"/> was last built for.</summary>
     private string? _presetSlotDeviceId;
 
+    /// <summary>
+    /// The slot whose delete is armed for a confirming second click, or null when none is.
+    /// The two-step confirm is the anti-mistouch half of a destructive action: the first
+    /// press arms, the second on the same slot deletes, and any other preset action disarms.
+    /// </summary>
+    private int? _presetDeleteArmedSlot;
+
     public MainWindowViewModel(
         EngineHost host,
         IProfileStore profileStore,
@@ -430,6 +437,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private async Task SwitchPresetSlot(int slot)
     {
+        // Switching is a deliberate move to another slot, so any half-finished delete confirm
+        // is dropped rather than left armed behind the user's back.
+        DisarmPresetDelete();
+
         if (_daemonRequired && !IsDaemonConnected)
         {
             SetTransferError("提权守护进程不可用；配置槽位未切换。");
@@ -511,6 +522,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private async Task AddPreset()
     {
+        DisarmPresetDelete();
+
         var deviceId = _daemon is null
             ? ActiveController?.Descriptor.DeviceId
             : PersistenceDeviceId;
@@ -541,6 +554,140 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    /// Deletes one preset slot of the device in scope. The action is destructive, so it runs
+    /// as a two-step confirm: the first press arms this slot's delete (the card shows the
+    /// confirm state), the second press on the same slot performs it, and any other preset
+    /// action disarms. In daemon mode the daemon owns the store and the app-wide slot, so the
+    /// request is sent to it and the resulting snapshot reconciles this client; locally the
+    /// slot is removed here. Deleting the active slot moves the whole app to a surviving slot
+    /// first, so the running engine and every Leader reference never point at a slot that is
+    /// gone, and the delete is rolled back if that switch fails. Slot 1 and the device's last
+    /// remaining preset are refused.
+    /// </summary>
+    [RelayCommand]
+    private async Task DeletePreset(int slot)
+    {
+        if (slot < PresetStore.MinSlot)
+        {
+            return;
+        }
+
+        if (_presetDeleteArmedSlot != slot)
+        {
+            _presetDeleteArmedSlot = slot;
+            MarkPresetDeleteArmed();
+            return;
+        }
+
+        DisarmPresetDelete();
+
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；预设未删除。");
+            return;
+        }
+
+        if (_daemon is not null)
+        {
+            if (PersistenceDeviceId is not { } deviceId)
+            {
+                SetTransferError("删除预设失败：请先连接手柄。");
+                return;
+            }
+
+            try
+            {
+                var result = await _daemon.DeletePresetSlotAsync(deviceId, slot, _lifetime.Token);
+                ReportMutationFailure(result, "删除预设");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            return;
+        }
+
+        PerformPresetDelete(slot);
+    }
+
+    /// <summary>
+    /// The local-engine counterpart of the daemon's delete: removes the slot from the store
+    /// and, when it was the active slot, switches the whole app to a surviving slot first so
+    /// nothing is left aimed at a slot that is gone. The switch runs before the delete, so a
+    /// reload failure rolls the delete back and leaves the slot intact.
+    /// </summary>
+    private void PerformPresetDelete(int slot)
+    {
+        if (ActiveController?.Descriptor.DeviceId is not { } deviceId)
+        {
+            SetTransferError("删除预设失败：请先连接手柄。");
+            return;
+        }
+
+        if (slot == PresetStore.MinSlot)
+        {
+            SetTransferError("不能删除设备的主预设（槽位 1）。");
+            return;
+        }
+
+        var inUse = _presets.SlotsInUse(deviceId);
+
+        if (slot == ActivePresetSlot)
+        {
+            var fallback = inUse
+                .Where(candidate => candidate != slot && candidate < slot)
+                .DefaultIfEmpty(PresetStore.MinSlot)
+                .Max();
+
+            var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
+            foreach (var connected in _host.Controllers)
+            {
+                if (_presets.LoadSlot(connected.Descriptor.DeviceId, fallback) is { } profile)
+                {
+                    profiles.Add(connected.Descriptor.DeviceId, profile);
+                }
+            }
+
+            try
+            {
+                _host.SwitchPresetSlot(fallback, profiles);
+            }
+            catch (Exception exception)
+            {
+                SetTransferError($"删除预设失败，已保留原槽位：{exception.Message}");
+                return;
+            }
+
+            ActivePresetSlot = fallback;
+        }
+
+        var outcome = _presets.DeleteSlot(deviceId, slot);
+        if (outcome != PresetDeleteOutcome.Deleted)
+        {
+            SetTransferError(outcome switch
+            {
+                PresetDeleteOutcome.PrimarySlot => "不能删除设备的主预设（槽位 1）。",
+                PresetDeleteOutcome.LastRemaining => "不能删除最后一套预设。",
+                _ => "该槽位没有配置。",
+            });
+            return;
+        }
+
+        ReconcilePresetSlots(deviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
+
+        if (ActiveController is { } controller
+            && _presets.LoadSlot(controller.Descriptor.DeviceId, ActivePresetSlot) is { } activeProfile)
+        {
+            ActiveProfile = activeProfile;
+        }
+
+        ReloadSensitivityPanels();
+        RefreshMappings();
+    }
+
+    /// <summary>
     /// Reconciles <see cref="PresetSlots"/> against the store for one device and keeps the
     /// leader slot options in step. The stored slot set is re-read on every call, so a slot
     /// another client added while this one runs is picked up on the next daemon snapshot; the
@@ -559,6 +706,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         _presetSlotDeviceId = deviceId;
+
+        // The items are about to be replaced, so the armed-slot reference is dropped: a fresh
+        // item is never born armed, and a stale slot number must not let the next click skip
+        // the confirming step.
+        _presetDeleteArmedSlot = null;
         PresetSlots.Clear();
         if (deviceId is not null)
         {
@@ -579,6 +731,27 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             item.IsActive = item.Slot == slot;
         }
+    }
+
+    /// <summary>Moves the delete-confirm flag onto the armed slot's item, clearing the rest.</summary>
+    private void MarkPresetDeleteArmed()
+    {
+        foreach (var item in PresetSlots)
+        {
+            item.IsDeleteArmed = item.Slot == _presetDeleteArmedSlot;
+        }
+    }
+
+    /// <summary>Drops any armed delete confirm, both the slot it named and the cards' flags.</summary>
+    private void DisarmPresetDelete()
+    {
+        if (_presetDeleteArmedSlot is null)
+        {
+            return;
+        }
+
+        _presetDeleteArmedSlot = null;
+        MarkPresetDeleteArmed();
     }
 
     /// <summary>
@@ -1955,6 +2128,26 @@ public sealed partial class PresetSlotItem : ObservableObject
 
     public string Name { get; }
 
+    /// <summary>
+    /// Whether this slot offers a delete affordance. Slot 1 is the device's own profile and
+    /// the anchor the rest of the system reads from, so it is never deletable; every later
+    /// slot is.
+    /// </summary>
+    public bool CanDelete => Slot > PresetStore.MinSlot;
+
     [ObservableProperty]
     private bool _isActive;
+
+    /// <summary>
+    /// True while this card's delete is armed for a second, confirming click - the
+    /// anti-mistouch half of a destructive action. Kept in step by the view model exactly
+    /// like <see cref="IsActive"/>: at most one slot is armed at a time.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isDeleteArmed;
+
+    /// <summary>The delete badge's tooltip: the confirm wording while armed, the plain prompt otherwise.</summary>
+    public string DeleteTip => IsDeleteArmed ? "再次点击确认删除" : "删除此预设";
+
+    partial void OnIsDeleteArmedChanged(bool value) => OnPropertyChanged(nameof(DeleteTip));
 }

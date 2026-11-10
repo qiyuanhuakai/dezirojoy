@@ -571,6 +571,87 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task DeletePreset_In_Daemon_Mode_Deletes_The_Slot_And_Reconciles_The_Selector()
+    {
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        var presets = context.Presets;
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+
+        // Two presses to confirm the destructive action; the daemon owns the delete.
+        await viewModel.DeletePresetCommand.ExecuteAsync(3);
+        await viewModel.DeletePresetCommand.ExecuteAsync(3);
+        await WaitForCondition(() => viewModel.PresetSlots.Count == 3);
+
+        Assert.Equal([1, 2, 4], viewModel.PresetSlots.Select(item => item.Slot));
+        Assert.Null(presets.LoadSlot("pad-1", 3));
+        // Slot 1 stayed active: deleting a non-active slot does not move the app-wide slot.
+        Assert.Equal(1, viewModel.ActivePresetSlot);
+        Assert.False(viewModel.IsTransferError);
+    }
+
+    [Fact]
+    public async Task Deleting_The_Active_Preset_In_Daemon_Mode_Moves_The_App_Wide_Slot()
+    {
+        var context = await CreateDaemonPresetViewModel();
+        await using var viewModel = context.ViewModel;
+        await viewModel.SwitchPresetSlotCommand.ExecuteAsync(2);
+        await WaitForCondition(() => viewModel.ActivePresetSlot == 2);
+
+        await viewModel.DeletePresetCommand.ExecuteAsync(2);
+        await viewModel.DeletePresetCommand.ExecuteAsync(2);
+        await WaitForCondition(() => viewModel.PresetSlots.Count == 3);
+
+        // The active slot 2 is gone; the daemon moved the app-wide slot to a survivor and the
+        // GUI adopted it from the snapshot.
+        Assert.DoesNotContain(2, viewModel.PresetSlots.Select(item => item.Slot));
+        Assert.Equal(1, viewModel.ActivePresetSlot);
+        Assert.Equal(1, viewModel.PresetSlots.Single(item => item.IsActive).Slot);
+    }
+
+    [Fact]
+    public async Task A_Second_Client_Discovers_A_Slot_Another_Client_Deleted_Through_The_Snapshot()
+    {
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+
+        var channelA = new ServerChannel(server);
+        var channelB = new ServerChannel(server);
+        server.StateChanged += channelA.Push;
+        server.StateChanged += channelB.Push;
+        server.InputSampled += channelA.Push;
+        server.InputSampled += channelB.Push;
+        await using var controllerA = new DaemonController(new ServerEndpoint(channelA));
+        await using var controllerB = new DaemonController(new ServerEndpoint(channelB));
+        await controllerA.ConnectAsync(TestContext.Current.CancellationToken);
+        await controllerB.ConnectAsync(TestContext.Current.CancellationToken);
+
+        using var presentationA = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        using var presentationB = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        await using var clientA = new MainWindowViewModel(presentationA, store, daemon: controllerA, daemonRequired: true);
+        await using var clientB = new MainWindowViewModel(presentationB, store, daemon: controllerB, daemonRequired: true);
+
+        Assert.Equal(4, clientA.PresetSlots.Count);
+        Assert.Equal(4, clientB.PresetSlots.Count);
+
+        // Client A deletes slot 2; the daemon broadcasts the resulting snapshot to every client.
+        await clientA.DeletePresetCommand.ExecuteAsync(2);
+        await clientA.DeletePresetCommand.ExecuteAsync(2);
+        await WaitForCondition(() => clientB.PresetSlots.Count == 3);
+
+        // Client B never deleted anything, yet it must reconcile the store on the snapshot.
+        Assert.DoesNotContain(2, clientB.PresetSlots.Select(item => item.Slot));
+        Assert.DoesNotContain(2, clientA.PresetSlots.Select(item => item.Slot));
+        Assert.Null(presets.LoadSlot("pad-1", 2));
+    }
+
+    [Fact]
     public async Task A_Second_Client_Discovers_A_Slot_Another_Client_Added_Through_The_Snapshot()
     {
         var daemonHost = new FakeDaemonHost { HasController = true };

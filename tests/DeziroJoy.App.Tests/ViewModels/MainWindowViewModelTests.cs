@@ -302,6 +302,105 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task DeletePreset_Removes_The_Slot_From_The_Store_And_The_Collection()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // Add a fifth preset so the delete covers a slot past the initial four, then remove it.
+        await vm.AddPresetCommand.ExecuteAsync(null);
+        Assert.Equal(5, vm.PresetSlots.Count);
+        var presets = new PresetStore(store);
+        Assert.NotNull(presets.LoadSlot("xinput:0", 5));
+
+        // Two presses: the first arms, the second deletes.
+        await vm.DeletePresetCommand.ExecuteAsync(5);
+        Assert.Equal(5, vm.PresetSlots.Count);
+        await vm.DeletePresetCommand.ExecuteAsync(5);
+
+        Assert.Equal([1, 2, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.Null(presets.LoadSlot("xinput:0", 5));
+        Assert.False(vm.IsTransferError);
+    }
+
+    [Fact]
+    public async Task DeletePreset_Requires_A_Confirming_Second_Press()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+
+        // The first press only arms: the slot survives and exactly its card is flagged.
+        Assert.Equal([1, 2, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.True(vm.PresetSlots.Single(item => item.Slot == 2).IsDeleteArmed);
+        Assert.Equal(1, vm.PresetSlots.Count(item => item.IsDeleteArmed));
+
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+
+        Assert.Equal([1, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.Equal(0, vm.PresetSlots.Count(item => item.IsDeleteArmed));
+    }
+
+    [Fact]
+    public async Task Deleting_The_Active_Preset_Switches_To_A_Surviving_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        Assert.Equal(2, vm.ActivePresetSlot);
+
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+
+        // The active slot 2 is gone and the app fell back to a surviving slot (the primary).
+        Assert.Equal(1, vm.ActivePresetSlot);
+        Assert.Equal([1, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.Equal(1, vm.PresetSlots.Single(item => item.IsActive).Slot);
+        var presets = new PresetStore(store);
+        Assert.Null(presets.LoadSlot("xinput:0", 2));
+    }
+
+    [Fact]
+    public async Task DeletePreset_Refuses_The_Primary_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        await vm.DeletePresetCommand.ExecuteAsync(1);
+        await vm.DeletePresetCommand.ExecuteAsync(1);
+
+        Assert.True(vm.IsTransferError);
+        Assert.Contains("主预设", vm.TransferMessage);
+        Assert.Equal([1, 2, 3, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.NotNull(new PresetStore(store).LoadSlot("xinput:0", 1));
+    }
+
+    [Fact]
+    public async Task DeletePreset_Is_Disarmed_By_A_Switch()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        await vm.DeletePresetCommand.ExecuteAsync(2);
+        Assert.True(vm.PresetSlots.Single(item => item.Slot == 2).IsDeleteArmed);
+
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(3);
+
+        Assert.Equal(0, vm.PresetSlots.Count(item => item.IsDeleteArmed));
+    }
+
+    [Fact]
     public void Reset_To_Default_Restores_The_Built_In_Profile()
     {
         var (vm, host, provider, _) = CreateHost();

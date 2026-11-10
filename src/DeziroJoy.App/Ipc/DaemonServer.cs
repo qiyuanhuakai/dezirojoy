@@ -25,6 +25,8 @@ public sealed partial class DaemonServer
     private const string DirectConnectionId = "direct";
     private const string InvalidPresetSlotErrorCode = "invalid-slot";
     private const string NoPresetConfigurationErrorCode = "no-configuration";
+    private const string PrimaryPresetSlotErrorCode = "primary-preset";
+    private const string LastPresetErrorCode = "last-preset";
     private const string LeaderPresetSwitchRequestId = "leader-key";
     private readonly Lock _sync = new();
     private readonly Lock _inputGate = new();
@@ -153,6 +155,9 @@ public sealed partial class DaemonServer
 
             case SwitchPresetSlotMessage switchSlot:
                 return HandleSwitchPresetSlot(switchSlot);
+
+            case DeletePresetSlotMessage deleteSlot:
+                return HandleDeletePresetSlot(deleteSlot);
 
             case ShutdownDaemonMessage shutdown:
                 return new MutationAckMessage(shutdown.RequestId, true, CurrentRevision(), CurrentSequence());
@@ -371,6 +376,124 @@ public sealed partial class DaemonServer
             {
                 _profileName = bodyProfile.Name;
                 _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = bodyDeviceId });
+            }
+
+            _revision++;
+            PublishStateChange();
+
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    /// <summary>
+    /// Deletes one device's preset slot. <see cref="PresetStore.DeleteSlot"/> removes the
+    /// slot's stored profile and repairs any Leader mapping that referenced it. When the
+    /// deleted slot was the app-wide active one, the daemon first moves every device that
+    /// holds a surviving slot onto it - so no running engine or leader key is ever left aimed
+    /// at a slot that is about to disappear - and only then removes the old slot. The switch
+    /// runs before the delete so a reload failure rolls the whole operation back and leaves
+    /// the slot intact; a delete of any other slot leaves the active slot untouched. The
+    /// revision is bumped and a snapshot published either way, so every connected GUI
+    /// reconciles its selector. Slot 1 (the device's own profile) and the device's last
+    /// remaining preset are refused without touching any state.
+    /// </summary>
+    private IpcMessage HandleDeletePresetSlot(DeletePresetSlotMessage request)
+    {
+        if (request.Slot < PresetStore.MinSlot)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                InvalidPresetSlotErrorCode,
+                $"preset slots run from {PresetStore.MinSlot} upward");
+        }
+
+        lock (_sync)
+        {
+            var connected = _host.ConnectedDeviceIds;
+            var deviceId = !string.IsNullOrWhiteSpace(request.DeviceId)
+                ? request.DeviceId
+                : connected.Count > 0 ? connected[0] : null;
+            if (deviceId is null)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    NoPresetConfigurationErrorCode,
+                    "没有可删除预设的设备。");
+            }
+
+            var inUse = _presetStore.SlotsInUse(deviceId);
+            if (request.Slot == PresetStore.MinSlot)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    PrimaryPresetSlotErrorCode,
+                    "不能删除设备的主预设（槽位 1）。");
+            }
+
+            if (inUse.Count <= 1)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    LastPresetErrorCode,
+                    "不能删除最后一套预设。");
+            }
+
+            if (!inUse.Contains(request.Slot))
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    NoPresetConfigurationErrorCode,
+                    "该槽位没有配置。");
+            }
+
+            var wasActive = request.Slot == _activePresetSlot;
+
+            // Move the whole app off the active slot before it is removed. The switch is
+            // performed first so a reload failure rolls the delete back and leaves the slot
+            // intact, rather than deleting a slot the engine is still pointed at.
+            if (wasActive)
+            {
+                var fallback = inUse
+                    .Where(slot => slot != request.Slot && slot < request.Slot)
+                    .DefaultIfEmpty(PresetStore.MinSlot)
+                    .Max();
+
+                var holders = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
+                foreach (var id in connected)
+                {
+                    if (_presetStore.LoadSlot(id, fallback) is { } profile)
+                    {
+                        holders[id] = profile;
+                    }
+                }
+
+                try
+                {
+                    _host.SwitchPresetSlot(fallback, holders);
+                }
+                catch (Exception exception)
+                {
+                    return new MutationAckMessage(
+                        request.RequestId,
+                        false,
+                        _revision,
+                        _sequence,
+                        "preset-delete-failed",
+                        $"删除预设已回滚：{exception.Message}");
+                }
+
+                _activePresetSlot = fallback;
+            }
+
+            _presetStore.DeleteSlot(deviceId, request.Slot);
+
+            // The snapshot body must follow the slot the engine now runs, or a GUI re-adopting
+            // on the revision bump would show the deleted slot's profile. The body keeps the
+            // bare device id, exactly as the switch path does.
+            if (wasActive && _presetStore.LoadSlot(deviceId, _activePresetSlot) is { } bodyProfile)
+            {
+                _profileName = bodyProfile.Name;
+                _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = deviceId });
             }
 
             _revision++;
