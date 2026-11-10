@@ -283,6 +283,128 @@ public sealed class GamepadVisualizerTests
     }
 
     /// <summary>
+    /// The M29 regression, pinned as geometry: the centre cluster used to overlap - the Guide
+    /// well spilled over the Back capsule and the Guide's own hit surface sat on top of Back's
+    /// right edge, so a click on Back's right flank was stolen by the Guide. Every visible
+    /// surface now keeps a gap from its neighbours and from the Guide's base plate, and each hit
+    /// region covers only its own element, so a pointer press resolves to exactly one control.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_Centre_Cluster_Surfaces_And_Hit_Regions_Never_Overlap()
+    {
+        var control = new GamepadVisualizer { DataContext = new GamepadVisualizerViewModel() };
+        var window = new Window { Content = control, Width = 700, Height = 460 };
+        window.Show();
+        window.UpdateLayout();
+
+        var canvas = control.FindControl<Canvas>("PadCanvas")!;
+        Rect CanvasBounds(string name)
+        {
+            var element = control.FindControl<Control>(name)!;
+            var topLeft = element.TranslatePoint(new Point(0, 0), canvas) ?? default;
+            var bottomRight = element.TranslatePoint(new Point(element.Bounds.Width, element.Bounds.Height), canvas) ?? default;
+            return new Rect(topLeft, bottomRight);
+        }
+
+        var back = CanvasBounds("BackButton");
+        var backHit = CanvasBounds("BackButtonHit");
+        var guide = CanvasBounds("GuideButton");
+        var guideHit = CanvasBounds("GuideButtonHit");
+        var start = CanvasBounds("StartButton");
+        var startHit = CanvasBounds("StartButtonHit");
+        var guideWell = CanvasBounds("GuideWell");
+
+        // Each hit region covers its own visible element, so a click anywhere on the pill or the
+        // Guide circle - including the ellipse's corners the shape itself cannot hit-test - is caught.
+        Assert.True(Contains(backHit, back), "the Back hit region must cover the Back capsule");
+        Assert.True(Contains(guideHit, guide), "the Guide hit region must cover the Guide button");
+        Assert.True(Contains(startHit, start), "the Start hit region must cover the Start capsule");
+
+        // The three visible surfaces never overlap each other...
+        Assert.False(back.Intersects(guide), "the Back capsule must not overlap the Guide button");
+        Assert.False(guide.Intersects(start), "the Guide button must not overlap the Start capsule");
+        Assert.False(back.Intersects(start), "the Back capsule must not overlap the Start capsule");
+
+        // ...and their hit regions never overlap each other, so a click routes to exactly one element.
+        Assert.False(backHit.Intersects(guideHit), "the Back hit region must not overlap the Guide hit region");
+        Assert.False(guideHit.Intersects(startHit), "the Guide hit region must not overlap the Start hit region");
+
+        // The Guide well is the Guide's base plate: it may cup the Guide but must not spill over
+        // the flanking capsules - that spill is exactly what hid Back's right edge.
+        Assert.True(Contains(guideWell, guide), "the Guide well must still cup the Guide button");
+        Assert.False(guideWell.Intersects(back), "the Guide well must not cover the Back capsule");
+        Assert.False(guideWell.Intersects(start), "the Guide well must not cover the Start capsule");
+
+        // The cluster is symmetric about the Guide and stays on the model's vertical axis.
+        Assert.Equal(guide.Center.X - back.Center.X, start.Center.X - guide.Center.X, 1.0);
+
+        // PadBody's Bounds are already canvas-relative, so its centre is the axis itself.
+        var body = control.FindControl<Avalonia.Controls.Shapes.Path>("PadBody")!;
+        Assert.True(Math.Abs(guide.Center.X - body.Bounds.Center.X) <= 20,
+            $"the Guide must stay near the model axis ({body.Bounds.Center.X:0.#}), was {guide.Center.X:0.#}");
+
+        window.Close();
+    }
+
+    /// <summary>
+    /// The M29 routing regression, exercised with a real pointer press: clicking a flank of the
+    /// Back or Start capsule must still select that capsule, not the Guide that used to sit on
+    /// top of it. The click lands off-centre on the capsule so it would have hit the Guide under
+    /// the old overlapping layout.
+    /// </summary>
+    [AvaloniaFact]
+    public void Clicking_A_Capsule_Flank_Routes_To_That_Capsule_Not_Its_Neighbour()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        // The hit-target contract is tested at the settled lifted position, without the lift
+        // transform moving between coordinate measurement and the input event.
+        Assert.IsType<TranslateTransform>(Stage(Model(window)).RenderTransform).Transitions = null;
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+
+        // Back's right flank (85% across): must select Back, never the Guide it used to hide under.
+        ClickAt(model.FindControl<Control>("BackButton")!, window, 0.85, 0.5);
+        Assert.True(viewModel.IsEditing, "clicking Back's right flank must open the editor");
+        Assert.Equal(GamepadButton.Back, viewModel.Editor.SelectedButton);
+
+        // Start's left flank (15% across): must select Start, never the Guide on its other side.
+        ClickAt(model.FindControl<Control>("StartButton")!, window, 0.15, 0.5);
+        Assert.Equal(GamepadButton.Start, viewModel.Editor.SelectedButton);
+
+        // The Guide still answers at its own centre.
+        ClickAt(model.FindControl<Control>("GuideButton")!, window, 0.5, 0.5);
+        Assert.Equal(GamepadButton.Guide, viewModel.Editor.SelectedButton);
+
+        window.Close();
+    }
+
+    /// <summary>True when <paramref name="inner"/> lies fully inside <paramref name="outer"/>.</summary>
+    private static bool Contains(Rect outer, Rect inner) =>
+        inner.Left >= outer.Left - 0.01 && inner.Right <= outer.Right + 0.01
+        && inner.Top >= outer.Top - 0.01 && inner.Bottom <= outer.Bottom + 0.01;
+
+    /// <summary>Presses and releases at a fractional point inside <paramref name="target"/>.</summary>
+    private static void ClickAt(Control target, Window window, double fractionX, double fractionY)
+    {
+        window.Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        window.UpdateLayout();
+        target.BringIntoView();
+        window.UpdateLayout();
+        var point = target.TranslatePoint(
+            new Point(target.Bounds.Width * fractionX, target.Bounds.Height * fractionY), window) ?? default;
+        window.MouseDown(point, Avalonia.Input.MouseButton.Left);
+        window.MouseUp(point, Avalonia.Input.MouseButton.Left);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// <summary>
     /// The sticks are asymmetric exactly as the reference measures them: the left stick
     /// sits high and outboard, the right stick low and inboard, and neither shares a row
     /// with the other.
