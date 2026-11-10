@@ -124,8 +124,9 @@ public sealed class ButtonGestureState
     /// double accumulator can push a threshold a whole tick late (0.3s reached by 0.1s ticks
     /// compares just under 0.3f) or swallow the last repeat of a long catch-up tick. One
     /// microsecond sits far below anything perceptible and far above representation noise.
+    /// Shared with the complex-shortcut runtime, whose periodic taps face the same drift.
     /// </summary>
-    private const double TimingTolerance = 1e-6;
+    internal const double TimingTolerance = 1e-6;
 
     private static bool Reached(double elapsed, float threshold) => elapsed >= threshold - TimingTolerance;
 

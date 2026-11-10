@@ -24,6 +24,13 @@ namespace DeziroJoy.Core.Engine;
 /// so the action fields are purely additive. All gesture timing derives from the tick's
 /// <c>deltaSeconds</c>.
 /// </para>
+/// <para>
+/// A <see cref="ComplexShortcutTarget"/> runs a hand-written DSL program from a button's
+/// 长按 (hold Alt + every 1s tap Tab): the long press starts the program, every held tick
+/// advances it by <c>deltaSeconds</c>, and the release tick stops it and releases the keys
+/// it held. v1 binds it to a bare long-press gesture, so it can never double-trigger
+/// against the click or the long-press repeat.
+/// </para>
 /// </remarks>
 public sealed class MappingEngine
 {
@@ -52,6 +59,7 @@ public sealed class MappingEngine
     private readonly HashSet<Guid> _engagedPrecisionKeys = [];
     private readonly Dictionary<Guid, bool> _specialKeyWasActive = [];
     private readonly Dictionary<Guid, bool> _leaderLatches = [];
+    private readonly Dictionary<Guid, ComplexShortcutRuntime> _complexRuntimes = [];
     private GamepadButtonMask _previousButtons;
 
     public MappingEngine(GamepadProfile profile)
@@ -81,10 +89,34 @@ public sealed class MappingEngine
                 case SpecialKeyTarget special:
                     RegisterSpecialKey(mapping, special);
                     break;
+                case ComplexShortcutTarget complex:
+                    _complexRuntimes[mapping.Id] = CompileComplexShortcut(mapping, complex);
+                    break;
             }
         }
 
         SeedLeaderLatches();
+    }
+
+    /// <summary>
+    /// Compiles a complex shortcut's script when the engine is built, so a hand-edited
+    /// profile fails here rather than on the first long press. The parse error keeps its
+    /// Chinese reason and line/column, wrapped in the ArgumentException every other
+    /// rejected mapping throws.
+    /// </summary>
+    private static ComplexShortcutRuntime CompileComplexShortcut(MappingEntry mapping, ComplexShortcutTarget complex)
+    {
+        try
+        {
+            return ComplexShortcutRuntime.Compile(complex.Script);
+        }
+        catch (ComplexShortcutParseException ex)
+        {
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} carries a complex shortcut script that does not parse: {ex.Message}",
+                nameof(mapping),
+                ex);
+        }
     }
 
     public IReadOnlyList<InputCommand> Tick(IGamepadState current, float deltaSeconds)
@@ -151,6 +183,13 @@ public sealed class MappingEngine
         _engagedPrecisionKeys.Clear();
         _specialKeyWasActive.Clear();
         SeedLeaderLatches();
+        foreach (var runtime in _complexRuntimes.Values)
+        {
+            // Silent by design: the host pairs Reset with CommandDispatcher.ReleaseAll,
+            // which lifts the keys a running complex shortcut held.
+            runtime.Reset();
+        }
+
         foreach (var processor in _mouseProcessors.Values)
         {
             processor.Reset();
@@ -371,6 +410,46 @@ public sealed class MappingEngine
                 }
 
                 break;
+
+            case ComplexShortcutTarget:
+                ValidateComplexShortcutSource(mapping);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// v1 binds a complex shortcut to a button's bare 长按 and nothing else: the long press
+    /// starts the program, and nothing else may fire on the same press, which is what keeps
+    /// a complex shortcut from double-triggering against the click, the long-press repeat,
+    /// or a gesture action of its own.
+    /// </summary>
+    private static void ValidateComplexShortcutSource(MappingEntry mapping)
+    {
+        if (mapping.Source is not ButtonBinding button)
+        {
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} drives a complex shortcut from {mapping.Source.GetType().Name}. " +
+                "A complex shortcut is a long-press program: bind it to a button.",
+                nameof(mapping));
+        }
+
+        var gesture = button.Gesture;
+        if (gesture is not { LongPressThreshold: > 0f })
+        {
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} binds a complex shortcut to button {button.Button} " +
+                "without a long press. A complex shortcut starts on 长按: set " +
+                "ButtonGesture.LongPressThreshold.",
+                nameof(mapping));
+        }
+
+        if (gesture.HasDoubleClick || gesture.HasClickRepeat || gesture.HasDoubleClickAction || gesture.HasLongPressAction)
+        {
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} pairs a complex shortcut with 双击 / auto-repeat / an extra " +
+                "gesture action on button {button.Button}. The long press already owns the " +
+                "program: leave the gesture as a bare long-press threshold.",
+                nameof(mapping));
         }
     }
 
@@ -408,6 +487,15 @@ public sealed class MappingEngine
     {
         var gesture = GestureStateFor(mapping.Id);
         var step = gesture.Update(button.Gesture, isPressed, wasPressed, deltaSeconds);
+
+        // A complex shortcut is its own long-press program: the gesture machine only reports
+        // when the long press fires and when it ends, and the runtime owns everything in
+        // between - so none of the tap/hold/continuous paths below ever see this target.
+        if (mapping.Target is ComplexShortcutTarget)
+        {
+            UpdateComplexShortcut(mapping.Id, gesture, step, deltaSeconds, commands);
+            return;
+        }
 
         switch (step.Action)
         {
@@ -447,6 +535,47 @@ public sealed class MappingEngine
         }
 
         UpdateContinuous(mapping, button, gesture, current, deltaSeconds, commands);
+    }
+
+    /// <summary>
+    /// Drives one complex shortcut program for one tick. The gesture machine fires the
+    /// long press exactly once - that tick starts the program - and holds
+    /// <see cref="GesturePhase.LongPressActive"/> until the button is released. Every tick
+    /// in between advances the program by <paramref name="deltaSeconds"/>; the tick that
+    /// ends the long press stops it and releases the keys it held, so no periodic tap can
+    /// outlive the press and no key stays stuck down.
+    /// </summary>
+    private void UpdateComplexShortcut(
+        Guid mappingId,
+        ButtonGestureState gesture,
+        GestureStep step,
+        float deltaSeconds,
+        List<InputCommand> commands)
+    {
+        var runtime = _complexRuntimes[mappingId];
+
+        if (step.Action == GestureAction.Tap && step.Kind == GestureKind.LongPress)
+        {
+            runtime.Start();
+            runtime.Tick(deltaSeconds, commands);
+            return;
+        }
+
+        if (!runtime.IsRunning)
+        {
+            return;
+        }
+
+        if (gesture.Phase == GesturePhase.LongPressActive)
+        {
+            runtime.Tick(deltaSeconds, commands);
+        }
+        else
+        {
+            // The long press ended: the release edge stopped the cycle, so the program
+            // stops with it and hands its held keys back.
+            runtime.Stop(commands);
+        }
     }
 
     /// <summary>
