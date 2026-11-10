@@ -1314,4 +1314,106 @@ public class MainWindowViewModelTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    // ---- 复杂快捷键: a DSL program committed from the editor -------------------
+
+    [Fact]
+    public async Task A_Committed_Complex_Shortcut_Persists_Reopens_And_Runs_Through_The_Host()
+    {
+        // The user's own example, end to end: authored on the long-press tab, committed,
+        // persisted across a preset switch, reopened, and finally executed by the engine -
+        // holding the button holds Alt and taps Tab once a second, releasing lifts Alt.
+        var provider = new FakeGamepadProvider();
+        var sink = new RecordingOutputSink();
+        var store = new InMemoryProfileStore();
+        var host = new EngineHost(provider, sink, store);
+        var vm = new MainWindowViewModel(host, store);
+
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        vm.SetGamepadNavigationEnabled(false);
+        SampleHelper.Sample(vm, host);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.Editor.ActiveComplexShortcutScript = "hold Alt\nevery 1s tap Tab";
+        vm.CommitEditorCommand.Execute(null);
+
+        Assert.False(vm.IsEditing);
+        var committed = vm.ActiveProfile!.Mappings.Single(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
+        Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" }, committed.Target);
+
+        // The mapping row reads the program in plain language, never the record's ToString.
+        var row = vm.Mappings.Single(r => r.Entry == committed);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.ClickText);
+        Assert.DoesNotContain("ComplexShortcutTarget", row.TargetText);
+
+        // It survives the store: leave the slot, come back, reopen the mapping.
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        Assert.DoesNotContain(vm.Mappings, r => r.Entry.Target is ComplexShortcutTarget);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(1);
+
+        var reopened = vm.Mappings.Single(r => r.Entry.Target is ComplexShortcutTarget);
+        vm.EditMappingCommand.Execute(reopened);
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        Assert.Equal("hold Alt\nevery 1s tap Tab", vm.Editor.ActiveComplexShortcutScript);
+        vm.CancelEditorCommand.Execute(null);
+
+        // And the engine runs it: holding past the long-press threshold starts the program,
+        // another second of holding taps Tab, and the release lifts Alt.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+        for (var tick = 0; tick < 40; tick++)
+        {
+            SampleHelper.Sample(vm, host);
+        }
+
+        Assert.Contains("down:LeftAlt", sink.Calls);
+        Assert.DoesNotContain(sink.Calls, call => call.StartsWith("up:LeftAlt", StringComparison.Ordinal));
+
+        for (var tick = 0; tick < 64; tick++)
+        {
+            SampleHelper.Sample(vm, host);
+        }
+
+        Assert.Contains("down:Tab", sink.Calls);
+
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        Assert.Contains("up:LeftAlt", sink.Calls);
+    }
+
+    [Fact]
+    public void An_Unparseable_Script_Blocks_The_Commit_And_Leaves_The_Profile_Untouched()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.RightBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.Editor.ActiveComplexShortcutScript = "hold Alt\nfrobnicate";
+        var mappings = vm.ActiveProfile!.Mappings.Count;
+
+        vm.CommitEditorCommand.Execute(null);
+
+        // The editor stays open on the offending script and the active profile is untouched:
+        // a program the engine cannot build never reaches the store or the running engine.
+        Assert.True(vm.IsEditing);
+        Assert.Equal(mappings, vm.ActiveProfile.Mappings.Count);
+        Assert.DoesNotContain(vm.Mappings, row => row.Entry.Target is ComplexShortcutTarget);
+        Assert.Contains("第 2 行", vm.Editor.ComplexShortcutScriptError);
+
+        // Cancelling drops the draft entirely.
+        vm.CancelEditorCommand.Execute(null);
+
+        Assert.False(vm.IsEditing);
+        Assert.Equal(mappings, vm.ActiveProfile.Mappings.Count);
+    }
 }

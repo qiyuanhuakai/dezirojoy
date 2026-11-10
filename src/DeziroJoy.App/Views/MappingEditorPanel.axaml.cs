@@ -1,13 +1,10 @@
 using System.ComponentModel;
-using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Data.Converters;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Markup.Xaml;
 using DeziroJoy.App.ViewModels;
-using DeziroJoy.App.Views.Converters;
 
 namespace DeziroJoy.App.Views;
 
@@ -87,23 +84,4 @@ public partial class MappingEditorPanel : UserControl
 
     private bool IsSelected(KeyPickerItem item)
         => _editor?.ActiveSelectedKeyOption is { } selected && selected.Key == item.Key;
-}
-
-/// <summary>
-/// Chinese label for a target kind, 特殊键 included. It lives here rather than beside the
-/// shared converters because this wave owns the panel alone: the shared
-/// <see cref="EnumDisplayConverter"/> falls back to the raw enum name for the kind this
-/// panel adds, so the combo would read "SpecialKey" instead of 「特殊键」.
-/// </summary>
-public sealed class TargetKindLabelConverter : IValueConverter
-{
-    private static readonly EnumDisplayConverter Display = new();
-
-    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => value is MappingTargetKind.SpecialKey
-            ? "特殊键"
-            : Display.Convert(value, targetType, parameter, culture);
-
-    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-        => Avalonia.Data.BindingOperations.DoNothing;
 }

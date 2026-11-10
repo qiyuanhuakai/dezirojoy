@@ -32,6 +32,8 @@ public sealed class EnumDisplayConverter : IValueConverter
                 MappingTargetKind.MouseButton => "鼠标按键",
                 MappingTargetKind.MouseMove => "鼠标移动",
                 MappingTargetKind.WheelScroll => "滚轮滚动",
+                MappingTargetKind.SpecialKey => "特殊键",
+                MappingTargetKind.ComplexShortcut => "复杂快捷键",
                 _ => kind.ToString(),
             },
             MappingSourceKind source => source switch
