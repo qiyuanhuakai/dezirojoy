@@ -370,6 +370,145 @@ public class ButtonGestureTests
     }
 
     [Fact]
+    public void Adopt_Baseline_Keeps_A_Held_Key_From_Re_Firing_After_A_Reload()
+    {
+        var engine = new MappingEngine(Profile(Plain(GamepadButton.B, new KeyPressTarget(GamepadKey.Enter))));
+
+        // A profile reload rebuilds the engine while the key is still held. Adopting the last
+        // polled snapshot as the baseline keeps the held key from fabricating a second press
+        // edge, so the key the reload released is not silently re-pressed.
+        engine.AdoptBaseline(Held(GamepadButton.B));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.016f));
+
+        // The release is a real edge, so it ends the hold the old engine left open - the only
+        // output is the redundant up for a key the reload already released.
+        var release = engine.Tick(Released, 0.016f);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(release));
+
+        // A fresh press fires normally.
+        var press = engine.Tick(Held(GamepadButton.B), 0.016f);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), Assert.Single(press));
+    }
+
+    [Fact]
+    public void Adopt_Baseline_Cancels_An_In_Flight_Gesture_Until_A_Fresh_Press()
+    {
+        var engine = new MappingEngine(Profile(Gestured(
+            GamepadButton.B,
+            new KeyPressTarget(GamepadKey.Enter),
+            DoubleClickOnly)));
+
+        // The reload lands mid-press: the held button is adopted as the baseline, so the
+        // gesture machine stays Idle - a cancelled cycle is never resumed and a held button
+        // never re-arms mid-gesture.
+        engine.AdoptBaseline(Held(GamepadButton.B));
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
+        Assert.Empty(engine.Tick(Released, 0.1f));
+
+        // A fresh press runs the gesture exactly as it always did.
+        Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+
+        var tap = engine.Tick(Held(GamepadButton.B), 0.05f);
+        Assert.Equal(2, tap.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), tap[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), tap[1]);
+    }
+
+    [Fact]
+    public void Adopt_Baseline_Does_Not_Restart_A_Held_Complex_Shortcut()
+    {
+        var engine = new MappingEngine(Profile(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture { LongPressThreshold = 0.5f },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+        }));
+
+        // The program is running when the profile is reloaded; the fresh engine adopts the
+        // held button, so the long press is not restarted and the program stays stopped until
+        // a fresh press - the host's ReleaseAll already lifted the keys it held.
+        engine.AdoptBaseline(Held(GamepadButton.LeftBumper));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 1f));
+        Assert.Empty(engine.Tick(Released, 0.25f));
+
+        // A fresh press starts the program from scratch, exactly like a first press.
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        var activation = engine.Tick(Held(GamepadButton.LeftBumper), 0.25f);
+        Assert.Equal(new KeyDownCommand(GamepadKey.LeftAlt, KeyModifiers.None), Assert.Single(activation));
+    }
+
+    [Fact]
+    public void Adopt_Baseline_Covers_Extra_Buttons_Too()
+    {
+        var engine = new MappingEngine(Profile(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.Extra, 305),
+            Target = new KeyPressTarget(GamepadKey.F13),
+        }));
+
+        engine.AdoptBaseline(new ExtraButtonState(305));
+        Assert.Empty(engine.Tick(new ExtraButtonState(305), 0.016f));
+
+        var release = engine.Tick(GamepadState.Neutral, 0.016f);
+        Assert.Equal(new KeyUpCommand(GamepadKey.F13, KeyModifiers.None), Assert.Single(release));
+
+        var press = engine.Tick(new ExtraButtonState(305), 0.016f);
+        Assert.Equal(new KeyDownCommand(GamepadKey.F13, KeyModifiers.None), Assert.Single(press));
+    }
+
+    [Fact]
+    public void Adopt_Baseline_Keeps_A_Held_Leader_Key_From_Toggling_Twice()
+    {
+        var engine = new MappingEngine(Profile(Plain(
+            GamepadButton.Back,
+            new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Press))));
+
+        // The press edge asks for slot 2 and flips the latch.
+        var firstPress = engine.Tick(Held(GamepadButton.Back), 0.016f);
+        Assert.Equal(new SwitchPresetCommand(2), Assert.Single(firstPress));
+
+        // The preset switch reloads the engine while the key is still held. Adopting the last
+        // polled snapshot keeps the held key from forming a second press edge - the fake edge
+        // that used to flip the latch back on every held tick, so the landing slot depended on
+        // how long the key stayed down.
+        engine.AdoptBaseline(Held(GamepadButton.Back));
+        Assert.Empty(engine.Tick(Held(GamepadButton.Back), 0.016f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.Back), 0.016f));
+
+        // A Press leader emits nothing on the release edge.
+        Assert.Empty(engine.Tick(Released, 0.016f));
+
+        // The next real press round-trips to slot 1: one switch per press.
+        var secondPress = engine.Tick(Held(GamepadButton.Back), 0.016f);
+        Assert.Equal(new SwitchPresetCommand(1), Assert.Single(secondPress));
+    }
+
+    [Fact]
+    public void Adopt_Baseline_Lets_A_Hold_Leader_Return_On_The_Release_Edge()
+    {
+        var engine = new MappingEngine(Profile(Plain(
+            GamepadButton.Back,
+            new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold))));
+
+        // Holding enters slot 2 once...
+        var press = engine.Tick(Held(GamepadButton.Back), 0.016f);
+        Assert.Equal(new SwitchPresetCommand(2), Assert.Single(press));
+
+        // ...and the reload in between does not re-engage it.
+        engine.AdoptBaseline(Held(GamepadButton.Back));
+        Assert.Empty(engine.Tick(Held(GamepadButton.Back), 0.016f));
+
+        // The release edge survived the reload, so the hold returns to slot 1 exactly once -
+        // the lost release that used to strand the engine on slot 2.
+        var release = engine.Tick(Released, 0.016f);
+        Assert.Equal(new SwitchPresetCommand(1), Assert.Single(release));
+    }
+
+    [Fact]
     public void Gestures_Apply_To_Extra_Buttons_Too()
     {
         var engine = new MappingEngine(Profile(new MappingEntry

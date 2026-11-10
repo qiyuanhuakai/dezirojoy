@@ -3,6 +3,7 @@ using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Platform;
+using DeziroJoy.Core.Profiles;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Services;
@@ -639,6 +640,9 @@ public class EngineHostTests
     };
 
     private static GamepadProfile LeaderProfile(LeaderSwitchMode switchMode, params GamepadButton[] buttons)
+        => LeaderProfile(switchMode, slotA: 1, slotB: 2, buttons);
+
+    private static GamepadProfile LeaderProfile(LeaderSwitchMode switchMode, int slotA, int slotB, params GamepadButton[] buttons)
         => new()
         {
             Name = "leader",
@@ -653,11 +657,36 @@ public class EngineHostTests
                         SpecialKeyKind.Leader,
                         PrecisionMode.Toggle,
                         switchMode,
-                        SlotA: 1,
-                        SlotB: 2),
+                        SlotA: slotA,
+                        SlotB: slotB),
                 }),
             ],
         };
+
+    /// <summary>
+    /// Wires the host's preset-switch event to apply the switch the way the GUI's local path
+    /// and the daemon do - the slot's profile is reloaded into the device - and records every
+    /// requested slot. This is the end-to-end shape of the reported bug: the switch lands on
+    /// the tick thread, at the end of the very tick that asked for it, while the leader key is
+    /// still held.
+    /// </summary>
+    private static List<int> ApplySwitchesLikeTheGui(EngineHost host, Dictionary<int, GamepadProfile> slotProfiles)
+    {
+        var requested = new List<int>();
+        host.PresetSwitchRequested += (_, slot) =>
+        {
+            requested.Add(slot);
+            if (slotProfiles.TryGetValue(slot, out var profile))
+            {
+                host.SwitchPresetSlot(slot, new Dictionary<string, GamepadProfile>(StringComparer.Ordinal)
+                {
+                    ["xinput:0"] = profile,
+                });
+            }
+        };
+
+        return requested;
+    }
 
     [Fact]
     public void A_Leader_Press_Edge_Raises_Preset_Switch_Requested_Once_Per_Tick()
@@ -728,6 +757,235 @@ public class EngineHostTests
         host.TickOnce(Tick);
 
         Assert.Equal([2], requested);
+    }
+
+    [Fact]
+    public void A_Leader_Press_Switches_Exactly_Once_While_The_Button_Stays_Held()
+    {
+        var slots = new Dictionary<int, GamepadProfile>
+        {
+            [1] = LeaderProfile(LeaderSwitchMode.Press, 1, 2, GamepadButton.Back),
+            [2] = LeaderProfile(LeaderSwitchMode.Press, 1, 2, GamepadButton.Back),
+        };
+        var store = new InMemoryProfileStore();
+        store.Save(slots[1]);
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var requested = ApplySwitchesLikeTheGui(host, slots);
+
+        host.TickOnce(Tick);
+        Assert.Empty(requested);
+
+        // One press asks for slot 2, and the switch lands on the same tick.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2], requested);
+        Assert.Equal(2, host.ActivePresetSlot);
+        Assert.Equal(2, host.Controllers.Single().Profile.PresetSlot);
+
+        // The button is still held across the reload: the fresh engine adopts the last polled
+        // snapshot, so no second press edge is fabricated and no second switch is requested -
+        // the parity-dependent double-toggle the user reported (切不过去 / 切两次).
+        for (var i = 0; i < 5; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Equal([2], requested);
+
+        // A Press leader emits nothing on the release edge.
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal([2], requested);
+
+        // The second press round-trips to slot 1: one switch per press, two presses to return.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2, 1], requested);
+        Assert.Equal(1, host.Controllers.Single().Profile.PresetSlot);
+    }
+
+    [Fact]
+    public void A_Hold_Leader_Enters_Once_And_Returns_Once_After_The_Reload()
+    {
+        var slots = new Dictionary<int, GamepadProfile>
+        {
+            [1] = LeaderProfile(LeaderSwitchMode.Hold, 1, 2, GamepadButton.Back),
+            [2] = LeaderProfile(LeaderSwitchMode.Hold, 1, 2, GamepadButton.Back),
+        };
+        var store = new InMemoryProfileStore();
+        store.Save(slots[1]);
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var requested = ApplySwitchesLikeTheGui(host, slots);
+
+        host.TickOnce(Tick);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2], requested);
+
+        // Held across the reload: the fresh engine sees no new press edge, so the hold does
+        // not re-engage on every tick.
+        for (var i = 0; i < 5; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Equal([2], requested);
+
+        // The release edge survived the reload, so the hold returns to slot 1 exactly once -
+        // the lost release that used to strand the engine on slot 2.
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal([2, 1], requested);
+        Assert.Equal(1, host.Controllers.Single().Profile.PresetSlot);
+    }
+
+    [Fact]
+    public void A_Chained_Leader_Moves_One_Slot_Per_Press()
+    {
+        // Slot 1 flips 1<->2 and slot 2 flips 2<->3: each press must move exactly one step
+        // along the chain, never two in a single hold.
+        var slots = new Dictionary<int, GamepadProfile>
+        {
+            [1] = LeaderProfile(LeaderSwitchMode.Press, 1, 2, GamepadButton.Back),
+            [2] = LeaderProfile(LeaderSwitchMode.Press, 2, 3, GamepadButton.Back),
+            [3] = LeaderProfile(LeaderSwitchMode.Press, 2, 3, GamepadButton.Back),
+        };
+        var store = new InMemoryProfileStore();
+        store.Save(slots[1]);
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var requested = ApplySwitchesLikeTheGui(host, slots);
+
+        host.TickOnce(Tick);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        for (var i = 0; i < 3; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Equal([2], requested);
+
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2, 3], requested);
+        Assert.Equal(3, host.Controllers.Single().Profile.PresetSlot);
+    }
+
+    [Fact]
+    public void A_Device_Missing_The_Target_Slot_Keeps_Its_Configuration_And_Its_Leader_Latch()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        // pad-A holds slots 1 and 2; pad-B holds only its primary, so a switch to slot 2 can
+        // never move it.
+        presets.SaveSlot("pad-A", 1, LeaderProfile(LeaderSwitchMode.Press, GamepadButton.Back));
+        presets.SaveSlot("pad-A", 2, LeaderProfile(LeaderSwitchMode.Press, GamepadButton.Back));
+        presets.SaveSlot("pad-B", 1, LeaderProfile(LeaderSwitchMode.Press, GamepadButton.Back));
+
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("pad-A", "Controller A");
+        provider.Add("pad-B", "Controller B");
+        provider.SetState("pad-A", GamepadState.Neutral);
+        provider.SetState("pad-B", GamepadState.Neutral);
+        host.RefreshPresence();
+
+        var requested = new List<int>();
+        host.PresetSwitchRequested += (_, slot) => requested.Add(slot);
+
+        // B presses its leader: it asks for slot 2, but nothing answers - B holds no slot 2 -
+        // so its latch is left flipped, exactly the stale state a refusing handler produces.
+        provider.SetState("pad-B", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2], requested);
+
+        provider.SetState("pad-B", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        // The app moves to slot 2: A is reloaded onto it, B keeps running its own profile.
+        host.SwitchPresetSlot(2, new Dictionary<string, GamepadProfile>(StringComparer.Ordinal)
+        {
+            ["pad-A"] = presets.LoadSlot("pad-A", 2)!,
+        });
+        Assert.Equal(2, host.ActivePresetSlot);
+        Assert.Equal(1, host.Controllers.Single(c => c.Descriptor.DeviceId == "pad-B").Profile.PresetSlot);
+
+        // The switch re-anchored B's latch to the slot it truly runs, so its next press asks
+        // for slot 2 again rather than a no-op switch back to the slot it is already on.
+        provider.SetState("pad-B", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal([2, 2], requested);
+    }
+
+    [Fact]
+    public void A_Reload_Does_Not_Re_Press_Keys_Held_Across_It()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+
+        // An edit lands while the key is still held. The reload releases everything it held
+        // and the fresh engine adopts the last polled snapshot as its baseline, so the held
+        // key does not fabricate a new press edge and is not silently re-pressed.
+        host.Reload("xinput:0", DefaultProfileLibrary.CreateForLayout(GamepadLayout.Xbox) with
+        {
+            DeviceId = "xinput:0",
+        });
+        sink.Calls.Clear();
+
+        host.TickOnce(Tick);
+        Assert.Empty(sink.Calls);
+
+        // The release ends the hold the old engine left open, but the fresh dispatcher never
+        // pressed the key, so its held-key tracking drops the redundant up: nothing reaches
+        // the sink, and no key is left stuck.
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Empty(sink.Calls);
+
+        // A fresh press fires the reloaded mapping again.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void A_Switch_To_The_Slot_A_Device_Already_Runs_Leaves_Its_Runtime_Alone()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+        var runtime = host.Controllers.Single();
+
+        // The device runs slot 1 and is asked to switch to slot 1: reloading it would recreate
+        // its engine and release the key it is holding to change nothing at all.
+        host.SwitchPresetSlot(1, new Dictionary<string, GamepadProfile>(StringComparer.Ordinal)
+        {
+            ["xinput:0"] = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Xbox) with { DeviceId = "xinput:0" },
+        });
+
+        Assert.Same(runtime, host.Controllers.Single());
+        Assert.DoesNotContain("up:Enter", sink.Calls);
+        Assert.Equal(1, host.ActivePresetSlot);
     }
 
     [Fact]

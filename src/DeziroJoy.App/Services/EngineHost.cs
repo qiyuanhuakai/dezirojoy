@@ -32,6 +32,16 @@ public sealed class EngineHost : IDisposable
     private readonly PresetStore _presets;
     private readonly Dictionary<string, ControllerRuntime> _runtimes = [];
     private readonly Dictionary<string, int> _absenceTicks = [];
+
+    /// <summary>
+    /// Each connected device's most recent polled snapshot. A profile reload rebuilds the
+    /// device's engine, and without this the fresh engine would see every still-held button
+    /// as a new press edge - re-firing a key the reload just released, or toggling a leader
+    /// key once per held tick. Recorded on every poll (tick and presence sampling alike) and
+    /// handed to <see cref="ControllerRuntime.Reload"/> as the new engine's edge baseline.
+    /// </summary>
+    private readonly Dictionary<string, IGamepadState> _lastStates = new(StringComparer.Ordinal);
+
     private readonly Lock _sync = new();
     private readonly string _injectionMutexName;
     private Thread? _thread;
@@ -138,6 +148,8 @@ public sealed class EngineHost : IDisposable
                     // Transient read failure: keep the runtime, try again next tick.
                     continue;
                 }
+
+                _lastStates[descriptor.DeviceId] = state;
 
                 if (IsMappingEnabled && !_injectionSuspended)
                 {
@@ -283,6 +295,8 @@ public sealed class EngineHost : IDisposable
                     continue;
                 }
 
+                _lastStates[descriptor.DeviceId] = state;
+
                 PresenceSampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
             }
 
@@ -301,7 +315,8 @@ public sealed class EngineHost : IDisposable
     /// delete). The profile's own <see cref="GamepadProfile.PresetSlot"/> is preserved, so the
     /// runtime is tagged with the slot it actually runs - a reload onto a survivor slot tags the
     /// survivor, not the app-wide scalar. Callers that apply an edit to the active slot pass a
-    /// profile already carrying that slot.
+    /// profile already carrying that slot. The new engine adopts the device's last polled
+    /// snapshot as its edge baseline, so a key held across the reload is not re-pressed.
     /// </summary>
     public void Reload(string deviceId, GamepadProfile profile)
     {
@@ -309,7 +324,7 @@ public sealed class EngineHost : IDisposable
         {
             if (_runtimes.TryGetValue(deviceId, out var runtime))
             {
-                runtime.Reload(profile);
+                runtime.Reload(profile, _lastStates.GetValueOrDefault(deviceId));
             }
         }
     }
@@ -318,6 +333,13 @@ public sealed class EngineHost : IDisposable
     /// Switches every supplied device as one transaction. If any reload fails, runtimes
     /// already touched are restored before the exception escapes and the global slot stays
     /// unchanged. New devices created afterwards also inherit the selected slot.
+    /// <para>
+    /// A device already running the target slot is left alone: reloading it would recreate its
+    /// engine and release whatever it holds for a switch that changes nothing. A device
+    /// holding no profile in the target slot is not reloaded either - it keeps running its own
+    /// configuration - but its engine's leader latch is re-anchored to the slot it truly runs,
+    /// because a leader press whose switch never landed leaves that latch flipped.
+    /// </para>
     /// </summary>
     public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
     {
@@ -334,8 +356,13 @@ public sealed class EngineHost : IDisposable
                     ArgumentNullException.ThrowIfNull(profile);
                     if (_runtimes.TryGetValue(deviceId, out var runtime))
                     {
+                        if (runtime.Profile.PresetSlot == slot)
+                        {
+                            continue;
+                        }
+
                         previous.Add(deviceId, (runtime, runtime.Profile));
-                        runtime.Reload(profile with { PresetSlot = slot });
+                        runtime.Reload(profile with { PresetSlot = slot }, _lastStates.GetValueOrDefault(deviceId));
                     }
                 }
             }
@@ -343,10 +370,23 @@ public sealed class EngineHost : IDisposable
             {
                 foreach (var (deviceId, prior) in previous)
                 {
-                    prior.Runtime.Reload(prior.Profile);
+                    prior.Runtime.Reload(prior.Profile, _lastStates.GetValueOrDefault(deviceId));
                 }
 
                 throw;
+            }
+
+            // A runtime the switch did not reload - it holds no profile in the target slot, or
+            // it already ran it - keeps its own engine, whose leader latch was seeded for the
+            // slot that engine started on. Re-anchor it to the slot the runtime truly runs, or
+            // a press whose switch never landed would leave the next one asking for the slot
+            // the device is already on.
+            foreach (var runtime in _runtimes.Values)
+            {
+                if (!previous.ContainsKey(runtime.Descriptor.DeviceId))
+                {
+                    runtime.Engine.SyncLeaderLatches(runtime.Profile.PresetSlot);
+                }
             }
 
             ActivePresetSlot = slot;
@@ -616,6 +656,7 @@ public sealed class EngineHost : IDisposable
             {
                 runtime.Engine.Reset();
                 runtime.Dispatcher.ReleaseAll();
+                _lastStates.Remove(deviceId);
                 _presenceVersion++;
             }
         }
