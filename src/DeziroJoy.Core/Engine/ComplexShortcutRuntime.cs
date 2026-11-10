@@ -24,8 +24,14 @@ namespace DeziroJoy.Core.Engine;
 /// still run in order. A tick covering several intervals fires every tap it covers and the
 /// remainder carries on - the same "never lose a unit" rule the gesture machine's
 /// auto-repeat applies, with the same one-microsecond tolerance so a run of 0.1s ticks
-/// cannot drift a tap out of existence. A tap due after the release boundary never fires,
-/// because the release tick stops the program before it is advanced.
+/// cannot drift a tap out of existence.
+/// </para>
+/// <para>
+/// A timer only exists from the moment its every step runs: within the tick that registers
+/// it, the timer is credited the time left after the waits that preceded it, while timers
+/// from earlier ticks take the whole tick. Within one tick the sequence's commands come
+/// first, then the periodic taps in registration order. A tap due after the release
+/// boundary never fires, because the release tick stops the program before it is advanced.
 /// </para>
 /// </remarks>
 public sealed class ComplexShortcutRuntime
@@ -64,9 +70,11 @@ public sealed class ComplexShortcutRuntime
 
     /// <summary>
     /// Advances the program by one tick, appending its commands. A NaN or negative step
-    /// counts as no time passing, so it can never rewind or explode the timers.
+    /// counts as no time passing, so it can never rewind or explode the timers. The step is
+    /// a double so the engine can hand over the gesture machine's post-threshold overflow
+    /// without a lossy float round trip.
     /// </summary>
-    public void Tick(float deltaSeconds, List<InputCommand> commands)
+    public void Tick(double deltaSeconds, List<InputCommand> commands)
     {
         ArgumentNullException.ThrowIfNull(commands);
 
@@ -75,10 +83,23 @@ public sealed class ComplexShortcutRuntime
             return;
         }
 
-        var remaining = double.IsNaN(deltaSeconds) || deltaSeconds < 0f ? 0d : deltaSeconds;
+        var dt = double.IsNaN(deltaSeconds) || deltaSeconds < 0d ? 0d : deltaSeconds;
 
-        AdvanceSequence(remaining, commands);
-        DrainTimers(remaining, commands);
+        var registered = AdvanceSequence(dt, commands);
+
+        // Timers registered by earlier ticks take the whole tick; timers this tick's
+        // sequence just registered only take the slice left after the waits that preceded
+        // them - they did not exist before that point.
+        foreach (var timer in _timers)
+        {
+            Drain(timer, dt, commands);
+        }
+
+        foreach (var (timer, credit) in registered)
+        {
+            _timers.Add(timer);
+            Drain(timer, credit, commands);
+        }
     }
 
     /// <summary>
@@ -125,10 +146,13 @@ public sealed class ComplexShortcutRuntime
     /// <summary>
     /// Runs sequence steps until the tick's time runs out. Instantaneous steps cost no
     /// time and always run; a wait consumes what is left and parks the sequence, carrying
-    /// the remainder into the next tick.
+    /// the remainder into the next tick. Reports the timers the sequence registered, each
+    /// with the slice of the tick that was still left when it was registered.
     /// </summary>
-    private void AdvanceSequence(double remaining, List<InputCommand> commands)
+    private List<(EveryTimer Timer, double Credit)> AdvanceSequence(double remaining, List<InputCommand> commands)
     {
+        var registered = new List<(EveryTimer, double)>();
+
         while (_position < _steps.Count)
         {
             if (_steps[_position] is ComplexShortcutWaitStep wait)
@@ -141,7 +165,7 @@ public sealed class ComplexShortcutRuntime
                 if (remaining < _waitRemaining - ButtonGestureState.TimingTolerance)
                 {
                     _waitRemaining = Math.Max(_waitRemaining - remaining, 0d);
-                    return;
+                    return registered;
                 }
 
                 remaining = Math.Max(remaining - _waitRemaining, 0d);
@@ -150,9 +174,18 @@ public sealed class ComplexShortcutRuntime
                 continue;
             }
 
+            if (_steps[_position] is ComplexShortcutEveryStep every)
+            {
+                registered.Add((new EveryTimer(every.Interval, every.Key), remaining));
+                _position++;
+                continue;
+            }
+
             ExecuteStep(_steps[_position], commands);
             _position++;
         }
+
+        return registered;
     }
 
     private void ExecuteStep(ComplexShortcutStep step, List<InputCommand> commands)
@@ -183,29 +216,22 @@ public sealed class ComplexShortcutRuntime
                 }
 
                 break;
-
-            case ComplexShortcutEveryStep every:
-                _timers.Add(new EveryTimer(every.Interval, every.Key));
-                break;
         }
     }
 
     /// <summary>
-    /// Fires every periodic tap the tick covers, in registration order, draining each
-    /// timer's own interval so one large tick emits every tap it covers instead of one.
+    /// Fires every tap of one timer the credited time covers, draining the timer's own
+    /// interval so one large tick emits every tap it covers instead of one.
     /// </summary>
-    private void DrainTimers(double deltaSeconds, List<InputCommand> commands)
+    private static void Drain(EveryTimer timer, double deltaSeconds, List<InputCommand> commands)
     {
-        foreach (var timer in _timers)
-        {
-            timer.Elapsed += deltaSeconds;
+        timer.Elapsed += deltaSeconds;
 
-            while (timer.Elapsed >= timer.Interval - ButtonGestureState.TimingTolerance)
-            {
-                timer.Elapsed = Math.Max(timer.Elapsed - timer.Interval, 0d);
-                commands.Add(new KeyDownCommand(timer.Key, KeyModifiers.None));
-                commands.Add(new KeyUpCommand(timer.Key, KeyModifiers.None));
-            }
+        while (timer.Elapsed >= timer.Interval - ButtonGestureState.TimingTolerance)
+        {
+            timer.Elapsed = Math.Max(timer.Elapsed - timer.Interval, 0d);
+            commands.Add(new KeyDownCommand(timer.Key, KeyModifiers.None));
+            commands.Add(new KeyUpCommand(timer.Key, KeyModifiers.None));
         }
     }
 

@@ -26,7 +26,8 @@ namespace DeziroJoy.Core.Engine;
 /// </para>
 /// <para>
 /// A <see cref="ComplexShortcutTarget"/> runs a hand-written DSL program from a button's
-/// 长按 (hold Alt + every 1s tap Tab): the long press starts the program, every held tick
+/// 长按 (hold Alt + every 1s tap Tab): the long press starts the program - advanced first
+/// by the tick's post-threshold overflow, not the whole press tick - every held tick then
 /// advances it by <c>deltaSeconds</c>, and the release tick stops it and releases the keys
 /// it held. v1 binds it to a bare long-press gesture, so it can never double-trigger
 /// against the click or the long-press repeat.
@@ -443,12 +444,17 @@ public sealed class MappingEngine
                 nameof(mapping));
         }
 
-        if (gesture.HasDoubleClick || gesture.HasClickRepeat || gesture.HasDoubleClickAction || gesture.HasLongPressAction)
+        if (gesture.HasDoubleClick
+            || gesture.HasClickRepeat
+            || gesture.HasDoubleClickAction
+            || gesture.HasLongPressAction
+            || gesture.LongPressRepeatInterval > 0f)
         {
             throw new ArgumentException(
-                $"Mapping {mapping.Id} pairs a complex shortcut with 双击 / auto-repeat / an extra " +
-                "gesture action on button {button.Button}. The long press already owns the " +
-                "program: leave the gesture as a bare long-press threshold.",
+                $"Mapping {mapping.Id} pairs a complex shortcut with 双击 / long-press repeat / " +
+                $"click auto-repeat / an extra gesture action on button {button.Button}. " +
+                "The long press already owns the program: leave the gesture as a bare " +
+                "long-press threshold.",
                 nameof(mapping));
         }
     }
@@ -556,8 +562,16 @@ public sealed class MappingEngine
 
         if (step.Action == GestureAction.Tap && step.Kind == GestureKind.LongPress)
         {
-            runtime.Start();
-            runtime.Tick(deltaSeconds, commands);
+            // The gesture machine measured how far this tick overshot the threshold; only
+            // that overflow belongs to the program, not the whole press tick. Validation
+            // rejects a repeat interval, so this fires once per press - the IsRunning guard
+            // keeps any future repeat from restarting a program that is still running.
+            if (!runtime.IsRunning)
+            {
+                runtime.Start();
+            }
+
+            runtime.Tick(gesture.RepeatElapsed, commands);
             return;
         }
 
