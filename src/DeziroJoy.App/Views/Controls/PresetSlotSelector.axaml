@@ -124,6 +124,41 @@
         <Style Selector="Button.presetCard.active:focus Border.presetUnderline">
             <Setter Property="Opacity" Value="1" />
         </Style>
+
+        <!-- The per-card delete affordance: a small badge over the card's top-right corner,
+             deliberately a sibling of the switch button rather than a child of it, so a click
+             on the badge never bubbles into the switch. It stays out of the way at rest and
+             answers the pointer, the keyboard and the armed confirm. -->
+        <Style Selector="Button.presetDelete">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Opacity" Value="0.5" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style Selector="Button.presetDelete:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <Style Selector="Button.presetDelete:focus">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
+        <!-- Armed for the confirming click: the badge takes the accent surface so the second
+             press reads as the final, deliberate one. The tooltip carries the same message in
+             words ("再次点击确认删除"), so the confirm survives a colour-blind reading. -->
+        <Style Selector="Button.presetDelete.armed">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
     </UserControl.Styles>
 
     <!-- The strip: one rounded bar, wide and short, spanning the full width of the centre
@@ -156,34 +191,52 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:PresetSlotItem">
-                            <Button Classes="presetCard" Width="94" Height="30"
-                                    Classes.active="{Binding IsActive}"
-                                    Command="{Binding DataContext.(vm:MainWindowViewModel).SwitchPresetSlotCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                    CommandParameter="{Binding Slot}"
-                                    AutomationProperties.Name="{Binding Slot, StringFormat='全局预设 {0}'}"
-                                    ToolTip.Tip="{Binding Name, StringFormat='切换整个应用：{0}'}">
-                                <!-- A bounded Grid, not a horizontal StackPanel: the label's
-                                     star column is what limits its measure to the card's
-                                     content width, so a long generated name ("Xbox 布局默认
-                                     配置 · 预设 5") ellipsizes inside the card instead of
-                                     painting over its neighbours. The full name rides on the
-                                     tooltip. -->
-                                <Grid RowDefinitions="*,Auto">
-                                    <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
-                                        <Ellipse Grid.Column="0" Classes="presetDot" />
-                                        <TextBlock Grid.Column="1" Margin="5,0,0,0" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis">
-                                            <TextBlock.Text>
-                                                <MultiBinding StringFormat="{}{0} · {1}">
-                                                    <Binding Path="Slot" />
-                                                    <Binding Path="Name" />
-                                                </MultiBinding>
-                                            </TextBlock.Text>
-                                        </TextBlock>
+                            <!-- One card is a Grid, not a bare button: the switch button fills it
+                                 and the delete badge sits over its top-right corner as a sibling,
+                                 so a click on the badge never bubbles into the switch. The badge
+                                 is offered only on the slots that can be deleted (CanDelete hides
+                                 it on the protected primary slot); its armed class and tooltip
+                                 carry the confirming second step. -->
+                            <Grid Width="94" Height="30">
+                                <Button Classes="presetCard" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                        Classes.active="{Binding IsActive}"
+                                        Command="{Binding DataContext.(vm:MainWindowViewModel).SwitchPresetSlotCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                        CommandParameter="{Binding Slot}"
+                                        AutomationProperties.Name="{Binding Slot, StringFormat='全局预设 {0}'}"
+                                        ToolTip.Tip="{Binding Name, StringFormat='切换整个应用：{0}'}">
+                                    <!-- A bounded Grid, not a horizontal StackPanel: the label's
+                                         star column is what limits its measure to the card's
+                                         content width, so a long generated name ("Xbox 布局默认
+                                         配置 · 预设 5") ellipsizes inside the card instead of
+                                         painting over its neighbours. The full name rides on the
+                                         tooltip. -->
+                                    <Grid RowDefinitions="*,Auto">
+                                        <Grid Grid.Row="0" ColumnDefinitions="Auto,*">
+                                            <Ellipse Grid.Column="0" Classes="presetDot" />
+                                            <TextBlock Grid.Column="1" Margin="5,0,0,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} · {1}">
+                                                        <Binding Path="Slot" />
+                                                        <Binding Path="Name" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                        </Grid>
+                                        <Border Grid.Row="1" Classes="presetUnderline" />
                                     </Grid>
-                                    <Border Grid.Row="1" Classes="presetUnderline" />
-                                </Grid>
-                            </Button>
+                                </Button>
+                                <Button Classes="presetDelete" Classes.armed="{Binding IsDeleteArmed}"
+                                        IsVisible="{Binding CanDelete}"
+                                        Width="18" Height="18" Margin="0,3,4,0"
+                                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                                        Command="{Binding DataContext.(vm:MainWindowViewModel).DeletePresetCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                        CommandParameter="{Binding Slot}"
+                                        AutomationProperties.Name="{Binding Slot, StringFormat='删除全局预设 {0}'}"
+                                        ToolTip.Tip="{Binding DeleteTip}">
+                                    <TextBlock Text="×" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Button>
+                            </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>

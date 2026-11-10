@@ -147,7 +147,9 @@ internal sealed class FakeDaemonHost : IDaemonHost
         {
             foreach (var (deviceId, profile) in profiles)
             {
-                Reload(deviceId, profile);
+                // Mirror EngineHost.SwitchPresetSlot: the runtime is tagged with the slot it moves
+                // to, so a device left off the app-wide slot is observable through GetProfile.
+                Reload(deviceId, profile with { PresetSlot = slot });
             }
         }
         catch
@@ -952,6 +954,429 @@ public class DaemonServerTests
         Assert.Equal("Third", secondHost.GetProfile("pad-1")!.Name);
         var snapshot = Assert.IsType<StateChangedMessage>(await second.ProcessAsync(new GetStateMessage("state")));
         Assert.Equal(3, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task DeletePresetSlot_Removes_The_Slot_Bumps_The_Revision_And_Publishes()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            presets.SaveSlot("pad-1", slot, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Slot {slot}",
+                DeviceId = "pad-1",
+            });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += push => pushes.Add(push);
+
+        // Slot 1 is active, so deleting slot 2 leaves the active slot untouched.
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 2)));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal(1, ack.Revision);
+        Assert.Equal([1, 3], presets.SlotsInUse("pad-1"));
+        Assert.Null(store.Load("preset2:pad-1"));
+
+        var push = Assert.Single(pushes);
+        Assert.Equal(1, push.Snapshot.ActivePresetSlot);
+        Assert.Equal(1, push.Snapshot.Revision);
+    }
+
+    private static GamepadProfile ProfileWithLeader(string name, string deviceId, int slotA, int slotB)
+        => DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = name,
+            DeviceId = deviceId,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: slotA, SlotB: slotB),
+                    Enabled = true,
+                },
+            ],
+        };
+
+    private static SpecialKeyTarget LeaderOf(GamepadProfile profile)
+        => profile.Mappings.Select(mapping => mapping.Target)
+            .OfType<SpecialKeyTarget>().Single(target => target.Kind == SpecialKeyKind.Leader);
+
+    [Fact]
+    public async Task Deleting_The_Active_Slot_Reloads_The_Repaired_Fallback_Profile()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { Name = "One", DeviceId = "pad-1" });
+        // The fallback slot 2 carries a leader 2<->3; deleting the active slot 3 must repair it.
+        presets.SaveSlot("pad-1", 2, ProfileWithLeader("Two", "pad-1", slotA: 2, slotB: 3));
+        presets.SaveSlot("pad-1", 3, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { Name = "Three", DeviceId = "pad-1" });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new SwitchPresetSlotMessage("s", "pad-1", 3));
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d", "pad-1", 3)));
+
+        Assert.True(ack.Accepted);
+        // The runtime was reloaded onto the fallback slot 2 with its leader repaired to flip
+        // between two surviving slots (2 and 1), not the deleted slot 3.
+        var runtimeLeader = LeaderOf(host.GetProfile("pad-1")!);
+        Assert.Equal(2, runtimeLeader.SlotA);
+        Assert.Equal(1, runtimeLeader.SlotB);
+
+        // The published body carries the same repaired profile, so a client re-adopting it cannot
+        // write the deleted-slot reference back.
+        var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
+        var bodyLeader = LeaderOf(ProfileSerializer.Deserialize(snapshot.Snapshot.ProfileJson!));
+        Assert.Equal(1, bodyLeader.SlotB);
+    }
+
+    [Fact]
+    public async Task Deleting_A_NonActive_Slot_Repairs_And_Reloads_The_Active_Profile()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        // Slot 1 is active and carries a leader 1<->3; deleting the non-active slot 3 repairs it.
+        presets.SaveSlot("pad-1", 1, ProfileWithLeader("One", "pad-1", slotA: 1, slotB: 3));
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { Name = "Two", DeviceId = "pad-1" });
+        presets.SaveSlot("pad-1", 3, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { Name = "Three", DeviceId = "pad-1" });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d", "pad-1", 3)));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
+
+        // The active slot is unchanged, but its repaired profile was reloaded into the runtime and
+        // published as the body (leader retargeted from the deleted slot 3 to the survivor 2).
+        var runtimeLeader = LeaderOf(host.GetProfile("pad-1")!);
+        Assert.Equal(1, runtimeLeader.SlotA);
+        Assert.Equal(2, runtimeLeader.SlotB);
+        var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
+        Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+        Assert.Equal(2, LeaderOf(ProfileSerializer.Deserialize(snapshot.Snapshot.ProfileJson!)).SlotB);
+    }
+
+    [Fact]
+    public async Task Deleting_A_NonActive_Slot_Rolls_Back_When_The_Repair_Reload_Fails()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, ProfileWithLeader("One", "pad-1", slotA: 1, slotB: 3));
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { Name = "Two", DeviceId = "pad-1" });
+        presets.SaveSlot("pad-1", 3, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { Name = "Three", DeviceId = "pad-1" });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        host.FailReloadDevice = "pad-1";
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d", "pad-1", 3)));
+
+        // The reload of the repaired active profile failed, so the whole delete is rolled back:
+        // the store is restored exactly and the active slot never moved.
+        Assert.False(ack.Accepted);
+        Assert.Equal("preset-delete-failed", ack.ErrorCode);
+        Assert.Equal([1, 2, 3], presets.SlotsInUse("pad-1"));
+        Assert.Equal(3, LeaderOf(presets.LoadSlot("pad-1", 1)!).SlotB);
+        var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
+        Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task Deleting_A_Slot_A_Device_Is_Running_Moves_That_Device_Even_When_It_Is_Not_The_Active_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var deviceId in new[] { "pad-A", "pad-B" })
+        {
+            presets.EnsureDefaults(new GamepadDescriptor(deviceId, deviceId));
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-A");
+        host.AddDevice("pad-B");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        // 1. Delete B's non-active slot 2 (the app-wide slot is still 1).
+        Assert.True(Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d1", "pad-B", 2))).Accepted);
+        Assert.Equal([1, 3, 4], presets.SlotsInUse("pad-B"));
+
+        // 2. Select global slot 3 - both devices reload onto it.
+        await server.ProcessAsync(new SwitchPresetSlotMessage("s3", "pad-A", 3));
+        Assert.Equal(3, host.GetProfile("pad-B")!.PresetSlot);
+
+        // 3. Delete A's active slot 3: the app-wide slot moves to 2, but B lacks slot 2, so B
+        //    keeps running slot 3 (the supported missing-slot semantics).
+        Assert.True(Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d3", "pad-A", 3))).Accepted);
+        Assert.Equal(2, Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("g1"))).Snapshot.ActivePresetSlot);
+        Assert.Equal(3, host.GetProfile("pad-B")!.PresetSlot);
+
+        // 4. Now delete B's slot 3 - the very slot B is running, even though it is not the
+        //    app-wide active slot. B must be moved to a survivor rather than left executing a
+        //    profile whose storage was just removed.
+        Assert.True(Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("d4", "pad-B", 3))).Accepted);
+        Assert.Equal([1, 4], presets.SlotsInUse("pad-B"));
+        Assert.Equal(1, host.GetProfile("pad-B")!.PresetSlot);
+        // The app-wide slot did not move - only B's runtime did.
+        Assert.Equal(2, Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("g2"))).Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task Deleting_The_Active_Slot_Moves_The_App_To_A_Surviving_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            presets.SaveSlot("pad-1", slot, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+            {
+                Name = $"Slot {slot}",
+                DeviceId = "pad-1",
+            });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-switch", "pad-1", 3));
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 3)));
+
+        Assert.True(ack.Accepted);
+        // The active slot 3 is gone and the app moved to the highest surviving slot below it.
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
+        Assert.Equal("Slot 2", host.GetProfile("pad-1")!.Name);
+        Assert.Contains("pad-1", host.ReloadedDevices);
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("verify")));
+        Assert.Equal(2, snapshot.Snapshot.ActivePresetSlot);
+        Assert.Contains("Slot 2", snapshot.Snapshot.ProfileName);
+    }
+
+    [Fact]
+    public async Task DeletePresetSlot_Refuses_The_Primary_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Primary",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Second",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 1)));
+
+        Assert.Equal("primary-preset", error.ErrorCode);
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
+        var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
+        Assert.Equal(0, snapshot.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task DeletePresetSlot_Refuses_The_Last_Remaining_Preset()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Only",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 2)));
+
+        Assert.Equal("last-preset", error.ErrorCode);
+        Assert.Equal([1], presets.SlotsInUse("pad-1"));
+    }
+
+    [Fact]
+    public async Task DeletePresetSlot_Reports_Nothing_Stored_For_An_Empty_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { DeviceId = "pad-1" });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with { DeviceId = "pad-1" });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 5)));
+
+        Assert.Equal("no-configuration", error.ErrorCode);
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
+    }
+
+    [Fact]
+    public async Task DeletePresetSlot_Rejects_A_Slot_Below_One()
+    {
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore());
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 0)));
+
+        Assert.Equal("invalid-slot", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Deleting_The_Active_Slot_Rolls_Back_When_The_Switch_Fails()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Primary",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Second",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-switch", "pad-1", 2));
+        host.FailReloadDevice = "pad-1";
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("req-del", "pad-1", 2)));
+
+        // The switch to the fallback failed, so the delete is rolled back and slot 2 survives.
+        Assert.False(ack.Accepted);
+        Assert.Equal("preset-delete-failed", ack.ErrorCode);
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
+        var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
+        Assert.Equal(2, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task DeletePresetSlot_Repairs_The_Leader_And_Persists_The_Slot_Set_Across_A_Restart()
+    {
+        var stateStore = NewStore();
+        var profileStore = new InMemoryProfileStore();
+        var presets = new PresetStore(profileStore);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Primary",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 3, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "Third",
+            DeviceId = "pad-1",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 2, SlotB: 3),
+                    Enabled = true,
+                },
+            ],
+        });
+        var clock = new FakeClock();
+        var firstHost = new FakeDaemonHost();
+        firstHost.AddDevice("pad-1");
+        var first = CreateServer(firstHost, stateStore, clock, profileStore);
+
+        await first.ProcessAsync(new SwitchPresetSlotMessage("switch", "pad-1", 3));
+        var ack = Assert.IsType<MutationAckMessage>(
+            await first.ProcessAsync(new DeletePresetSlotMessage("delete", "pad-1", 3)));
+        Assert.True(ack.Accepted);
+
+        // The leader in slot 3 named slot 2 and itself; with slot 3 gone it is repaired onto
+        // the surviving slot 1.
+        Assert.Equal([1], presets.SlotsInUse("pad-1"));
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var secondHost = new FakeDaemonHost();
+        secondHost.AddDevice("pad-1");
+        var second = CreateServer(secondHost, stateStore, clock, profileStore);
+        second.ResumeDesiredState();
+
+        // The deleted slot stays gone and the persisted active slot (a survivor) is restored.
+        Assert.Equal([1], presets.SlotsInUse("pad-1"));
+        var snapshot = Assert.IsType<StateChangedMessage>(await second.ProcessAsync(new GetStateMessage("state")));
+        Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
+        Assert.Equal("Primary", secondHost.GetProfile("pad-1")!.Name);
+    }
+
+    [Fact]
+    public async Task Deleting_The_Active_Slot_On_One_Device_Keeps_Other_Devices_Running()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        foreach (var deviceId in new[] { "pad-1", "pad-2" })
+        {
+            foreach (var slot in new[] { 1, 2, 3 })
+            {
+                presets.SaveSlot(deviceId, slot, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+                {
+                    Name = $"{deviceId} Slot {slot}",
+                    DeviceId = deviceId,
+                });
+            }
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new SwitchPresetSlotMessage("switch", "pad-1", 3));
+
+        // pad-1 deletes its own slot 3; pad-2 keeps its slot 3 in the store.
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new DeletePresetSlotMessage("delete", "pad-1", 3)));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
+        Assert.Equal([1, 2, 3], presets.SlotsInUse("pad-2"));
+        // The app-wide active slot moved off the deleted one, and both devices were reloaded
+        // onto a slot they still hold.
+        Assert.Equal("pad-1 Slot 2", host.GetProfile("pad-1")!.Name);
+        Assert.Equal("pad-2 Slot 2", host.GetProfile("pad-2")!.Name);
+        var snapshot = Assert.IsType<StateChangedMessage>(await server.ProcessAsync(new GetStateMessage("v")));
+        Assert.Equal(2, snapshot.Snapshot.ActivePresetSlot);
     }
 
     [Fact]

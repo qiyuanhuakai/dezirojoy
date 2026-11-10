@@ -296,14 +296,20 @@ public sealed class EngineHost : IDisposable
         }
     }
 
-    /// <summary>Replaces the active profile of a device (used by the mapping editor).</summary>
+    /// <summary>
+    /// Replaces the active profile of a device (used by the mapping editor and the preset
+    /// delete). The profile's own <see cref="GamepadProfile.PresetSlot"/> is preserved, so the
+    /// runtime is tagged with the slot it actually runs - a reload onto a survivor slot tags the
+    /// survivor, not the app-wide scalar. Callers that apply an edit to the active slot pass a
+    /// profile already carrying that slot.
+    /// </summary>
     public void Reload(string deviceId, GamepadProfile profile)
     {
         lock (_sync)
         {
             if (_runtimes.TryGetValue(deviceId, out var runtime))
             {
-                runtime.Reload(profile with { PresetSlot = ActivePresetSlot });
+                runtime.Reload(profile);
             }
         }
     }
@@ -550,7 +556,10 @@ public sealed class EngineHost : IDisposable
                 return existing;
             }
 
-            var profile = _presets.EnsureDefaults(descriptor, ActivePresetSlot) with { PresetSlot = ActivePresetSlot };
+            // EnsureDefaults tags the profile with the slot it actually loaded (the active slot,
+            // or the primary anchor when this device lacks the active slot), so the runtime is
+            // tagged with the slot it truly runs and is not force-fit to the app-wide scalar.
+            var profile = _presets.EnsureDefaults(descriptor, ActivePresetSlot);
             var runtime = new ControllerRuntime(descriptor, profile, _sink);
             _runtimes[descriptor.DeviceId] = runtime;
             _presenceVersion++;

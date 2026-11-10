@@ -87,6 +87,16 @@ public sealed class MappingEditorPresetPickerTests
     private static Button AddPresetButton(PresetSlotSelector selector)
         => selector.GetVisualDescendants().OfType<Button>().Single(button => button.Classes.Contains("presetAdd"));
 
+    /// <summary>The delete badges the strip renders, in the order they are laid out.</summary>
+    private static List<Button> DeleteButtons(PresetSlotSelector selector)
+        => selector.GetVisualDescendants().OfType<Button>()
+            .Where(button => button.Classes.Contains("presetDelete"))
+            .OrderBy(button => button.Bounds.X)
+            .ToList();
+
+    private static Button? DeleteButton(PresetSlotSelector selector, int slot)
+        => DeleteButtons(selector).FirstOrDefault(button => Equals(button.CommandParameter, slot));
+
     private static Rect RectInWindow(Control control, Window window)
     {
         var origin = control.TranslatePoint(new Point(0, 0), window);
@@ -439,6 +449,162 @@ public sealed class MappingEditorPresetPickerTests
 
         Assert.Equal(2, viewModel.ActivePresetSlot);
         Assert.Contains("active", card.Classes);
+    }
+
+    [AvaloniaFact]
+    public void Every_Deletable_Preset_Card_Offers_A_Reachable_Delete_Badge()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var selector = PresetSelector(window);
+
+        // The primary slot is protected: it renders no delete badge at all.
+        Assert.False(DeleteButton(selector, 1)?.IsVisible ?? true, "slot 1 must offer no delete");
+
+        // Every later slot offers one, reachable by keyboard and named for its slot.
+        foreach (var slot in new[] { 2, 3, 4 })
+        {
+            var badge = DeleteButton(selector, slot);
+            Assert.NotNull(badge);
+            Assert.True(badge!.IsVisible, $"slot {slot} must offer a delete badge");
+            Assert.True(badge.Focusable, $"slot {slot} delete must be reachable by keyboard");
+            Assert.Same(viewModel.DeletePresetCommand, badge.Command);
+            Assert.Equal(slot, Assert.IsType<int>(badge.CommandParameter));
+            Assert.Equal($"删除全局预设 {slot}", Avalonia.Automation.AutomationProperties.GetName(badge));
+
+            // The badge is a sibling of the switch, never a child of it: a click on the badge
+            // must not bubble into the switch.
+            var card = PresetCard(selector, slot);
+            Assert.False(IsDescendantOf(badge, card), "the delete badge must not live inside the switch button");
+        }
+    }
+
+    [AvaloniaFact]
+    public void Clicking_The_Delete_Badge_Twice_Removes_The_Preset()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var selector = PresetSelector(window);
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+
+        // The first click only arms the confirm; the card stays and is flagged.
+        Click(DeleteButton(selector, 2)!, window);
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+        Assert.True(viewModel.PresetSlots.Single(item => item.Slot == 2).IsDeleteArmed);
+
+        // The second click on the same badge performs the delete.
+        Click(DeleteButton(selector, 2)!, window);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal([1, 3, 4], viewModel.PresetSlots.Select(item => item.Slot));
+    }
+
+    [AvaloniaFact]
+    public void Clicking_The_Card_Body_Still_Switches_And_Never_Deletes()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var selector = PresetSelector(window);
+
+        // The switch target is the card body, well clear of the top-right delete badge.
+        Click(PresetCard(selector, 2), window);
+
+        Assert.Equal(2, viewModel.ActivePresetSlot);
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+    }
+
+    [AvaloniaFact]
+    public void A_Focused_Delete_Badge_Can_Be_Activated_With_The_Keyboard()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        window.Focus();
+        var badge = DeleteButton(PresetSelector(window), 3)!;
+        Assert.True(badge.Focus());
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // First Enter arms, second Enter confirms - the delete is reachable without a pointer.
+        window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+        window.KeyRelease(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+
+        window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+        window.KeyRelease(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal([1, 2, 4], viewModel.PresetSlots.Select(item => item.Slot));
+    }
+
+    [AvaloniaFact]
+    public void The_Gamepad_Can_Enter_The_Preset_Strip_And_Delete_Without_External_Focus()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The window is active with the mapping tab selected, so physical pad input is in scope.
+        viewModel.SetPhysicalInputScope(true);
+
+        // No strip control is focused. Every step is a host tick the window dispatches to the view
+        // model (SampleHelper.Sample would double it against the window's own Sampled
+        // subscription), so each press is navigated exactly once - and nothing is focused
+        // programmatically: the pad alone enters and drives the strip.
+        Assert.Equal(-1, viewModel.PresetStripFocusIndex);
+
+        // Guide enters the strip, parking the pad focus on the active card.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.Guide, 0, 0, 0, 0));
+        Assert.Equal((PresetStripAction.Switch, 1), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
+
+        // D-pad right twice reaches slot 2's delete badge (Switch1, Switch2, Delete2).
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadRight, 0, 0, 0, 0));
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadRight, 0, 0, 0, 0));
+        Assert.Equal((PresetStripAction.Delete, 2), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
+
+        // A arms, A confirms - the delete is reached and performed purely by gamepad.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+        Assert.True(viewModel.PresetSlots.Single(item => item.Slot == 2).IsDeleteArmed);
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+        Assert.Equal([1, 3, 4], viewModel.PresetSlots.Select(item => item.Slot));
+
+        // Guide exits the strip.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.Guide, 0, 0, 0, 0));
+        Assert.Equal(-1, viewModel.PresetStripFocusIndex);
+    }
+
+    private static void PadStep(EngineHost host, FakeGamepadProvider provider, Window window, IGamepadState state)
+    {
+        provider.SetState(DeviceId, state);
+        host.TickOnce(SampleHelper.Tick);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
     }
 
     [AvaloniaFact]

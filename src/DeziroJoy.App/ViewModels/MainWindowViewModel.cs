@@ -47,6 +47,19 @@ public enum MappingOwner
     ResidentDaemon,
 }
 
+/// <summary>Which control of the global preset strip a gamepad focus index names.</summary>
+public enum PresetStripAction
+{
+    /// <summary>A preset card: activating it switches the whole app to that slot.</summary>
+    Switch,
+
+    /// <summary>A card's delete badge: activating it arms, then confirms, the delete.</summary>
+    Delete,
+
+    /// <summary>The add button: activating it creates and switches to a new preset.</summary>
+    Add,
+}
+
 /// <summary>
 /// Main window orchestration: connection state, profile editing, mapping table and
 /// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
@@ -91,6 +104,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>The device whose slots <see cref="PresetSlots"/> was last built for.</summary>
     private string? _presetSlotDeviceId;
+
+    /// <summary>
+    /// The slot whose delete is armed for a confirming second click, or null when none is.
+    /// The two-step confirm is the anti-mistouch half of a destructive action: the first
+    /// press arms, the second on the same slot deletes, and any other preset action disarms.
+    /// </summary>
+    private int? _presetDeleteArmedSlot;
 
     public MainWindowViewModel(
         EngineHost host,
@@ -430,6 +450,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private async Task SwitchPresetSlot(int slot)
     {
+        // Switching is a deliberate move to another slot, so any half-finished delete confirm
+        // is dropped rather than left armed behind the user's back.
+        DisarmPresetDelete();
+
         if (_daemonRequired && !IsDaemonConnected)
         {
             SetTransferError("提权守护进程不可用；配置槽位未切换。");
@@ -511,6 +535,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private async Task AddPreset()
     {
+        DisarmPresetDelete();
+
         var deviceId = _daemon is null
             ? ActiveController?.Descriptor.DeviceId
             : PersistenceDeviceId;
@@ -541,6 +567,198 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    /// Deletes one preset slot of the device in scope. The action is destructive, so it runs
+    /// as a two-step confirm: the first press arms this slot's delete (the card shows the
+    /// confirm state), the second press on the same slot performs it, and any other preset
+    /// action disarms. In daemon mode the daemon owns the store and the app-wide slot, so the
+    /// request is sent to it and the resulting snapshot reconciles this client; locally the
+    /// slot is removed here. Deleting the active slot moves the whole app to a surviving slot
+    /// first, so the running engine and every Leader reference never point at a slot that is
+    /// gone, and the delete is rolled back if that switch fails. Slot 1 and the device's last
+    /// remaining preset are refused.
+    /// </summary>
+    [RelayCommand]
+    private async Task DeletePreset(int slot)
+    {
+        if (slot < PresetStore.MinSlot)
+        {
+            return;
+        }
+
+        if (_presetDeleteArmedSlot != slot)
+        {
+            _presetDeleteArmedSlot = slot;
+            MarkPresetDeleteArmed();
+            return;
+        }
+
+        DisarmPresetDelete();
+
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；预设未删除。");
+            return;
+        }
+
+        if (_daemon is not null)
+        {
+            if (PersistenceDeviceId is not { } deviceId)
+            {
+                SetTransferError("删除预设失败：请先连接手柄。");
+                return;
+            }
+
+            try
+            {
+                var result = await _daemon.DeletePresetSlotAsync(deviceId, slot, _lifetime.Token);
+                ReportMutationFailure(result, "删除预设");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            return;
+        }
+
+        PerformPresetDelete(slot);
+    }
+
+    /// <summary>
+    /// The local-engine counterpart of the daemon's delete, run as one safe transaction: the
+    /// store is repaired and the slot removed, then the affected runtime is reloaded with the
+    /// repaired profile and the in-view profile follows it - so the running engine never keeps a
+    /// stale leader aimed at the deleted slot. Deleting the active slot switches the whole app to
+    /// a surviving slot; a reload failure restores the store from the rollback snapshot and leaves
+    /// the slot intact.
+    /// </summary>
+    private void PerformPresetDelete(int slot)
+    {
+        if (ActiveController?.Descriptor.DeviceId is not { } deviceId)
+        {
+            SetTransferError("删除预设失败：请先连接手柄。");
+            return;
+        }
+
+        if (slot == PresetStore.MinSlot)
+        {
+            SetTransferError("不能删除设备的主预设（槽位 1）。");
+            return;
+        }
+
+        var inUse = _presets.SlotsInUse(deviceId);
+
+        // Capture a rollback snapshot so a failed reload restores the store exactly.
+        var rollback = new Dictionary<int, GamepadProfile>();
+        foreach (var existing in inUse)
+        {
+            if (_presets.LoadSlot(deviceId, existing) is { } profile)
+            {
+                rollback[existing] = profile;
+            }
+        }
+
+        // Reconcile against the slot the active controller's runtime is actually running - it can
+        // differ from the app-wide scalar when this device lacks that slot - not only the global
+        // scalar, so a device left running the deleted slot is moved rather than abandoned.
+        var runtimeSlot = ActiveController.Profile.PresetSlot;
+        var wasActive = slot == ActivePresetSlot;
+        var deviceRunsDeleted = runtimeSlot == slot;
+
+        // Repair + delete on the store first, so the profile reloaded below is already repaired.
+        var outcome = _presets.DeleteSlot(deviceId, slot);
+        if (outcome != PresetDeleteOutcome.Deleted)
+        {
+            SetTransferError(outcome switch
+            {
+                PresetDeleteOutcome.PrimarySlot => "不能删除设备的主预设（槽位 1）。",
+                PresetDeleteOutcome.LastRemaining => "不能删除最后一套预设。",
+                _ => "该槽位没有配置。",
+            });
+            return;
+        }
+
+        var surviving = inUse.Where(candidate => candidate != slot).ToList();
+        var fallback = surviving.Where(candidate => candidate < slot).DefaultIfEmpty(PresetStore.MinSlot).Max();
+
+        int deviceSlot;
+        GamepadProfile? reloadProfile = null;
+        var switchAll = false;
+
+        if (wasActive)
+        {
+            // The app-wide active slot was deleted: move the whole app to a survivor.
+            deviceSlot = fallback;
+            switchAll = true;
+        }
+        else if (deviceRunsDeleted)
+        {
+            // This device was running the deleted slot (it lacked the app-wide active slot): move
+            // just it to a survivor, leaving the app-wide slot where it is.
+            deviceSlot = fallback;
+            if (_presets.LoadSlot(deviceId, fallback) is { } survivor)
+            {
+                reloadProfile = survivor with { PresetSlot = fallback };
+            }
+        }
+        else
+        {
+            // The device runs some other slot; reload only if its own profile was repaired.
+            deviceSlot = runtimeSlot;
+            if (rollback.TryGetValue(runtimeSlot, out var runtimeBefore)
+                && _presets.LoadSlot(deviceId, runtimeSlot) is { } runtimeAfter
+                && runtimeBefore != runtimeAfter)
+            {
+                reloadProfile = runtimeAfter with { PresetSlot = runtimeSlot };
+            }
+        }
+
+        try
+        {
+            if (switchAll)
+            {
+                var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
+                foreach (var connected in _host.Controllers)
+                {
+                    if (_presets.LoadSlot(connected.Descriptor.DeviceId, fallback) is { } profile)
+                    {
+                        profiles.Add(connected.Descriptor.DeviceId, profile);
+                    }
+                }
+
+                _host.SwitchPresetSlot(fallback, profiles);
+                ActivePresetSlot = fallback;
+            }
+            else if (reloadProfile is not null && _host.Controllers.Any(c => c.Descriptor.DeviceId == deviceId))
+            {
+                _host.Reload(deviceId, reloadProfile);
+            }
+        }
+        catch (Exception exception)
+        {
+            foreach (var (existing, profile) in rollback)
+            {
+                _presets.SaveSlot(deviceId, existing, profile);
+            }
+
+            SetTransferError($"删除预设失败，已保留原槽位：{exception.Message}");
+            return;
+        }
+
+        ReconcilePresetSlots(deviceId);
+        MarkActivePresetSlot(ActivePresetSlot);
+
+        if (ActiveController is { } controller
+            && _presets.LoadSlot(controller.Descriptor.DeviceId, deviceSlot) is { } activeProfile)
+        {
+            ActiveProfile = activeProfile;
+        }
+
+        ReloadSensitivityPanels();
+        RefreshMappings();
+    }
+
+    /// <summary>
     /// Reconciles <see cref="PresetSlots"/> against the store for one device and keeps the
     /// leader slot options in step. The stored slot set is re-read on every call, so a slot
     /// another client added while this one runs is picked up on the next daemon snapshot; the
@@ -559,6 +777,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         _presetSlotDeviceId = deviceId;
+
+        // The items are about to be replaced, so the armed-slot reference is dropped: a fresh
+        // item is never born armed, and a stale slot number must not let the next click skip
+        // the confirming step.
+        _presetDeleteArmedSlot = null;
         PresetSlots.Clear();
         if (deviceId is not null)
         {
@@ -570,6 +793,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         UpdateLeaderSlotOptions(slots);
+
+        // The strip's controls changed with the slot set, so keep the gamepad focus index inside
+        // the new range rather than leaving it aimed at a control that no longer exists.
+        if (PresetStripFocusIndex >= PresetStripFocusCount)
+        {
+            PresetStripFocusIndex = PresetStripFocusCount - 1;
+        }
     }
 
     /// <summary>Moves the active flag onto the item for <paramref name="slot"/>, if present.</summary>
@@ -580,6 +810,127 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             item.IsActive = item.Slot == slot;
         }
     }
+
+    /// <summary>Moves the delete-confirm flag onto the armed slot's item, clearing the rest.</summary>
+    private void MarkPresetDeleteArmed()
+    {
+        foreach (var item in PresetSlots)
+        {
+            item.IsDeleteArmed = item.Slot == _presetDeleteArmedSlot;
+        }
+    }
+
+    /// <summary>Drops any armed delete confirm, both the slot it named and the cards' flags.</summary>
+    private void DisarmPresetDelete()
+    {
+        if (_presetDeleteArmedSlot is null)
+        {
+            return;
+        }
+
+        _presetDeleteArmedSlot = null;
+        MarkPresetDeleteArmed();
+    }
+
+    /// <summary>
+    /// The gamepad-focused control in the global preset strip, or -1 when none is. The view
+    /// keeps real focus in step with this and reports focus changes back; while it is set the
+    /// pad drives the strip (see <see cref="NavigateByPhysicalInput"/>) instead of the gamepad
+    /// model, so the strip and its delete badges are reachable by gamepad, not only by Tab.
+    /// </summary>
+    [ObservableProperty]
+    private int _presetStripFocusIndex = -1;
+
+    /// <summary>How many controls the preset strip offers the gamepad, in focus order.</summary>
+    public int PresetStripFocusCount
+        => PresetSlots.Count + PresetSlots.Count(item => item.CanDelete) + 1;
+
+    /// <summary>
+    /// The strip control a focus index names, in the strip's focus order - each card, then its
+    /// delete badge, then the add button - or null when the index is out of range. The view maps
+    /// this to the matching control and back, so the order is defined in exactly one place.
+    /// </summary>
+    public (PresetStripAction Action, int Slot)? PresetStripActionAt(int index)
+    {
+        if (index < 0)
+        {
+            return null;
+        }
+
+        var position = 0;
+        foreach (var item in PresetSlots)
+        {
+            if (index == position++)
+            {
+                return (PresetStripAction.Switch, item.Slot);
+            }
+
+            if (item.CanDelete && index == position++)
+            {
+                return (PresetStripAction.Delete, item.Slot);
+            }
+        }
+
+        return index == position ? (PresetStripAction.Add, 0) : null;
+    }
+
+    /// <summary>Moves the gamepad focus along the strip by <paramref name="delta"/>, clamped to the strip.</summary>
+    public void MovePresetStripFocus(int delta)
+    {
+        var count = PresetStripFocusCount;
+        if (count <= 0)
+        {
+            return;
+        }
+
+        var current = PresetStripFocusIndex < 0 ? (delta < 0 ? count : -1) : PresetStripFocusIndex;
+        PresetStripFocusIndex = Math.Clamp(current + delta, 0, count - 1);
+    }
+
+    /// <summary>Activates the gamepad-focused strip control: switch, delete (with its confirm) or add.</summary>
+    private void ActivatePresetStripFocus()
+    {
+        if (PresetStripActionAt(PresetStripFocusIndex) is not { } action)
+        {
+            return;
+        }
+
+        switch (action.Action)
+        {
+            case PresetStripAction.Switch:
+                _ = SwitchPresetSlot(action.Slot);
+                break;
+            case PresetStripAction.Delete:
+                _ = DeletePreset(action.Slot);
+                break;
+            case PresetStripAction.Add:
+                _ = AddPreset();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Enters the preset strip by gamepad, parking the focus on the active card (or the first
+    /// card when the device lacks the app-wide slot). This is the pad-only entry the Guide button
+    /// drives, so the strip is reachable without any keyboard or pointer focus.
+    /// </summary>
+    private void EnterPresetStrip()
+    {
+        for (var index = 0; index < PresetStripFocusCount; index++)
+        {
+            if (PresetStripActionAt(index) is { Action: PresetStripAction.Switch, Slot: var slot }
+                && slot == ActivePresetSlot)
+            {
+                PresetStripFocusIndex = index;
+                return;
+            }
+        }
+
+        PresetStripFocusIndex = 0;
+    }
+
+    /// <summary>Leaves the preset strip, returning the pad to the gamepad model.</summary>
+    private void ExitPresetStrip() => PresetStripFocusIndex = -1;
 
     /// <summary>
     /// Points the mapping editor's leader slot pickers at the device's current slots, so a
@@ -1377,6 +1728,44 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         RememberNavigation(state, deviceId);
 
+        // The Guide button is the pad-only route into and out of the preset strip, reserved so it
+        // never also selects its own model element. It works from the normal initial state - no
+        // keyboard or pointer focus required - which is what makes the strip gamepad-reachable.
+        if (buttonEdges.Has(GamepadButton.Guide))
+        {
+            if (PresetStripFocusIndex >= 0)
+            {
+                ExitPresetStrip();
+            }
+            else
+            {
+                EnterPresetStrip();
+            }
+
+            return;
+        }
+
+        // While the preset strip is entered the pad drives it rather than the gamepad model:
+        // D-pad left/right move focus along it and A activates the focused control (switch /
+        // delete-with-confirm / add).
+        if (PresetStripFocusIndex >= 0)
+        {
+            if (buttonEdges.Has(GamepadButton.A))
+            {
+                ActivatePresetStripFocus();
+            }
+            else if (buttonEdges.Has(GamepadButton.DPadLeft))
+            {
+                MovePresetStripFocus(-1);
+            }
+            else if (buttonEdges.Has(GamepadButton.DPadRight))
+            {
+                MovePresetStripFocus(1);
+            }
+
+            return;
+        }
+
         if (NavigationTarget(buttonEdges, extraEdges, leftEdge, rightEdge) is not { } source)
         {
             return;
@@ -1643,7 +2032,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         if (_daemon is null && ActiveController is { } controller)
         {
-            _host.Reload(controller.Descriptor.DeviceId, updated);
+            // A committed edit belongs to the active preset slot, so the reloaded runtime is
+            // tagged with it (Reload no longer re-tags on its own).
+            _host.Reload(controller.Descriptor.DeviceId, updated with { PresetSlot = ActivePresetSlot });
 
             // A committed edit belongs to the active preset slot, not only to the running
             // engine: writing it here is what keeps the slots independent and lets a switch
@@ -1955,6 +2346,26 @@ public sealed partial class PresetSlotItem : ObservableObject
 
     public string Name { get; }
 
+    /// <summary>
+    /// Whether this slot offers a delete affordance. Slot 1 is the device's own profile and
+    /// the anchor the rest of the system reads from, so it is never deletable; every later
+    /// slot is.
+    /// </summary>
+    public bool CanDelete => Slot > PresetStore.MinSlot;
+
     [ObservableProperty]
     private bool _isActive;
+
+    /// <summary>
+    /// True while this card's delete is armed for a second, confirming click - the
+    /// anti-mistouch half of a destructive action. Kept in step by the view model exactly
+    /// like <see cref="IsActive"/>: at most one slot is armed at a time.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isDeleteArmed;
+
+    /// <summary>The delete badge's tooltip: the confirm wording while armed, the plain prompt otherwise.</summary>
+    public string DeleteTip => IsDeleteArmed ? "再次点击确认删除" : "删除此预设";
+
+    partial void OnIsDeleteArmedChanged(bool value) => OnPropertyChanged(nameof(DeleteTip));
 }

@@ -25,6 +25,8 @@ public sealed partial class DaemonServer
     private const string DirectConnectionId = "direct";
     private const string InvalidPresetSlotErrorCode = "invalid-slot";
     private const string NoPresetConfigurationErrorCode = "no-configuration";
+    private const string PrimaryPresetSlotErrorCode = "primary-preset";
+    private const string LastPresetErrorCode = "last-preset";
     private const string LeaderPresetSwitchRequestId = "leader-key";
     private readonly Lock _sync = new();
     private readonly Lock _inputGate = new();
@@ -153,6 +155,9 @@ public sealed partial class DaemonServer
 
             case SwitchPresetSlotMessage switchSlot:
                 return HandleSwitchPresetSlot(switchSlot);
+
+            case DeletePresetSlotMessage deleteSlot:
+                return HandleDeletePresetSlot(deleteSlot);
 
             case ShutdownDaemonMessage shutdown:
                 return new MutationAckMessage(shutdown.RequestId, true, CurrentRevision(), CurrentSequence());
@@ -287,7 +292,9 @@ public sealed partial class DaemonServer
         if (SnapshotDeviceFor(profile.DeviceId) is { } target
             && _host.ConnectedDeviceIds.Contains(target, StringComparer.Ordinal))
         {
-            _host.Reload(target, profile);
+            // An applied edit belongs to the app-wide active slot, so the reloaded runtime is
+            // tagged with it (Reload no longer re-tags on its own).
+            _host.Reload(target, profile with { PresetSlot = _activePresetSlot });
         }
     }
 
@@ -371,6 +378,188 @@ public sealed partial class DaemonServer
             {
                 _profileName = bodyProfile.Name;
                 _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = bodyDeviceId });
+            }
+
+            _revision++;
+            PublishStateChange();
+
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    /// <summary>
+    /// Deletes one device's preset slot as one safe transaction: <see cref="PresetStore.DeleteSlot"/>
+    /// repairs every Leader reference to the slot and removes it, then the affected runtimes are
+    /// reloaded with the repaired profiles and the snapshot body follows them - so neither a live
+    /// runtime nor a published profile is ever left carrying the deleted-slot reference, and a
+    /// later apply cannot write it back. When the deleted slot was the app-wide active one the
+    /// daemon moves every device that holds a surviving slot onto the highest survivor below it;
+    /// a delete of any other slot leaves the active slot in place but still reloads the in-scope
+    /// device when its active profile was repaired. A reload failure rolls the whole thing back -
+    /// the store is restored and no revision is bumped. The revision is bumped and a snapshot
+    /// published on success, so every connected GUI reconciles its selector. Slot 1 (the device's
+    /// own profile) and the device's last remaining preset are refused without touching any state.
+    /// </summary>
+    private IpcMessage HandleDeletePresetSlot(DeletePresetSlotMessage request)
+    {
+        if (request.Slot < PresetStore.MinSlot)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                InvalidPresetSlotErrorCode,
+                $"preset slots run from {PresetStore.MinSlot} upward");
+        }
+
+        lock (_sync)
+        {
+            var connected = _host.ConnectedDeviceIds;
+            var deviceId = !string.IsNullOrWhiteSpace(request.DeviceId)
+                ? request.DeviceId
+                : connected.Count > 0 ? connected[0] : null;
+            if (deviceId is null)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    NoPresetConfigurationErrorCode,
+                    "没有可删除预设的设备。");
+            }
+
+            var inUse = _presetStore.SlotsInUse(deviceId);
+            if (request.Slot == PresetStore.MinSlot)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    PrimaryPresetSlotErrorCode,
+                    "不能删除设备的主预设（槽位 1）。");
+            }
+
+            if (inUse.Count <= 1)
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    LastPresetErrorCode,
+                    "不能删除最后一套预设。");
+            }
+
+            if (!inUse.Contains(request.Slot))
+            {
+                return new ErrorMessage(
+                    request.RequestId,
+                    NoPresetConfigurationErrorCode,
+                    "该槽位没有配置。");
+            }
+
+            // The device's actual loaded slot. A device that lacks the app-wide active slot keeps
+            // running its own previous profile (the supported missing-slot semantics), so the
+            // delete must reconcile against what this device is really running, not only the
+            // global scalar - otherwise a device left on the deleted slot would keep executing a
+            // profile whose storage was just removed.
+            var runtimeSlot = _host.GetProfile(deviceId)?.PresetSlot ?? _activePresetSlot;
+            var wasActive = request.Slot == _activePresetSlot;
+            var deviceRunsDeleted = runtimeSlot == request.Slot;
+
+            // Capture a rollback snapshot of the device's current slots. The repair rewrites
+            // surviving profiles and the delete removes one; if the runtime reload below does not
+            // land, both must be undone together, so the whole device is restored from here.
+            var rollback = new Dictionary<int, GamepadProfile>();
+            foreach (var slot in inUse)
+            {
+                if (_presetStore.LoadSlot(deviceId, slot) is { } profile)
+                {
+                    rollback[slot] = profile;
+                }
+            }
+
+            // Repair + delete on the store first, so every profile reloaded below is already free
+            // of the deleted-slot reference.
+            _presetStore.DeleteSlot(deviceId, request.Slot);
+
+            var surviving = inUse.Where(slot => slot != request.Slot).ToList();
+            var fallback = surviving.Where(slot => slot < request.Slot).DefaultIfEmpty(PresetStore.MinSlot).Max();
+
+            // Where the device ends up and how it gets there.
+            int deviceSlot;
+            int? switchTo = null;
+            Dictionary<string, GamepadProfile>? holders = null;
+            GamepadProfile? reloadProfile = null;
+
+            if (wasActive)
+            {
+                // The app-wide active slot was deleted: move the whole app to the highest survivor
+                // below it, reloading every connected device that holds it.
+                deviceSlot = fallback;
+                switchTo = fallback;
+                holders = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
+                foreach (var id in connected)
+                {
+                    if (_presetStore.LoadSlot(id, fallback) is { } profile)
+                    {
+                        holders[id] = profile;
+                    }
+                }
+            }
+            else if (deviceRunsDeleted)
+            {
+                // This device was running the deleted slot even though it was not the app-wide
+                // active one: move just it to a survivor, leaving the app-wide slot where it is.
+                deviceSlot = fallback;
+                if (_presetStore.LoadSlot(deviceId, fallback) is { } survivor)
+                {
+                    reloadProfile = survivor with { PresetSlot = fallback };
+                }
+            }
+            else
+            {
+                // The device runs some other slot; reload only if its own profile was repaired.
+                deviceSlot = runtimeSlot;
+                if (rollback.TryGetValue(runtimeSlot, out var runtimeBefore)
+                    && _presetStore.LoadSlot(deviceId, runtimeSlot) is { } runtimeAfter
+                    && runtimeBefore != runtimeAfter)
+                {
+                    reloadProfile = runtimeAfter with { PresetSlot = runtimeSlot };
+                }
+            }
+
+            try
+            {
+                if (switchTo is { } target && holders is not null)
+                {
+                    _host.SwitchPresetSlot(target, holders);
+                }
+                else if (reloadProfile is not null && connected.Contains(deviceId, StringComparer.Ordinal))
+                {
+                    _host.Reload(deviceId, reloadProfile);
+                }
+            }
+            catch (Exception exception)
+            {
+                foreach (var (slot, profile) in rollback)
+                {
+                    _presetStore.SaveSlot(deviceId, slot, profile);
+                }
+
+                return new MutationAckMessage(
+                    request.RequestId,
+                    false,
+                    _revision,
+                    _sequence,
+                    "preset-delete-failed",
+                    $"删除预设已回滚：{exception.Message}");
+            }
+
+            if (switchTo is { } moved)
+            {
+                _activePresetSlot = moved;
+            }
+
+            // The snapshot body must follow the device's post-delete profile, or a client
+            // re-adopting it would carry a deleted-slot reference a later apply could write back.
+            // The body keeps the bare device id, exactly as the switch path.
+            if ((wasActive || reloadProfile is not null)
+                && _presetStore.LoadSlot(deviceId, deviceSlot) is { } bodyProfile)
+            {
+                _profileName = bodyProfile.Name;
+                _profileJson = ProfileSerializer.Serialize(bodyProfile with { DeviceId = deviceId });
             }
 
             _revision++;

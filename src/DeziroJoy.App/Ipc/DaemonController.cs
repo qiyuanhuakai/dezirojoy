@@ -267,6 +267,9 @@ public sealed class DaemonController : IAsyncDisposable
     public Task<MutationResult> SwitchPresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SwitchPresetSlotMessage(requestId, deviceId, slot), cancellationToken);
 
+    public Task<MutationResult> DeletePresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new DeletePresetSlotMessage(requestId, deviceId, slot), cancellationToken);
+
     public async Task<MutationResult> ShutdownDaemonAsync(CancellationToken cancellationToken)
     {
         Interlocked.Exchange(ref _shutdownRequested, 1);

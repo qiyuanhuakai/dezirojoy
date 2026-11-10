@@ -57,6 +57,7 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
+[JsonDerivedType(typeof(DeletePresetSlotMessage), "delete-preset-slot")]
 [JsonDerivedType(typeof(ShutdownDaemonMessage), "shutdown-daemon")]
 [JsonDerivedType(typeof(MutationAckMessage), "mutation-ack")]
 [JsonDerivedType(typeof(StateChangedMessage), "state-changed")]
@@ -136,6 +137,18 @@ public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspend
 /// </para>
 /// </summary>
 public sealed record SwitchPresetSlotMessage(string RequestId, string DeviceId, int Slot) : IpcMessage;
+
+/// <summary>
+/// GUI to daemon: delete one device's preset slot. Like a switch, the slot is app-wide in
+/// effect but stored per device, so <see cref="DeviceId"/> names the device whose slot is
+/// removed and <see cref="Slot"/> the slot number. The daemon deletes the slot's stored
+/// profile, repairs any Leader mapping that referenced it, and - when the deleted slot was
+/// the active one - moves the whole app to a surviving slot before acknowledging, so no
+/// running engine or leader key is ever left pointing at a slot that is gone. Slot 1 (the
+/// device's own profile) and the device's last remaining preset are refused. The refusal is
+/// a mutation ack or error message, never a silent success.
+/// </summary>
+public sealed record DeletePresetSlotMessage(string RequestId, string DeviceId, int Slot) : IpcMessage;
 
 /// <summary>GUI/tray to daemon: release held input and exit the resident process.</summary>
 public sealed record ShutdownDaemonMessage(string RequestId) : IpcMessage;

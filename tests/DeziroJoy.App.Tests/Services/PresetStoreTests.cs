@@ -335,4 +335,335 @@ public class PresetStoreTests
 
         Assert.Null(migrated);
     }
+
+    // ---- Deleting a preset slot ---------------------------------------------
+
+    private static GamepadProfile LeaderProfile(string name, string deviceId, int slotA, int slotB) => new()
+    {
+        Name = name,
+        DeviceId = deviceId,
+        Layout = GamepadLayout.Xbox,
+        Mappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new SpecialKeyTarget(
+                    SpecialKeyKind.Leader,
+                    PrecisionMode.Toggle,
+                    LeaderSwitchMode.Press,
+                    SlotA: slotA,
+                    SlotB: slotB),
+                Enabled = true,
+            },
+        ],
+    };
+
+    private static SpecialKeyTarget? LeaderTarget(GamepadProfile profile)
+        => profile.Mappings
+            .Select(mapping => mapping.Target)
+            .OfType<SpecialKeyTarget>()
+            .FirstOrDefault(target => target.Kind == SpecialKeyKind.Leader);
+
+    [Fact]
+    public void DeleteSlot_Removes_The_Slot_From_The_Store_And_The_Slot_Set()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, SlotProfile("第三套", "pad-1"));
+
+        var outcome = store.DeleteSlot("pad-1", 2);
+
+        Assert.Equal(PresetDeleteOutcome.Deleted, outcome);
+        Assert.Equal([1, 3], store.SlotsInUse("pad-1"));
+        Assert.Null(store.LoadSlot("pad-1", 2));
+        Assert.Null(inner.Load("preset2:pad-1"));
+        // The surviving slots are untouched.
+        Assert.Equal("主配置", store.LoadSlot("pad-1", 1)!.Name);
+        Assert.Equal("第三套", store.LoadSlot("pad-1", 3)!.Name);
+    }
+
+    [Fact]
+    public void DeleteSlot_Refuses_The_Primary_Slot_And_Keeps_It()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        var outcome = store.DeleteSlot("pad-1", 1);
+
+        Assert.Equal(PresetDeleteOutcome.PrimarySlot, outcome);
+        Assert.Equal([1, 2], store.SlotsInUse("pad-1"));
+        Assert.NotNull(store.LoadSlot("pad-1", 1));
+    }
+
+    [Fact]
+    public void DeleteSlot_Refuses_To_Leave_The_Device_Preset_Less()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+
+        // The only slot is the protected primary; a delete of any other number is refused as
+        // the last remaining preset rather than emptying the device.
+        var outcome = store.DeleteSlot("pad-1", 2);
+
+        Assert.Equal(PresetDeleteOutcome.LastRemaining, outcome);
+        Assert.Equal([1], store.SlotsInUse("pad-1"));
+    }
+
+    [Fact]
+    public void DeleteSlot_Reports_Nothing_Stored_For_An_Empty_Slot()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        var outcome = store.DeleteSlot("pad-1", 5);
+
+        Assert.Equal(PresetDeleteOutcome.NothingStored, outcome);
+        Assert.Equal([1, 2], store.SlotsInUse("pad-1"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-2)]
+    public void DeleteSlot_Rejects_A_Slot_Below_One(int slot)
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.DeleteSlot("pad-1", slot));
+    }
+
+    [Fact]
+    public void DeleteSlot_Retargets_A_Leader_That_Named_The_Deleted_Slot()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        // Slot 4 flips between slot 2 and slot 4; deleting slot 2 must retarget the slot-2 end.
+        store.SaveSlot("pad-1", 4, LeaderProfile("第四套", "pad-1", slotA: 2, slotB: 4));
+
+        var outcome = store.DeleteSlot("pad-1", 2);
+
+        Assert.Equal(PresetDeleteOutcome.Deleted, outcome);
+        var leader = LeaderTarget(store.LoadSlot("pad-1", 4)!);
+        Assert.NotNull(leader);
+        // The deleted end moves to the lowest surviving slot other than the surviving end (4).
+        Assert.Equal(1, leader!.SlotA);
+        Assert.Equal(4, leader.SlotB);
+    }
+
+    [Fact]
+    public void DeleteSlot_Drops_A_Leader_That_Has_No_Distinct_Survivor()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        // Slot 1 flips between slot 1 and slot 2; deleting slot 2 leaves only slot 1, so the
+        // leader is dropped rather than written as a slot flipping against itself.
+        store.SaveSlot("pad-1", 1, LeaderProfile("主配置", "pad-1", slotA: 1, slotB: 2));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        var outcome = store.DeleteSlot("pad-1", 2);
+
+        Assert.Equal(PresetDeleteOutcome.Deleted, outcome);
+        Assert.Null(LeaderTarget(store.LoadSlot("pad-1", 1)!));
+    }
+
+    [Fact]
+    public void DeleteSlot_Leaves_A_Leader_That_Never_Named_The_Deleted_Slot_Alone()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, LeaderProfile("第二套", "pad-1", slotA: 1, slotB: 2));
+        store.SaveSlot("pad-1", 3, SlotProfile("第三套", "pad-1"));
+
+        store.DeleteSlot("pad-1", 3);
+
+        // The slot 1<->2 leader is untouched by deleting slot 3.
+        var leader = LeaderTarget(store.LoadSlot("pad-1", 2)!);
+        Assert.NotNull(leader);
+        Assert.Equal(1, leader!.SlotA);
+        Assert.Equal(2, leader.SlotB);
+    }
+
+    [Fact]
+    public void DeleteSlot_Only_Touches_The_Named_Device()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-2", 2, SlotProfile("别的设备", "pad-2"));
+
+        store.DeleteSlot("pad-1", 2);
+
+        Assert.Equal([1], store.SlotsInUse("pad-1"));
+        Assert.Equal([2], store.SlotsInUse("pad-2"));
+        Assert.NotNull(store.LoadSlot("pad-2", 2));
+    }
+
+    // ---- One-time default materialization ----------------------------------
+
+    [Fact]
+    public void EnsureDefaults_Does_Not_Resurrect_A_Deleted_Slot()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        var descriptor = new GamepadDescriptor("pad-1", "Xbox Wireless Controller");
+        store.EnsureDefaults(descriptor);
+        Assert.Equal([1, 2, 3, 4], store.SlotsInUse("pad-1"));
+
+        store.DeleteSlot("pad-1", 2);
+        Assert.Equal([1, 3, 4], store.SlotsInUse("pad-1"));
+
+        // A reconnect re-runs EnsureDefaults through EngineHost.EnsureRuntime; it must not
+        // re-materialize the deleted default slot, only ever ensure the primary anchor.
+        store.EnsureDefaults(descriptor);
+        Assert.Equal([1, 3, 4], store.SlotsInUse("pad-1"));
+        Assert.Null(store.LoadSlot("pad-1", 2));
+    }
+
+    [Fact]
+    public void EnsureDefaults_Still_Materializes_The_Initial_Set_For_A_Fresh_Device()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        var descriptor = new GamepadDescriptor("pad-1", "Xbox Wireless Controller");
+
+        store.EnsureDefaults(descriptor);
+
+        Assert.Equal([1, 2, 3, 4], store.SlotsInUse("pad-1"));
+    }
+
+    // ---- Leader repair across target and gesture actions -------------------
+
+    private static GamepadProfile GestureLeaderProfile(string name, string deviceId, int slotA, int slotB, bool longPress)
+    {
+        var action = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: slotA, SlotB: slotB);
+        var gesture = longPress
+            ? new ButtonGesture { LongPressThreshold = ButtonGesture.DefaultLongPressThreshold, LongPressAction = action }
+            : new ButtonGesture { DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow, DoubleClickAction = action };
+
+        return new GamepadProfile
+        {
+            Name = name,
+            DeviceId = deviceId,
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B) { Gesture = gesture },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+    }
+
+    private static SpecialKeyTarget? GestureLeaderAction(GamepadProfile profile, bool longPress)
+        => profile.Mappings
+            .Select(mapping => mapping.Source)
+            .OfType<ButtonBinding>()
+            .Select(binding => binding.Gesture)
+            .Where(gesture => gesture is not null)
+            .Select(gesture => longPress ? gesture!.LongPressAction : gesture!.DoubleClickAction)
+            .OfType<SpecialKeyTarget>()
+            .FirstOrDefault(target => target.Kind == SpecialKeyKind.Leader);
+
+    [Fact]
+    public void DeleteSlot_Repairs_A_Leader_In_A_Double_Click_Action()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, GestureLeaderProfile("第三套", "pad-1", slotA: 2, slotB: 3, longPress: false));
+
+        store.DeleteSlot("pad-1", 2);
+
+        var leader = GestureLeaderAction(store.LoadSlot("pad-1", 3)!, longPress: false);
+        Assert.NotNull(leader);
+        Assert.Equal(1, leader!.SlotA);
+        Assert.Equal(3, leader.SlotB);
+    }
+
+    [Fact]
+    public void DeleteSlot_Repairs_A_Leader_In_A_Long_Press_Action()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, GestureLeaderProfile("第三套", "pad-1", slotA: 2, slotB: 3, longPress: true));
+
+        store.DeleteSlot("pad-1", 2);
+
+        var leader = GestureLeaderAction(store.LoadSlot("pad-1", 3)!, longPress: true);
+        Assert.NotNull(leader);
+        Assert.Equal(1, leader!.SlotA);
+        Assert.Equal(3, leader.SlotB);
+    }
+
+    [Fact]
+    public void DeleteSlot_Drops_A_Gesture_Leader_With_No_Distinct_Survivor()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        // Slot 1's double-click flips between slot 1 and slot 2; deleting slot 2 leaves only slot 1.
+        store.SaveSlot("pad-1", 1, GestureLeaderProfile("主配置", "pad-1", slotA: 1, slotB: 2, longPress: false));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        store.DeleteSlot("pad-1", 2);
+
+        // The leader action is dropped, but the gesture's timing and its re-fire-the-click
+        // fallback survive untouched.
+        Assert.Null(GestureLeaderAction(store.LoadSlot("pad-1", 1)!, longPress: false));
+        var gesture = store.LoadSlot("pad-1", 1)!.Mappings
+            .Select(mapping => mapping.Source).OfType<ButtonBinding>().Single().Gesture;
+        Assert.NotNull(gesture);
+        Assert.True(gesture!.HasDoubleClick);
+        Assert.Null(gesture.DoubleClickAction);
+    }
+
+    [Fact]
+    public void DeleteSlot_Repairs_A_Target_Leader_And_A_Gesture_Leader_Together()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        var both = SlotProfile("第三套", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 2, SlotB: 3),
+                    Enabled = true,
+                },
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                            DoubleClickAction = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 2, SlotB: 3),
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 3, both);
+
+        store.DeleteSlot("pad-1", 2);
+
+        var profile = store.LoadSlot("pad-1", 3)!;
+        var targetLeader = profile.Mappings.Select(mapping => mapping.Target)
+            .OfType<SpecialKeyTarget>().Single(target => target.Kind == SpecialKeyKind.Leader);
+        Assert.Equal(1, targetLeader.SlotA);
+        Assert.Equal(3, targetLeader.SlotB);
+
+        var gestureLeader = GestureLeaderAction(profile, longPress: false);
+        Assert.NotNull(gestureLeader);
+        Assert.Equal(1, gestureLeader!.SlotA);
+        Assert.Equal(3, gestureLeader.SlotB);
+    }
 }
