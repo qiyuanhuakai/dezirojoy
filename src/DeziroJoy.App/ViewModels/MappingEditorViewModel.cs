@@ -1310,6 +1310,17 @@ public partial class MappingEditorViewModel : ObservableObject
 
     public void LoadFrom(MappingEntry entry)
     {
+        // The editor is reused across edits, and the previous edit may have left the
+        // long-press draft running a complex shortcut - a state whose guards refuse the
+        // double-click, click auto-repeat and the long press itself, because each would
+        // pair a second behaviour with a running program. Those guards answer interactive
+        // requests; a load replaces the draft wholesale, so the state is stood down first
+        // and the incoming mapping's flags load exactly as its gesture carries them.
+        if (LongPressSlot.TargetKind == MappingTargetKind.ComplexShortcut)
+        {
+            LongPressSlot.Reset();
+        }
+
         switch (entry.Source)
         {
             case ButtonBinding button:

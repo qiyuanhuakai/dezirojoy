@@ -1462,4 +1462,103 @@ public class MainWindowViewModelTests
         Assert.False(vm.IsEditing);
         Assert.Equal(mappings, vm.ActiveProfile.Mappings.Count);
     }
+
+    [Fact]
+    public void Reopening_An_Ordinary_Mapping_After_A_Complex_Shortcut_Keeps_Its_Double_Click()
+    {
+        // The editor is reused: EditMapping loads into the same instance without a reset, so
+        // a draft left running a complex shortcut must not gate the incoming mapping's flags
+        // - the guards that refuse a double-click belong to interactive edits, not to a load
+        // that replaces the draft wholesale.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // A complex shortcut on the long press, committed through the real editor path.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.CommitEditorCommand.Execute(null);
+        var complexRow = vm.Mappings.Single(row => row.Entry.Target is ComplexShortcutTarget);
+
+        // An ordinary double-click mapping, committed the same way.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.RightBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.DoubleClick;
+        vm.Editor.ActiveGestureEnabled = true;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.ActiveSelectedKey = GamepadKey.Space;
+        vm.CommitEditorCommand.Execute(null);
+        var doubleClickRow = vm.Mappings.Single(
+            row => row.Entry.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+
+        // Reopen the complex mapping, then the ordinary one: the incoming gesture must load
+        // exactly as it was committed, and committing it back must not rewrite it.
+        vm.EditMappingCommand.Execute(complexRow);
+        Assert.True(vm.Editor.LongPressRunsComplexShortcut);
+
+        vm.EditMappingCommand.Execute(doubleClickRow);
+
+        Assert.False(vm.Editor.LongPressRunsComplexShortcut);
+        Assert.True(vm.Editor.DoubleClickEnabled);
+        Assert.False(vm.Editor.LongPressEnabled);
+        Assert.Equal(doubleClickRow.Entry.Source, vm.Editor.BuildEntry().Source);
+        Assert.Equal(doubleClickRow.Entry.Target, vm.Editor.BuildEntry().Target);
+
+        vm.CommitEditorCommand.Execute(null);
+
+        var rewritten = vm.ActiveProfile!.Mappings.Single(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+        Assert.Equal(doubleClickRow.Entry.Source, rewritten.Source);
+        Assert.Equal(doubleClickRow.Entry.Target, rewritten.Target);
+    }
+
+    [Fact]
+    public void Reopening_A_No_Gesture_Mapping_After_A_Complex_Shortcut_Adds_No_Long_Press()
+    {
+        // The same reuse path with an ordinary mapping that carries no gesture at all: the
+        // stale program must not leave a bare long press behind, because a long press that
+        // cannot fire would silently change what the mapping does.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.CommitEditorCommand.Execute(null);
+        var complexRow = vm.Mappings.Single(row => row.Entry.Target is ComplexShortcutTarget);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.RightBumper;
+        vm.Editor.TargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.SelectedKey = GamepadKey.Space;
+        vm.CommitEditorCommand.Execute(null);
+        var plainRow = vm.Mappings.Single(
+            row => row.Entry.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+        Assert.Null(Assert.IsType<ButtonBinding>(plainRow.Entry.Source).Gesture);
+
+        vm.EditMappingCommand.Execute(complexRow);
+        Assert.True(vm.Editor.LongPressRunsComplexShortcut);
+
+        vm.EditMappingCommand.Execute(plainRow);
+
+        Assert.False(vm.Editor.LongPressRunsComplexShortcut);
+        Assert.False(vm.Editor.LongPressEnabled);
+        Assert.False(vm.Editor.DoubleClickEnabled);
+        Assert.False(vm.Editor.ClickRepeatEnabled);
+        Assert.Equal(plainRow.Entry.Source, vm.Editor.BuildEntry().Source);
+        Assert.Equal(plainRow.Entry.Target, vm.Editor.BuildEntry().Target);
+
+        vm.CommitEditorCommand.Execute(null);
+
+        var rewritten = vm.ActiveProfile!.Mappings.Single(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+        Assert.Equal(plainRow.Entry.Source, rewritten.Source);
+        Assert.Equal(plainRow.Entry.Target, rewritten.Target);
+    }
 }
