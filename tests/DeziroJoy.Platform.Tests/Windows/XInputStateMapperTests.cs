@@ -65,16 +65,119 @@ public class XInputStateMapperTests
 
     [Theory]
     [InlineData(0, false)]
-    [InlineData(127, false)]
-    [InlineData(128, true)]
+    [InlineData(115, false)]
+    [InlineData(116, false)] // inside the hysteresis band, starts released
+    [InlineData(139, false)] // inside the hysteresis band
+    [InlineData(140, true)]
+    [InlineData(200, true)]
     [InlineData(255, true)]
-    public void Triggers_Are_Digital_Above_The_Halfway_Threshold(byte triggerValue, bool expectedPressed)
+    public void Triggers_Press_Only_Above_The_Hysteresis_Band(byte triggerValue, bool expectedPressed)
     {
-        var state = XInputStateMapper.ToGamepadState(new XInputGamepad { LeftTrigger = triggerValue });
+        var state = ToState(new XInputGamepad { LeftTrigger = triggerValue }, "press-band");
 
         Assert.Equal(expectedPressed, state.IsPressed(GamepadButton.LeftTrigger));
         Assert.False(state.IsPressed(GamepadButton.RightTrigger));
     }
+
+    [Fact]
+    public void Trigger_Holds_Its_State_Inside_The_Hysteresis_Band()
+    {
+        const string Device = "hysteresis-band";
+
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 200 }, Device).IsPressed(GamepadButton.LeftTrigger));
+
+        // Easing into the band keeps the trigger pressed: only crossing the release
+        // point (<= 115) lets go.
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 139 }, Device).IsPressed(GamepadButton.LeftTrigger));
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 116 }, Device).IsPressed(GamepadButton.LeftTrigger));
+        Assert.False(ToState(new XInputGamepad { LeftTrigger = 115 }, Device).IsPressed(GamepadButton.LeftTrigger));
+
+        // Re-entering the band from below keeps it released until the press point.
+        Assert.False(ToState(new XInputGamepad { LeftTrigger = 116 }, Device).IsPressed(GamepadButton.LeftTrigger));
+        Assert.False(ToState(new XInputGamepad { LeftTrigger = 139 }, Device).IsPressed(GamepadButton.LeftTrigger));
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 140 }, Device).IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Midpoint_Noise_Does_Not_Chatter_The_Trigger()
+    {
+        // M29: bLeftToggle alternating 126/128 flipped the pressed flag 9 times in 10
+        // samples. The mapping engine is edge-driven, so the same chatter injected
+        // BeginHold + EndHold pairs at up to 500 Hz while the visualizer highlight
+        // snapped on and off. Inside the hysteresis band the state must not move, so
+        // neither symptom can be produced downstream.
+        const string Device = "midpoint-noise";
+
+        for (var i = 0; i < 50; i++)
+        {
+            var state = ToState(new XInputGamepad { LeftTrigger = (byte)(i % 2 == 0 ? 126 : 128) }, Device);
+
+            Assert.False(state.IsPressed(GamepadButton.LeftTrigger));
+        }
+    }
+
+    [Fact]
+    public void Band_Noise_Does_Not_Release_A_Held_Trigger()
+    {
+        const string Device = "band-noise";
+
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 200 }, Device).IsPressed(GamepadButton.LeftTrigger));
+
+        for (var i = 0; i < 24; i++)
+        {
+            var state = ToState(new XInputGamepad { LeftTrigger = (byte)(116 + i) }, Device);
+
+            Assert.True(state.IsPressed(GamepadButton.LeftTrigger));
+        }
+    }
+
+    [Fact]
+    public void Interleaved_Polls_Keep_Each_Devices_Trigger_State_Independent()
+    {
+        // XInputGamepadProvider.Poll forwards its device id, and the engine polls every
+        // connected pad once per tick on one thread, so mapper calls interleave. Pad A
+        // eases its left trigger into the band while pad B rests at 0: B's poll must not
+        // reset A's held state, and A's band value must not press B's trigger either.
+        const string PadA = "xinput:0";
+        const string PadB = "xinput:1";
+
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 200 }, PadA).IsPressed(GamepadButton.LeftTrigger));
+
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.False(ToState(new XInputGamepad { LeftTrigger = 0 }, PadB).IsPressed(GamepadButton.LeftTrigger));
+            Assert.True(ToState(new XInputGamepad { LeftTrigger = 130 }, PadA).IsPressed(GamepadButton.LeftTrigger));
+        }
+
+        // Mirror image: B presses while A rests in the band from below.
+        Assert.False(ToState(new XInputGamepad { LeftTrigger = 0 }, PadA).IsPressed(GamepadButton.LeftTrigger));
+        Assert.True(ToState(new XInputGamepad { LeftTrigger = 200 }, PadB).IsPressed(GamepadButton.LeftTrigger));
+
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.False(ToState(new XInputGamepad { LeftTrigger = 130 }, PadA).IsPressed(GamepadButton.LeftTrigger));
+            Assert.True(ToState(new XInputGamepad { LeftTrigger = 130 }, PadB).IsPressed(GamepadButton.LeftTrigger));
+        }
+    }
+
+    [Fact]
+    public void A_Trigger_Held_At_Startup_Presses_On_The_First_Sample()
+    {
+        var state = ToState(new XInputGamepad { LeftTrigger = 255 }, "startup-held");
+
+        Assert.True(state.IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Trigger_Resting_At_Startup_Stays_Released()
+    {
+        var state = ToState(new XInputGamepad { LeftTrigger = 130 }, "startup-rest");
+
+        Assert.False(state.IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    private static GamepadState ToState(XInputGamepad pad, string deviceId)
+        => XInputStateMapper.ToGamepadState(pad, deviceId);
 
     [Fact]
     public void Stick_Axes_Are_Normalized_To_Unit_Range()

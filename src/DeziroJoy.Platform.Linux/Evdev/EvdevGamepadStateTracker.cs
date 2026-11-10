@@ -5,10 +5,23 @@ namespace DeziroJoy.Platform.Linux.Evdev;
 /// <summary>
 /// Accumulates evdev events into a normalized <see cref="GamepadState"/>. Axis ranges come
 /// from EVIOCGABS at device open time so unusual pad calibrations normalize correctly. Button
-/// codes with no logical position are kept as raw codes so they stay mappable.
+/// codes with no logical position are kept as raw codes so they stay mappable. The analog
+/// triggers run through a Schmitt trigger, so a trigger resting near half travel holds one
+/// pressed state instead of chattering; every tracker instance carries its own trigger
+/// state, keeping devices independent.
 /// </summary>
 public sealed class EvdevGamepadStateTracker
 {
+    /// <summary>
+    /// Schmitt-trigger band for the analog triggers, as a fraction of the declared axis
+    /// travel: 140/255 and 115/255 of a 0..255 trigger. At or above the press point the
+    /// trigger presses; at or below the release point it releases; inside the band the
+    /// previous state is kept.
+    /// </summary>
+    private const float TriggerPressPoint = 140f / 255f;
+
+    private const float TriggerReleasePoint = 115f / 255f;
+
     private readonly IReadOnlyDictionary<ushort, EvdevAxisRange> _axisRanges;
     private readonly SortedSet<int> _extraButtons = [];
     private GamepadButtonMask _buttons;
@@ -16,6 +29,8 @@ public sealed class EvdevGamepadStateTracker
     private float _leftStickY;
     private float _rightStickX;
     private float _rightStickY;
+    private bool _leftTriggerPressed;
+    private bool _rightTriggerPressed;
     private IReadOnlyList<int>? _extraButtonsSnapshot;
 
     public EvdevGamepadStateTracker(IReadOnlyDictionary<ushort, EvdevAxisRange>? axisRanges = null)
@@ -63,6 +78,8 @@ public sealed class EvdevGamepadStateTracker
         _leftStickY = 0;
         _rightStickX = 0;
         _rightStickY = 0;
+        _leftTriggerPressed = false;
+        _rightTriggerPressed = false;
         _extraButtons.Clear();
         _extraButtonsSnapshot = null;
     }
@@ -126,10 +143,10 @@ public sealed class EvdevGamepadStateTracker
                 SetDpad(value < 0, value > 0, GamepadButton.DPadUp, GamepadButton.DPadDown);
                 break;
             case EvdevCodes.AbsZ:
-                SetTrigger(value, EvdevCodes.AbsZ, GamepadButton.LeftTrigger);
+                SetTrigger(value, EvdevCodes.AbsZ, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
                 break;
             case EvdevCodes.AbsRz:
-                SetTrigger(value, EvdevCodes.AbsRz, GamepadButton.RightTrigger);
+                SetTrigger(value, EvdevCodes.AbsRz, GamepadButton.RightTrigger, ref _rightTriggerPressed);
                 break;
         }
     }
@@ -140,10 +157,31 @@ public sealed class EvdevGamepadStateTracker
         _buttons = positiveActive ? _buttons.Add(positiveButton) : _buttons.Remove(positiveButton);
     }
 
-    private void SetTrigger(int value, ushort axisCode, GamepadButton button)
+    /// <summary>
+    /// Schmitt trigger for the analog triggers: the trigger presses at or above
+    /// <see cref="TriggerPressPoint"/> of the declared travel and releases at or below
+    /// <see cref="TriggerReleasePoint"/>; inside the band the previous state is kept, so
+    /// analog noise around the midpoint cannot flap the pressed flag. A single-threshold
+    /// trigger (value &gt; range.Midpoint) let 126/128 chatter flip the flag 9 times in
+    /// 10 samples (M29), flickering the visualizer highlight and injecting BeginHold +
+    /// EndHold pairs at up to 500 Hz, because the mapping engine is edge-driven. The
+    /// per-instance <paramref name="pressed"/> state keeps each device's triggers
+    /// independent. LB/RB arrive as digital keys and never pass through here.
+    /// </summary>
+    private void SetTrigger(int value, ushort axisCode, GamepadButton button, ref bool pressed)
     {
         var range = RangeFor(axisCode);
-        var pressed = value > range.Midpoint;
+        var span = range.Max - range.Min;
+        var travel = span <= 0 ? 0f : (value - range.Min) / (float)span;
+
+        if (travel >= TriggerPressPoint)
+        {
+            pressed = true;
+        }
+        else if (travel <= TriggerReleasePoint)
+        {
+            pressed = false;
+        }
 
         _buttons = pressed ? _buttons.Add(button) : _buttons.Remove(button);
     }

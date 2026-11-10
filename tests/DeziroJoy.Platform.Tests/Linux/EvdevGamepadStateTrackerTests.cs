@@ -104,16 +104,157 @@ public class EvdevGamepadStateTrackerTests
 
     [Theory]
     [InlineData(0, false)]
-    [InlineData(127, false)]
-    [InlineData(128, true)]
+    [InlineData(115, false)]
+    [InlineData(116, false)] // inside the hysteresis band, starts released
+    [InlineData(139, false)] // inside the hysteresis band
+    [InlineData(140, true)]
+    [InlineData(200, true)]
     [InlineData(255, true)]
-    public void Analog_Triggers_Are_Digital_Above_The_Midpoint(int value, bool expectedPressed)
+    public void Analog_Triggers_Press_Only_Above_The_Hysteresis_Band(int value, bool expectedPressed)
     {
         var tracker = CreateTracker();
 
         tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, value));
 
         Assert.Equal(expectedPressed, tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Trigger_Holds_Its_State_Inside_The_Hysteresis_Band()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 200));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        // Easing into the band keeps the trigger pressed: only crossing the release
+        // point (<= 115) lets go.
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 139));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 116));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 115));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        // Re-entering the band from below keeps it released until the press point.
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 116));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 139));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 140));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Midpoint_Noise_Does_Not_Chatter_The_Trigger()
+    {
+        // M29: absZ alternating 126/128 flipped the pressed flag 9 times in 10 samples.
+        // The mapping engine is edge-driven, so the same chatter injected BeginHold +
+        // EndHold pairs at up to 500 Hz while the visualizer highlight snapped on and
+        // off. Inside the hysteresis band the state must not move, so neither symptom
+        // can be produced downstream.
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 0));
+        for (var i = 0; i < 50; i++)
+        {
+            tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, i % 2 == 0 ? 126 : 128));
+
+            Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+        }
+    }
+
+    [Fact]
+    public void Band_Noise_Does_Not_Release_A_Held_Trigger()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 200));
+
+        for (var i = 0; i < 24; i++)
+        {
+            tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 116 + i));
+
+            Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+        }
+    }
+
+    [Fact]
+    public void Left_And_Right_Triggers_Hold_Independent_Hysteresis_State()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 200));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRz, 120));
+
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+
+        // RT crossing its own press point must not disturb LT's held state, and LT
+        // resting in the band must not leak into RT either.
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRz, 150));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 130));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+    }
+
+    [Fact]
+    public void A_Trigger_Held_At_Startup_Presses_On_The_First_Sample()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 255));
+
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Trigger_Resting_At_Startup_Stays_Released()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 130));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Reset_Clears_The_Trigger_Hysteresis_State()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 200));
+        tracker.Reset();
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 130));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Trigger_Thresholds_Scale_With_The_Declared_Axis_Range()
+    {
+        // Thresholds are fractions of the declared travel, so a pad that reports AbsZ
+        // on a 0..1023 range presses at >= 562 and releases at <= 461, not at the raw
+        // 0..255 numbers.
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsZ] = new EvdevAxisRange(0, 1023),
+        });
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 500));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 562));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 500));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 461));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
     }
 
     [Fact]

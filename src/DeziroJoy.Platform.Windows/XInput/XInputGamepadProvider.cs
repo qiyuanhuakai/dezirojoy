@@ -31,7 +31,10 @@ public sealed class XInputGamepadProvider : IGamepadProvider
             return null;
         }
 
-        return TryGetState(slot, out var state) ? XInputStateMapper.ToGamepadState(in state.Gamepad) : null;
+        // The mapper keys its trigger hysteresis by device, so the slot-parsed id must
+        // travel with the sample: the engine polls every connected pad once per tick on
+        // one thread, and id-less calls would share one trigger state across pads.
+        return TryGetState(slot, out var state) ? XInputStateMapper.ToGamepadState(in state.Gamepad, deviceId) : null;
     }
 
     public void Dispose()
