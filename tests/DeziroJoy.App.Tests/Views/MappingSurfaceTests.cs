@@ -644,4 +644,67 @@ public sealed class MappingSurfaceTests
         Assert.Contains("Enter", texts);
         Assert.Contains("已关闭", texts);
     }
+
+    // ---- Special key rows read as their picker name ------------------------
+
+    private static MappingRowBorder RowForTarget(
+        Window window, MainWindowViewModel viewModel, Func<MappingTarget, bool> match)
+    {
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        return list.GetVisualDescendants().OfType<MappingRowBorder>()
+            .Single(candidate => candidate.DataContext == viewModel.Mappings.First(
+                row => match(row.Entry.Target)));
+    }
+
+    [AvaloniaFact]
+    public void A_Leader_Key_Row_Shows_Leader_键_Not_The_Record_Text()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        // The mapping goes in through the real editor path, so the row the surface renders
+        // comes from a committed profile entry rather than a hand-built one.
+        viewModel.AddMappingCommand.Execute(null);
+        viewModel.Editor.SelectedButton = GamepadButton.Back;
+        viewModel.Editor.TargetKind = MappingTargetKind.SpecialKey;
+        viewModel.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        viewModel.CommitEditorCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var row = RowForTarget(
+            window, viewModel, target => target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+        var texts = row.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text).ToList();
+
+        // The Core record's ToString would read as debug output in a mapping row; the row
+        // says what the editor's header says - the picker's own name for the kind.
+        Assert.Contains("Leader 键", texts);
+        Assert.DoesNotContain(texts, text => text?.Contains("SpecialKeyTarget", StringComparison.Ordinal) == true);
+    }
+
+    [AvaloniaFact]
+    public void A_Precision_Key_Row_Shows_精准键_Not_The_Record_Text()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        viewModel.AddMappingCommand.Execute(null);
+        viewModel.Editor.SelectedButton = GamepadButton.Guide;
+        viewModel.Editor.TargetKind = MappingTargetKind.SpecialKey;
+        viewModel.Editor.ActiveSpecialKind = SpecialKeyKind.Precision;
+        viewModel.CommitEditorCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var row = RowForTarget(
+            window, viewModel, target => target is SpecialKeyTarget { Kind: SpecialKeyKind.Precision });
+        var texts = row.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text).ToList();
+
+        Assert.Contains("精准键", texts);
+        Assert.DoesNotContain(texts, text => text?.Contains("SpecialKeyTarget", StringComparison.Ordinal) == true);
+    }
 }

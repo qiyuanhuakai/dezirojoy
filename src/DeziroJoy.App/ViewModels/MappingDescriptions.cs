@@ -65,8 +65,20 @@ public static class MappingDescriptions
         MouseMoveTarget => "鼠标移动",
         WheelScrollTarget => "滚轮滚动",
         ComplexShortcutTarget complex => ComplexShortcut(complex),
+        SpecialKeyTarget special => SpecialKey(special),
         _ => target.ToString() ?? string.Empty,
     };
+
+    /// <summary>
+    /// What a special key does, named the way its own picker names it: a leader key flips
+    /// between the two preset slots it carries, a precision key slows the stick while it is
+    /// engaged. The Core record has no description of its own and its raw <c>ToString</c>
+    /// would read as debug output in a mapping row, so the row - like the editor's header -
+    /// says the kind alone. The slot pair and the switch mode live in the editor's own
+    /// pickers, not in the summary the two share.
+    /// </summary>
+    public static string SpecialKey(SpecialKeyTarget target)
+        => target.Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
 
     /// <summary>
     /// What a complex shortcut does, in plain language: the kind plus the steps the script
