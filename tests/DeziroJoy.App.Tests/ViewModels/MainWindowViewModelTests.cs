@@ -1177,6 +1177,49 @@ public class MainWindowViewModelTests
         Assert.Equal("已关闭", row.LongPressText);
     }
 
+    [Fact]
+    public void A_Complex_Shortcut_Row_Names_The_Program_On_Its_Long_Press_Line()
+    {
+        // The engine binds the program to the mapping's own target with a bare long press,
+        // so the long-press line names the program - not the null action that shape
+        // requires, which would read as the legacy 重复单击的功能.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture { LongPressThreshold = 0.50f },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+        });
+
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.ClickText);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.LongPressText);
+        Assert.Equal("已关闭", row.DoubleClickText);
+    }
+
+    [Fact]
+    public void A_Complex_Shortcut_Without_A_Long_Press_Keeps_Its_Long_Press_Line_Closed()
+    {
+        // A hand-edited profile that pairs the program with click auto-repeat (or with no
+        // long press at all) is one the engine refuses; the row must not advertise a
+        // long-press that cannot start the program.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture
+                {
+                    ClickRepeatInterval = 0.10f,
+                    LongPressThreshold = 0.50f,
+                },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt" },
+        });
+
+        Assert.Equal("复杂快捷键：持续按住 Alt", row.ClickText);
+        Assert.Equal("已关闭", row.LongPressText);
+    }
+
     // ---- The legacy leader key is migrated into the preset slots -------------
 
     [Fact]
@@ -1346,9 +1389,12 @@ public class MainWindowViewModelTests
             mapping => mapping.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
         Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" }, committed.Target);
 
-        // The mapping row reads the program in plain language, never the record's ToString.
+        // The mapping row reads the program in plain language, never the record's ToString:
+        // the click line names the mapping's own target and the long-press line names the
+        // program it starts - not the null action that shape requires.
         var row = vm.Mappings.Single(r => r.Entry == committed);
         Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.ClickText);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.LongPressText);
         Assert.DoesNotContain("ComplexShortcutTarget", row.TargetText);
 
         // It survives the store: leave the slot, come back, reopen the mapping.
