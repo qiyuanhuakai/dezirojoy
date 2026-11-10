@@ -264,4 +264,45 @@ public class MappingDescriptionsTests
             "复杂快捷键",
             MappingDescriptions.Target(new ComplexShortcutTarget { Script = "frobnicate" }));
     }
+
+    [Theory]
+    [InlineData(SpecialKeyKind.Precision, "精准键")]
+    [InlineData(SpecialKeyKind.Leader, "Leader 键")]
+    public void A_Special_Key_Target_Reads_As_Its_Picker_Name_Not_Record_Text(SpecialKeyKind kind, string expected)
+    {
+        // The Core record's ToString would read as debug output in a mapping row, and the
+        // editor's header already names the kind its own picker uses - the row must say the
+        // same thing, so the two can never disagree about what the mapping does.
+        var text = MappingDescriptions.Target(new SpecialKeyTarget(kind));
+
+        Assert.Equal(expected, text);
+        Assert.DoesNotContain("SpecialKeyTarget", text);
+        Assert.DoesNotContain("Kind", text);
+    }
+
+    [Fact]
+    public void A_Leader_Key_Target_Keeps_Its_Slot_And_Mode_Fields_Out_Of_The_Summary()
+    {
+        // The slot pair and the switch mode are configured in the editor's own pickers; the
+        // summary the row and the editor header share stays the kind alone, so no record
+        // field leaks into it however the leader is configured.
+        var text = MappingDescriptions.Target(new SpecialKeyTarget(
+            SpecialKeyKind.Leader, PrecisionMode.Hold, LeaderSwitchMode.Hold, SlotA: 3, SlotB: 4));
+
+        Assert.Equal("Leader 键", text);
+        Assert.DoesNotContain("SlotA", text);
+        Assert.DoesNotContain("SlotB", text);
+        Assert.DoesNotContain("Hold", text);
+    }
+
+    [Fact]
+    public void The_Precision_Key_Target_Reads_The_Same_Under_Every_Mode()
+    {
+        Assert.Equal(
+            "精准键",
+            MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Hold)));
+        Assert.Equal(
+            "精准键",
+            MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Toggle)));
+    }
 }
