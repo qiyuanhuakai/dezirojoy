@@ -232,4 +232,36 @@ public class MappingDescriptionsTests
         Assert.Equal("A 键", MappingDescriptions.Source(new ButtonBinding(GamepadButton.A)));
         Assert.Equal("十字键 ←", MappingDescriptions.Source(new ButtonBinding(GamepadButton.DPadLeft)));
     }
+
+    [Fact]
+    public void A_Complex_Shortcut_Reads_As_Plain_Language_Not_Record_Text()
+    {
+        // The script is DSL text, so its raw form would read as code in a mapping row.
+        // The row shows what the program does instead - and never the record ToString.
+        var text = MappingDescriptions.Target(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" });
+
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", text);
+        Assert.DoesNotContain("ComplexShortcutTarget", text);
+        Assert.DoesNotContain("Script", text);
+    }
+
+    [Fact]
+    public void The_Complex_Shortcut_Summary_Names_Every_Step_In_Order()
+    {
+        var steps = ComplexShortcutDsl.Parse("tap A\nhold B\nrelease B\nwait 500ms\nevery 2s tap C");
+
+        Assert.Equal(
+            "点按 A；持续按住 B；松开 B；等待 0.5 秒；每 2 秒点按 C",
+            MappingDescriptions.ComplexShortcutSteps(steps));
+    }
+
+    [Fact]
+    public void An_Unparseable_Complex_Shortcut_Still_Names_The_Kind()
+    {
+        // A hand-edited profile the engine refuses must not leak its parse failure into
+        // a mapping row: the kind alone is what the row can honestly say.
+        Assert.Equal(
+            "复杂快捷键",
+            MappingDescriptions.Target(new ComplexShortcutTarget { Script = "frobnicate" }));
+    }
 }

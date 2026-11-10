@@ -25,7 +25,8 @@ public sealed record LeaderSwitchModeOption(LeaderSwitchMode Value, string Label
 
 /// <summary>
 /// Editing surface for one mapping: pick the source (button or stick) and the target
-/// (single key, combo, mouse button, stick-to-mouse, stick-to-wheel).
+/// (single key, combo, mouse button, stick-to-mouse, stick-to-wheel, special key, or the
+/// 复杂快捷键 program the long press runs).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -56,6 +57,18 @@ public partial class MappingEditorViewModel : ObservableObject
         MappingTargetKind.MouseMove,
         MappingTargetKind.WheelScroll,
         MappingTargetKind.SpecialKey,
+    ];
+
+    /// <summary>
+    /// The long-press tab's list: every kind plus 复杂快捷键. The engine binds a complex
+    /// shortcut to a button's bare long press, so the long-press gesture is the only place
+    /// the kind is offered - the click and the double-click would produce a mapping whose
+    /// program can never start.
+    /// </summary>
+    private static readonly MappingTargetKind[] LongPressTargetKinds =
+    [
+        .. AllTargetKinds,
+        MappingTargetKind.ComplexShortcut,
     ];
 
     private readonly SortedSet<int> _extraButtonCodes = [];
@@ -161,7 +174,15 @@ public partial class MappingEditorViewModel : ObservableObject
     public MappingTargetKind ActiveTargetKind
     {
         get => ActiveSlot.TargetKind;
-        set => ActiveSlot.TargetKind = value;
+        set
+        {
+            if (value == MappingTargetKind.ComplexShortcut)
+            {
+                PointComplexShortcutAtTheLongPress();
+            }
+
+            ActiveSlot.TargetKind = value;
+        }
     }
 
     /// <summary>The active slot's target key.</summary>
@@ -370,7 +391,7 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>无功能 for the active slot: it resolves and emits nothing.</summary>
     public bool ActiveIsNone
     {
-        get => ActiveSlot.IsNone;
+        get => ActiveSlot.IsNone || ClickIsInert;
         set => ActiveSlot.IsNone = value;
     }
 
@@ -425,14 +446,17 @@ public partial class MappingEditorViewModel : ObservableObject
 
     /// <summary>
     /// True when the shared target editor's controls are live: the gesture resolves and the
-    /// slot is not 无功能. A disabled gesture has nothing to configure until it is enabled.
+    /// slot is not 无功能. A disabled gesture has nothing to configure until it is enabled,
+    /// and neither does a click the long-press program has taken over.
     /// </summary>
-    public bool ActiveTargetEditable => ActiveGestureEnabled && !ActiveSlot.IsNone;
+    public bool ActiveTargetEditable => ActiveGestureEnabled && !ActiveSlot.IsNone && !ClickIsInert;
 
     /// <summary>
     /// What the active slot does, for the header readout. The click is the mapping's own
     /// target, so it reads as the target alone; a gesture slot is prefixed with its name, and
-    /// a disabled one reads 已关闭 rather than naming a target that never fires.
+    /// a disabled one reads 已关闭 rather than naming a target that never fires. A click the
+    /// long-press program has taken over reads 无功能 - a quick press emits nothing - and the
+    /// long press reads 复杂快捷键, with the script's own summary in the card below.
     /// </summary>
     public string ActiveTargetDescription
     {
@@ -448,6 +472,8 @@ public partial class MappingEditorViewModel : ObservableObject
             {
                 GestureSlotFunction.None => "无功能",
                 GestureSlotFunction.RepeatClick => "重复单击的功能",
+                _ when ClickIsInert => "无功能",
+                _ when IsLongPressSelected && LongPressRunsComplexShortcut => "复杂快捷键",
                 _ => target is SpecialKeyTarget special
                     ? SpecialKeyDescription(special)
                     : MappingDescriptions.Target(target),
@@ -518,7 +544,160 @@ public partial class MappingEditorViewModel : ObservableObject
     public MappingTargetKind TargetKind
     {
         get => ClickSlot.TargetKind;
-        set => ClickSlot.TargetKind = value;
+        set
+        {
+            if (value == MappingTargetKind.ComplexShortcut)
+            {
+                PointComplexShortcutAtTheLongPress();
+                return;
+            }
+
+            ClickSlot.TargetKind = value;
+        }
+    }
+
+    // ---- 复杂快捷键: a DSL program the long press runs -------------------------
+
+    /// <summary>
+    /// True when the long-press draft runs a complex shortcut program. The engine binds a
+    /// <see cref="ComplexShortcutTarget"/> to the mapping's own target with a bare long
+    /// press, so this draft state is translated on commit: the program becomes the
+    /// mapping's target and the gesture carries the long-press threshold alone. While it
+    /// runs, the double-click, click auto-repeat and the long-press repeat are refused -
+    /// each would pair a second behaviour with the program - and the long press can no
+    /// longer be switched off.
+    /// </summary>
+    public bool LongPressRunsComplexShortcut => !SourceIsStick
+        && LongPressSlot.TargetKind == MappingTargetKind.ComplexShortcut
+        && LongPressSlot.Function == GestureSlotFunction.Target;
+
+    /// <summary>
+    /// True while the click tab shows a click that cannot fire: the long press runs a
+    /// complex shortcut, and the program is the mapping's own target, so a quick press
+    /// resolves into the program's own long-press path and emits nothing. The click reads
+    /// 无功能 and its parameters stay disabled until the long press carries an ordinary
+    /// action again.
+    /// </summary>
+    public bool ClickIsInert => IsClickSelected && LongPressRunsComplexShortcut;
+
+    /// <summary>
+    /// True when the 启用手势 checkbox is live. A long press running a complex shortcut
+    /// cannot be switched off: the program is the mapping's own target, so a disabled long
+    /// press would leave it unreachable - the editor keeps the gesture on and says why
+    /// instead of writing a mapping the engine refuses.
+    /// </summary>
+    public bool ActiveGestureToggleEnabled => !(IsLongPressSelected && LongPressRunsComplexShortcut);
+
+    /// <summary>
+    /// True when the double-click branch is offered. The long press running a complex
+    /// shortcut owns the press, so a double-click would pair a second gesture with the
+    /// program; click auto-repeat excludes the long-press alone, never the double-click.
+    /// </summary>
+    public bool DoubleClickAvailable => !LongPressRunsComplexShortcut;
+
+    /// <summary>The active slot's script, as the script card's text box reads and writes it.</summary>
+    public string ActiveComplexShortcutScript
+    {
+        get => ActiveSlot.Script ?? string.Empty;
+        set => ActiveSlot.Script = value;
+    }
+
+    /// <summary>
+    /// The long-press script's parse error, in Chinese and naming the line and column, or
+    /// null while it parses. The script is hand-edited, so the author needs the offending
+    /// token found without counting characters.
+    /// </summary>
+    public string? ComplexShortcutScriptError
+    {
+        get => _complexShortcutScriptError;
+        private set
+        {
+            _complexShortcutScriptError = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasComplexShortcutScriptError));
+            OnPropertyChanged(nameof(ComplexShortcutScriptInvalid));
+        }
+    }
+
+    /// <summary>What the long-press script does in plain language, or null while it does not parse.</summary>
+    public string? ComplexShortcutScriptSummary
+    {
+        get => _complexShortcutScriptSummary;
+        private set
+        {
+            _complexShortcutScriptSummary = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasComplexShortcutScriptSummary));
+        }
+    }
+
+    /// <summary>True while the script card shows the parse error rather than the summary.</summary>
+    public bool HasComplexShortcutScriptError => ComplexShortcutScriptError is not null;
+
+    /// <summary>True while the script card shows the plain-language summary.</summary>
+    public bool HasComplexShortcutScriptSummary => ComplexShortcutScriptSummary is not null;
+
+    /// <summary>
+    /// True while the long press runs a script that does not parse. The commit refuses it:
+    /// writing a program the engine cannot build would fail the whole profile at reload,
+    /// so the editor stops here and the script card already says what is wrong.
+    /// </summary>
+    public bool ComplexShortcutScriptInvalid => LongPressRunsComplexShortcut
+        && ComplexShortcutScriptError is not null;
+
+    private string? _complexShortcutScriptError;
+
+    private string? _complexShortcutScriptSummary;
+
+    /// <summary>
+    /// Moves the authoring of a complex shortcut to the long press and arms the bare
+    /// gesture it runs from. The picker offers the kind on the long-press tab alone, so
+    /// this only fires for a programmatic path that names it elsewhere; the kind is
+    /// meaningless without the long press that drives it.
+    /// </summary>
+    private void PointComplexShortcutAtTheLongPress()
+    {
+        if (SelectedGestureKind != GestureKind.LongPress)
+        {
+            SelectedGestureKind = GestureKind.LongPress;
+        }
+
+        // The program owns the press: a double-click, click auto-repeat or a long-press
+        // repeat would pair a second behaviour with it and the engine refuses that.
+        DoubleClickEnabled = false;
+        ClickRepeatEnabled = false;
+        LongPressRepeatInterval = 0f;
+    }
+
+    /// <summary>Fills the script box with the example program, so the grammar is one click from a working script.</summary>
+    [RelayCommand]
+    private void FillComplexShortcutExample() => ActiveComplexShortcutScript = GestureSlotEditor.ExampleScript;
+
+    /// <summary>
+    /// Parses the long-press script and publishes the error or the plain-language summary
+    /// the script card shows. Runs on every editor notification, so the card is live while
+    /// the script is typed and stays in step when the gesture or the source changes.
+    /// </summary>
+    private void RefreshComplexShortcutScript()
+    {
+        if (!LongPressRunsComplexShortcut)
+        {
+            ComplexShortcutScriptError = null;
+            ComplexShortcutScriptSummary = null;
+            return;
+        }
+
+        try
+        {
+            ComplexShortcutScriptSummary = MappingDescriptions.ComplexShortcutSteps(
+                ComplexShortcutDsl.Parse(LongPressSlot.Script ?? string.Empty));
+            ComplexShortcutScriptError = null;
+        }
+        catch (ComplexShortcutParseException exception)
+        {
+            ComplexShortcutScriptError = exception.Message;
+            ComplexShortcutScriptSummary = null;
+        }
     }
 
     /// <summary>
@@ -562,11 +741,13 @@ public partial class MappingEditorViewModel : ObservableObject
 
     /// <summary>
     /// True when the click itself is set to 无功能: the mapping's own target becomes a
-    /// <see cref="NoneTarget"/>, so a plain press emits nothing.
+    /// <see cref="NoneTarget"/>, so a plain press emits nothing. A click the long-press
+    /// program has taken over reads the same way, because a quick press really does emit
+    /// nothing then - the program owns the press.
     /// </summary>
     public bool ClickIsNone
     {
-        get => ClickSlot.IsNone;
+        get => ClickSlot.IsNone || LongPressRunsComplexShortcut;
         set => ClickSlot.IsNone = value;
     }
 
@@ -643,10 +824,15 @@ public partial class MappingEditorViewModel : ObservableObject
         set => DoubleClickSlot.LoadAction(value);
     }
 
-    /// <summary>What the long-press emits, and what auto-repeat re-fires. Null behaves as above.</summary>
+    /// <summary>
+    /// What the long-press emits, and what auto-repeat re-fires. Null behaves as above.
+    /// A long press running a complex shortcut also reads null: the program is the mapping's
+    /// own target, so the gesture carries no action of its own - writing one would pair a
+    /// second behaviour with the program and the engine refuses that combination.
+    /// </summary>
     public MappingTarget? LongPressAction
     {
-        get => LongPressEnabled ? LongPressSlot.BuildAction() : null;
+        get => LongPressEnabled && !LongPressRunsComplexShortcut ? LongPressSlot.BuildAction() : null;
         set => LongPressSlot.LoadAction(value);
     }
 
@@ -843,12 +1029,14 @@ public partial class MappingEditorViewModel : ObservableObject
     };
 
     /// <summary>What the long-press currently does, for the readout beside its picker.</summary>
-    public string LongPressActionDescription => LongPressAction switch
-    {
-        null => LongPressEnabled ? GestureRepeatOption.Label : GestureOffOption.Label,
-        NoneTarget => GestureNoneOption.Label,
-        var action => MappingDescriptions.Target(action),
-    };
+    public string LongPressActionDescription => LongPressRunsComplexShortcut
+        ? "复杂快捷键"
+        : LongPressAction switch
+        {
+            null => LongPressEnabled ? GestureRepeatOption.Label : GestureOffOption.Label,
+            NoneTarget => GestureNoneOption.Label,
+            var action => MappingDescriptions.Target(action),
+        };
 
     /// <summary>The switcher flag for the click, kept in step with <see cref="SelectedGestureKind"/>.</summary>
     public bool IsClickSelected
@@ -948,12 +1136,16 @@ public partial class MappingEditorViewModel : ObservableObject
 
     private void SyncLongPressOption()
     {
-        var option = LongPressAction is { } action
-            ? GestureActionOptions.FirstOrDefault(
-                candidate => EqualityComparer<MappingTarget>.Default.Equals(candidate.Target, action))
-            : LongPressEnabled
-                ? GestureRepeatOption
-                : GestureOffOption;
+        // A complex shortcut is not one of the picker's rows, so it reads as unlisted - the
+        // same shape a hand-edited profile naming a target the picker does not carry has.
+        var option = LongPressRunsComplexShortcut
+            ? null
+            : LongPressAction is { } action
+                ? GestureActionOptions.FirstOrDefault(
+                    candidate => EqualityComparer<MappingTarget>.Default.Equals(candidate.Target, action))
+                : LongPressEnabled
+                    ? GestureRepeatOption
+                    : GestureOffOption;
 
         if (!EqualityComparer<GestureActionOption?>.Default.Equals(option, _selectedLongPressOption))
         {
@@ -1100,7 +1292,15 @@ public partial class MappingEditorViewModel : ObservableObject
         };
     }
 
-    public MappingTarget BuildTarget() => ClickSlot.BuildTarget();
+    /// <summary>
+    /// The mapping's own target: the click draft's target, or the long-press program when
+    /// one runs. The engine binds a complex shortcut to the mapping's own target with a
+    /// bare long press, so the draft state is translated here rather than in the gesture:
+    /// the program becomes what the mapping does, and the long press fires it.
+    /// </summary>
+    public MappingTarget BuildTarget() => LongPressRunsComplexShortcut
+        ? new ComplexShortcutTarget { Script = LongPressSlot.Script }
+        : ClickSlot.BuildTarget();
 
     public MappingEntry BuildEntry() => new()
     {
@@ -1110,6 +1310,17 @@ public partial class MappingEditorViewModel : ObservableObject
 
     public void LoadFrom(MappingEntry entry)
     {
+        // The editor is reused across edits, and the previous edit may have left the
+        // long-press draft running a complex shortcut - a state whose guards refuse the
+        // double-click, click auto-repeat and the long press itself, because each would
+        // pair a second behaviour with a running program. Those guards answer interactive
+        // requests; a load replaces the draft wholesale, so the state is stood down first
+        // and the incoming mapping's flags load exactly as its gesture carries them.
+        if (LongPressSlot.TargetKind == MappingTargetKind.ComplexShortcut)
+        {
+            LongPressSlot.Reset();
+        }
+
         switch (entry.Source)
         {
             case ButtonBinding button:
@@ -1150,8 +1361,26 @@ public partial class MappingEditorViewModel : ObservableObject
         }
 
         // The click draft takes the mapping's own target; the two gesture drafts were filled
-        // from the button's gesture above.
-        ClickSlot.LoadAction(entry.Target);
+        // from the button's gesture above. A complex shortcut is the exception: its program
+        // is the mapping's own target, so the long-press draft carries it and the click is
+        // left pristine - it reads 无功能, because a quick press emits nothing.
+        if (entry.Target is ComplexShortcutTarget complex)
+        {
+            LongPressSlot.LoadAction(complex);
+            ClickSlot.Reset();
+
+            // A hand-edited profile may pair the program with gestures the engine refuses;
+            // the editor repairs it to the bare long press the program runs from, exactly as
+            // the picker repairs an action carried at a zero timing.
+            DoubleClickEnabled = false;
+            ClickRepeatEnabled = false;
+            LongPressEnabled = true;
+            LongPressRepeatInterval = 0f;
+        }
+        else
+        {
+            ClickSlot.LoadAction(entry.Target);
+        }
 
         // The optional key list is collapsed on every editor, so a reloaded mapping opens on
         // the compact surface rather than wherever the previous edit left the list.
@@ -1341,8 +1570,22 @@ public partial class MappingEditorViewModel : ObservableObject
 
         // Every kind is valid for both source kinds, so the list never has to be narrowed and
         // the chosen target survives a source switch. Only the direction picker comes and goes.
-        AvailableTargetKinds = AllTargetKinds;
+        AvailableTargetKinds = AvailableKindsForGesture(SelectedGestureKind);
+
+        // A stick has no gestures, so a program the long press was running stops being one:
+        // the switcher row is hidden and the kind leaves the list.
+        NotifyActiveSlotChanged();
     }
+
+    /// <summary>
+    /// The kinds the 类型 picker offers for one gesture. 复杂快捷键 joins the list on the
+    /// long-press tab of a button source alone: the engine binds the program to a bare long
+    /// press, so no other gesture - and no stick, which has no gestures at all - can run it.
+    /// </summary>
+    private MappingTargetKind[] AvailableKindsForGesture(GestureKind gesture)
+        => !SourceIsStick && gesture == GestureKind.LongPress
+            ? LongPressTargetKinds
+            : AllTargetKinds;
 
     partial void OnSelectedButtonChanged(GamepadButton value)
     {
@@ -1364,6 +1607,16 @@ public partial class MappingEditorViewModel : ObservableObject
     partial void OnSelectedStickChanged(GamepadStick value)
         => OnPropertyChanged(nameof(SourceDescription));
 
+    partial void OnSelectedGestureKindChanging(GestureKind value)
+    {
+        // The picker's list follows the gesture, and it is swapped here - before the active
+        // slot moves - on purpose. Replacing the collection makes the combo re-assert its
+        // selection, and that write-back has to land on the slot the selection came from:
+        // swapping after the move would copy the outgoing gesture's kind into the incoming
+        // slot, silently rewriting a draft the user never touched.
+        AvailableTargetKinds = AvailableKindsForGesture(value);
+    }
+
     partial void OnSelectedGestureKindChanged(GestureKind value)
     {
         // Selecting the long-press switches auto-repeat off: the two are mutually exclusive,
@@ -1379,6 +1632,14 @@ public partial class MappingEditorViewModel : ObservableObject
 
     partial void OnClickRepeatEnabledChanged(bool value)
     {
+        if (value && LongPressRunsComplexShortcut)
+        {
+            // The program owns the press: auto-repeat would pair a second behaviour with it
+            // and the engine refuses that combination, so the request is refused here.
+            ClickRepeatEnabled = false;
+            return;
+        }
+
         if (value)
         {
             // Auto-repeat makes the long-press inert, so the long-press is dropped rather than
@@ -1400,6 +1661,14 @@ public partial class MappingEditorViewModel : ObservableObject
 
     partial void OnDoubleClickEnabledChanged(bool value)
     {
+        if (value && LongPressRunsComplexShortcut)
+        {
+            // The program owns the press: a double-click would pair a second gesture with it,
+            // so the request is refused and the 双击 branch stays closed while it runs.
+            DoubleClickEnabled = false;
+            return;
+        }
+
         SyncDoubleClickOption();
         OnPropertyChanged(nameof(HasDoubleClick));
         OnPropertyChanged(nameof(HasAnyGesture));
@@ -1408,6 +1677,15 @@ public partial class MappingEditorViewModel : ObservableObject
 
     partial void OnLongPressEnabledChanged(bool value)
     {
+        if (!value && LongPressRunsComplexShortcut)
+        {
+            // The program is the mapping's own target: a long press that cannot fire would
+            // leave it unreachable, so switching the gesture off is refused. The 启用手势
+            // checkbox is disabled with a hint for the same reason.
+            LongPressEnabled = true;
+            return;
+        }
+
         if (value)
         {
             // Configuring the long-press switches auto-repeat off, and vice versa.
@@ -1545,6 +1823,18 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveGestureName));
         OnPropertyChanged(nameof(ActiveTargetDescription));
         OnPropertyChanged(nameof(ActiveTargetEditable));
+
+        // The complex-shortcut surface: which tab offers the kind, whether the script card
+        // is armed, what its validation line says, and whether the click the program has
+        // taken over reads 无功能.
+        OnPropertyChanged(nameof(LongPressRunsComplexShortcut));
+        OnPropertyChanged(nameof(ClickIsInert));
+        OnPropertyChanged(nameof(ActiveGestureToggleEnabled));
+        OnPropertyChanged(nameof(DoubleClickAvailable));
+        OnPropertyChanged(nameof(ClickIsNone));
+        OnPropertyChanged(nameof(ActiveComplexShortcutScript));
+        RefreshComplexShortcutScript();
+
         SetActiveSelectedKeyOption(CurrentActiveKeyOption());
     }
 

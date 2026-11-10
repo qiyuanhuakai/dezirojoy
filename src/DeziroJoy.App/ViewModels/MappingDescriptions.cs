@@ -1,3 +1,4 @@
+using System.Globalization;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 
@@ -63,8 +64,49 @@ public static class MappingDescriptions
         }}",
         MouseMoveTarget => "鼠标移动",
         WheelScrollTarget => "滚轮滚动",
+        ComplexShortcutTarget complex => ComplexShortcut(complex),
         _ => target.ToString() ?? string.Empty,
     };
+
+    /// <summary>
+    /// What a complex shortcut does, in plain language: the kind plus the steps the script
+    /// compiles to. The script is DSL text, so its raw form would read as code rather than
+    /// as behaviour; the step list is what the user actually gets. A script that does not
+    /// parse - a hand-edited profile the engine refuses to build - reads as the kind alone
+    /// rather than leaking the parse failure into a mapping row.
+    /// </summary>
+    public static string ComplexShortcut(ComplexShortcutTarget target)
+    {
+        IReadOnlyList<ComplexShortcutStep> steps;
+        try
+        {
+            steps = ComplexShortcutDsl.Parse(target.Script ?? string.Empty);
+        }
+        catch (ComplexShortcutParseException)
+        {
+            return "复杂快捷键";
+        }
+
+        return $"复杂快捷键：{ComplexShortcutSteps(steps)}";
+    }
+
+    /// <summary>The compiled steps as one plain-language sentence, joined in execution order.</summary>
+    public static string ComplexShortcutSteps(IReadOnlyList<ComplexShortcutStep> steps)
+        => string.Join("；", steps.Select(DescribeStep));
+
+    private static string DescribeStep(ComplexShortcutStep step) => step switch
+    {
+        ComplexShortcutTapStep tap => $"点按 {Key(tap.Key)}",
+        ComplexShortcutHoldStep hold => $"持续按住 {Key(hold.Key)}",
+        ComplexShortcutReleaseStep release => $"松开 {Key(release.Key)}",
+        ComplexShortcutWaitStep wait => $"等待 {Seconds(wait.Seconds)}",
+        ComplexShortcutEveryStep every => $"每 {Seconds(every.Interval)}点按 {Key(every.Key)}",
+        _ => step.ToString() ?? string.Empty,
+    };
+
+    /// <summary>A duration in seconds, trimmed to at most three decimals so 1s reads 1 秒 and 500ms reads 0.5 秒.</summary>
+    private static string Seconds(double seconds)
+        => $"{seconds.ToString("0.###", CultureInfo.InvariantCulture)} 秒";
 
     public static string Key(GamepadKey key) => key switch
     {

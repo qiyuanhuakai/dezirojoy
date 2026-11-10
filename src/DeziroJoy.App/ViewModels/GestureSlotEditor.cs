@@ -34,8 +34,22 @@ public enum GestureSlotFunction
 /// </remarks>
 public partial class GestureSlotEditor : ObservableObject
 {
+    /// <summary>
+    /// The script a fresh 复杂快捷键 draft starts from: the mission's own example, which
+    /// parses, so a newly chosen kind opens on a working program instead of an empty box.
+    /// </summary>
+    public const string ExampleScript = "hold Alt\nevery 1s tap Tab";
+
     [ObservableProperty]
     private MappingTargetKind _targetKind = MappingTargetKind.KeyPress;
+
+    /// <summary>
+    /// The DSL source of a <see cref="MappingTargetKind.ComplexShortcut"/> target, one step
+    /// per line. The text is the single source of truth: the editor validates it live and
+    /// the engine compiles it when the mapping is built, so the draft carries nothing else.
+    /// </summary>
+    [ObservableProperty]
+    private string _script = ExampleScript;
 
     [ObservableProperty]
     private GamepadKey _selectedKey = GamepadKey.Enter;
@@ -150,6 +164,7 @@ public partial class GestureSlotEditor : ObservableObject
                 SpecialSwitchMode,
                 SpecialSlotA,
                 SpecialSlotB),
+            MappingTargetKind.ComplexShortcut => new ComplexShortcutTarget { Script = Script },
             _ => new KeyPressTarget(SelectedKey),
         };
 
@@ -219,6 +234,11 @@ public partial class GestureSlotEditor : ObservableObject
                 SpecialSlotA = special.SlotA;
                 SpecialSlotB = special.SlotB;
                 break;
+            case ComplexShortcutTarget complex:
+                Function = GestureSlotFunction.Target;
+                TargetKind = MappingTargetKind.ComplexShortcut;
+                Script = complex.Script;
+                break;
         }
     }
 
@@ -228,6 +248,7 @@ public partial class GestureSlotEditor : ObservableObject
         Function = GestureSlotFunction.Target;
         TargetKind = MappingTargetKind.KeyPress;
         SelectedKey = GamepadKey.Enter;
+        Script = ExampleScript;
         ModifierCtrl = false;
         ModifierShift = false;
         ModifierAlt = false;

@@ -1257,7 +1257,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         // A leader key whose two slots are the same is refused, and the editor's own hint
         // beside the slot pickers says why - the same pattern the gesture exclusion uses.
-        if (Editor.SpecialKeySlotConflict)
+        // A complex-shortcut script that does not parse is refused the same way: the script
+        // card already names the line and column, and committing it would write a program
+        // the engine cannot build, failing the whole profile at the next reload.
+        if (Editor.SpecialKeySlotConflict || Editor.ComplexShortcutScriptInvalid)
         {
             return;
         }

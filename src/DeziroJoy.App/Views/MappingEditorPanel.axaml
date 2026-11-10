@@ -27,7 +27,6 @@
     <UserControl.Resources>
         <conv:BoolNegationConverter x:Key="Not" />
         <conv:TargetKindMatchConverter x:Key="KindMatch" />
-        <views:TargetKindLabelConverter x:Key="TargetKindLabel" />
     </UserControl.Resources>
 
     <UserControl.Styles>
@@ -174,6 +173,24 @@
             <Setter Property="MinHeight" Value="32" />
         </Style>
 
+        <!-- The complex-shortcut script box: the same form-control chrome as the combo
+             boxes, opened up into a wide multi-line editor. It returns and wraps, because
+             a program is one step per line and a long line must stay readable; the height
+             fits a handful of steps without pushing the rest of the card off screen, and
+             the editor body scrolls it like every other field. -->
+        <Style Selector="TextBox.dslEditor">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="MinHeight" Value="128" />
+            <Setter Property="AcceptsReturn" Value="True" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
     </UserControl.Styles>
 
     <Grid RowDefinitions="Auto,*">
@@ -213,7 +230,8 @@
                             <RadioButton x:Name="GestureClickTab" Classes="gestureSegment" GroupName="GestureSlots"
                                          Content="单击" IsChecked="{Binding IsClickSelected, Mode=TwoWay}" />
                             <RadioButton x:Name="GestureDoubleClickTab" Classes="gestureSegment" GroupName="GestureSlots"
-                                         Content="双击" IsChecked="{Binding IsDoubleClickSelected, Mode=TwoWay}" />
+                                         Content="双击" IsChecked="{Binding IsDoubleClickSelected, Mode=TwoWay}"
+                                         IsEnabled="{Binding DoubleClickAvailable}" />
                             <RadioButton x:Name="GestureLongPressTab" Classes="gestureSegment" GroupName="GestureSlots"
                                          Content="长按" IsChecked="{Binding IsLongPressSelected, Mode=TwoWay}"
                                          IsEnabled="{Binding LongPressAvailable}" />
@@ -227,12 +245,23 @@
                                IsVisible="{Binding ClickRepeatEnabled}"
                                Text="「长按重复触发」已启用：重复触发与长按互斥，长按手势暂不可用。关闭重复触发后即可配置长按。" />
 
+                    <!-- A running complex shortcut owns the press outright: the engine pairs
+                         the program with a bare long press, so the double-click and click
+                         auto-repeat would each add a second behaviour the engine refuses.
+                         The script itself is authored in the card below the target editor. -->
+                    <TextBlock x:Name="GestureComplexShortcutHint" Classes="hint" Margin="0,0,0,10"
+                               IsVisible="{Binding LongPressRunsComplexShortcut}"
+                               Text="长按正在运行复杂快捷键：该程序独占长按手势，双击与「长按重复触发」暂不可用；脚本在下方「复杂快捷键」卡片中编辑。" />
+
                     <!-- Auto-repeat belongs to the click alone: it re-fires the click's own
                          target, so it is offered on the click's tab and nowhere else. The
                          wording names the behaviour only - the interval below carries the
-                         number, so the label never pins a value the user can change. -->
+                         number, so the label never pins a value the user can change. A long
+                         press running a complex shortcut disarms it: auto-repeat would pair
+                         a second behaviour with the program. -->
                     <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发"
                               IsVisible="{Binding IsClickSelected}"
+                              IsEnabled="{Binding LongPressRunsComplexShortcut, Converter={StaticResource Not}}"
                               IsChecked="{Binding ClickRepeatEnabled, Mode=TwoWay}" />
 
                     <!-- The repeat interval, offered once repeat is on: the click tab's own
@@ -265,7 +294,11 @@
                      is offered for the two gestures alone. -->
                 <StackPanel x:Name="ActiveGestureRow" IsVisible="{Binding ActiveGestureCanBeDisabled}">
                     <CheckBox x:Name="ActiveGestureEnabledBox" Content="启用手势"
+                              IsEnabled="{Binding ActiveGestureToggleEnabled}"
                               IsChecked="{Binding ActiveGestureEnabled, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               IsVisible="{Binding ActiveGestureToggleEnabled, Converter={StaticResource Not}}"
+                               Text="长按正在运行复杂快捷键，不能关闭：该程序就是映射的目标，关闭长按后将无法触发它。可取消编辑，或改选其他目标类型。" />
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ActiveGestureEnabled, Converter={StaticResource Not}}"
                                Text="手势已关闭：该手势不会触发，双击或长按都只按单击处理。勾选「启用手势」后即可配置它的功能。" />
@@ -274,18 +307,14 @@
                 <WrapPanel IsEnabled="{Binding ActiveTargetEditable}">
                     <StackPanel Width="230" Margin="0,0,12,0">
                         <TextBlock Classes="fieldLabel" Text="类型" />
-                        <!-- The label comes from the panel's own converter rather than the
-                             shared enumCombo template: the shared one falls back to the raw
-                             enum name for 特殊键, the kind this panel adds. -->
+                        <!-- Every kind's Chinese label comes from the shared enumCombo
+                             template's converter, so the picker and the rest of the app
+                             name the same kind the same way. The list itself is
+                             gesture-aware: 复杂快捷键 is offered on the long-press tab
+                             alone, the only gesture that can run it. -->
                         <ComboBox x:Name="TargetKindCombo" Classes="enumCombo"
                                   ItemsSource="{Binding AvailableTargetKinds}"
-                                  SelectedItem="{Binding ActiveTargetKind, Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Converter={StaticResource TargetKindLabel}}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
+                                  SelectedItem="{Binding ActiveTargetKind, Mode=TwoWay}" />
                     </StackPanel>
                     <StackPanel x:Name="DirectionRow" Width="230" Margin="0,0,12,0"
                                 IsVisible="{Binding ShowDirectionPicker}">
@@ -409,7 +438,11 @@
                      so the row waits for 启用手势, exactly as the parameters do. -->
                 <StackPanel Margin="0,12,0,0" IsEnabled="{Binding ActiveGestureEnabled}">
                     <CheckBox x:Name="ActiveNoneBox" Content="无功能（不触发任何操作）"
+                              IsEnabled="{Binding ClickIsInert, Converter={StaticResource Not}}"
                               IsChecked="{Binding ActiveIsNone, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               IsVisible="{Binding ClickIsInert}"
+                               Text="长按正在运行复杂快捷键：快速单击不触发任何操作，因此单击显示为无功能；目标参数暂不可用，改回其他类型后恢复。" />
                     <CheckBox x:Name="ActiveRepeatBox" Content="重复单击的功能（沿用单击的目标）"
                               Margin="0,8,0,0"
                               IsVisible="{Binding ActiveGestureCanBeDisabled}"
@@ -578,6 +611,38 @@
                     <TextBlock x:Name="SpecialSlotHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding SpecialKeySlotConflict}"
                                Text="Leader 键的两个槽位不能相同：请为槽位 A 与槽位 B 选择不同的预设，否则按下该键不会切换任何配置。" />
+                </StackPanel>
+
+                <!-- 复杂快捷键. The long press - and only the long press - can run a program:
+                     the engine binds a ComplexShortcutTarget to the mapping's own target with
+                     a bare long press, so the script is authored here and committed as that
+                     shape. The box is a wide multi-line editor over the card's full width,
+                     with the grammar and a working example one click away. Every edit is
+                     parsed live: a failure names the line and column in Chinese, a valid
+                     script reads back as the plain-language summary of what it will do. An
+                     unparseable script blocks 确定 rather than writing a program the engine
+                     cannot build. -->
+                <StackPanel x:Name="ComplexShortcutRow" Margin="0,12,0,0"
+                            IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=ComplexShortcut}">
+                    <TextBlock Classes="sectionLabel" Text="复杂快捷键" />
+                    <TextBox x:Name="ComplexShortcutScriptBox" Classes="dslEditor"
+                             Text="{Binding ActiveComplexShortcutScript, Mode=TwoWay}"
+                             AutomationProperties.Name="复杂快捷键脚本" />
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Text="每行一步，可用指令：tap &lt;按键&gt;（点按一次）、hold &lt;按键&gt;（按住不放）、release &lt;按键&gt;（松开）、wait &lt;时长&gt;（等待）、every &lt;时长&gt; tap &lt;按键&gt;（每隔时长点按一次）。时长为正数，可带 s 或 ms 后缀（如 1s、500ms）；按键名不区分大小写，# 之后为注释。脚本在按住期间按顺序执行，松手时全部释放，不会卡键。" />
+                    <Button x:Name="ComplexShortcutExampleButton" Classes="ghost" MinHeight="32"
+                            HorizontalAlignment="Left" Margin="0,8,0,0" Content="填入示例"
+                            Command="{Binding FillComplexShortcutExampleCommand}" />
+                    <TextBlock x:Name="ComplexShortcutErrorText" Classes="hint" Margin="0,8,0,0"
+                               TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                               IsVisible="{Binding HasComplexShortcutScriptError}"
+                               Text="{Binding ComplexShortcutScriptError}" />
+                    <TextBlock x:Name="ComplexShortcutSummaryText" Margin="0,8,0,0"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource AccentBrush}"
+                               IsVisible="{Binding HasComplexShortcutScriptSummary}"
+                               Text="{Binding ComplexShortcutScriptSummary}" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

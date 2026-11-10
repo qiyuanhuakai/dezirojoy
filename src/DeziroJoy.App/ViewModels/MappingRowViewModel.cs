@@ -53,10 +53,14 @@ public partial class MappingRowViewModel : ObservableObject
     /// <summary>
     /// The 长按 line. Click auto-repeat and the long-press are mutually exclusive and the
     /// repeat wins, so a repeating click closes this line rather than advertising a
-    /// long-press that never fires.
+    /// long-press that never fires. A complex shortcut is the mapping's own target driven
+    /// by a bare long press, so this line names the program - the same readable summary
+    /// the click line carries - rather than the null action that shape requires.
     /// </summary>
     public string LongPressText => Gesture is { HasEffectiveLongPress: true } gesture
-        ? Describe(gesture.LongPressAction)
+        ? Entry.Target is ComplexShortcutTarget complex
+            ? MappingDescriptions.ComplexShortcut(complex)
+            : Describe(gesture.LongPressAction)
         : MappingEditorViewModel.GestureOffOption.Label;
 
     /// <summary>Gestures live on the button binding; a stick carries none.</summary>

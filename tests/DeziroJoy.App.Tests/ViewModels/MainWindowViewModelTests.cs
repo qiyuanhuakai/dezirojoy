@@ -1177,6 +1177,49 @@ public class MainWindowViewModelTests
         Assert.Equal("已关闭", row.LongPressText);
     }
 
+    [Fact]
+    public void A_Complex_Shortcut_Row_Names_The_Program_On_Its_Long_Press_Line()
+    {
+        // The engine binds the program to the mapping's own target with a bare long press,
+        // so the long-press line names the program - not the null action that shape
+        // requires, which would read as the legacy 重复单击的功能.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture { LongPressThreshold = 0.50f },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+        });
+
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.ClickText);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.LongPressText);
+        Assert.Equal("已关闭", row.DoubleClickText);
+    }
+
+    [Fact]
+    public void A_Complex_Shortcut_Without_A_Long_Press_Keeps_Its_Long_Press_Line_Closed()
+    {
+        // A hand-edited profile that pairs the program with click auto-repeat (or with no
+        // long press at all) is one the engine refuses; the row must not advertise a
+        // long-press that cannot start the program.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture
+                {
+                    ClickRepeatInterval = 0.10f,
+                    LongPressThreshold = 0.50f,
+                },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt" },
+        });
+
+        Assert.Equal("复杂快捷键：持续按住 Alt", row.ClickText);
+        Assert.Equal("已关闭", row.LongPressText);
+    }
+
     // ---- The legacy leader key is migrated into the preset slots -------------
 
     [Fact]
@@ -1313,5 +1356,209 @@ public class MainWindowViewModelTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    // ---- 复杂快捷键: a DSL program committed from the editor -------------------
+
+    [Fact]
+    public async Task A_Committed_Complex_Shortcut_Persists_Reopens_And_Runs_Through_The_Host()
+    {
+        // The user's own example, end to end: authored on the long-press tab, committed,
+        // persisted across a preset switch, reopened, and finally executed by the engine -
+        // holding the button holds Alt and taps Tab once a second, releasing lifts Alt.
+        var provider = new FakeGamepadProvider();
+        var sink = new RecordingOutputSink();
+        var store = new InMemoryProfileStore();
+        var host = new EngineHost(provider, sink, store);
+        var vm = new MainWindowViewModel(host, store);
+
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        vm.SetGamepadNavigationEnabled(false);
+        SampleHelper.Sample(vm, host);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.Editor.ActiveComplexShortcutScript = "hold Alt\nevery 1s tap Tab";
+        vm.CommitEditorCommand.Execute(null);
+
+        Assert.False(vm.IsEditing);
+        var committed = vm.ActiveProfile!.Mappings.Single(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
+        Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" }, committed.Target);
+
+        // The mapping row reads the program in plain language, never the record's ToString:
+        // the click line names the mapping's own target and the long-press line names the
+        // program it starts - not the null action that shape requires.
+        var row = vm.Mappings.Single(r => r.Entry == committed);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.ClickText);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.LongPressText);
+        Assert.DoesNotContain("ComplexShortcutTarget", row.TargetText);
+
+        // It survives the store: leave the slot, come back, reopen the mapping.
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
+        Assert.DoesNotContain(vm.Mappings, r => r.Entry.Target is ComplexShortcutTarget);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(1);
+
+        var reopened = vm.Mappings.Single(r => r.Entry.Target is ComplexShortcutTarget);
+        vm.EditMappingCommand.Execute(reopened);
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        Assert.Equal("hold Alt\nevery 1s tap Tab", vm.Editor.ActiveComplexShortcutScript);
+        vm.CancelEditorCommand.Execute(null);
+
+        // And the engine runs it: holding past the long-press threshold starts the program,
+        // another second of holding taps Tab, and the release lifts Alt.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+        for (var tick = 0; tick < 40; tick++)
+        {
+            SampleHelper.Sample(vm, host);
+        }
+
+        Assert.Contains("down:LeftAlt", sink.Calls);
+        Assert.DoesNotContain(sink.Calls, call => call.StartsWith("up:LeftAlt", StringComparison.Ordinal));
+
+        for (var tick = 0; tick < 64; tick++)
+        {
+            SampleHelper.Sample(vm, host);
+        }
+
+        Assert.Contains("down:Tab", sink.Calls);
+
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        Assert.Contains("up:LeftAlt", sink.Calls);
+    }
+
+    [Fact]
+    public void An_Unparseable_Script_Blocks_The_Commit_And_Leaves_The_Profile_Untouched()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.RightBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.Editor.ActiveComplexShortcutScript = "hold Alt\nfrobnicate";
+        var mappings = vm.ActiveProfile!.Mappings.Count;
+
+        vm.CommitEditorCommand.Execute(null);
+
+        // The editor stays open on the offending script and the active profile is untouched:
+        // a program the engine cannot build never reaches the store or the running engine.
+        Assert.True(vm.IsEditing);
+        Assert.Equal(mappings, vm.ActiveProfile.Mappings.Count);
+        Assert.DoesNotContain(vm.Mappings, row => row.Entry.Target is ComplexShortcutTarget);
+        Assert.Contains("第 2 行", vm.Editor.ComplexShortcutScriptError);
+
+        // Cancelling drops the draft entirely.
+        vm.CancelEditorCommand.Execute(null);
+
+        Assert.False(vm.IsEditing);
+        Assert.Equal(mappings, vm.ActiveProfile.Mappings.Count);
+    }
+
+    [Fact]
+    public void Reopening_An_Ordinary_Mapping_After_A_Complex_Shortcut_Keeps_Its_Double_Click()
+    {
+        // The editor is reused: EditMapping loads into the same instance without a reset, so
+        // a draft left running a complex shortcut must not gate the incoming mapping's flags
+        // - the guards that refuse a double-click belong to interactive edits, not to a load
+        // that replaces the draft wholesale.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // A complex shortcut on the long press, committed through the real editor path.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.CommitEditorCommand.Execute(null);
+        var complexRow = vm.Mappings.Single(row => row.Entry.Target is ComplexShortcutTarget);
+
+        // An ordinary double-click mapping, committed the same way.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.RightBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.DoubleClick;
+        vm.Editor.ActiveGestureEnabled = true;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.ActiveSelectedKey = GamepadKey.Space;
+        vm.CommitEditorCommand.Execute(null);
+        var doubleClickRow = vm.Mappings.Single(
+            row => row.Entry.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+
+        // Reopen the complex mapping, then the ordinary one: the incoming gesture must load
+        // exactly as it was committed, and committing it back must not rewrite it.
+        vm.EditMappingCommand.Execute(complexRow);
+        Assert.True(vm.Editor.LongPressRunsComplexShortcut);
+
+        vm.EditMappingCommand.Execute(doubleClickRow);
+
+        Assert.False(vm.Editor.LongPressRunsComplexShortcut);
+        Assert.True(vm.Editor.DoubleClickEnabled);
+        Assert.False(vm.Editor.LongPressEnabled);
+        Assert.Equal(doubleClickRow.Entry.Source, vm.Editor.BuildEntry().Source);
+        Assert.Equal(doubleClickRow.Entry.Target, vm.Editor.BuildEntry().Target);
+
+        vm.CommitEditorCommand.Execute(null);
+
+        var rewritten = vm.ActiveProfile!.Mappings.Single(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+        Assert.Equal(doubleClickRow.Entry.Source, rewritten.Source);
+        Assert.Equal(doubleClickRow.Entry.Target, rewritten.Target);
+    }
+
+    [Fact]
+    public void Reopening_A_No_Gesture_Mapping_After_A_Complex_Shortcut_Adds_No_Long_Press()
+    {
+        // The same reuse path with an ordinary mapping that carries no gesture at all: the
+        // stale program must not leave a bare long press behind, because a long press that
+        // cannot fire would silently change what the mapping does.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.SelectedGestureKind = GestureKind.LongPress;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        vm.CommitEditorCommand.Execute(null);
+        var complexRow = vm.Mappings.Single(row => row.Entry.Target is ComplexShortcutTarget);
+
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.RightBumper;
+        vm.Editor.TargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.SelectedKey = GamepadKey.Space;
+        vm.CommitEditorCommand.Execute(null);
+        var plainRow = vm.Mappings.Single(
+            row => row.Entry.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+        Assert.Null(Assert.IsType<ButtonBinding>(plainRow.Entry.Source).Gesture);
+
+        vm.EditMappingCommand.Execute(complexRow);
+        Assert.True(vm.Editor.LongPressRunsComplexShortcut);
+
+        vm.EditMappingCommand.Execute(plainRow);
+
+        Assert.False(vm.Editor.LongPressRunsComplexShortcut);
+        Assert.False(vm.Editor.LongPressEnabled);
+        Assert.False(vm.Editor.DoubleClickEnabled);
+        Assert.False(vm.Editor.ClickRepeatEnabled);
+        Assert.Equal(plainRow.Entry.Source, vm.Editor.BuildEntry().Source);
+        Assert.Equal(plainRow.Entry.Target, vm.Editor.BuildEntry().Target);
+
+        vm.CommitEditorCommand.Execute(null);
+
+        var rewritten = vm.ActiveProfile!.Mappings.Single(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.RightBumper });
+        Assert.Equal(plainRow.Entry.Source, rewritten.Source);
+        Assert.Equal(plainRow.Entry.Target, rewritten.Target);
     }
 }

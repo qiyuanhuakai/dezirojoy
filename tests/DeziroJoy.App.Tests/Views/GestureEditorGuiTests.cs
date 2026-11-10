@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -12,6 +13,7 @@ using Avalonia.LogicalTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
+using DeziroJoy.App.Views.Converters;
 using DeziroJoy.App.Views.Controls;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
@@ -1321,5 +1323,172 @@ public sealed class GestureEditorGuiTests
 
         Assert.False(viewModel.Editor.ClickRepeatEnabled);
         Assert.False(row.IsVisible);
+    }
+
+    // ---- 复杂快捷键: the long press runs a hand-written program ---------------
+
+    [AvaloniaFact]
+    public void The_Target_Kind_Combo_Reads_复杂快捷键()
+    {
+        // The picker's Chinese label comes from the shared converter, so the kind this
+        // wave adds reads as Chinese everywhere it is shown.
+        var converter = new EnumDisplayConverter();
+
+        Assert.Equal(
+            "复杂快捷键",
+            converter.Convert(MappingTargetKind.ComplexShortcut, typeof(string), null, CultureInfo.InvariantCulture));
+        Assert.Equal(
+            "特殊键",
+            converter.Convert(MappingTargetKind.SpecialKey, typeof(string), null, CultureInfo.InvariantCulture));
+    }
+
+    [AvaloniaFact]
+    public void The_Complex_Shortcut_Card_Is_Offered_On_The_Long_Press_Tab_Alone()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+
+        var panel = EditorPanelOf(window);
+        var combo = panel.FindControl<ComboBox>("TargetKindCombo")!;
+        var card = panel.FindControl<StackPanel>("ComplexShortcutRow")!;
+
+        // The click's list does not carry the kind, so the card never opens there.
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
+        Assert.False(card.IsVisible);
+
+        SelectTab(window, viewModel, "GestureLongPressTab");
+
+        Assert.Contains(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
+
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+
+        Assert.Equal(MappingTargetKind.ComplexShortcut, combo.SelectedItem);
+        Assert.True(card.IsVisible);
+
+        // The example button fills a working program, and the card leaves with the kind.
+        var scriptBox = panel.FindControl<TextBox>("ComplexShortcutScriptBox")!;
+        scriptBox.Text = "tap F5";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Click(panel.FindControl<Button>("ComplexShortcutExampleButton")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("hold Alt\nevery 1s tap Tab", scriptBox.Text);
+
+        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(card.IsVisible);
+
+        // And the kind itself is gone from every other gesture's list.
+        SelectTab(window, viewModel, "GestureClickTab");
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
+
+        SelectTab(window, viewModel, "GestureDoubleClickTab");
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
+    }
+
+    [AvaloniaFact]
+    public void A_Valid_Script_Shows_Its_Plain_Language_Summary_And_Commits()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var before = list.ItemCount;
+
+        SelectTab(window, viewModel, "GestureLongPressTab");
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+
+        var panel = EditorPanelOf(window);
+        panel.FindControl<TextBox>("ComplexShortcutScriptBox")!.Text = "hold Alt\nevery 1s tap Tab";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var summary = panel.FindControl<TextBlock>("ComplexShortcutSummaryText")!;
+        var error = panel.FindControl<TextBlock>("ComplexShortcutErrorText")!;
+
+        Assert.True(summary.IsVisible);
+        Assert.False(error.IsVisible);
+        Assert.Equal("持续按住 Alt；每 1 秒点按 Tab", summary.Text);
+
+        Click(panel.FindControl<Button>("CommitButton")!, window);
+
+        Assert.False(viewModel.IsEditing);
+        Assert.Equal(before + 1, list.ItemCount);
+
+        var committed = viewModel.ActiveProfile!.Mappings.First(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
+
+        Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" }, committed.Target);
+        Assert.NotNull(Assert.IsType<ButtonBinding>(committed.Source).Gesture);
+    }
+
+    [AvaloniaFact]
+    public void An_Invalid_Script_Shows_Its_Chinese_Error_And_Blocks_The_Commit()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var list = window.FindControl<ItemsControl>("MappingsList")!;
+        var before = list.ItemCount;
+
+        SelectTab(window, viewModel, "GestureLongPressTab");
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+
+        var panel = EditorPanelOf(window);
+        panel.FindControl<TextBox>("ComplexShortcutScriptBox")!.Text = "hold Alt\nfrobnicate";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var summary = panel.FindControl<TextBlock>("ComplexShortcutSummaryText")!;
+        var error = panel.FindControl<TextBlock>("ComplexShortcutErrorText")!;
+
+        Assert.True(error.IsVisible);
+        Assert.False(summary.IsVisible);
+        Assert.Contains("第 2 行", error.Text);
+
+        Click(panel.FindControl<Button>("CommitButton")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The commit is refused: the editor stays open on the offending script, and
+        // nothing reaches the profile, the list or the running engine.
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(before, list.ItemCount);
+        Assert.DoesNotContain(
+            viewModel.ActiveProfile!.Mappings,
+            mapping => mapping.Target is ComplexShortcutTarget);
+    }
+
+    [AvaloniaFact]
+    public void The_Script_Box_Is_Keyboard_Reachable_And_Capture_Keeps_Working()
+    {
+        var (window, viewModel) = OpenEditorOn("ButtonA");
+
+        SelectTab(window, viewModel, "GestureLongPressTab");
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+
+        var scriptBox = EditorPanelOf(window).FindControl<TextBox>("ComplexShortcutScriptBox")!;
+
+        window.Focus();
+        Dispatcher.UIThread.RunJobs();
+        scriptBox.Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        // A plain focusable control, so keyboard and gamepad navigation reach it exactly
+        // as they reach every other field in the card.
+        Assert.True(scriptBox.Focusable);
+        Assert.True(scriptBox.IsFocused);
+
+        // Capture still works with the script box focused: the captured key becomes the
+        // slot's target, and the hand-written program is left waiting on the slot.
+        Click(EditorPanelOf(window).FindControl<Button>("CaptureKeyButton")!, window);
+        Assert.True(viewModel.Editor.IsCapturingKey);
+
+        window.KeyPress(Key.F5, RawInputModifiers.None, PhysicalKey.F5, null);
+        window.KeyRelease(Key.F5, RawInputModifiers.None, PhysicalKey.F5, null);
+
+        Assert.False(viewModel.Editor.IsCapturingKey);
+        Assert.Equal(GamepadKey.F5, viewModel.Editor.LongPressSlot.SelectedKey);
+        Assert.Equal("hold Alt\nevery 1s tap Tab", viewModel.Editor.LongPressSlot.Script);
     }
 }

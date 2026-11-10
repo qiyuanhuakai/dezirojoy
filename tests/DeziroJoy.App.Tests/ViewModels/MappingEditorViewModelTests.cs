@@ -2,6 +2,7 @@ using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
+using MappingEngine = DeziroJoy.Core.Engine.MappingEngine;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.ViewModels;
@@ -2194,5 +2195,242 @@ public class MappingEditorViewModelTests
         editor.ActivePrecisionButton = GamepadButton.LeftStick;
 
         Assert.Equal("左摇杆按下", editor.ActivePrecisionButtonLabel);
+    }
+
+    // ---- 复杂快捷键: the long press runs a DSL program ------------------------
+
+    [Fact]
+    public void The_Complex_Shortcut_Kind_Is_Offered_On_The_Long_Press_Tab_Alone()
+    {
+        // The engine binds the program to a button's bare long press, so no other gesture
+        // can run it - and a stick has no gestures at all.
+        var editor = new MappingEditorViewModel();
+
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+
+        editor.SelectedGestureKind = GestureKind.LongPress;
+
+        Assert.Contains(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+
+        editor.SourceIsStick = true;
+        editor.SelectedGestureKind = GestureKind.LongPress;
+
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+    }
+
+    [Fact]
+    public void Choosing_The_Complex_Shortcut_Builds_The_Shape_The_Engine_Accepts()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.LeftBumper };
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+
+        var entry = editor.BuildEntry();
+
+        Assert.Equal(
+            new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+            entry.Target);
+
+        // The gesture is a bare long press and nothing else: the program owns the press.
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(entry.Source).Gesture);
+        Assert.True(gesture.LongPressThreshold > 0f);
+        Assert.False(gesture.HasDoubleClick);
+        Assert.False(gesture.HasClickRepeat);
+        Assert.False(gesture.HasDoubleClickAction);
+        Assert.False(gesture.HasLongPressAction);
+        Assert.Equal(0f, gesture.LongPressRepeatInterval);
+
+        // The engine itself is the judge: building it refuses anything but that shape.
+        _ = new MappingEngine(new GamepadProfile { Name = "complex", Mappings = [entry] });
+    }
+
+    [Fact]
+    public void The_Complex_Shortcut_Round_Trips_Through_Build_And_Load()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        editor.ActiveComplexShortcutScript = "hold Shift\ntap F5";
+
+        var entry = editor.BuildEntry();
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(entry);
+
+        Assert.Equal(entry.Target, reloaded.BuildEntry().Target);
+        Assert.Equal(entry.Source, reloaded.BuildEntry().Source);
+        Assert.True(reloaded.LongPressRunsComplexShortcut);
+
+        // The program is authored on the long-press tab, which a reopened mapping opens on
+        // only once the switcher says so - the same way a long-press action is reached.
+        reloaded.SelectedGestureKind = GestureKind.LongPress;
+
+        Assert.Equal(MappingTargetKind.ComplexShortcut, reloaded.ActiveTargetKind);
+        Assert.Equal("hold Shift\ntap F5", reloaded.ActiveComplexShortcutScript);
+    }
+
+    [Fact]
+    public void The_Script_Validates_Live_With_Chinese_Line_And_Column()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+
+        editor.ActiveComplexShortcutScript = "hold Alt\nfrobnicate";
+
+        Assert.True(editor.ComplexShortcutScriptInvalid);
+        Assert.Contains("第 2 行", editor.ComplexShortcutScriptError);
+        Assert.Contains("未知指令", editor.ComplexShortcutScriptError);
+        Assert.Null(editor.ComplexShortcutScriptSummary);
+        Assert.True(editor.HasComplexShortcutScriptError);
+        Assert.False(editor.HasComplexShortcutScriptSummary);
+
+        editor.ActiveComplexShortcutScript = "hold Alt\nevery 1s tap Tab";
+
+        Assert.False(editor.ComplexShortcutScriptInvalid);
+        Assert.Null(editor.ComplexShortcutScriptError);
+        Assert.Equal("持续按住 Alt；每 1 秒点按 Tab", editor.ComplexShortcutScriptSummary);
+        Assert.True(editor.HasComplexShortcutScriptSummary);
+    }
+
+    [Fact]
+    public void The_Script_Draft_Survives_Switching_Between_The_Three_Gestures()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        editor.ActiveComplexShortcutScript = "hold Alt\ntap Tab";
+
+        editor.SelectedGestureKind = GestureKind.Click;
+
+        // The program keeps running while another tab is in view - the click it has taken
+        // over reads 无功能 - and the draft is waiting when the long press comes back.
+        Assert.True(editor.LongPressRunsComplexShortcut);
+        Assert.True(editor.ClickIsInert);
+
+        editor.SelectedGestureKind = GestureKind.LongPress;
+
+        Assert.Equal("hold Alt\ntap Tab", editor.ActiveComplexShortcutScript);
+        Assert.Equal(MappingTargetKind.ComplexShortcut, editor.ActiveTargetKind);
+    }
+
+    [Fact]
+    public void The_Click_Tab_Reads_No_Function_While_The_Program_Runs()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+
+        editor.SelectedGestureKind = GestureKind.Click;
+
+        // A quick press resolves the click into the program's own long-press path and
+        // emits nothing, so the click surface says exactly that.
+        Assert.True(editor.ClickIsInert);
+        Assert.True(editor.ClickIsNone);
+        Assert.True(editor.ActiveIsNone);
+        Assert.False(editor.ActiveTargetEditable);
+        Assert.Equal("无功能", editor.TargetDescription);
+        Assert.Equal("无功能", editor.ActiveTargetDescription);
+    }
+
+    [Fact]
+    public void The_Long_Press_Tab_Names_The_Program_And_Refuses_To_Switch_It_Off()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+
+        Assert.Equal("长按：复杂快捷键", editor.ActiveTargetDescription);
+        Assert.False(editor.ActiveGestureToggleEnabled);
+
+        // Switching the long press off would leave the mapping's own target unreachable,
+        // so the request is refused rather than written into a mapping the engine rejects.
+        editor.ActiveGestureEnabled = false;
+
+        Assert.True(editor.LongPressEnabled);
+        Assert.True(editor.LongPressRunsComplexShortcut);
+    }
+
+    [Fact]
+    public void The_Other_Gestures_Cannot_Be_Paired_With_A_Running_Program()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+
+        Assert.False(editor.DoubleClickAvailable);
+
+        editor.DoubleClickEnabled = true;
+        editor.ClickRepeatEnabled = true;
+
+        Assert.False(editor.DoubleClickEnabled);
+        Assert.False(editor.ClickRepeatEnabled);
+        Assert.True(editor.LongPressEnabled);
+
+        var entry = editor.BuildEntry();
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(entry.Source).Gesture);
+
+        Assert.False(gesture.HasDoubleClick);
+        Assert.False(gesture.HasClickRepeat);
+        Assert.True(gesture.LongPressThreshold > 0f);
+        Assert.Null(gesture.LongPressAction);
+        _ = new MappingEngine(new GamepadProfile { Name = "complex", Mappings = [entry] });
+    }
+
+    [Fact]
+    public void A_Hand_Edited_Program_Paired_With_Other_Gestures_Is_Repaired_On_Load()
+    {
+        // A profile that pairs the program with a double-click or a long-press repeat is
+        // refused by the engine; loading it repairs the gesture to the bare long press the
+        // program runs from, the same way an action at a zero timing is repaired.
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = 0.25f,
+                    LongPressThreshold = 0.50f,
+                    LongPressRepeatInterval = 0.10f,
+                },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt" },
+        });
+
+        Assert.True(editor.LongPressRunsComplexShortcut);
+        Assert.False(editor.DoubleClickEnabled);
+        Assert.False(editor.ClickRepeatEnabled);
+        Assert.True(editor.LongPressEnabled);
+
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(editor.BuildEntry().Source).Gesture);
+
+        Assert.False(gesture.HasDoubleClick);
+        Assert.Equal(0f, gesture.LongPressRepeatInterval);
+        Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt" }, editor.BuildEntry().Target);
+    }
+
+    [Fact]
+    public void Cancelling_A_Complex_Shortcut_Leaves_Nothing_Behind()
+    {
+        // The editor is reused, so a cancelled program must not bleed into the next edit:
+        // the draft is pristine again and the kind is off the click's list.
+        var editor = new MappingEditorViewModel();
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
+        editor.ActiveComplexShortcutScript = "hold Alt\ntap Tab";
+
+        editor.Reset();
+
+        Assert.False(editor.LongPressRunsComplexShortcut);
+        Assert.False(editor.ClickIsInert);
+        Assert.Null(editor.ComplexShortcutScriptError);
+        Assert.Null(editor.ComplexShortcutScriptSummary);
+        Assert.Equal(MappingTargetKind.KeyPress, editor.TargetKind);
+        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
     }
 }

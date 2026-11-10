@@ -141,4 +141,49 @@ public class GestureSlotEditorTests
         Assert.False(slot.RepeatsClick);
         Assert.Equal(new KeyPressTarget(GamepadKey.Enter), slot.BuildTarget());
     }
+
+    [Fact]
+    public void A_Fresh_Complex_Shortcut_Draft_Starts_From_The_Example_Script()
+    {
+        var slot = new GestureSlotEditor();
+
+        slot.TargetKind = MappingTargetKind.ComplexShortcut;
+
+        Assert.Equal(GestureSlotEditor.ExampleScript, slot.Script);
+        Assert.Equal(
+            new ComplexShortcutTarget { Script = GestureSlotEditor.ExampleScript },
+            slot.BuildTarget());
+    }
+
+    [Fact]
+    public void Loading_A_Complex_Shortcut_Fills_The_Kind_And_The_Script()
+    {
+        var slot = new GestureSlotEditor();
+        var program = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" };
+
+        slot.LoadAction(program);
+
+        Assert.Equal(MappingTargetKind.ComplexShortcut, slot.TargetKind);
+        Assert.False(slot.RepeatsClick);
+        Assert.Equal(program.Script, slot.Script);
+        Assert.Equal(program, slot.BuildTarget());
+        Assert.Equal(program, slot.BuildAction());
+
+        var reloaded = new GestureSlotEditor();
+        reloaded.LoadAction(slot.BuildAction());
+
+        Assert.Equal(program, reloaded.BuildTarget());
+    }
+
+    [Fact]
+    public void Reset_Returns_The_Script_To_The_Example()
+    {
+        var slot = new GestureSlotEditor();
+        slot.LoadAction(new ComplexShortcutTarget { Script = "tap F5" });
+
+        slot.Reset();
+
+        Assert.Equal(GestureSlotEditor.ExampleScript, slot.Script);
+        Assert.Equal(MappingTargetKind.KeyPress, slot.TargetKind);
+    }
 }
