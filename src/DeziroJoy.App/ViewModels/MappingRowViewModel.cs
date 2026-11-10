@@ -35,7 +35,9 @@ public partial class MappingRowViewModel : ObservableObject
     /// <summary>
     /// The 单击 line of the row's summary. The click is the mapping's own target, so it has
     /// no off state of its own: only the mapping's enable flag and an explicit 无功能
-    /// target change what this line says.
+    /// target change what this line says. A v1 profile that still carries a complex shortcut
+    /// as the mapping's own target reads as the program here, because that is what the
+    /// mapping's target is.
     /// </summary>
     public string ClickText => !IsEnabled
         ? MappingEditorViewModel.GestureOffOption.Label
@@ -53,13 +55,14 @@ public partial class MappingRowViewModel : ObservableObject
     /// <summary>
     /// The 长按 line. Click auto-repeat and the long-press are mutually exclusive and the
     /// repeat wins, so a repeating click closes this line rather than advertising a
-    /// long-press that never fires. A complex shortcut is the mapping's own target driven
-    /// by a bare long press, so this line names the program - the same readable summary
-    /// the click line carries - rather than the null action that shape requires.
+    /// long-press that never fires. A complex shortcut is the long press's own action, so
+    /// this line names the program; a v1 profile that still carries it as the mapping's own
+    /// target names it here too, because the long press is the only place the program ever
+    /// ran.
     /// </summary>
     public string LongPressText => Gesture is { HasEffectiveLongPress: true } gesture
-        ? Entry.Target is ComplexShortcutTarget complex
-            ? MappingDescriptions.ComplexShortcut(complex)
+        ? Entry.Target is ComplexShortcutTarget legacy
+            ? MappingDescriptions.ComplexShortcut(legacy)
             : Describe(gesture.LongPressAction)
         : MappingEditorViewModel.GestureOffOption.Label;
 

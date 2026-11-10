@@ -1180,9 +1180,33 @@ public class MainWindowViewModelTests
     [Fact]
     public void A_Complex_Shortcut_Row_Names_The_Program_On_Its_Long_Press_Line()
     {
-        // The engine binds the program to the mapping's own target with a bare long press,
-        // so the long-press line names the program - not the null action that shape
-        // requires, which would read as the legacy 重复单击的功能.
+        // The program is the long press's own action, so the click line names the click's
+        // own target and the long-press line names the program - not the null action that
+        // would read as the legacy 重复单击的功能.
+        var row = RowOf(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = 0.50f,
+                    LongPressAction = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+                },
+            },
+            Target = new NoneTarget(),
+        });
+
+        Assert.Equal("无功能", row.ClickText);
+        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.LongPressText);
+        Assert.Equal("已关闭", row.DoubleClickText);
+    }
+
+    [Fact]
+    public void A_v1_Complex_Shortcut_Row_Names_The_Program_On_Both_Lines()
+    {
+        // A profile written before the program became the long press's own action carries
+        // it as the mapping's own target, so the click line names the program too - that is
+        // what the mapping's target is - and the long-press line still names it.
         var row = RowOf(new MappingEntry
         {
             Source = new ButtonBinding(GamepadButton.LeftBumper)
@@ -1387,22 +1411,29 @@ public class MainWindowViewModelTests
         Assert.False(vm.IsEditing);
         var committed = vm.ActiveProfile!.Mappings.Single(
             mapping => mapping.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
-        Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" }, committed.Target);
+        var committedGesture = Assert.IsType<ButtonGesture>(
+            Assert.IsType<ButtonBinding>(committed.Source).Gesture);
+        Assert.Equal(
+            new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+            committedGesture.LongPressAction);
 
         // The mapping row reads the program in plain language, never the record's ToString:
-        // the click line names the mapping's own target and the long-press line names the
-        // program it starts - not the null action that shape requires.
+        // the click line names the click's own target and the long-press line names the
+        // program it starts.
         var row = vm.Mappings.Single(r => r.Entry == committed);
-        Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.ClickText);
+        Assert.Equal("Enter", row.ClickText);
         Assert.Equal("复杂快捷键：持续按住 Alt；每 1 秒点按 Tab", row.LongPressText);
         Assert.DoesNotContain("ComplexShortcutTarget", row.TargetText);
 
         // It survives the store: leave the slot, come back, reopen the mapping.
         await vm.SwitchPresetSlotCommand.ExecuteAsync(2);
-        Assert.DoesNotContain(vm.Mappings, r => r.Entry.Target is ComplexShortcutTarget);
+        Assert.DoesNotContain(
+            vm.Mappings,
+            r => r.Entry.Source is ButtonBinding { Gesture.LongPressAction: ComplexShortcutTarget });
         await vm.SwitchPresetSlotCommand.ExecuteAsync(1);
 
-        var reopened = vm.Mappings.Single(r => r.Entry.Target is ComplexShortcutTarget);
+        var reopened = vm.Mappings.Single(
+            r => r.Entry.Source is ButtonBinding { Gesture.LongPressAction: ComplexShortcutTarget });
         vm.EditMappingCommand.Execute(reopened);
         vm.Editor.SelectedGestureKind = GestureKind.LongPress;
         Assert.Equal("hold Alt\nevery 1s tap Tab", vm.Editor.ActiveComplexShortcutScript);
@@ -1453,7 +1484,9 @@ public class MainWindowViewModelTests
         // a program the engine cannot build never reaches the store or the running engine.
         Assert.True(vm.IsEditing);
         Assert.Equal(mappings, vm.ActiveProfile.Mappings.Count);
-        Assert.DoesNotContain(vm.Mappings, row => row.Entry.Target is ComplexShortcutTarget);
+        Assert.DoesNotContain(
+            vm.Mappings,
+            row => row.Entry.Source is ButtonBinding { Gesture.LongPressAction: ComplexShortcutTarget });
         Assert.Contains("第 2 行", vm.Editor.ComplexShortcutScriptError);
 
         // Cancelling drops the draft entirely.
@@ -1481,7 +1514,8 @@ public class MainWindowViewModelTests
         vm.Editor.SelectedGestureKind = GestureKind.LongPress;
         vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
         vm.CommitEditorCommand.Execute(null);
-        var complexRow = vm.Mappings.Single(row => row.Entry.Target is ComplexShortcutTarget);
+        var complexRow = vm.Mappings.Single(
+            row => row.Entry.Source is ButtonBinding { Gesture.LongPressAction: ComplexShortcutTarget });
 
         // An ordinary double-click mapping, committed the same way.
         vm.AddMappingCommand.Execute(null);
@@ -1531,7 +1565,8 @@ public class MainWindowViewModelTests
         vm.Editor.SelectedGestureKind = GestureKind.LongPress;
         vm.Editor.ActiveTargetKind = MappingTargetKind.ComplexShortcut;
         vm.CommitEditorCommand.Execute(null);
-        var complexRow = vm.Mappings.Single(row => row.Entry.Target is ComplexShortcutTarget);
+        var complexRow = vm.Mappings.Single(
+            row => row.Entry.Source is ButtonBinding { Gesture.LongPressAction: ComplexShortcutTarget });
 
         vm.AddMappingCommand.Execute(null);
         vm.Editor.SelectedButton = GamepadButton.RightBumper;

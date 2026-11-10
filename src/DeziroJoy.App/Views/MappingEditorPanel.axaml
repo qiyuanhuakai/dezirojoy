@@ -230,8 +230,7 @@
                             <RadioButton x:Name="GestureClickTab" Classes="gestureSegment" GroupName="GestureSlots"
                                          Content="单击" IsChecked="{Binding IsClickSelected, Mode=TwoWay}" />
                             <RadioButton x:Name="GestureDoubleClickTab" Classes="gestureSegment" GroupName="GestureSlots"
-                                         Content="双击" IsChecked="{Binding IsDoubleClickSelected, Mode=TwoWay}"
-                                         IsEnabled="{Binding DoubleClickAvailable}" />
+                                         Content="双击" IsChecked="{Binding IsDoubleClickSelected, Mode=TwoWay}" />
                             <RadioButton x:Name="GestureLongPressTab" Classes="gestureSegment" GroupName="GestureSlots"
                                          Content="长按" IsChecked="{Binding IsLongPressSelected, Mode=TwoWay}"
                                          IsEnabled="{Binding LongPressAvailable}" />
@@ -245,20 +244,22 @@
                                IsVisible="{Binding ClickRepeatEnabled}"
                                Text="「长按重复触发」已启用：重复触发与长按互斥，长按手势暂不可用。关闭重复触发后即可配置长按。" />
 
-                    <!-- A running complex shortcut owns the press outright: the engine pairs
-                         the program with a bare long press, so the double-click and click
-                         auto-repeat would each add a second behaviour the engine refuses.
-                         The script itself is authored in the card below the target editor. -->
+                    <!-- A complex shortcut is the long press's own action, so the click and
+                         the double-click keep working beside it. What it cannot coexist
+                         with is whatever would stop the long press from firing the program:
+                         「长按重复触发」 makes the long press inert, so it stays unavailable
+                         and the reason is stated. The script itself is authored in the card
+                         below the target editor. -->
                     <TextBlock x:Name="GestureComplexShortcutHint" Classes="hint" Margin="0,0,0,10"
                                IsVisible="{Binding LongPressRunsComplexShortcut}"
-                               Text="长按正在运行复杂快捷键：该程序独占长按手势，双击与「长按重复触发」暂不可用；脚本在下方「复杂快捷键」卡片中编辑。" />
+                               Text="长按正在运行复杂快捷键：单击与双击不受影响，仍按各自的手势触发；「长按重复触发」暂不可用（重复与长按互斥）。脚本在下方「复杂快捷键」卡片中编辑。" />
 
                     <!-- Auto-repeat belongs to the click alone: it re-fires the click's own
                          target, so it is offered on the click's tab and nowhere else. The
                          wording names the behaviour only - the interval below carries the
                          number, so the label never pins a value the user can change. A long
-                         press running a complex shortcut disarms it: auto-repeat would pair
-                         a second behaviour with the program. -->
+                         press running a complex shortcut disarms it: the repeat would make
+                         the long press inert, so the program could never start. -->
                     <CheckBox x:Name="GestureClickRepeatBox" Content="长按重复触发"
                               IsVisible="{Binding IsClickSelected}"
                               IsEnabled="{Binding LongPressRunsComplexShortcut, Converter={StaticResource Not}}"
@@ -298,7 +299,7 @@
                               IsChecked="{Binding ActiveGestureEnabled, Mode=TwoWay}" />
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ActiveGestureToggleEnabled, Converter={StaticResource Not}}"
-                               Text="长按正在运行复杂快捷键，不能关闭：该程序就是映射的目标，关闭长按后将无法触发它。可取消编辑，或改选其他目标类型。" />
+                               Text="长按正在运行复杂快捷键，不能关闭：该程序由长按触发，关闭长按后将无法触发它。可取消编辑，或改选其他目标类型。" />
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ActiveGestureEnabled, Converter={StaticResource Not}}"
                                Text="手势已关闭：该手势不会触发，双击或长按都只按单击处理。勾选「启用手势」后即可配置它的功能。" />
@@ -438,11 +439,7 @@
                      so the row waits for 启用手势, exactly as the parameters do. -->
                 <StackPanel Margin="0,12,0,0" IsEnabled="{Binding ActiveGestureEnabled}">
                     <CheckBox x:Name="ActiveNoneBox" Content="无功能（不触发任何操作）"
-                              IsEnabled="{Binding ClickIsInert, Converter={StaticResource Not}}"
                               IsChecked="{Binding ActiveIsNone, Mode=TwoWay}" />
-                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                               IsVisible="{Binding ClickIsInert}"
-                               Text="长按正在运行复杂快捷键：快速单击不触发任何操作，因此单击显示为无功能；目标参数暂不可用，改回其他类型后恢复。" />
                     <CheckBox x:Name="ActiveRepeatBox" Content="重复单击的功能（沿用单击的目标）"
                               Margin="0,8,0,0"
                               IsVisible="{Binding ActiveGestureCanBeDisabled}"
@@ -614,14 +611,13 @@
                 </StackPanel>
 
                 <!-- 复杂快捷键. The long press - and only the long press - can run a program:
-                     the engine binds a ComplexShortcutTarget to the mapping's own target with
-                     a bare long press, so the script is authored here and committed as that
-                     shape. The box is a wide multi-line editor over the card's full width,
-                     with the grammar and a working example one click away. Every edit is
-                     parsed live: a failure names the line and column in Chinese, a valid
-                     script reads back as the plain-language summary of what it will do. An
-                     unparseable script blocks 确定 rather than writing a program the engine
-                     cannot build. -->
+                     the script is the long press's own action, so the click target and the
+                     double-click action stay independent of it. The box is a wide multi-line
+                     editor over the card's full width, with the grammar and a working example
+                     one click away. Every edit is parsed live: a failure names the line and
+                     column in Chinese, a valid script reads back as the plain-language summary
+                     of what it will do. An unparseable script blocks 确定 rather than writing
+                     a program the engine cannot build. -->
                 <StackPanel x:Name="ComplexShortcutRow" Margin="0,12,0,0"
                             IsEnabled="{Binding ActiveTargetEditable}"
                             IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=ComplexShortcut}">

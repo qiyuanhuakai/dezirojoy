@@ -10,6 +10,11 @@ namespace DeziroJoy.Core.Tests.Engine;
 /// advanced first by the tick's post-threshold overflow - every held tick advances it by
 /// deltaSeconds, and the release tick stops it and releases the keys it held. All timing
 /// comes from the tick's deltaSeconds; there is no clock.
+/// <para>
+/// The program is the long press's own action, so the click target and the double-click
+/// action stay independent of it: a quick press fires the click, a second press inside the
+/// double-click window fires the double-click, and only the long press runs the program.
+/// </para>
 /// </summary>
 public class ComplexShortcutTests
 {
@@ -23,7 +28,27 @@ public class ComplexShortcutTests
         Mappings = mappings,
     };
 
+    /// <summary>
+    /// The DP31 shape: the program rides in the gesture's long-press action and the click
+    /// keeps a target of its own - 无功能 here, so a quick press emits nothing exactly as
+    /// the v1 shape did.
+    /// </summary>
     private static MappingEntry LongPressComplex(GamepadButton button, string script, float threshold = Threshold)
+        => new()
+        {
+            Source = new ButtonBinding(button)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = threshold,
+                    LongPressAction = new ComplexShortcutTarget { Script = script },
+                },
+            },
+            Target = new NoneTarget(),
+        };
+
+    /// <summary>The v1 shape: the program as the mapping's own target with a bare long press.</summary>
+    private static MappingEntry LegacyLongPressComplex(GamepadButton button, string script, float threshold = Threshold)
         => new()
         {
             Source = new ButtonBinding(button) { Gesture = new ButtonGesture { LongPressThreshold = threshold } },
@@ -261,15 +286,112 @@ public class ComplexShortcutTests
     }
 
     [Fact]
-    public void Releasing_Before_The_Threshold_Starts_Nothing()
+    public void Releasing_Before_The_Threshold_Leaves_The_Program_Unstarted()
     {
         var engine = new MappingEngine(Profile(LongPressComplex(GamepadButton.LeftBumper, UserScript)));
 
         Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
 
-        // The click must not fire the program: a complex shortcut is long-press only.
+        // The click must not fire the program: a complex shortcut is long-press only. The
+        // click itself resolves - it is independent of the program now - but a 无功能
+        // target emits nothing, exactly as the v1 shape did.
         Assert.Empty(engine.Tick(Released, 0.25f));
         Assert.Empty(engine.Tick(Released, 5f));
+    }
+
+    [Fact]
+    public void A_Quick_Press_Fires_The_Clicks_Own_Target_While_The_Program_Waits()
+    {
+        // The click is independent of the program: a press that never reached the long-press
+        // threshold is a click, not an aborted program, so it fires the mapping's own target.
+        var engine = new MappingEngine(Profile(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = Threshold,
+                    LongPressAction = new ComplexShortcutTarget { Script = "hold Alt" },
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        }));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        var click = engine.Tick(Released, 0.25f);
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None),
+            ],
+            click);
+
+        // The program never started, so a later long press runs it from scratch.
+        Assert.Empty(engine.Tick(Released, 1f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        Assert.Equal(
+            new KeyDownCommand(GamepadKey.LeftAlt, KeyModifiers.None),
+            Assert.Single(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)));
+        Assert.Equal(
+            new KeyUpCommand(GamepadKey.LeftAlt, KeyModifiers.None),
+            Assert.Single(engine.Tick(Released, 0.25f)));
+    }
+
+    [Fact]
+    public void The_Program_Runs_Alongside_An_Independent_Click_And_Double_Click()
+    {
+        // All three on one button: the click target, the double-click action and the
+        // long-press program each fire on their own gesture, and nothing double-starts.
+        var engine = new MappingEngine(Profile(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = 0.25f,
+                    LongPressThreshold = Threshold,
+                    DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+                    LongPressAction = new ComplexShortcutTarget { Script = "hold Alt" },
+                },
+            },
+            Target = new KeyPressTarget(GamepadKey.Enter),
+        }));
+
+        // A quick press: the double-click window closes after the release, and the single
+        // fires as a tap - the long press never resolved, so the program stays unstarted.
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None),
+            ],
+            engine.Tick(Released, 0.15f));
+
+        // A second press inside the window fires the double-click's own target.
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.Space, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.Space, KeyModifiers.None),
+            ],
+            engine.Tick(Held(GamepadButton.LeftBumper), 0.05f));
+
+        // A fresh press held on hands the button over to the long press, which runs the
+        // program: Alt goes down on the threshold tick...
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.2f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.1f));
+        Assert.Equal(
+            new KeyDownCommand(GamepadKey.LeftAlt, KeyModifiers.None),
+            Assert.Single(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)));
+
+        // ...and the release tick stops it and hands Alt back.
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        Assert.Equal(
+            new KeyUpCommand(GamepadKey.LeftAlt, KeyModifiers.None),
+            Assert.Single(engine.Tick(Released, 0.25f)));
     }
 
     [Fact]
@@ -325,58 +447,123 @@ public class ComplexShortcutTests
                 Target = new ComplexShortcutTarget { Script = UserScript },
             })));
         Assert.Contains("without a long press", emptyGesture.Message, StringComparison.OrdinalIgnoreCase);
-    }
 
-    [Fact]
-    public void A_Complex_Shortcut_Rejects_Double_Click_And_Click_Auto_Repeat()
-    {
-        // Each of these would fire something else on the same press, which is the
-        // double-trigger v1 avoids by binding complex shortcuts to a bare long press.
-        var doubleClick = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
-            LongPressComplex(GamepadButton.LeftBumper, UserScript) with
+        // The program is the long press's own action now, so an action without a threshold
+        // is refused the same way: there is no long press to run it.
+        var actionWithoutThreshold = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            new MappingEntry
             {
                 Source = new ButtonBinding(GamepadButton.LeftBumper)
                 {
-                    Gesture = new ButtonGesture { LongPressThreshold = Threshold, DoubleClickWindow = 0.25f },
+                    Gesture = new ButtonGesture
+                    {
+                        LongPressAction = new ComplexShortcutTarget { Script = UserScript },
+                    },
                 },
+                Target = new NoneTarget(),
             })));
-        Assert.Contains("双击", doubleClick.Message, StringComparison.Ordinal);
+        Assert.Contains("without a long press", actionWithoutThreshold.Message, StringComparison.OrdinalIgnoreCase);
+    }
 
-        var clickRepeat = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
-            LongPressComplex(GamepadButton.LeftBumper, UserScript) with
+    [Fact]
+    public void A_Complex_Shortcut_Rejects_Click_Auto_Repeat()
+    {
+        // Click auto-repeat makes the long press inert, so the program could never start.
+        var action = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.LeftBumper)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        LongPressThreshold = Threshold,
+                        ClickRepeatInterval = 0.1f,
+                        LongPressAction = new ComplexShortcutTarget { Script = UserScript },
+                    },
+                },
+                Target = new NoneTarget(),
+            })));
+        Assert.Contains("click auto-repeat", action.Message, StringComparison.OrdinalIgnoreCase);
+
+        var legacy = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            LegacyLongPressComplex(GamepadButton.LeftBumper, UserScript) with
             {
                 Source = new ButtonBinding(GamepadButton.LeftBumper)
                 {
                     Gesture = new ButtonGesture { LongPressThreshold = Threshold, ClickRepeatInterval = 0.1f },
                 },
             })));
-        Assert.Contains("click auto-repeat", clickRepeat.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("click auto-repeat", legacy.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public void A_Complex_Shortcut_Rejects_A_Long_Press_Repeat_Interval()
     {
-        // The gesture machine would emit another long-press Tap at the interval, and
-        // UpdateComplexShortcut would treat it as a fresh activation: the script would
-        // re-run (and Start would clear held-key ownership) on every repeat. v1 rejects
-        // the interval outright, so a repeat can neither re-fire nor restart the program.
-        var exception = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
-            LongPressComplex(GamepadButton.LeftBumper, UserScript) with
+        // The gesture machine would emit another long-press Tap at the interval, and the
+        // engine would treat it as a fresh activation: the script would re-run (and Start
+        // would clear held-key ownership) on every repeat. The interval is rejected
+        // outright, so a repeat can neither re-fire nor restart the program.
+        var action = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            new MappingEntry
             {
                 Source = new ButtonBinding(GamepadButton.LeftBumper)
                 {
-                    Gesture = new ButtonGesture { LongPressThreshold = Threshold, LongPressRepeatInterval = 0.5f },
+                    Gesture = new ButtonGesture
+                    {
+                        LongPressThreshold = Threshold,
+                        LongPressRepeatInterval = 0.5f,
+                        LongPressAction = new ComplexShortcutTarget { Script = UserScript },
+                    },
+                },
+                Target = new NoneTarget(),
+            })));
+        Assert.Contains("long-press repeat", action.Message, StringComparison.OrdinalIgnoreCase);
+
+        var legacy = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            LegacyLongPressComplex(GamepadButton.LeftBumper, UserScript) with
+            {
+                Source = new ButtonBinding(GamepadButton.LeftBumper)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        LongPressThreshold = Threshold,
+                        LongPressRepeatInterval = 0.5f,
+                    },
                 },
             })));
-
-        Assert.Contains("long-press repeat", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("long-press repeat", legacy.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void A_Complex_Shortcut_Rejects_A_Gesture_Action()
+    public void A_Complex_Shortcut_Rejects_Being_The_Double_Clicks_Action()
     {
-        var longPressAction = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
-            LongPressComplex(GamepadButton.LeftBumper, UserScript) with
+        // A program only ever runs from the long press; as the double-click's action it
+        // could never start.
+        var exception = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.LeftBumper)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = 0.25f,
+                        DoubleClickAction = new ComplexShortcutTarget { Script = UserScript },
+                    },
+                },
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            })));
+
+        Assert.Contains("long-press program", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_v1_Program_Rejects_A_Second_Gesture_Action()
+    {
+        // The v1 shape is normalized into the long-press action only when the gesture
+        // carries nothing else on the long press; a target-bound program paired with an
+        // action of its own is still refused.
+        var exception = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
+            LegacyLongPressComplex(GamepadButton.LeftBumper, UserScript) with
             {
                 Source = new ButtonBinding(GamepadButton.LeftBumper)
                 {
@@ -387,7 +574,8 @@ public class ComplexShortcutTests
                     },
                 },
             })));
-        Assert.Contains("gesture action", longPressAction.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains("gesture action", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -399,6 +587,74 @@ public class ComplexShortcutTests
         var parse = Assert.IsType<ComplexShortcutParseException>(exception.InnerException);
         Assert.Equal(2, parse.Line);
         Assert.Contains("未知指令", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_v1_Program_Bound_To_The_Mappings_Target_Still_Runs()
+    {
+        // A profile written before the program became the long press's own action: the
+        // engine rewrites it into that shape and runs it exactly as before - a quick press
+        // emits nothing, the long press runs the program, the release lifts the held keys.
+        var engine = new MappingEngine(Profile(LegacyLongPressComplex(GamepadButton.LeftBumper, UserScript)));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        Assert.Empty(engine.Tick(Released, 0.25f)); // quick press: nothing, as before
+        Assert.Empty(engine.Tick(Released, 1f));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f));
+        var activation = engine.Tick(Held(GamepadButton.LeftBumper), 0.25f);
+        Assert.Equal(new KeyDownCommand(GamepadKey.LeftAlt, KeyModifiers.None), Assert.Single(activation));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)); // 0.25s
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)); // 0.5s
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)); // 0.75s
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.Tab, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.Tab, KeyModifiers.None),
+            ],
+            engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)); // 1s
+
+        Assert.Equal(new KeyUpCommand(GamepadKey.LeftAlt, KeyModifiers.None), Assert.Single(engine.Tick(Released, 0.25f)));
+    }
+
+    [Fact]
+    public void A_v1_Program_Paired_With_A_Double_Click_Keeps_Both()
+    {
+        // The double-click could not coexist with a target-bound program before; now that
+        // the program is the long press's own action, the pairing loads and both fire.
+        var engine = new MappingEngine(Profile(LegacyLongPressComplex(GamepadButton.LeftBumper, "hold Alt") with
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper)
+            {
+                Gesture = new ButtonGesture
+                {
+                    DoubleClickWindow = 0.25f,
+                    LongPressThreshold = Threshold,
+                    DoubleClickAction = new KeyPressTarget(GamepadKey.Space),
+                },
+            },
+        }));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.05f));
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.Space, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.Space, KeyModifiers.None),
+            ],
+            engine.Tick(Held(GamepadButton.LeftBumper), 0.05f));
+
+        // A fresh press held on hands the button to the long press, which runs the program.
+        Assert.Empty(engine.Tick(Released, 0.05f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.2f));
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper), 0.1f));
+        Assert.Equal(
+            new KeyDownCommand(GamepadKey.LeftAlt, KeyModifiers.None),
+            Assert.Single(engine.Tick(Held(GamepadButton.LeftBumper), 0.25f)));
+        Assert.Equal(
+            new KeyUpCommand(GamepadKey.LeftAlt, KeyModifiers.None),
+            Assert.Single(engine.Tick(Released, 0.25f)));
     }
 
     [Fact]
