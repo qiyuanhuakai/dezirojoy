@@ -277,6 +277,13 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   默认 `%LOCALAPPDATA%\Programs\DeziroJoy`）；win-x64 在 runner 上静默安装到临时
   目录、断言 `DeziroJoy.exe` 与版本、静默卸载后断言安装目录 / 卸载注册项 / 快捷
   方式全部清理；ISCC 从 PATH 或标准安装路径解析，缺失时报错列出全部尝试过的位置
+- Windows：安装界面为简体中文（Inno Setup 自带的 `ChineseSimplified.isl`，
+  LanguageID $0804，不引入外部翻译文件），英文作为回退保留。静态断言：
+  `.iss` `[Languages]` 同时声明 `compiler:Default.isl` 与
+  `compiler:ChineseSimplified.isl`；任务 / 运行项的自定义文本（桌面图标、
+  安装后运行）经 `{cm:CreateDesktopIcon}` / `{cm:LaunchProgram,...}` 引用语言
+  文件而非硬编码英文；ISCC 目录下的 `ChineseSimplified.isl` 真实存在且定义上述
+  消息键。release.yml 在发布前另有 `.iss` 侧的静态检查，失败不进入编译
 - Linux：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
   元数据与 payload（完整 `/opt/dezirojoy`、`dezirojoy.ico`、desktop 入口），
   断言依赖含版本化 `libicu` 备选项（应用未启用 InvariantGlobalization，缺 ICU
@@ -291,6 +298,12 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
 
 - [ ] Windows：双击 `DeziroJoy-<version>-win-x64-setup.exe`，不弹 UAC，默认目录为
       `%LOCALAPPDATA%\Programs\DeziroJoy`，开始菜单出现 DeziroJoy
+- [ ] Windows：安装向导的语言选择对话框出现，可选「简体中文」或「English」，
+      中文系统下默认选中简体中文
+- [ ] Windows：欢迎、选择安装目录、附加任务、准备安装、安装完成各页面均为简体
+      中文；「创建桌面快捷方式」与「安装后运行 DeziroJoy」显示为中文
+- [ ] Windows：语言选择为 English 时各页面显示英文（回退可用）
+- [ ] Windows：卸载向导同样跟随所选语言显示中文界面
 - [ ] Windows：从开始菜单启动，窗口正常；配置写入 `%APPDATA%\DeziroJoy\profiles\`
 - [ ] Windows：SmartScreen 对未签名安装器的提示符合预期（发布未做代码签名）
 - [ ] Windows：卸载后安装目录、开始菜单与桌面入口消失，`%APPDATA%\DeziroJoy` 配置仍在
