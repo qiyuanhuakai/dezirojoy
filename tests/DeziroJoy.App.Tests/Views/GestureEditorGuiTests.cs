@@ -1420,8 +1420,12 @@ public sealed class GestureEditorGuiTests
         var committed = viewModel.ActiveProfile!.Mappings.First(
             mapping => mapping.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
 
-        Assert.Equal(new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" }, committed.Target);
-        Assert.NotNull(Assert.IsType<ButtonBinding>(committed.Source).Gesture);
+        // The program is the long press's own action; the click keeps its own target.
+        var gesture = Assert.IsType<ButtonGesture>(Assert.IsType<ButtonBinding>(committed.Source).Gesture);
+        Assert.Equal(
+            new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+            gesture!.LongPressAction);
+        Assert.Equal(new KeyPressTarget(GamepadKey.Enter), committed.Target);
     }
 
     [AvaloniaFact]
