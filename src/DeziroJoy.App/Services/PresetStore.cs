@@ -80,8 +80,9 @@ public sealed class PresetStore
     }
 
     /// <summary>
-    /// Removes one slot's stored profile for a device and repairs every Leader mapping that
-    /// still pointed at it, so a delete can never leave a leader key flipping toward a slot
+    /// Removes one slot's stored profile for a device and repairs every Leader reference that
+    /// still pointed at it - the mapping's own target or a button gesture's double-click /
+    /// long-press action - so a delete can never leave a leader key flipping toward a slot
     /// that no longer exists. The slot is gone from <see cref="SlotsInUse"/> the moment this
     /// returns <see cref="PresetDeleteOutcome.Deleted"/>, and stays gone across a restart
     /// because the delete reaches the backing store.
@@ -122,12 +123,30 @@ public sealed class PresetStore
         return PresetDeleteOutcome.Deleted;
     }
 
+    /// <summary>The result of trying to repair one Leader reference against a deleted slot.</summary>
+    private enum LeaderRepair
+    {
+        /// <summary>The candidate is not a Leader naming the deleted slot; leave it untouched.</summary>
+        Untouched,
+
+        /// <summary>The Leader's deleted end was retargeted to a distinct surviving slot.</summary>
+        Retargeted,
+
+        /// <summary>No distinct survivor remains; the Leader cannot flip anywhere and must go.</summary>
+        Dropped,
+    }
+
     /// <summary>
-    /// Rewrites every surviving profile's Leader mapping that named <paramref name="deletedSlot"/>
-    /// so it flips between two slots that still exist. The deleted end is retargeted to the
-    /// lowest surviving slot other than the mapping's surviving end; when only that one
-    /// surviving slot remains the leader has nowhere distinct to flip to, so the mapping is
-    /// dropped. Profiles untouched by the delete are never re-saved.
+    /// Rewrites every surviving profile's Leader reference that named <paramref name="deletedSlot"/>
+    /// so it flips between two slots that still exist. A Leader reference lives in one of three
+    /// places - the mapping's own <see cref="MappingEntry.Target"/>, or a button gesture's
+    /// <see cref="ButtonGesture.DoubleClickAction"/> / <see cref="ButtonGesture.LongPressAction"/> -
+    /// and all three are repaired, because the engine executes gesture actions exactly as it
+    /// executes the mapping's own target. The deleted end is retargeted to the lowest surviving
+    /// slot that keeps the pair distinct; when no distinct survivor remains the reference is
+    /// removed - the whole mapping for a target leader (its <see cref="MappingEntry.Target"/> is
+    /// required), or just the gesture action for a gesture leader (the gesture then re-fires the
+    /// click, its timing and fallback intact). Profiles untouched by the delete are never re-saved.
     /// </summary>
     private void RepairLeaderReferences(string deviceId, int deletedSlot, IReadOnlyList<int> surviving)
     {
@@ -143,32 +162,15 @@ public sealed class PresetStore
             var mappings = new List<MappingEntry>(profile.Mappings.Count);
             foreach (var mapping in profile.Mappings)
             {
-                if (mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader
-                    && (leader.SlotA == deletedSlot || leader.SlotB == deletedSlot))
+                var updated = RepairMapping(mapping, deletedSlot, surviving);
+                if (!ReferenceEquals(updated, mapping))
                 {
                     repaired = true;
-
-                    var other = leader.SlotA == deletedSlot ? leader.SlotB : leader.SlotA;
-                    var retarget = surviving.Where(candidate => candidate != other).DefaultIfEmpty(0).Min();
-                    if (retarget == 0)
-                    {
-                        // No distinct survivor: a leader that would flip a slot against itself
-                        // is dropped rather than written, matching the editor's own refusal.
-                        continue;
-                    }
-
-                    mappings.Add(mapping with
-                    {
-                        Target = leader with
-                        {
-                            SlotA = leader.SlotA == deletedSlot ? retarget : leader.SlotA,
-                            SlotB = leader.SlotB == deletedSlot ? retarget : leader.SlotB,
-                        },
-                    });
                 }
-                else
+
+                if (updated is not null)
                 {
-                    mappings.Add(mapping);
+                    mappings.Add(updated);
                 }
             }
 
@@ -177,6 +179,97 @@ public sealed class PresetStore
                 SaveSlot(deviceId, slot, profile with { Mappings = [.. mappings] });
             }
         }
+    }
+
+    /// <summary>
+    /// Repairs one mapping's Leader references, returning it unchanged when nothing named the
+    /// deleted slot. A target leader with no distinct survivor is unswitchable, so the whole
+    /// mapping is dropped (null); a gesture leader with no distinct survivor loses only its
+    /// action, keeping the gesture's timing and its re-fire-the-click fallback.
+    /// </summary>
+    private static MappingEntry? RepairMapping(MappingEntry mapping, int deletedSlot, IReadOnlyList<int> surviving)
+    {
+        var targetRepair = TryRepairLeader(mapping.Target, deletedSlot, surviving, out var repairedTarget);
+        if (targetRepair == LeaderRepair.Dropped)
+        {
+            return null;
+        }
+
+        var result = mapping;
+        var changed = targetRepair == LeaderRepair.Retargeted;
+        if (changed)
+        {
+            result = result with { Target = repairedTarget! };
+        }
+
+        if (mapping.Source is ButtonBinding { Gesture: { } gesture } button)
+        {
+            var newGesture = gesture;
+            var gestureChanged = false;
+
+            switch (TryRepairLeader(gesture.DoubleClickAction, deletedSlot, surviving, out var repairedDouble))
+            {
+                case LeaderRepair.Retargeted:
+                    newGesture = newGesture with { DoubleClickAction = repairedDouble };
+                    gestureChanged = true;
+                    break;
+                case LeaderRepair.Dropped:
+                    newGesture = newGesture with { DoubleClickAction = null };
+                    gestureChanged = true;
+                    break;
+            }
+
+            switch (TryRepairLeader(gesture.LongPressAction, deletedSlot, surviving, out var repairedLong))
+            {
+                case LeaderRepair.Retargeted:
+                    newGesture = newGesture with { LongPressAction = repairedLong };
+                    gestureChanged = true;
+                    break;
+                case LeaderRepair.Dropped:
+                    newGesture = newGesture with { LongPressAction = null };
+                    gestureChanged = true;
+                    break;
+            }
+
+            if (gestureChanged)
+            {
+                result = result with { Source = button with { Gesture = newGesture } };
+                changed = true;
+            }
+        }
+
+        return changed ? result : mapping;
+    }
+
+    /// <summary>
+    /// Classifies one candidate Leader target against the deleted slot and, when it can be kept,
+    /// produces the retargeted leader. A candidate that is not a Leader naming the deleted slot is
+    /// <see cref="LeaderRepair.Untouched"/>; one that is, is retargeted to the lowest surviving
+    /// slot other than its surviving end, or <see cref="LeaderRepair.Dropped"/> when none remains.
+    /// </summary>
+    private static LeaderRepair TryRepairLeader(
+        MappingTarget? target, int deletedSlot, IReadOnlyList<int> surviving, out MappingTarget? repaired)
+    {
+        repaired = target;
+        if (target is not SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader
+            || (leader.SlotA != deletedSlot && leader.SlotB != deletedSlot))
+        {
+            return LeaderRepair.Untouched;
+        }
+
+        var other = leader.SlotA == deletedSlot ? leader.SlotB : leader.SlotA;
+        var retarget = surviving.Where(candidate => candidate != other).DefaultIfEmpty(0).Min();
+        if (retarget == 0)
+        {
+            return LeaderRepair.Dropped;
+        }
+
+        repaired = leader with
+        {
+            SlotA = leader.SlotA == deletedSlot ? retarget : leader.SlotA,
+            SlotB = leader.SlotB == deletedSlot ? retarget : leader.SlotB,
+        };
+        return LeaderRepair.Retargeted;
     }
 
     /// <summary>
@@ -189,6 +282,14 @@ public sealed class PresetStore
         ArgumentNullException.ThrowIfNull(descriptor);
         ValidateSlot(activeSlot);
 
+        // Slot 1 is the device's own profile and the anchor the rest of the system reads from,
+        // so its absence is the one reliable signal that the device has never been initialized.
+        // Only then is the initial 2..N set materialized; afterwards the device owns its slot
+        // set, and a slot the user deleted stays deleted across a reconnect rather than being
+        // resurrected here on every EngineHost.EnsureRuntime. Only the primary anchor is ever
+        // re-ensured on a later call.
+        var firstMaterialization = LoadSlot(descriptor.DeviceId, MinSlot) is null;
+
         var primary = LoadSlot(descriptor.DeviceId, MinSlot)
             ?? DefaultProfileLibrary.CreateDefault(descriptor);
         if (LoadSlot(descriptor.DeviceId, MinSlot) is null)
@@ -196,18 +297,19 @@ public sealed class PresetStore
             SaveSlot(descriptor.DeviceId, MinSlot, primary);
         }
 
-        for (var slot = MinSlot + 1; slot <= DefaultSlotCount; slot++)
+        if (firstMaterialization)
         {
-            if (LoadSlot(descriptor.DeviceId, slot) is not null)
+            for (var slot = MinSlot + 1; slot <= DefaultSlotCount; slot++)
             {
-                continue;
+                if (LoadSlot(descriptor.DeviceId, slot) is null)
+                {
+                    SaveSlot(descriptor.DeviceId, slot, primary with
+                    {
+                        Name = $"{primary.Name} · 预设 {slot}",
+                        DeviceId = KeyFor(descriptor.DeviceId, slot),
+                    });
+                }
             }
-
-            SaveSlot(descriptor.DeviceId, slot, primary with
-            {
-                Name = $"{primary.Name} · 预设 {slot}",
-                DeviceId = KeyFor(descriptor.DeviceId, slot),
-            });
         }
 
         return LoadSlot(descriptor.DeviceId, activeSlot)

@@ -401,6 +401,100 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Deleting_A_NonActive_Preset_Reloads_The_Repaired_Active_Profile_Locally()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var presets = new PresetStore(store);
+
+        // The active slot 1 carries a leader that flips to slot 3.
+        presets.SaveSlot("xinput:0", 1, new GamepadProfile
+        {
+            Name = "主配置",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 1, SlotB: 3),
+                    Enabled = true,
+                },
+            ],
+        });
+
+        await vm.DeletePresetCommand.ExecuteAsync(3);
+        await vm.DeletePresetCommand.ExecuteAsync(3);
+
+        // Slot 3 is gone, and the active profile's leader was repaired onto a survivor and
+        // reloaded into the running engine and the in-view profile - not left stale.
+        Assert.Equal([1, 2, 4], presets.SlotsInUse("xinput:0"));
+        Assert.Equal(2, LeaderTarget(host.Controllers.Single().Profile)!.SlotB);
+        Assert.Equal(2, LeaderTarget(vm.ActiveProfile!)!.SlotB);
+    }
+
+    [Fact]
+    public async Task The_Gamepad_Can_Move_Along_The_Preset_Strip_And_Activate_Its_Delete()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var presets = new PresetStore(store);
+
+        // The strip's gamepad focus order: each card, then its delete badge, then the add button.
+        Assert.Equal(8, vm.PresetStripFocusCount);
+        Assert.Equal((PresetStripAction.Switch, 1), vm.PresetStripActionAt(0));
+        Assert.Equal((PresetStripAction.Delete, 3), vm.PresetStripActionAt(4));
+        Assert.Equal((PresetStripAction.Add, 0), vm.PresetStripActionAt(7));
+
+        // Park the gamepad focus on slot 3's delete badge, then drive it with the pad: the first
+        // A arms the confirm (the press must not also switch or delete), the second A confirms.
+        vm.PresetStripFocusIndex = 4;
+        PressPad(vm, host, provider, GamepadButtonMask.A);
+        Assert.Equal(4, vm.PresetSlots.Count);
+        Assert.True(vm.PresetSlots.Single(item => item.Slot == 3).IsDeleteArmed);
+
+        PressPad(vm, host, provider, GamepadButtonMask.A);
+        Assert.Equal([1, 2, 4], vm.PresetSlots.Select(item => item.Slot));
+        Assert.Null(presets.LoadSlot("xinput:0", 3));
+    }
+
+    [Fact]
+    public void The_Gamepad_Dpad_Moves_The_Preset_Strip_Focus()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.PresetStripFocusIndex = 0;
+        PressPad(vm, host, provider, GamepadButtonMask.DPadRight);
+        Assert.Equal(1, vm.PresetStripFocusIndex);
+        PressPad(vm, host, provider, GamepadButtonMask.DPadRight);
+        Assert.Equal(2, vm.PresetStripFocusIndex);
+        PressPad(vm, host, provider, GamepadButtonMask.DPadLeft);
+        Assert.Equal(1, vm.PresetStripFocusIndex);
+    }
+
+    private static void PressPad(MainWindowViewModel vm, EngineHost host, FakeGamepadProvider provider, GamepadButtonMask mask)
+    {
+        // Release first so the press is a fresh edge the pad navigation can see.
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        provider.SetState("xinput:0", GamepadState.Create(mask, 0, 0, 0, 0));
+        SampleHelper.Sample(vm, host);
+    }
+
+    private static SpecialKeyTarget? LeaderTarget(GamepadProfile profile)
+        => profile.Mappings.Select(mapping => mapping.Target)
+            .OfType<SpecialKeyTarget>()
+            .FirstOrDefault(target => target.Kind == SpecialKeyKind.Leader);
+
+    [Fact]
     public void Reset_To_Default_Restores_The_Built_In_Profile()
     {
         var (vm, host, provider, _) = CreateHost();

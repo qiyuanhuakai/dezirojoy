@@ -456,6 +456,34 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void A_Reconnect_After_Deleting_A_Default_Slot_Does_Not_Resurrect_It()
+    {
+        var store = new InMemoryProfileStore();
+        var (host, provider, _) = CreateHost(store);
+        var presets = new PresetStore(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        host.RefreshPresence();
+        Assert.Equal([1, 2, 3, 4], presets.SlotsInUse("xinput:0"));
+
+        // Delete a default slot while the device is connected.
+        presets.DeleteSlot("xinput:0", 2);
+
+        // Reconnect: the runtime is torn down and recreated through the real EnsureRuntime path,
+        // which re-runs EnsureDefaults. The deleted default slot must stay deleted - the initial
+        // set is materialized once, on the device's first use, and never again.
+        provider.Remove("xinput:0");
+        host.RefreshPresence();
+        Assert.Empty(host.Controllers);
+
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        host.RefreshPresence();
+
+        Assert.Single(host.Controllers);
+        Assert.Equal([1, 3, 4], presets.SlotsInUse("xinput:0"));
+        Assert.Null(presets.LoadSlot("xinput:0", 2));
+    }
+
+    [Fact]
     public void SwitchPresetSlot_Accepts_A_Slot_Beyond_The_Initial_Four()
     {
         var (host, provider, _) = CreateHost();

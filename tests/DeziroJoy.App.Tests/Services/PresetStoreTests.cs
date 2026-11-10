@@ -502,4 +502,168 @@ public class PresetStoreTests
         Assert.Equal([2], store.SlotsInUse("pad-2"));
         Assert.NotNull(store.LoadSlot("pad-2", 2));
     }
+
+    // ---- One-time default materialization ----------------------------------
+
+    [Fact]
+    public void EnsureDefaults_Does_Not_Resurrect_A_Deleted_Slot()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        var descriptor = new GamepadDescriptor("pad-1", "Xbox Wireless Controller");
+        store.EnsureDefaults(descriptor);
+        Assert.Equal([1, 2, 3, 4], store.SlotsInUse("pad-1"));
+
+        store.DeleteSlot("pad-1", 2);
+        Assert.Equal([1, 3, 4], store.SlotsInUse("pad-1"));
+
+        // A reconnect re-runs EnsureDefaults through EngineHost.EnsureRuntime; it must not
+        // re-materialize the deleted default slot, only ever ensure the primary anchor.
+        store.EnsureDefaults(descriptor);
+        Assert.Equal([1, 3, 4], store.SlotsInUse("pad-1"));
+        Assert.Null(store.LoadSlot("pad-1", 2));
+    }
+
+    [Fact]
+    public void EnsureDefaults_Still_Materializes_The_Initial_Set_For_A_Fresh_Device()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        var descriptor = new GamepadDescriptor("pad-1", "Xbox Wireless Controller");
+
+        store.EnsureDefaults(descriptor);
+
+        Assert.Equal([1, 2, 3, 4], store.SlotsInUse("pad-1"));
+    }
+
+    // ---- Leader repair across target and gesture actions -------------------
+
+    private static GamepadProfile GestureLeaderProfile(string name, string deviceId, int slotA, int slotB, bool longPress)
+    {
+        var action = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: slotA, SlotB: slotB);
+        var gesture = longPress
+            ? new ButtonGesture { LongPressThreshold = ButtonGesture.DefaultLongPressThreshold, LongPressAction = action }
+            : new ButtonGesture { DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow, DoubleClickAction = action };
+
+        return new GamepadProfile
+        {
+            Name = name,
+            DeviceId = deviceId,
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B) { Gesture = gesture },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+    }
+
+    private static SpecialKeyTarget? GestureLeaderAction(GamepadProfile profile, bool longPress)
+        => profile.Mappings
+            .Select(mapping => mapping.Source)
+            .OfType<ButtonBinding>()
+            .Select(binding => binding.Gesture)
+            .Where(gesture => gesture is not null)
+            .Select(gesture => longPress ? gesture!.LongPressAction : gesture!.DoubleClickAction)
+            .OfType<SpecialKeyTarget>()
+            .FirstOrDefault(target => target.Kind == SpecialKeyKind.Leader);
+
+    [Fact]
+    public void DeleteSlot_Repairs_A_Leader_In_A_Double_Click_Action()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, GestureLeaderProfile("第三套", "pad-1", slotA: 2, slotB: 3, longPress: false));
+
+        store.DeleteSlot("pad-1", 2);
+
+        var leader = GestureLeaderAction(store.LoadSlot("pad-1", 3)!, longPress: false);
+        Assert.NotNull(leader);
+        Assert.Equal(1, leader!.SlotA);
+        Assert.Equal(3, leader.SlotB);
+    }
+
+    [Fact]
+    public void DeleteSlot_Repairs_A_Leader_In_A_Long_Press_Action()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, GestureLeaderProfile("第三套", "pad-1", slotA: 2, slotB: 3, longPress: true));
+
+        store.DeleteSlot("pad-1", 2);
+
+        var leader = GestureLeaderAction(store.LoadSlot("pad-1", 3)!, longPress: true);
+        Assert.NotNull(leader);
+        Assert.Equal(1, leader!.SlotA);
+        Assert.Equal(3, leader.SlotB);
+    }
+
+    [Fact]
+    public void DeleteSlot_Drops_A_Gesture_Leader_With_No_Distinct_Survivor()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        // Slot 1's double-click flips between slot 1 and slot 2; deleting slot 2 leaves only slot 1.
+        store.SaveSlot("pad-1", 1, GestureLeaderProfile("主配置", "pad-1", slotA: 1, slotB: 2, longPress: false));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+
+        store.DeleteSlot("pad-1", 2);
+
+        // The leader action is dropped, but the gesture's timing and its re-fire-the-click
+        // fallback survive untouched.
+        Assert.Null(GestureLeaderAction(store.LoadSlot("pad-1", 1)!, longPress: false));
+        var gesture = store.LoadSlot("pad-1", 1)!.Mappings
+            .Select(mapping => mapping.Source).OfType<ButtonBinding>().Single().Gesture;
+        Assert.NotNull(gesture);
+        Assert.True(gesture!.HasDoubleClick);
+        Assert.Null(gesture.DoubleClickAction);
+    }
+
+    [Fact]
+    public void DeleteSlot_Repairs_A_Target_Leader_And_A_Gesture_Leader_Together()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+        store.SaveSlot("pad-1", 1, SlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SlotProfile("第二套", "pad-1"));
+        var both = SlotProfile("第三套", "pad-1") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 2, SlotB: 3),
+                    Enabled = true,
+                },
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                            DoubleClickAction = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 2, SlotB: 3),
+                        },
+                    },
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+        store.SaveSlot("pad-1", 3, both);
+
+        store.DeleteSlot("pad-1", 2);
+
+        var profile = store.LoadSlot("pad-1", 3)!;
+        var targetLeader = profile.Mappings.Select(mapping => mapping.Target)
+            .OfType<SpecialKeyTarget>().Single(target => target.Kind == SpecialKeyKind.Leader);
+        Assert.Equal(1, targetLeader.SlotA);
+        Assert.Equal(3, targetLeader.SlotB);
+
+        var gestureLeader = GestureLeaderAction(profile, longPress: false);
+        Assert.NotNull(gestureLeader);
+        Assert.Equal(1, gestureLeader!.SlotA);
+        Assert.Equal(3, gestureLeader.SlotB);
+    }
 }

@@ -556,6 +556,50 @@ public sealed class MappingEditorPresetPickerTests
     }
 
     [AvaloniaFact]
+    public void The_Gamepad_Reaches_And_Activates_The_Delete_Badge_End_To_End()
+    {
+        var (window, viewModel, host, provider, _) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The window is active with the mapping tab selected, so physical pad input is in scope.
+        viewModel.SetPhysicalInputScope(true);
+
+        var selector = PresetSelector(window);
+
+        // Focus slot 3's delete badge; the view reports its position, so the pad now drives the
+        // strip rather than the gamepad model.
+        var badge = DeleteButton(selector, 3)!;
+        Assert.True(badge.Focus());
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal((PresetStripAction.Delete, 3), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
+
+        // Drive the pad through the real path only - a host tick raises Sampled, the window
+        // dispatches it to the view model, and RunJobs runs that navigation - so each press is
+        // navigated exactly once (SampleHelper.Sample would double it against the window's own
+        // Sampled subscription).
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+        Assert.True(viewModel.PresetSlots.Single(item => item.Slot == 3).IsDeleteArmed);
+
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+        Assert.Equal([1, 2, 4], viewModel.PresetSlots.Select(item => item.Slot));
+    }
+
+    private static void PadStep(EngineHost host, FakeGamepadProvider provider, Window window, IGamepadState state)
+    {
+        provider.SetState(DeviceId, state);
+        host.TickOnce(SampleHelper.Tick);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    [AvaloniaFact]
     public void The_Global_Selector_Is_Not_In_The_Mapping_Editor()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();

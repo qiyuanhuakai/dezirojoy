@@ -47,6 +47,19 @@ public enum MappingOwner
     ResidentDaemon,
 }
 
+/// <summary>Which control of the global preset strip a gamepad focus index names.</summary>
+public enum PresetStripAction
+{
+    /// <summary>A preset card: activating it switches the whole app to that slot.</summary>
+    Switch,
+
+    /// <summary>A card's delete badge: activating it arms, then confirms, the delete.</summary>
+    Delete,
+
+    /// <summary>The add button: activating it creates and switches to a new preset.</summary>
+    Add,
+}
+
 /// <summary>
 /// Main window orchestration: connection state, profile editing, mapping table and
 /// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
@@ -612,10 +625,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    /// The local-engine counterpart of the daemon's delete: removes the slot from the store
-    /// and, when it was the active slot, switches the whole app to a surviving slot first so
-    /// nothing is left aimed at a slot that is gone. The switch runs before the delete, so a
-    /// reload failure rolls the delete back and leaves the slot intact.
+    /// The local-engine counterpart of the daemon's delete, run as one safe transaction: the
+    /// store is repaired and the slot removed, then the affected runtime is reloaded with the
+    /// repaired profile and the in-view profile follows it - so the running engine never keeps a
+    /// stale leader aimed at the deleted slot. Deleting the active slot switches the whole app to
+    /// a surviving slot; a reload failure restores the store from the rollback snapshot and leaves
+    /// the slot intact.
     /// </summary>
     private void PerformPresetDelete(int slot)
     {
@@ -633,35 +648,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         var inUse = _presets.SlotsInUse(deviceId);
 
-        if (slot == ActivePresetSlot)
+        // Capture a rollback snapshot so a failed reload restores the store exactly.
+        var rollback = new Dictionary<int, GamepadProfile>();
+        foreach (var existing in inUse)
         {
-            var fallback = inUse
-                .Where(candidate => candidate != slot && candidate < slot)
-                .DefaultIfEmpty(PresetStore.MinSlot)
-                .Max();
-
-            var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
-            foreach (var connected in _host.Controllers)
+            if (_presets.LoadSlot(deviceId, existing) is { } profile)
             {
-                if (_presets.LoadSlot(connected.Descriptor.DeviceId, fallback) is { } profile)
-                {
-                    profiles.Add(connected.Descriptor.DeviceId, profile);
-                }
+                rollback[existing] = profile;
             }
-
-            try
-            {
-                _host.SwitchPresetSlot(fallback, profiles);
-            }
-            catch (Exception exception)
-            {
-                SetTransferError($"删除预设失败，已保留原槽位：{exception.Message}");
-                return;
-            }
-
-            ActivePresetSlot = fallback;
         }
 
+        var wasActive = slot == ActivePresetSlot;
+
+        // Repair + delete on the store first, so the profile reloaded below is already repaired.
         var outcome = _presets.DeleteSlot(deviceId, slot);
         if (outcome != PresetDeleteOutcome.Deleted)
         {
@@ -671,6 +670,51 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 PresetDeleteOutcome.LastRemaining => "不能删除最后一套预设。",
                 _ => "该槽位没有配置。",
             });
+            return;
+        }
+
+        var activeAfter = _presets.LoadSlot(deviceId, ActivePresetSlot);
+        var activeRepaired = !wasActive
+            && rollback.TryGetValue(ActivePresetSlot, out var activeBefore)
+            && activeAfter is not null
+            && activeBefore != activeAfter;
+
+        try
+        {
+            if (wasActive)
+            {
+                var fallback = inUse
+                    .Where(candidate => candidate != slot && candidate < slot)
+                    .DefaultIfEmpty(PresetStore.MinSlot)
+                    .Max();
+
+                var profiles = new Dictionary<string, GamepadProfile>(StringComparer.Ordinal);
+                foreach (var connected in _host.Controllers)
+                {
+                    if (_presets.LoadSlot(connected.Descriptor.DeviceId, fallback) is { } profile)
+                    {
+                        profiles.Add(connected.Descriptor.DeviceId, profile);
+                    }
+                }
+
+                _host.SwitchPresetSlot(fallback, profiles);
+                ActivePresetSlot = fallback;
+            }
+            else if (activeRepaired && _host.Controllers.Any(c => c.Descriptor.DeviceId == deviceId))
+            {
+                // The active slot is unchanged, but its profile was repaired: reload it into the
+                // running engine so it does not keep the stale leader.
+                _host.Reload(deviceId, activeAfter!);
+            }
+        }
+        catch (Exception exception)
+        {
+            foreach (var (existing, profile) in rollback)
+            {
+                _presets.SaveSlot(deviceId, existing, profile);
+            }
+
+            SetTransferError($"删除预设失败，已保留原槽位：{exception.Message}");
             return;
         }
 
@@ -722,6 +766,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         UpdateLeaderSlotOptions(slots);
+
+        // The strip's controls changed with the slot set, so keep the gamepad focus index inside
+        // the new range rather than leaving it aimed at a control that no longer exists.
+        if (PresetStripFocusIndex >= PresetStripFocusCount)
+        {
+            PresetStripFocusIndex = PresetStripFocusCount - 1;
+        }
     }
 
     /// <summary>Moves the active flag onto the item for <paramref name="slot"/>, if present.</summary>
@@ -752,6 +803,83 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         _presetDeleteArmedSlot = null;
         MarkPresetDeleteArmed();
+    }
+
+    /// <summary>
+    /// The gamepad-focused control in the global preset strip, or -1 when none is. The view
+    /// keeps real focus in step with this and reports focus changes back; while it is set the
+    /// pad drives the strip (see <see cref="NavigateByPhysicalInput"/>) instead of the gamepad
+    /// model, so the strip and its delete badges are reachable by gamepad, not only by Tab.
+    /// </summary>
+    [ObservableProperty]
+    private int _presetStripFocusIndex = -1;
+
+    /// <summary>How many controls the preset strip offers the gamepad, in focus order.</summary>
+    public int PresetStripFocusCount
+        => PresetSlots.Count + PresetSlots.Count(item => item.CanDelete) + 1;
+
+    /// <summary>
+    /// The strip control a focus index names, in the strip's focus order - each card, then its
+    /// delete badge, then the add button - or null when the index is out of range. The view maps
+    /// this to the matching control and back, so the order is defined in exactly one place.
+    /// </summary>
+    public (PresetStripAction Action, int Slot)? PresetStripActionAt(int index)
+    {
+        if (index < 0)
+        {
+            return null;
+        }
+
+        var position = 0;
+        foreach (var item in PresetSlots)
+        {
+            if (index == position++)
+            {
+                return (PresetStripAction.Switch, item.Slot);
+            }
+
+            if (item.CanDelete && index == position++)
+            {
+                return (PresetStripAction.Delete, item.Slot);
+            }
+        }
+
+        return index == position ? (PresetStripAction.Add, 0) : null;
+    }
+
+    /// <summary>Moves the gamepad focus along the strip by <paramref name="delta"/>, clamped to the strip.</summary>
+    public void MovePresetStripFocus(int delta)
+    {
+        var count = PresetStripFocusCount;
+        if (count <= 0)
+        {
+            return;
+        }
+
+        var current = PresetStripFocusIndex < 0 ? (delta < 0 ? count : -1) : PresetStripFocusIndex;
+        PresetStripFocusIndex = Math.Clamp(current + delta, 0, count - 1);
+    }
+
+    /// <summary>Activates the gamepad-focused strip control: switch, delete (with its confirm) or add.</summary>
+    private void ActivatePresetStripFocus()
+    {
+        if (PresetStripActionAt(PresetStripFocusIndex) is not { } action)
+        {
+            return;
+        }
+
+        switch (action.Action)
+        {
+            case PresetStripAction.Switch:
+                _ = SwitchPresetSlot(action.Slot);
+                break;
+            case PresetStripAction.Delete:
+                _ = DeletePreset(action.Slot);
+                break;
+            case PresetStripAction.Add:
+                _ = AddPreset();
+                break;
+        }
     }
 
     /// <summary>
@@ -1549,6 +1677,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             && !IsDeflected(previous.RightStickX, previous.RightStickY);
 
         RememberNavigation(state, deviceId);
+
+        // While a preset-strip control holds focus the pad drives the strip rather than the
+        // gamepad model: D-pad left/right move focus along it and A activates the focused
+        // control (switch / delete-with-confirm / add). This is the gamepad route to the strip
+        // and its delete badges, so they are reachable without the keyboard.
+        if (PresetStripFocusIndex >= 0)
+        {
+            if (buttonEdges.Has(GamepadButton.A))
+            {
+                ActivatePresetStripFocus();
+            }
+            else if (buttonEdges.Has(GamepadButton.DPadLeft))
+            {
+                MovePresetStripFocus(-1);
+            }
+            else if (buttonEdges.Has(GamepadButton.DPadRight))
+            {
+                MovePresetStripFocus(1);
+            }
+
+            return;
+        }
 
         if (NavigationTarget(buttonEdges, extraEdges, leftEdge, rightEdge) is not { } source)
         {
