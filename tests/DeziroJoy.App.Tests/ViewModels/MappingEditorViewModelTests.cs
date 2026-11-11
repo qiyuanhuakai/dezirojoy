@@ -2463,4 +2463,110 @@ public class MappingEditorViewModelTests
         Assert.Equal(MappingTargetKind.KeyPress, editor.TargetKind);
         Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
     }
+
+    // ---- Special-key conflict hints while editing ------------------------------
+
+    [Fact]
+    public void A_Fresh_Draft_Collides_With_Nothing()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+        Assert.Empty(editor.DraftSpecialKeyConflicts);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_With_A_Double_Click_Gesture_Says_So_Live()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+
+        editor.DoubleClickEnabled = true;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("Leader 键", editor.SpecialKeyConflictHint!);
+        Assert.Contains("双击窗口", editor.SpecialKeyConflictHint!);
+
+        // Turning the gesture back off clears the hint: the report follows the draft.
+        editor.DoubleClickEnabled = false;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_With_Click_Repeat_Says_So_Live()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        editor.ClickRepeatEnabled = true;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("长按重复触发", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void The_Draft_Is_Measured_Against_The_Profiles_Other_Mappings()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        // The window view model hands the other mappings in when the edit opens; the entry
+        // being edited is excluded, so a draft is never measured against itself.
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("另一条映射", editor.SpecialKeyConflictHint!);
+        Assert.Contains("Enter", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void Moving_The_Draft_To_Another_Button_Re_Measures_Against_That_Button()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+
+        Assert.True(editor.HasSpecialKeyConflict);
+
+        // The conflicting mapping sits on Back, so arming the draft for A clears the hint.
+        editor.SelectedButton = GamepadButton.A;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+    }
+
+    [Fact]
+    public void A_Precision_Draft_On_A_Gesture_Position_Says_It_Will_Not_Engage()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.LeftStick };
+        editor.ActiveTargetKind = MappingTargetKind.KeyPress;
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Precision;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("不会生效", editor.SpecialKeyConflictHint!);
+    }
 }

@@ -24,6 +24,266 @@ public sealed record SpecialKeyKindOption(SpecialKeyKind Value, string Label);
 public sealed record LeaderSwitchModeOption(LeaderSwitchMode Value, string Label);
 
 /// <summary>
+/// One place where a global special key - a 精准键 or a Leader 键 - collides with another
+/// setting on the same physical button. The two global keys are device-level configuration,
+/// shared across every preset of the device, so a collision on their trigger button is a
+/// configuration defect rather than a per-preset quirk: the mapping row, the 全局特殊键
+/// area and the editor all read the same verdict and say the same thing about it.
+/// </summary>
+/// <param name="Kind">Which global key is at risk.</param>
+/// <param name="Button">The physical button the two settings share.</param>
+/// <param name="Code">The raw code that tells one extra button from another.</param>
+/// <param name="SpecialEntryId">The mapping that carries the global key.</param>
+/// <param name="OtherEntryId">
+/// The other mapping involved, or <see cref="SpecialEntryId"/> itself when the collision is
+/// inside the special key's own mapping - a gesture on it, for instance.
+/// </param>
+/// <param name="Message">
+/// The Chinese hint: which setting collides with which global key, and what the collision
+/// costs at runtime.
+/// </param>
+public sealed record SpecialKeyConflict(
+    SpecialKeyKind Kind,
+    GamepadButton Button,
+    int Code,
+    Guid SpecialEntryId,
+    Guid OtherEntryId,
+    string Message)
+{
+    /// <summary>What the shared button is called, the way every picker names it.</summary>
+    public string ButtonLabel => MappingDescriptions.Button(Button, Code);
+
+    /// <summary>What the global key is called, the way its own picker names it.</summary>
+    public string GlobalKeyLabel => MappingDescriptions.SpecialKey(new SpecialKeyTarget(Kind));
+}
+
+/// <summary>
+/// The conflict rules between the two global special keys and everything else configured on
+/// their trigger buttons. Every rule is stated the way the engine actually behaves - the
+/// gesture machine in <c>ButtonGestureState</c> decides which press resolves to what, and a
+/// precision key engages from the raw button rather than from the mapping loop - so a hint
+/// never warns about a pairing that works and never stays silent about one that does not.
+/// The analysis only reports: fixing a collision stays the user's edit to make.
+/// </summary>
+public static class SpecialKeyConflicts
+{
+    /// <summary>
+    /// Every collision in one mapping list. Mappings are grouped by physical button - the
+    /// button plus the raw code that tells one extra button from another - because a gesture
+    /// or a direction is configuration ON an element, not a second element. A disabled
+    /// mapping never runs, so it never collides; a stick has no gestures to swallow a press
+    /// with, so only buttons are examined.
+    /// </summary>
+    public static IReadOnlyList<SpecialKeyConflict> Analyze(IReadOnlyList<MappingEntry> mappings)
+    {
+        ArgumentNullException.ThrowIfNull(mappings);
+
+        var conflicts = new List<SpecialKeyConflict>();
+        var buttons = new Dictionary<(GamepadButton Button, int Code), List<MappingEntry>>();
+
+        foreach (var mapping in mappings)
+        {
+            if (!mapping.Enabled || mapping.Source is not ButtonBinding binding)
+            {
+                continue;
+            }
+
+            var key = (binding.Button, binding.Code);
+            if (!buttons.TryGetValue(key, out var group))
+            {
+                group = [];
+                buttons.Add(key, group);
+            }
+
+            group.Add(mapping);
+        }
+
+        foreach (var (key, entries) in buttons)
+        {
+            var (button, code) = key;
+            var label = MappingDescriptions.Button(button, code);
+
+            foreach (var entry in entries)
+            {
+                var binding = (ButtonBinding)entry.Source;
+                var gesture = binding.Gesture;
+
+                // A leader key on the click switches from the mapping loop, so any gesture on
+                // the same mapping delays or swallows the switch. A precision key engages
+                // from the raw button instead, so gestures leave it alone.
+                if (entry.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader } && gesture is { } leaderGesture)
+                {
+                    if (leaderGesture.HasDoubleClick)
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Leader,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「Leader 键」设在{label}的单击上，但该按钮还配了双击手势：单击要等双击窗口（{Seconds(ButtonGesture.DefaultDoubleClickWindow)}）结束才切换预设；窗口内按第二次时触发的是双击手势，双击若另配了动作，该次按下不会切换预设。"));
+                    }
+
+                    if (SwallowsClick(leaderGesture))
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Leader,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「Leader 键」设在{label}的单击上，但该按钮的长按配了自己的动作（{MappingDescriptions.Target(leaderGesture.LongPressAction!)}）：快速按下会被长按吞掉，不会切换预设。"));
+                    }
+
+                    if (leaderGesture.HasClickRepeat)
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Leader,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「Leader 键」设在{label}的单击上，但该按钮开启了长按重复触发：按住期间会每隔 {Seconds(leaderGesture.ClickRepeatInterval)} 秒反复切换一次预设。"));
+                    }
+                }
+
+                // A special key on the long press owns the press: a release that reached
+                // neither gesture is discarded, so the entry's own click target - the
+                // mapping a quick press used to fire - becomes unreachable.
+                if (gesture is { HasEffectiveLongPress: true } longPressGesture
+                    && longPressGesture.LongPressAction is SpecialKeyTarget longPressKey
+                    && entry.Target is not NoneTarget and not SpecialKeyTarget)
+                {
+                    var click = MappingDescriptions.Target(entry.Target);
+                    conflicts.Add(new SpecialKeyConflict(
+                        longPressKey.Kind,
+                        button,
+                        code,
+                        entry.Id,
+                        entry.Id,
+                        $"「{MappingDescriptions.SpecialKey(longPressKey)}」设在{label}的长按上，但该按钮的单击映射（{click}）会被长按吞掉：快速按下不再触发{click}，只有长按才触发全局键。"));
+                }
+
+                // Another entry on the same button whose click also fires: one press edge
+                // runs both mappings, so every trigger of the global key drags the other
+                // mapping's output along with it.
+                if (entry.Target is SpecialKeyTarget own)
+                {
+                    foreach (var other in entries)
+                    {
+                        if (ReferenceEquals(other, entry)
+                            || other.Target is NoneTarget
+                            || SwallowsClick(other))
+                        {
+                            continue;
+                        }
+
+                        var otherTarget = MappingDescriptions.Target(other.Target);
+                        conflicts.Add(new SpecialKeyConflict(
+                            own.Kind,
+                            button,
+                            code,
+                            entry.Id,
+                            other.Id,
+                            $"{label}上还有另一条映射（单击：{otherTarget}）：每次按下触发「{MappingDescriptions.SpecialKey(own)}」的同时也会触发{otherTarget}。"));
+                    }
+                }
+
+                // The engine registers a precision key from the mapping's own target alone:
+                // one sitting on a gesture action never joins the button set the slowing
+                // reads, so it engages nothing at all.
+                if (gesture is { } gestureKeys)
+                {
+                    if (gestureKeys.DoubleClickAction is SpecialKeyTarget { Kind: SpecialKeyKind.Precision })
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Precision,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「精准键」设在{label}的双击上不会生效：精准减速只识别设在单击上的精准键，请把它改到单击位置。"));
+                    }
+
+                    if (gestureKeys.LongPressAction is SpecialKeyTarget { Kind: SpecialKeyKind.Precision })
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Precision,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「精准键」设在{label}的长按上不会生效：精准减速只识别设在单击上的精准键，请把它改到单击位置。"));
+                    }
+                }
+            }
+        }
+
+        return conflicts;
+    }
+
+    /// <summary>The collisions that involve one entry, for the mapping row that shows it.</summary>
+    public static IReadOnlyList<SpecialKeyConflict> Involving(
+        IReadOnlyList<SpecialKeyConflict> conflicts,
+        Guid entryId)
+        => conflicts.Where(conflict => conflict.SpecialEntryId == entryId || conflict.OtherEntryId == entryId).ToArray();
+
+    /// <summary>
+    /// The first mapping that carries a special key of one kind, in any of the three
+    /// positions, or null when the profile configures none. The 全局特殊键 area lists one
+    /// row per kind through this; a profile carrying a second key of the same kind keeps it
+    /// reachable through its own mapping row.
+    /// </summary>
+    public static MappingEntry? EntryFor(IReadOnlyList<MappingEntry> mappings, SpecialKeyKind kind)
+        => mappings.FirstOrDefault(entry => KeyOf(entry) is { } key && key.Kind == kind);
+
+    /// <summary>
+    /// The special key one mapping carries, wherever it sits: its own target first - the
+    /// position the engine registers precision from - then the gesture's two actions. Null
+    /// when the mapping carries no global key at all.
+    /// </summary>
+    public static SpecialKeyTarget? KeyOf(MappingEntry entry)
+    {
+        if (entry.Target is SpecialKeyTarget target)
+        {
+            return target;
+        }
+
+        if (entry.Source is ButtonBinding { Gesture: { } gesture })
+        {
+            if (gesture.DoubleClickAction is SpecialKeyTarget doubleClick)
+            {
+                return doubleClick;
+            }
+
+            if (gesture.LongPressAction is SpecialKeyTarget longPress)
+            {
+                return longPress;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// True when a gesture's long press owns the press: a real function of its own - not
+    /// 无功能, and not a complex shortcut program, whose click and double-click stay
+    /// independent of the long press it runs from - makes an early release fire nothing.
+    /// </summary>
+    private static bool SwallowsClick(MappingEntry entry)
+        => entry.Source is ButtonBinding { Gesture: { } gesture } && SwallowsClick(gesture);
+
+    private static bool SwallowsClick(ButtonGesture gesture)
+        => gesture.HasEffectiveLongPress
+        && gesture.HasLongPressFunction
+        && gesture.LongPressAction is not ComplexShortcutTarget;
+
+    /// <summary>A pinned timing as the user reads it: 0.25 秒, never 0.25000012 秒.</summary>
+    private static string Seconds(float seconds)
+        => $"{seconds.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)} 秒";
+}
+
+/// <summary>
 /// Editing surface for one mapping: pick the source (button or stick) and the target
 /// (single key, combo, mouse button, stick-to-mouse, stick-to-wheel, special key, or the
 /// 复杂快捷键 program the long press runs).
@@ -270,15 +530,15 @@ public partial class MappingEditorViewModel : ObservableObject
     /// </summary>
     public IReadOnlyList<PrecisionModeOption> SpecialPrecisionModeOptions { get; } =
     [
-        new(PrecisionMode.Hold, "一直按住才触发"),
-        new(PrecisionMode.Toggle, "按一下启用，再按一下取消"),
+        new(PrecisionMode.Hold, MappingDescriptions.PrecisionModeLabel(PrecisionMode.Hold)),
+        new(PrecisionMode.Toggle, MappingDescriptions.PrecisionModeLabel(PrecisionMode.Toggle)),
     ];
 
     /// <summary>The leader switch modes, for the picker.</summary>
     public IReadOnlyList<LeaderSwitchModeOption> SpecialSwitchModeOptions { get; } =
     [
-        new(LeaderSwitchMode.Press, "按下切换"),
-        new(LeaderSwitchMode.Hold, "按住切换"),
+        new(LeaderSwitchMode.Press, MappingDescriptions.LeaderSwitchModeLabel(LeaderSwitchMode.Press)),
+        new(LeaderSwitchMode.Hold, MappingDescriptions.LeaderSwitchModeLabel(LeaderSwitchMode.Hold)),
     ];
 
     /// <summary>
@@ -379,6 +639,59 @@ public partial class MappingEditorViewModel : ObservableObject
     public bool SpecialKeySlotConflict => ActiveTargetKind == MappingTargetKind.SpecialKey
         && ActiveSpecialKind == SpecialKeyKind.Leader
         && ActiveSpecialSlotA == ActiveSpecialSlotB;
+
+    /// <summary>
+    /// The profile's other mappings, handed in by the window view model when an edit opens.
+    /// They exist for the conflict hints alone: a special key this draft configures collides
+    /// with what else sits on the same physical button, and the analysis needs to see it.
+    /// The entry being edited is excluded, so the draft is never measured against itself.
+    /// </summary>
+    [ObservableProperty]
+    private IReadOnlyList<MappingEntry> _otherMappings = [];
+
+    /// <summary>
+    /// Every collision the current draft has with the profile's other mappings on the same
+    /// button - its own gestures swallowing a leader switch, another mapping firing beside
+    /// the global key, a precision key the engine would never engage. Recomputed on every
+    /// draft edit and every source move, so the hint below is live while the user configures.
+    /// </summary>
+    public IReadOnlyList<SpecialKeyConflict> DraftSpecialKeyConflicts { get; private set; } = [];
+
+    /// <summary>True while the draft collides with something, so the hint has something to say.</summary>
+    public bool HasSpecialKeyConflict => DraftSpecialKeyConflicts.Count > 0;
+
+    /// <summary>
+    /// The collisions as one Chinese paragraph, each sentence naming the setting, the global
+    /// key it collides with and what the collision costs. Hints only: the draft is the user's
+    /// to keep or change, so nothing here rewrites it.
+    /// </summary>
+    public string? SpecialKeyConflictHint => DraftSpecialKeyConflicts.Count > 0
+        ? string.Join(" ", DraftSpecialKeyConflicts.Select(conflict => conflict.Message))
+        : null;
+
+    /// <summary>
+    /// Re-reads the draft's collisions. Runs from <see cref="NotifyActiveSlotChanged"/> - the
+    /// one chokepoint every slot edit, flag change and switcher move already passes through -
+    /// and from the source handlers, so moving the edit to another button re-measures against
+    /// that button's mappings instead of the previous one's.
+    /// </summary>
+    private void RefreshSpecialKeyConflicts()
+    {
+        var draft = BuildEntry();
+        var measured = new List<MappingEntry>(OtherMappings.Count + 1) { draft };
+        measured.AddRange(OtherMappings);
+
+        var conflicts = SpecialKeyConflicts.Analyze(measured);
+        if (conflicts.SequenceEqual(DraftSpecialKeyConflicts))
+        {
+            return;
+        }
+
+        DraftSpecialKeyConflicts = conflicts;
+        OnPropertyChanged(nameof(DraftSpecialKeyConflicts));
+        OnPropertyChanged(nameof(HasSpecialKeyConflict));
+        OnPropertyChanged(nameof(SpecialKeyConflictHint));
+    }
 
     /// <summary>The active slot's stick-to-wheel settings.</summary>
     public ScrollStickSettings ActiveScrollSettings
@@ -1362,6 +1675,10 @@ public partial class MappingEditorViewModel : ObservableObject
         // The optional key list is collapsed on every editor, so a reloaded mapping opens on
         // the compact surface rather than wherever the previous edit left the list.
         KeyPickerExpanded = false;
+
+        // A load lands the whole draft at once, so the conflict hints are re-measured once
+        // here rather than left to whatever the individual setters happened to raise.
+        RefreshSpecialKeyConflicts();
     }
 
     public void Reset()
@@ -1397,6 +1714,8 @@ public partial class MappingEditorViewModel : ObservableObject
         // option is often unchanged by a reset - the default key is the default key - and the
         // follow in SetActiveSelectedKeyOption would then never run, so it is called directly.
         FollowActiveKeyCategory(CurrentActiveKeyOption());
+
+        RefreshSpecialKeyConflicts();
     }
 
     /// <summary>
@@ -1536,6 +1855,8 @@ public partial class MappingEditorViewModel : ObservableObject
     [RelayCommand]
     private void ToggleCaptureKey() => IsCapturingKey = !IsCapturingKey;
 
+    partial void OnOtherMappingsChanged(IReadOnlyList<MappingEntry> value) => RefreshSpecialKeyConflicts();
+
     partial void OnSourceIsStickChanged(bool value)
     {
         OnPropertyChanged(nameof(SourceKind));
@@ -1573,12 +1894,14 @@ public partial class MappingEditorViewModel : ObservableObject
 
         SetSelectedButtonOption(CurrentOption());
         OnPropertyChanged(nameof(SourceDescription));
+        RefreshSpecialKeyConflicts();
     }
 
     partial void OnSelectedExtraCodeChanged(int value)
     {
         SetSelectedButtonOption(CurrentOption());
         OnPropertyChanged(nameof(SourceDescription));
+        RefreshSpecialKeyConflicts();
     }
 
     partial void OnSelectedStickChanged(GamepadStick value)
@@ -1792,6 +2115,10 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveGestureName));
         OnPropertyChanged(nameof(ActiveTargetDescription));
         OnPropertyChanged(nameof(ActiveTargetEditable));
+
+        // The conflict hints ride the same chokepoint: every draft edit re-measures the
+        // draft against the profile's other mappings on its button.
+        RefreshSpecialKeyConflicts();
 
         // The complex-shortcut surface: which tab offers the kind, whether the script card
         // is armed, and what its validation line says.

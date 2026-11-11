@@ -175,6 +175,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<MappingRowViewModel> Mappings { get; } = [];
 
     /// <summary>
+    /// The two global special keys as the 按键配置 top area shows them: 精准键 and Leader 键,
+    /// one row each, configured or not. They are device-level configuration - shared across
+    /// every preset of the device - so they lead the page above the per-preset mapping list
+    /// instead of being searched for inside it, and every collision on their buttons is
+    /// reported beside them. Rebuilt on every refresh, so an edit, a preset switch or a
+    /// shared-key fan-out re-lists them immediately.
+    /// </summary>
+    public ObservableCollection<GlobalSpecialKeyItem> SpecialKeys { get; } = [];
+
+    /// <summary>
     /// The preset slots of the device in scope, one bindable item per slot in ascending
     /// order. The selector iterates this, so the initial four and any slot the user adds
     /// appear here without the view knowing a fixed count.
@@ -1249,6 +1259,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void AddMapping()
     {
+        Editor.OtherMappings = ActiveProfile?.Mappings.ToArray() ?? [];
         Editor.Reset();
         _editingEntry = null;
         IsEditing = true;
@@ -1257,9 +1268,35 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void EditMapping(MappingRowViewModel row)
     {
+        // The editor's conflict hints measure the draft against the profile's other
+        // mappings, so they are handed in before the draft loads - the entry being edited
+        // excluded, or the draft would be measured against the very mapping it replaces.
+        Editor.OtherMappings = ActiveProfile?.Mappings
+            .Where(mapping => mapping.Id != row.Entry.Id)
+            .ToArray() ?? [];
         Editor.LoadFrom(row.Entry);
         _editingEntry = row.Entry;
         IsEditing = true;
+    }
+
+    /// <summary>
+    /// Opens the mapping behind one 全局特殊键 row in the editor, exactly as clicking that
+    /// mapping's row in the list does: the editing interaction stays the one the mapping
+    /// editor already has. A kind the device does not configure has no mapping to open, so
+    /// its row carries no affordance - the guidance beside it says how to configure one.
+    /// </summary>
+    [RelayCommand]
+    private void EditSpecialKey(GlobalSpecialKeyItem item)
+    {
+        if (item.MappingId is not { } id)
+        {
+            return;
+        }
+
+        if (Mappings.FirstOrDefault(row => row.Entry.Id == id) is { } row)
+        {
+            EditMapping(row);
+        }
     }
 
     [RelayCommand]
@@ -1912,6 +1949,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 ActiveController = null;
                 ActiveProfile = null;
                 Mappings.Clear();
+                RefreshSpecialKeys([]);
                 MouseSensitivity.Reset();
                 ScrollSensitivity.Reset();
             }
@@ -2341,14 +2379,54 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         Mappings.Clear();
 
-        if (ActiveProfile is null)
+        // One analysis serves every surface: the rows carry the collisions they are involved
+        // in, and the 全局特殊键 area carries the ones on each global key's buttons.
+        var conflicts = ActiveProfile is { } profile
+            ? SpecialKeyConflicts.Analyze(profile.Mappings)
+            : [];
+
+        if (ActiveProfile is { } active)
         {
-            return;
+            foreach (var entry in active.Mappings)
+            {
+                Mappings.Add(new MappingRowViewModel(
+                    entry,
+                    row => EditMapping(row),
+                    row => { _ = DeleteMapping(row); },
+                    ToggleMappingEnabled,
+                    SpecialKeyConflicts.Involving(conflicts, entry.Id)));
+            }
         }
 
-        foreach (var entry in ActiveProfile.Mappings)
+        RefreshSpecialKeys(conflicts);
+    }
+
+    /// <summary>
+    /// Re-lists the two global special keys above the mapping list: 精准键 and Leader 键,
+    /// one row each, in that order. A kind the device configures names its trigger button
+    /// and how it engages; one it does not still takes its row, so the area says where the
+    /// key would live rather than looking like a feature that is missing. Every collision of
+    /// the kind rides along, whatever button carries it.
+    /// </summary>
+    private void RefreshSpecialKeys(IReadOnlyList<SpecialKeyConflict> conflicts)
+    {
+        IReadOnlyList<MappingEntry> mappings = ActiveProfile?.Mappings ?? [];
+
+        GlobalSpecialKeyItem ItemFor(SpecialKeyKind kind) => new(
+            kind,
+            SpecialKeyConflicts.EntryFor(mappings, kind),
+            conflicts.Where(conflict => conflict.Kind == kind).ToArray());
+
+        var items = new[]
         {
-            Mappings.Add(new MappingRowViewModel(entry, row => EditMapping(row), row => { _ = DeleteMapping(row); }, ToggleMappingEnabled));
+            ItemFor(SpecialKeyKind.Precision),
+            ItemFor(SpecialKeyKind.Leader),
+        };
+
+        SpecialKeys.Clear();
+        foreach (var item in items)
+        {
+            SpecialKeys.Add(item);
         }
     }
 }
@@ -2393,4 +2471,123 @@ public sealed partial class PresetSlotItem : ObservableObject
     public string DeleteTip => IsDeleteArmed ? "再次点击确认删除" : "删除此预设";
 
     partial void OnIsDeleteArmedChanged(bool value) => OnPropertyChanged(nameof(DeleteTip));
+}
+
+/// <summary>
+/// One global special key as the 按键配置 top area shows it: 精准键 or Leader 键, the button
+/// that triggers it, how it engages, and every collision on that kind's buttons. The two
+/// keys are device-level configuration - shared across every preset of the device - which is
+/// why the area lists them above the per-preset mapping list: they are looked for by kind,
+/// not hunted for inside one preset's rows.
+/// <para>
+/// A kind the device does not configure still takes its row: the area is where the user
+/// looks for the key, and a row that says 未配置 with the way to configure it answers the
+/// question a missing section would not. Editing stays where it always was - the mapping
+/// editor - and the row's 编辑 affordance opens exactly that mapping.
+/// </para>
+/// </summary>
+public sealed class GlobalSpecialKeyItem
+{
+    public GlobalSpecialKeyItem(
+        SpecialKeyKind kind,
+        MappingEntry? entry,
+        IReadOnlyList<SpecialKeyConflict> conflicts)
+    {
+        Kind = kind;
+        Entry = entry;
+        Conflicts = conflicts;
+    }
+
+    public SpecialKeyKind Kind { get; }
+
+    /// <summary>The mapping that carries the key, or null when this kind is not configured.</summary>
+    public MappingEntry? Entry { get; }
+
+    /// <summary>Every collision on this kind's buttons, whatever entry carries each one.</summary>
+    public IReadOnlyList<SpecialKeyConflict> Conflicts { get; }
+
+    /// <summary>True when the device configures this kind at all.</summary>
+    public bool IsConfigured => Entry is not null;
+
+    /// <summary>The configured mapping's id, for the 编辑 affordance; null when unconfigured.</summary>
+    public Guid? MappingId => Entry?.Id;
+
+    /// <summary>What the kind is called, the way its own picker calls it.</summary>
+    public string Title => Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
+
+    /// <summary>
+    /// What the key does today: the trigger button, the gesture position it sits on when it
+    /// is not the click, and how it engages - 未配置 when the device carries none.
+    /// </summary>
+    public string Summary => Entry is { } entry ? Describe(entry) : "未配置";
+
+    /// <summary>
+    /// How to configure the kind when it is not configured yet: the way the mapping editor
+    /// reaches it, stated beside the empty row so the next step is never guesswork. The
+    /// summary line above already says 未配置, so this starts at the doing.
+    /// </summary>
+    public string Guide => $"在手柄模型上点击一个按键，把目标类型设为「特殊键」、子类型选「{Title}」即可。";
+
+    /// <summary>True while this kind's buttons carry a collision.</summary>
+    public bool HasConflicts => Conflicts.Count > 0;
+
+    /// <summary>The collisions as one wrapped paragraph; hints only, never an automatic fix.</summary>
+    public string? ConflictHint => Conflicts.Count > 0
+        ? string.Join(" ", Conflicts.Select(conflict => conflict.Message))
+        : null;
+
+    /// <summary>
+    /// The summary of one configured key. The position is named only when the key is not the
+    /// click, because the click is the ordinary case and naming it would be noise; the engage
+    /// wording is the picker's own, so the area and the editor never name a mode differently.
+    /// </summary>
+    private static string Describe(MappingEntry entry)
+    {
+        var target = SpecialKeyConflicts.KeyOf(entry);
+        if (target is null)
+        {
+            return "未配置";
+        }
+
+        var position = PositionOf(entry);
+        var source = MappingDescriptions.Source(entry.Source);
+        var engage = target.Kind == SpecialKeyKind.Leader
+            ? $"{MappingDescriptions.LeaderSwitchModeLabel(target.SwitchMode)}：预设 {target.SlotA} ↔ {target.SlotB}"
+            : MappingDescriptions.PrecisionModeLabel(target.PrecisionMode);
+        var disabled = entry.Enabled ? string.Empty : "已禁用 · ";
+
+        return position is null
+            ? $"{disabled}{source} · {engage}"
+            : $"{disabled}{source} · {position} · {engage}";
+    }
+
+    /// <summary>
+    /// The gesture position the key sits on, or null when it is the mapping's own click.
+    /// The priority matches <see cref="SpecialKeyConflicts.KeyOf"/> - the click first, then
+    /// the double-click, then the long press - so the position named is the one the target
+    /// came from. A key the engine would never engage still reads as configured here; that
+    /// verdict is the conflict hint's to give, not the summary's.
+    /// </summary>
+    private static string? PositionOf(MappingEntry entry)
+    {
+        if (entry.Target is SpecialKeyTarget)
+        {
+            return null;
+        }
+
+        if (entry.Source is ButtonBinding { Gesture: { } gesture })
+        {
+            if (gesture.DoubleClickAction is SpecialKeyTarget)
+            {
+                return "双击";
+            }
+
+            if (gesture.LongPressAction is SpecialKeyTarget)
+            {
+                return "长按";
+            }
+        }
+
+        return null;
+    }
 }

@@ -214,6 +214,17 @@
         <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
 
+                <!-- A collision between this draft and a global special key on the same
+                     button, stated while the user configures: which setting fights which
+                     global key, and what it costs at runtime. It leads the editor body
+                     because the collision can belong to any gesture - the switcher below
+                     only picks which one is being edited. Hints only: nothing here rewrites
+                     the draft, so a deliberate pairing survives with its warning attached. -->
+                <TextBlock x:Name="SpecialKeyConflictHint" Classes="hint" Margin="0,0,0,10"
+                           TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                           IsVisible="{Binding HasSpecialKeyConflict}"
+                           Text="{Binding SpecialKeyConflictHint}" />
+
                 <!-- The switcher. One segmented control where all three gestures are equally
                      reachable - the double-click and the long-press are peers of the click,
                      not extras buried under it. It leads the editor, so the gesture is chosen
