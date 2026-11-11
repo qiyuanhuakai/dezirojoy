@@ -582,13 +582,18 @@ public partial class MainWindow : Window
         var provider = PlatformFactory.TryCreateProvider(out var gamepadProvider)
             ? gamepadProvider
             : new NoGamepadProvider();
-        var sink = PlatformFactory.TryCreateSink(out var outputSink, out _)
+        var sinkCreated = PlatformFactory.TryCreateSink(out var outputSink, out var sinkError);
+        var sink = sinkCreated
             ? outputSink
             : new NullOutputSink();
         var host = new EngineHost(provider, sink, store);
 
         // The design-time factory feeds the view model a settings service too, so the
         // 劫持手柄按键 preference behaves here exactly as it does in the running app.
-        return (new MainWindowViewModel(host, store, settings: new ThemeService()), host);
+        // The sink failure travels with it: a NullOutputSink degradation used to be
+        // invisible here, which is how "mapping does nothing" reached users.
+        return (
+            new MainWindowViewModel(host, store, settings: new ThemeService(), sinkError: sinkCreated ? null : sinkError),
+            host);
     }
 }
