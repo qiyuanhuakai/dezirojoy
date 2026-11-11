@@ -641,13 +641,13 @@ public class ButtonGestureTests
         Assert.Equal(new KeyDownCommand(GamepadKey.Space, KeyModifiers.None), fired[0]);
         Assert.Equal(new KeyUpCommand(GamepadKey.Space, KeyModifiers.None), fired[1]);
 
-        // The long-press action owns the hold, so the single never fires.
+        // The long press already resolved, so the single stays cancelled.
         Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
         Assert.Empty(engine.Tick(Released, 0.1f));
     }
 
     [Fact]
-    public void Long_Press_Action_Released_Before_The_Threshold_Fires_Nothing()
+    public void Long_Press_Action_Released_Before_The_Threshold_Fires_The_Single()
     {
         var engine = new MappingEngine(Profile(Gestured(
             GamepadButton.B,
@@ -656,9 +656,12 @@ public class ButtonGestureTests
 
         Assert.Empty(engine.Tick(Held(GamepadButton.B), 0.1f));
 
-        // The press was consumed by the pending long-press: neither the long-press action
-        // nor the single-click action fires.
-        Assert.Empty(engine.Tick(Released, 0.1f));
+        // The long-press action never consumes the press: a release that reached neither
+        // gesture is a single, so the click fires and the long-press action stays unstarted.
+        var tap = engine.Tick(Released, 0.1f);
+        Assert.Equal(2, tap.Count);
+        Assert.Equal(new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None), tap[0]);
+        Assert.Equal(new KeyUpCommand(GamepadKey.Enter, KeyModifiers.None), tap[1]);
         Assert.Empty(engine.Tick(Released, 0.5f));
     }
 

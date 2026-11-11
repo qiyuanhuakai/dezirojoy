@@ -87,7 +87,7 @@ public readonly record struct GestureStep(GestureAction Action, GestureKind Kind
 ///   <item><description><b>ClickPending</b> --second press inside the window--&gt; Idle, firing the double-click.</description></item>
 ///   <item><description><b>ClickPending</b> --window expires, still held--&gt; LongPressPending (长按 still ahead), ClickRepeating (click auto-repeat, firing the click now), or Holding (单击 as a hold).</description></item>
 ///   <item><description><b>ClickPending</b> --window expires, released--&gt; Idle, firing the single as a tap.</description></item>
-///   <item><description><b>LongPressPending</b> --release before the threshold--&gt; Idle, firing the single as a tap, or nothing at all when the long-press carries a real function of its own (a complex shortcut program does not count - see below).</description></item>
+///   <item><description><b>LongPressPending</b> --release before the threshold--&gt; Idle, firing the single as a tap: no long-press action consumes the press (see below).</description></item>
 ///   <item><description><b>LongPressPending</b> --threshold reached--&gt; LongPressActive, firing the long-press.</description></item>
 ///   <item><description><b>Holding</b> --release--&gt; Idle, ending the hold.</description></item>
 ///   <item><description><b>LongPressActive</b> --every repeat interval--&gt; fire the long-press again; --release--&gt; Idle.</description></item>
@@ -106,13 +106,12 @@ public readonly record struct GestureStep(GestureAction Action, GestureKind Kind
 /// contended. The click auto-repeat wins the both-configured case deterministically.
 /// </para>
 /// <para>
-/// A long-press that carries its own action consumes the press: releasing before the threshold
-/// fires nothing, because the button now has two functions and a press that reached neither is
-/// discarded rather than guessed at. Without an action the long-press stays a pure timing
-/// modifier on the single, so an early release still fires the single exactly as it always did.
-/// A <see cref="ComplexShortcutTarget"/> long-press action is the exception: the program runs
-/// from the long press, but the click and the double-click stay independent of it, so an early
-/// release still fires the single - a quick press is a click, never an aborted program.
+/// No long-press action consumes the press: a release before the threshold always fires the
+/// single, whatever the long-press action is. The press that reached the threshold fired the
+/// long press on an earlier held tick, so a release before it reached neither gesture and is a
+/// single - the long-press action, a <see cref="ComplexShortcutTarget"/> program included,
+/// simply never starts. A quick press is therefore a click, never an aborted program, and the
+/// three gestures coexist without swallowing one another.
 /// </para>
 /// <para>
 /// With no gesture configured (or nothing enabled) the machine takes the zero-latency path:
@@ -282,14 +281,12 @@ public sealed class ButtonGestureState
                 {
                     Phase = GesturePhase.Idle;
 
-                    // A long-press with a real function of its own owns the press: a release
-                    // that reached neither gesture is discarded rather than guessed at. A
-                    // NoneTarget action is 无功能, not a second function, so it does not
-                    // consume - and neither does a complex shortcut program, whose click and
-                    // double-click stay independent of the long press it runs from.
-                    return gesture.HasLongPressFunction && gesture.LongPressAction is not ComplexShortcutTarget
-                        ? GestureStep.None
-                        : GestureStep.Tap(GestureKind.Click);
+                    // No long-press action consumes the press: a release that reached the
+                    // threshold would have fired the long press on an earlier held tick, so
+                    // this press reached neither gesture and is a single. The long-press
+                    // action - a complex shortcut program included - simply never starts,
+                    // which is why a quick press is a click and never an aborted program.
+                    return GestureStep.Tap(GestureKind.Click);
                 }
 
                 if (Reached(Elapsed, gesture.LongPressThreshold))
