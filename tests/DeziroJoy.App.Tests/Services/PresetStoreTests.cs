@@ -1,5 +1,6 @@
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using Xunit;
@@ -1272,5 +1273,165 @@ public class PresetStoreTests
         {
             Assert.Equal(repaired, LeaderTarget(store.LoadSlot("pad-1", slot)!));
         }
+    }
+
+    // ---- Complex shortcuts must never be persisted into an engine-rejected shape ----
+
+    private static MappingEntry V1ComplexShortcutEntry(GamepadButton button, float threshold = 0.50f)
+        => new()
+        {
+            Source = new ButtonBinding(button)
+            {
+                Gesture = new ButtonGesture { LongPressThreshold = threshold },
+            },
+            Target = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+            Enabled = true,
+        };
+
+    private static MappingEntry CurrentComplexShortcutEntry(GamepadButton button, float threshold = 0.50f)
+        => new()
+        {
+            Source = new ButtonBinding(button)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = threshold,
+                    LongPressAction = new ComplexShortcutTarget { Script = "hold Alt\nevery 1s tap Tab" },
+                },
+            },
+            Target = new NoneTarget(),
+            Enabled = true,
+        };
+
+    private static MappingEntry LongPressLeaderEntry(GamepadButton button, float threshold = 0.50f)
+        => new()
+        {
+            Source = new ButtonBinding(button)
+            {
+                Gesture = new ButtonGesture { LongPressThreshold = threshold, LongPressAction = LeaderKey },
+            },
+            Target = new NoneTarget(),
+            Enabled = true,
+        };
+
+    private static GamepadProfile ComplexShortcutSlotProfile(string name, string deviceId, MappingEntry complex)
+        => new()
+        {
+            Name = name,
+            DeviceId = deviceId,
+            Layout = GamepadLayout.Xbox,
+            Mappings = [complex],
+        };
+
+    private static float LongPressThresholdOf(GamepadProfile profile)
+        => Assert.IsType<ButtonBinding>(Assert.Single(profile.Mappings).Source).Gesture!.LongPressThreshold;
+
+    [Fact]
+    public void SyncSpecialKeys_Over_A_V1_Complex_Shortcut_Persists_A_Shape_Every_Slot_Can_Build()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = ComplexShortcutSlotProfile("主配置", "pad-1", LongPressLeaderEntry(GamepadButton.Back));
+        store.SaveSlot("pad-1", 1, canonical);
+
+        // Slot 2 still stores the v1 shape: the program as the mapping's own target with a
+        // bare long press. The engine normalizes that in memory and never writes it back, so
+        // the fan-out has to keep the persisted result engine-valid itself.
+        store.SaveSlot("pad-1", 2, ComplexShortcutSlotProfile(
+            "第二套", "pad-1", V1ComplexShortcutEntry(GamepadButton.Back)));
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        foreach (var slot in new[] { 1, 2 })
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+
+            // The whole point: what landed in the store is a shape the engine builds.
+            _ = new MappingEngine(profile);
+
+            var entry = Assert.Single(profile.Mappings);
+            Assert.Equal(LeaderKey, Assert.IsType<ButtonBinding>(entry.Source).Gesture!.LongPressAction);
+            Assert.IsType<NoneTarget>(entry.Target);
+        }
+    }
+
+    [Fact]
+    public void CanonicalizeSpecialKeys_Over_A_V1_Complex_Shortcut_Persists_A_Shape_Every_Slot_Can_Build()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, ComplexShortcutSlotProfile(
+            "主配置", "pad-1", LongPressLeaderEntry(GamepadButton.Back)));
+        store.SaveSlot("pad-1", 2, ComplexShortcutSlotProfile(
+            "第二套", "pad-1", V1ComplexShortcutEntry(GamepadButton.Back)));
+        store.SaveSlot("pad-1", 3, ComplexShortcutSlotProfile(
+            "第三套", "pad-1", V1ComplexShortcutEntry(GamepadButton.Back, threshold: 0.75f)));
+
+        // The reconnect path: no new edit, the divergence is healed on its own.
+        Assert.True(store.CanonicalizeSpecialKeys("pad-1"));
+
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+            _ = new MappingEngine(profile);
+            Assert.Equal(
+                LeaderKey,
+                Assert.IsType<ButtonBinding>(Assert.Single(profile.Mappings).Source).Gesture!.LongPressAction);
+        }
+
+        // The slots kept their own gesture timing - only the action at the shared position
+        // is the device-global one.
+        Assert.Equal(0.50f, LongPressThresholdOf(store.LoadSlot("pad-1", 2)!));
+        Assert.Equal(0.75f, LongPressThresholdOf(store.LoadSlot("pad-1", 3)!));
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Displaces_A_Current_Shape_Complex_Shortcut_From_The_Claimed_Position()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        var canonical = ComplexShortcutSlotProfile("主配置", "pad-1", LongPressLeaderEntry(GamepadButton.Back));
+        store.SaveSlot("pad-1", 1, canonical);
+
+        // The current shape: the program is already the long press's own action, so the
+        // position holds an ordinary action the shared key displaces.
+        store.SaveSlot("pad-1", 2, ComplexShortcutSlotProfile(
+            "第二套", "pad-1", CurrentComplexShortcutEntry(GamepadButton.Back, threshold: 0.90f)));
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        var synced = store.LoadSlot("pad-1", 2)!;
+        _ = new MappingEngine(synced);
+
+        var entry = Assert.Single(synced.Mappings);
+        var gesture = Assert.IsType<ButtonBinding>(entry.Source).Gesture!;
+        Assert.Equal(LeaderKey, gesture.LongPressAction);
+        Assert.IsType<NoneTarget>(entry.Target);
+
+        // The slot's own timing survives the displacement.
+        Assert.Equal(0.90f, gesture.LongPressThreshold);
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_Leaves_A_Complex_Shortcut_Alone_When_No_Key_Claims_Its_Position()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+
+        // The shared set claims only the click position of a different button, so the v1
+        // program's long press is untouched - and the stored v1 shape stays as it was.
+        var canonical = SpecialSlotProfile("主配置", "pad-1", leader: LeaderKey);
+        store.SaveSlot("pad-1", 1, canonical);
+        var slotTwo = ComplexShortcutSlotProfile("第二套", "pad-1", V1ComplexShortcutEntry(GamepadButton.Back));
+        store.SaveSlot("pad-1", 2, slotTwo);
+
+        store.SyncSpecialKeys("pad-1", canonical);
+
+        var synced = store.LoadSlot("pad-1", 2)!;
+        var complex = Assert.Single(synced.Mappings, m => m.Target is ComplexShortcutTarget);
+        Assert.Null(Assert.IsType<ButtonBinding>(complex.Source).Gesture!.LongPressAction);
+
+        // The engine still builds it, exactly as it did before the fan-out.
+        _ = new MappingEngine(synced);
     }
 }

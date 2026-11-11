@@ -625,6 +625,12 @@ public sealed class PresetStore
     /// gesture key, whose timing and re-fire-the-click fallback stay; a key the profile cannot
     /// express in place is added, appended after the mappings it already had. Every other
     /// mapping, and every entry id, comes back exactly as it went in.
+    /// <para>
+    /// The rewrite never persists a shape the engine would reject: where the shared set claims
+    /// a button's long press, a v1 complex shortcut stored on that button is normalized first
+    /// (<see cref="NormalizeComplexShortcutShape"/>), because the engine normalizes that shape
+    /// in memory at build time and never writes it back - the store has to.
+    /// </para>
     /// </summary>
     private static (GamepadProfile Profile, bool Changed) ApplySpecialKeys(
         GamepadProfile profile, IReadOnlyDictionary<SpecialKeyId, SpecialKeyValue> canonical)
@@ -642,17 +648,27 @@ public sealed class PresetStore
                 continue;
             }
 
-            var desiredGesture = DesiredGesture(button.Gesture, canonical, button.Button, button.Code);
-            var gestureChanged = desiredGesture != button.Gesture;
+            // The shared set claims this button's long press. A v1 complex shortcut stored
+            // there - the program as the mapping's own target with a bare long press - would
+            // be persisted as the one shape the engine rejects: a complex-shortcut target
+            // paired with a long-press action. Normalizing it first, exactly as the engine
+            // would, leaves the position holding the program as an ordinary action, which the
+            // gesture sync below then displaces per the collision rule - so what lands in the
+            // store is always a shape the engine builds.
+            var entry = SpecialKeyAt(canonical, button.Button, button.Code, SpecialKeyPosition.LongPress) is not null
+                ? NormalizeComplexShortcutShape(mapping)
+                : mapping;
+            var source = entry.Source as ButtonBinding ?? button;
+            var desiredGesture = DesiredGesture(source.Gesture, canonical, source.Button, source.Code);
+            var gestureChanged = desiredGesture != source.Gesture;
 
-            if (mapping.Target is SpecialKeyTarget target)
+            if (entry.Target is SpecialKeyTarget target)
             {
-                var id = new SpecialKeyId(button.Button, button.Code, target.Kind, SpecialKeyPosition.Target);
+                var id = new SpecialKeyId(source.Button, source.Code, target.Kind, SpecialKeyPosition.Target);
                 present.Add(id);
 
                 if (canonical.TryGetValue(id, out var value))
                 {
-                    var entry = mapping;
                     if (target != value.Target)
                     {
                         entry = entry with { Target = value.Target };
@@ -662,36 +678,35 @@ public sealed class PresetStore
                     {
                         entry = entry with { Enabled = value.Enabled };
                     }
-
-                    changed |= !ReferenceEquals(entry, mapping) || gestureChanged;
-                    mappings.Add(WithGesture(entry, button, desiredGesture));
                 }
                 else if (CarriesSpecialKey(desiredGesture))
                 {
-                    // The key is gone from the shared set, so the entry's own target goes with
-                    // it - but its gesture carries a shared key of its own that dropping the
-                    // entry would lose, so the entry stays as a bare gesture whose click does
-                    // nothing.
-                    changed = true;
-                    mappings.Add(WithGesture(mapping with { Target = new NoneTarget() }, button, desiredGesture));
+                    // The key is gone from the shared set, so the entry's own target goes
+                    // with it - but its gesture carries a shared key of its own that
+                    // dropping the entry would lose, so the entry stays as a bare gesture
+                    // whose click does nothing.
+                    entry = entry with { Target = new NoneTarget() };
                 }
                 else
                 {
+                    // The entry's target IS the key and nothing else on it is shared, so the
+                    // whole entry goes with it.
                     changed = true;
+                    continue;
                 }
             }
-            else
+
+            if (gestureChanged)
             {
-                if (gestureChanged)
-                {
-                    changed = true;
-                    mappings.Add(mapping with { Source = button with { Gesture = desiredGesture } });
-                }
-                else
-                {
-                    mappings.Add(mapping);
-                }
+                entry = entry with { Source = source with { Gesture = desiredGesture } };
             }
+
+            if (!ReferenceEquals(entry, mapping))
+            {
+                changed = true;
+            }
+
+            mappings.Add(entry);
 
             // Whatever gesture this mapping ends up carrying marks its positions as present,
             // so the add phase below never duplicates a key the profile already expresses -
@@ -700,12 +715,12 @@ public sealed class PresetStore
             {
                 if (carried.DoubleClickAction is SpecialKeyTarget doubleClick)
                 {
-                    present.Add(new SpecialKeyId(button.Button, button.Code, doubleClick.Kind, SpecialKeyPosition.DoubleClick));
+                    present.Add(new SpecialKeyId(source.Button, source.Code, doubleClick.Kind, SpecialKeyPosition.DoubleClick));
                 }
 
                 if (carried.LongPressAction is SpecialKeyTarget longPress)
                 {
-                    present.Add(new SpecialKeyId(button.Button, button.Code, longPress.Kind, SpecialKeyPosition.LongPress));
+                    present.Add(new SpecialKeyId(source.Button, source.Code, longPress.Kind, SpecialKeyPosition.LongPress));
                 }
             }
         }
@@ -751,9 +766,38 @@ public sealed class PresetStore
         return (changed ? profile with { Mappings = [.. mappings] } : profile, changed);
     }
 
-    /// <summary>One entry with its source's gesture replaced, or the entry itself when it already carries it.</summary>
-    private static MappingEntry WithGesture(MappingEntry entry, ButtonBinding button, ButtonGesture? gesture)
-        => gesture == button.Gesture ? entry : entry with { Source = button with { Gesture = gesture } };
+    /// <summary>
+    /// The v1 complex-shortcut shape rewritten into the shape the engine runs, with the same
+    /// semantics as the engine's own normalizer: the program moves off the mapping's own
+    /// target onto the gesture's long-press action, and the click becomes 无功能 - what a
+    /// quick press did when the program owned the target. The engine normalizes this in
+    /// memory when it builds a profile and never writes the result back, so a store that
+    /// rewrites a profile has to do it itself: leaving a complex-shortcut target paired with
+    /// a long-press action behind is the one shape the engine rejects outright. Only the
+    /// exact v1 shape is rewritten - a stick source, no long press, a click auto-repeat or a
+    /// long-press action of its own is one the engine already rejects as it stands, and
+    /// repairing those is not this layer's business.
+    /// </summary>
+    private static MappingEntry NormalizeComplexShortcutShape(MappingEntry mapping)
+    {
+        if (mapping.Target is not ComplexShortcutTarget complex
+            || mapping.Source is not ButtonBinding button
+            || button.Gesture is not { } gesture
+            || !gesture.HasEffectiveLongPress
+            || gesture.LongPressAction is not null)
+        {
+            return mapping;
+        }
+
+        return mapping with
+        {
+            Target = new NoneTarget(),
+            Source = button with
+            {
+                Gesture = gesture with { LongPressAction = complex },
+            },
+        };
+    }
 
     /// <summary>
     /// Whether a (already synchronized) gesture carries a special key of its own. Only a
@@ -774,6 +818,13 @@ public sealed class PresetStore
     /// there. A position the shared set does not name keeps any non-special action it already
     /// had and loses only a special-key action. The result equals the gesture the slot already
     /// carries when nothing about it changes, so the caller can compare and skip the write.
+    /// <para>
+    /// Collision rule: a position the shared set names takes the shared key, whatever occupied
+    /// it - a stale special key, or a per-preset complex shortcut program (the engine builds a
+    /// v1 program as a long-press action, so by the time this runs the program is an ordinary
+    /// action there and the shared key displaces it). One source at one position holds one
+    /// thing, and for a special-key position that thing is the device-global value.
+    /// </para>
     /// </summary>
     private static ButtonGesture? DesiredGesture(
         ButtonGesture? existing,
