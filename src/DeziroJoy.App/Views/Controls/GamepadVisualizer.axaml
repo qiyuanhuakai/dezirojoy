@@ -358,9 +358,9 @@
             </Canvas>
 
             <!-- Generic View, Guide and Menu glyphs; no platform or manufacturer marks. -->
-            <Border x:Name="BackButtonHit" Canvas.Left="252" Canvas.Top="96" Width="18" Height="18"
+            <Border x:Name="BackButtonHit" Canvas.Left="233" Canvas.Top="90" Width="34" Height="30"
                     Background="Transparent" Tag="Button:Back" />
-            <Border x:Name="BackButton" Classes="padHit" Canvas.Left="252" Canvas.Top="98" Width="34" Height="14"
+            <Border x:Name="BackButton" Classes="padHit" Canvas.Left="233" Canvas.Top="98" Width="34" Height="14"
                     CornerRadius="7" Background="{Binding IsBackPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="返回键 Back" PointerPressed="OnElementPressed" Tag="Button:Back">
                 <Grid IsHitTestVisible="False">
@@ -370,25 +370,25 @@
                 </Grid>
                 <Border.Transitions><Transitions><BrushTransition Property="BorderBrush" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" /></Transitions></Border.Transitions>
             </Border>
-            <Border x:Name="GuideButtonHit" Canvas.Left="278" Canvas.Top="90" Width="30" Height="30"
+            <Border x:Name="GuideButtonHit" Canvas.Left="283" Canvas.Top="90" Width="30" Height="30"
                     Background="Transparent" Tag="Button:Guide" />
-            <Ellipse x:Name="GuideWell" Canvas.Left="272" Canvas.Top="84" Width="42" Height="42"
+            <Ellipse x:Name="GuideWell" Canvas.Left="277" Canvas.Top="84" Width="42" Height="42"
                      Fill="{DynamicResource StickWellBrush}" Stroke="{DynamicResource PadSeamBrush}"
                      StrokeThickness="1" IsHitTestVisible="False" />
-            <Ellipse x:Name="GuideRing" Canvas.Left="275" Canvas.Top="87" Width="36" Height="36"
+            <Ellipse x:Name="GuideRing" Canvas.Left="280" Canvas.Top="87" Width="36" Height="36"
                      Fill="Transparent" Stroke="{DynamicResource AccentBrush}" StrokeThickness="2" IsHitTestVisible="False" />
-            <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="278" Canvas.Top="90" Width="30" Height="30"
+            <Ellipse x:Name="GuideButton" Classes="padHit" Canvas.Left="283" Canvas.Top="90" Width="30" Height="30"
                      Fill="{Binding IsGuidePressed, Converter={StaticResource PadBrush}}"
                      ToolTip.Tip="主页键 Guide" PointerPressed="OnElementPressed" Tag="Button:Guide">
                 <Ellipse.Transitions><Transitions><BrushTransition Property="Stroke" Duration="{DynamicResource MotionDurationFast}" Easing="{DynamicResource MotionEaseStandard}" /></Transitions></Ellipse.Transitions>
             </Ellipse>
-            <Ellipse Canvas.Left="278" Canvas.Top="90" Width="30" Height="30"
+            <Ellipse Canvas.Left="283" Canvas.Top="90" Width="30" Height="30"
                      Fill="{DynamicResource PadControlGlossBrush}" IsHitTestVisible="False" />
-            <Ellipse x:Name="GuideGlyph" Canvas.Left="289" Canvas.Top="101" Width="8" Height="8"
+            <Ellipse x:Name="GuideGlyph" Canvas.Left="294" Canvas.Top="101" Width="8" Height="8"
                      Fill="{DynamicResource AccentBrush}" IsHitTestVisible="False" />
-            <Border x:Name="StartButtonHit" Canvas.Left="316" Canvas.Top="96" Width="18" Height="18"
+            <Border x:Name="StartButtonHit" Canvas.Left="329" Canvas.Top="90" Width="34" Height="30"
                     Background="Transparent" Tag="Button:Start" />
-            <Border x:Name="StartButton" Classes="padHit" Canvas.Left="316" Canvas.Top="98" Width="34" Height="14"
+            <Border x:Name="StartButton" Classes="padHit" Canvas.Left="329" Canvas.Top="98" Width="34" Height="14"
                     CornerRadius="7" Background="{Binding IsStartPressed, Converter={StaticResource PadBrush}}"
                     ToolTip.Tip="开始键 Start" PointerPressed="OnElementPressed" Tag="Button:Start">
                 <Grid IsHitTestVisible="False">
