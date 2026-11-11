@@ -109,6 +109,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private readonly Func<LinuxRuntimeHints> _runtimeHints;
 
+    /// <summary>
+    /// Why this process's own output sink could not be created, or null when it was. Only a
+    /// GUI that tried and failed carries one - the daemon injects on its own behalf and a
+    /// render process owns no sink by design - and a sink that failed stays failed for the
+    /// session, which is why the status line keeps quoting it with a pad connected too.
+    /// </summary>
+    private readonly string? _sinkError;
+
     private MappingEntry? _editingEntry;
 
     /// <summary>
@@ -140,7 +148,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         bool daemonRequired = false,
         ThemeService? settings = null,
         IUpdateService? updateService = null,
-        Func<LinuxRuntimeHints>? runtimeHints = null)
+        Func<LinuxRuntimeHints>? runtimeHints = null,
+        string? sinkError = null)
     {
         _host = host;
         _daemon = daemon;
@@ -153,6 +162,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _updateService = updateService ?? new UpdateService();
         _ownsUpdateService = updateService is null;
         _runtimeHints = runtimeHints ?? LinuxRuntimeProbe.Probe;
+        _sinkError = sinkError;
         Editor = new MappingEditorViewModel();
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
@@ -2061,12 +2071,27 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         var device = $"{ActiveController.Descriptor.Name} · {MappingDescriptions.Layout(ActiveController.Descriptor.Layout)}";
 
-        StatusMessage = IsEngineRunning
+        var status = IsEngineRunning
             ? device
             : MappingOwner == MappingOwner.AnotherProcess
                 ? $"{device} · 启动被拒绝：另一个进程（常驻服务或其他 DeziroJoy 实例）正在注入映射"
                 : $"{device} · 映射未启动";
+
+        // With a pad connected the injection reason matters most: the device line alone
+        // reads as a healthy session while every injected event goes nowhere.
+        StatusMessage = status + InjectionUnavailableSuffix();
     }
+
+    /// <summary>
+    /// The resident half of the injection diagnosis. A sink that failed to create is failed
+    /// for the whole session, so its reason stays on the status line with a pad connected
+    /// too - the old wiring quoted it only while no pad was plugged in, so a user whose pad
+    /// worked and whose mapping did nothing saw a perfectly healthy status line. The wording
+    /// comes from the same LinuxDeviceAccess source the probe, the settings card and the
+    /// daemon log print.
+    /// </summary>
+    private string InjectionUnavailableSuffix()
+        => _sinkError is { Length: > 0 } ? $" · 注入不可用：{_sinkError}" : string.Empty;
 
     /// <summary>
     /// The "no gamepad" line, plus whatever the platform's one-shot probe can say about why.
@@ -2085,6 +2110,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         var text = "未检测到手柄，请连接手柄";
 
+        // The sink error outranks the probe's output half: it is this process's actual sink
+        // state for the session, it covers everything the open-check probe can see with the
+        // same wording, and it also catches ioctl failures the probe never performs. A probe
+        // that throws must not swallow it either, so it is appended outside the try.
+        var output = _sinkError;
+
         try
         {
             var hints = _runtimeHints();
@@ -2094,14 +2125,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 text += $" · {device}";
             }
 
-            if (hints.OutputGuidance is { Length: > 0 } output)
-            {
-                text += $" · 注入不可用：{output}";
-            }
+            output ??= hints.OutputGuidance;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             // A probe is diagnostics, never a reason to break the status line.
+        }
+
+        if (output is { Length: > 0 })
+        {
+            text += $" · 注入不可用：{output}";
         }
 
         return text;

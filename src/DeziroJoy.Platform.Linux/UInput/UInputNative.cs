@@ -12,11 +12,16 @@ internal static partial class UInputNative
 
     public const ushort BusVirtual = 0x06;
 
-    public const uint UiSetEvBit = 0x40045500;
+    // UI_SET_EVBIT/KEYBIT/RELBIT are _IOW('U', 100..102, int) from the kernel uapi header
+    // (linux/uinput.h): direction _IOC_WRITE, size sizeof(int), type 'U' (0x55), nr 100..102.
+    // The nr digit is what a wrong constant gets wrong - 0x40045500/01/02 decode as
+    // nr 0..2, which the kernel rejects with EINVAL on the first ioctl, so every
+    // injected event is silently dropped. Verified against the installed kernel headers.
+    public const uint UiSetEvBit = 0x40045564;
 
-    public const uint UiSetKeyBit = 0x40045501;
+    public const uint UiSetKeyBit = 0x40045565;
 
-    public const uint UiSetRelBit = 0x40045502;
+    public const uint UiSetRelBit = 0x40045566;
 
     public const uint UiDevSetup = 0x405C5503;
 

@@ -25,7 +25,7 @@ public sealed class UInputOutputSink : IOutputSink
     private readonly int _fd;
     private bool _disposed;
 
-    public unsafe UInputOutputSink(string deviceName = "DeziroJoy Virtual Gamepad")
+    public UInputOutputSink(string deviceName = "DeziroJoy Virtual Gamepad")
     {
         _fd = UInputNative.Open(DevicePath, UInputNative.OWrOnly);
         if (_fd < 0)
@@ -36,49 +36,67 @@ public sealed class UInputOutputSink : IOutputSink
 
         try
         {
-            EnableEventType(1); // EV_KEY
-            EnableEventType(2); // EV_REL
-
-            foreach (var key in Enum.GetValues<GamepadKey>())
-            {
-                var code = LinuxKeyCodes.ToEvdevCode(key);
-                if (code != LinuxKeyCodes.Unmapped)
-                {
-                    SetBit(UInputNative.UiSetKeyBit, code);
-                }
-            }
-
-            SetBit(UInputNative.UiSetRelBit, 0); // REL_X
-            SetBit(UInputNative.UiSetRelBit, 1); // REL_Y
-            SetBit(UInputNative.UiSetRelBit, 8); // REL_WHEEL
-            SetBit(UInputNative.UiSetRelBit, 6); // REL_HWHEEL
-
-            var nameBytes = Encoding.UTF8.GetBytes(deviceName);
-            var nameLength = Math.Min(nameBytes.Length, 79);
-
-            var setup = new UinputSetup
-            {
-                Bustype = UInputNative.BusVirtual,
-                Vendor = 0x0DE2,
-                Product = 0x0001,
-                Version = 1,
-                FfEffectsMax = 0,
-            };
-
-            var pointer = &setup;
-            for (var i = 0; i < nameLength; i++)
-            {
-                pointer->Name[i] = nameBytes[i];
-            }
-
-            EnsureOk(UInputNative.Ioctl(_fd, UInputNative.UiDevSetup, pointer), "UI_DEV_SETUP");
-            EnsureOk(UInputNative.Ioctl(_fd, UInputNative.UiDevCreate, null), "UI_DEV_CREATE");
+            Configure(deviceName);
         }
         catch
         {
             UInputNative.Close(_fd);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Test seam that adopts an already-open descriptor instead of opening /dev/uinput, so a
+    /// suite on a machine without the node can still drive the configuration path: the ioctls
+    /// fail on any non-uinput fd (ENOTTY), which is the shape of the failure that shipped -
+    /// the open succeeding says nothing about the ioctls, and a silent one degraded every
+    /// injection to nothing. The caller keeps ownership of the fd on every outcome.
+    /// </summary>
+    internal UInputOutputSink(int fd, string deviceName)
+    {
+        _fd = fd;
+        Configure(deviceName);
+    }
+
+    private unsafe void Configure(string deviceName)
+    {
+        EnableEventType(1); // EV_KEY
+        EnableEventType(2); // EV_REL
+
+        foreach (var key in Enum.GetValues<GamepadKey>())
+        {
+            var code = LinuxKeyCodes.ToEvdevCode(key);
+            if (code != LinuxKeyCodes.Unmapped)
+            {
+                SetBit(UInputNative.UiSetKeyBit, code);
+            }
+        }
+
+        SetBit(UInputNative.UiSetRelBit, 0); // REL_X
+        SetBit(UInputNative.UiSetRelBit, 1); // REL_Y
+        SetBit(UInputNative.UiSetRelBit, 8); // REL_WHEEL
+        SetBit(UInputNative.UiSetRelBit, 6); // REL_HWHEEL
+
+        var nameBytes = Encoding.UTF8.GetBytes(deviceName);
+        var nameLength = Math.Min(nameBytes.Length, 79);
+
+        var setup = new UinputSetup
+        {
+            Bustype = UInputNative.BusVirtual,
+            Vendor = 0x0DE2,
+            Product = 0x0001,
+            Version = 1,
+            FfEffectsMax = 0,
+        };
+
+        var pointer = &setup;
+        for (var i = 0; i < nameLength; i++)
+        {
+            pointer->Name[i] = nameBytes[i];
+        }
+
+        EnsureOk(UInputNative.Ioctl(_fd, UInputNative.UiDevSetup, pointer), "UI_DEV_SETUP");
+        EnsureOk(UInputNative.Ioctl(_fd, UInputNative.UiDevCreate, null), "UI_DEV_CREATE");
     }
 
     /// <summary>
