@@ -150,10 +150,9 @@ public class MainWindowViewModelSpecialKeysTests
         Assert.Contains("长按", precision.Summary);
 
         // The engine registers a precision key from the click alone, so this one engages
-        // nothing - and the long press also owns the press the click used to fire.
+        // nothing - stated beside the key, with the click target untouched beside it.
         Assert.True(precision.HasConflicts);
         Assert.Contains("不会生效", precision.ConflictHint!);
-        Assert.Contains("吞掉", precision.ConflictHint!);
     }
 
     [Fact]

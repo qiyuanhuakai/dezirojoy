@@ -9,10 +9,12 @@ namespace DeziroJoy.App.Tests.ViewModels;
 /// The conflict rules between the two global special keys and everything else on their
 /// trigger buttons. Every expectation here is a statement about how the engine actually
 /// behaves: a leader key switches from the mapping loop, so a gesture on the same mapping
-/// delays or swallows the switch, while a precision key engages from the raw button and
-/// ignores gestures entirely - but only when it sits on the mapping's own target, which is
-/// the one position the engine registers. The hints only report; none of them rewrites the
-/// configuration.
+/// delays the switch (the double-click window) or repeats it (click auto-repeat, or a long
+/// press with a repeat interval that falls back to the click), while a precision key engages
+/// from the raw button and ignores gestures entirely - but only from the click position, the
+/// one the engine registers it from. The engine swallows nothing: no long-press action
+/// consumes the press, so a sibling's quick press always fires beside the global key. The
+/// hints only report; none of them rewrites the configuration.
 /// </summary>
 public class SpecialKeyConflictsTests
 {
@@ -33,7 +35,8 @@ public class SpecialKeyConflictsTests
         float longPressThreshold = 0f,
         float clickRepeatInterval = 0f,
         MappingTarget? doubleClickAction = null,
-        MappingTarget? longPressAction = null)
+        MappingTarget? longPressAction = null,
+        float longPressRepeatInterval = 0f)
         => new()
         {
             DoubleClickWindow = doubleClickWindow,
@@ -41,6 +44,7 @@ public class SpecialKeyConflictsTests
             ClickRepeatInterval = clickRepeatInterval,
             DoubleClickAction = doubleClickAction,
             LongPressAction = longPressAction,
+            LongPressRepeatInterval = longPressRepeatInterval,
         };
 
     private static SpecialKeyTarget Leader(
@@ -83,17 +87,16 @@ public class SpecialKeyConflictsTests
             Button(GamepadButton.Back, Leader(), Gesture(doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow)),
         };
 
-        var message = Message(SpecialKeyConflicts.Analyze(mappings));
-
-        Assert.Contains("Leader 键", message);
-        Assert.Contains("Back 键", message);
-        Assert.Contains("双击窗口", message);
-        Assert.Contains("切换预设", message);
+        Assert.Equal(
+            "「Leader 键」设在Back 键的单击上，但该按钮还配了双击手势：单击要等双击窗口（0.25 秒）结束才切换预设；窗口内按第二次时触发的是双击手势，双击若另配了动作，该次按下不会切换预设。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
     }
 
     [Fact]
-    public void A_Leader_Key_With_A_Long_Press_That_Has_A_Function_Is_Swallowed()
+    public void A_Leader_Key_With_A_Long_Press_That_Has_A_Function_Still_Switches_On_A_Quick_Press()
     {
+        // The engine swallows nothing: a release before the threshold always fires the single,
+        // so the long press's own action is an extra function, not a stolen click.
         var mappings = new[]
         {
             Button(
@@ -104,18 +107,12 @@ public class SpecialKeyConflictsTests
                     longPressAction: new KeyPressTarget(GamepadKey.A))),
         };
 
-        var message = Message(SpecialKeyConflicts.Analyze(mappings));
-
-        Assert.Contains("长按", message);
-        Assert.Contains("吞掉", message);
-        Assert.Contains("A", message);
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
     }
 
     [Fact]
     public void A_Leader_Key_With_A_Plain_Long_Press_Still_Fires_On_A_Quick_Press()
     {
-        // The long press carries no function of its own, so an early release still fires the
-        // single - the engine's own rule, and the reason there is nothing to warn about.
         var mappings = new[]
         {
             Button(GamepadButton.Back, Leader(), Gesture(longPressThreshold: ButtonGesture.DefaultLongPressThreshold)),
@@ -135,10 +132,47 @@ public class SpecialKeyConflictsTests
                 Gesture(clickRepeatInterval: ButtonGesture.DefaultClickRepeatInterval)),
         };
 
-        var message = Message(SpecialKeyConflicts.Analyze(mappings));
+        Assert.Equal(
+            "「Leader 键」设在Back 键的单击上，但该按钮开启了长按重复触发：按住期间会每隔 0.1 秒反复切换一次预设。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
 
-        Assert.Contains("长按重复触发", message);
-        Assert.Contains("反复", message);
+    [Fact]
+    public void A_Leader_Key_With_A_Bare_Long_Press_Repeat_Switches_Repeatedly()
+    {
+        // The long press carries no action of its own, so every repeat falls back to the
+        // mapping's own target - the leader key - and the preset flips on each one.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                Leader(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    clickRepeatInterval: 0f,
+                    longPressRepeatInterval: 0.2f)),
+        };
+
+        Assert.Equal(
+            "「Leader 键」设在Back 键的单击上，但该按钮的长按配了重复间隔（每 0.2 秒一次）：按住越过长按阈值后，长按会反复回落到该 Leader 键，预设随之反复切换。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Long_Press_With_An_Action_Of_Its_Own_Does_Not_Repeat_The_Leader()
+    {
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                Leader(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    longPressRepeatInterval: 0.2f,
+                    longPressAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
     }
 
     [Fact]
@@ -161,8 +195,10 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
-    public void A_Long_Press_Special_Key_Swallows_The_Entrys_Own_Click()
+    public void A_Long_Press_Special_Key_Costs_The_Click_Nothing()
     {
+        // The engine lets the gestures coexist: a quick press fires the click and only a hold
+        // past the threshold fires the long press, so the click stays reachable.
         var mappings = new[]
         {
             Button(
@@ -173,11 +209,7 @@ public class SpecialKeyConflictsTests
                     longPressAction: Leader())),
         };
 
-        var message = Message(SpecialKeyConflicts.Analyze(mappings));
-
-        Assert.Contains("长按", message);
-        Assert.Contains("Enter", message);
-        Assert.Contains("吞掉", message);
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
     }
 
     [Fact]
@@ -205,11 +237,9 @@ public class SpecialKeyConflictsTests
             Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)),
         };
 
-        var message = Message(SpecialKeyConflicts.Analyze(mappings));
-
-        Assert.Contains("另一条映射", message);
-        Assert.Contains("Enter", message);
-        Assert.Contains("同时", message);
+        Assert.Equal(
+            "Back 键上还有另一条映射（单击：Enter）：每次按下触发「Leader 键」的同时也会触发Enter。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
     }
 
     [Fact]
@@ -237,8 +267,10 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
-    public void A_Sibling_Whose_Click_Its_Own_Long_Press_Swallows_Is_Not_A_Double_Fire()
+    public void A_Sibling_With_A_Long_Press_Action_Double_Fires_Too()
     {
+        // No long-press action consumes the press any more, so the sibling's quick press fires
+        // the click beside the leader - the exclusion that once hid this is gone.
         var mappings = new[]
         {
             Button(GamepadButton.Back, Leader()),
@@ -250,7 +282,10 @@ public class SpecialKeyConflictsTests
                     longPressAction: new KeyPressTarget(GamepadKey.A))),
         };
 
-        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+        var message = Message(SpecialKeyConflicts.Analyze(mappings));
+
+        Assert.Contains("另一条映射", message);
+        Assert.Contains("Enter", message);
     }
 
     [Fact]

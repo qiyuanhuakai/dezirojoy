@@ -38,7 +38,7 @@ public partial class MappingRowViewModel : ObservableObject
 
     /// <summary>
     /// Every collision this row's button carries that involves this row - a global special
-    /// key its gestures would swallow, another mapping that fires beside it. Empty for the
+    /// key its gestures would delay, another mapping that fires beside it. Empty for the
     /// overwhelming majority of rows, which is why the hint line stays collapsed.
     /// </summary>
     public IReadOnlyList<SpecialKeyConflict> Conflicts { get; }

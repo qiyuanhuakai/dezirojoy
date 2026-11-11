@@ -2512,6 +2512,66 @@ public class MappingEditorViewModelTests
     }
 
     [Fact]
+    public void Turning_Click_Repeat_Off_Clears_The_Hint_It_Raised()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        editor.ClickRepeatEnabled = true;
+        Assert.True(editor.HasSpecialKeyConflict);
+
+        // The user resolved the collision by switching the repeat off: the hint must not
+        // outlive the edit that removed it.
+        editor.ClickRepeatEnabled = false;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+        Assert.Empty(editor.DraftSpecialKeyConflicts);
+    }
+
+    [Fact]
+    public void Editing_The_Click_Repeat_Interval_Updates_The_Hint()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.ClickRepeatEnabled = true;
+
+        Assert.Contains("0.1 秒", editor.SpecialKeyConflictHint!);
+
+        editor.ClickRepeatIntervalSeconds = 0.5;
+
+        Assert.Contains("0.5 秒", editor.SpecialKeyConflictHint!);
+        Assert.DoesNotContain("0.1 秒", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_With_A_Bare_Long_Press_Repeat_Says_So_Live()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // The repeat interval is not editor-editable, but a profile that carries one
+        // round-trips it through the draft, and the hint must name it as it will behave.
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.Back)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                    LongPressRepeatInterval = 0.2f,
+                },
+            },
+            Target = new SpecialKeyTarget(SpecialKeyKind.Leader),
+        });
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("重复间隔", editor.SpecialKeyConflictHint!);
+        Assert.Contains("0.2 秒", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
     public void The_Draft_Is_Measured_Against_The_Profiles_Other_Mappings()
     {
         var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };

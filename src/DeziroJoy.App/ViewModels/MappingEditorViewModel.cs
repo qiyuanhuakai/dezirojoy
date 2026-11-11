@@ -65,14 +65,23 @@ public sealed record SpecialKeyConflict(
 /// never warns about a pairing that works and never stays silent about one that does not.
 /// The analysis only reports: fixing a collision stays the user's edit to make.
 /// </summary>
+/// <remarks>
+/// The engine lets the three gestures coexist: no long-press action consumes the press, so a
+/// release before the long-press threshold always fires the single. What a gesture CAN do to
+/// a leader key on the click is delay it (the double-click window) or repeat it (click
+/// auto-repeat, or a long press that carries a repeat interval and falls back to the click),
+/// and what another entry on the same button can do is fire beside it. A precision key
+/// engages from the raw button, so gestures leave it alone - but only from the click
+/// position, the one the engine registers it from.
+/// </remarks>
 public static class SpecialKeyConflicts
 {
     /// <summary>
     /// Every collision in one mapping list. Mappings are grouped by physical button - the
     /// button plus the raw code that tells one extra button from another - because a gesture
     /// or a direction is configuration ON an element, not a second element. A disabled
-    /// mapping never runs, so it never collides; a stick has no gestures to swallow a press
-    /// with, so only buttons are examined.
+    /// mapping never runs, so it never collides; a stick has no gestures, so only buttons
+    /// are examined.
     /// </summary>
     public static IReadOnlyList<SpecialKeyConflict> Analyze(IReadOnlyList<MappingEntry> mappings)
     {
@@ -108,8 +117,8 @@ public static class SpecialKeyConflicts
                 var binding = (ButtonBinding)entry.Source;
                 var gesture = binding.Gesture;
 
-                // A leader key on the click switches from the mapping loop, so any gesture on
-                // the same mapping delays or swallows the switch. A precision key engages
+                // A leader key on the click switches from the mapping loop, so a gesture on
+                // the same mapping delays the switch or repeats it. A precision key engages
                 // from the raw button instead, so gestures leave it alone.
                 if (entry.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader } && gesture is { } leaderGesture)
                 {
@@ -124,17 +133,6 @@ public static class SpecialKeyConflicts
                             $"「Leader 键」设在{label}的单击上，但该按钮还配了双击手势：单击要等双击窗口（{Seconds(ButtonGesture.DefaultDoubleClickWindow)}）结束才切换预设；窗口内按第二次时触发的是双击手势，双击若另配了动作，该次按下不会切换预设。"));
                     }
 
-                    if (SwallowsClick(leaderGesture))
-                    {
-                        conflicts.Add(new SpecialKeyConflict(
-                            SpecialKeyKind.Leader,
-                            button,
-                            code,
-                            entry.Id,
-                            entry.Id,
-                            $"「Leader 键」设在{label}的单击上，但该按钮的长按配了自己的动作（{MappingDescriptions.Target(leaderGesture.LongPressAction!)}）：快速按下会被长按吞掉，不会切换预设。"));
-                    }
-
                     if (leaderGesture.HasClickRepeat)
                     {
                         conflicts.Add(new SpecialKeyConflict(
@@ -143,37 +141,36 @@ public static class SpecialKeyConflicts
                             code,
                             entry.Id,
                             entry.Id,
-                            $"「Leader 键」设在{label}的单击上，但该按钮开启了长按重复触发：按住期间会每隔 {Seconds(leaderGesture.ClickRepeatInterval)} 秒反复切换一次预设。"));
+                            $"「Leader 键」设在{label}的单击上，但该按钮开启了长按重复触发：按住期间会每隔 {Seconds(leaderGesture.ClickRepeatInterval)}反复切换一次预设。"));
+                    }
+
+                    // A long press with a repeat interval and no action of its own falls back
+                    // to the mapping's own target on every repeat - the leader key - so the
+                    // same repeated switching arrives through the other flag.
+                    if (leaderGesture.HasEffectiveLongPress
+                        && leaderGesture.LongPressRepeatInterval > 0f
+                        && leaderGesture.LongPressAction is null)
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Leader,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「Leader 键」设在{label}的单击上，但该按钮的长按配了重复间隔（每 {Seconds(leaderGesture.LongPressRepeatInterval)}一次）：按住越过长按阈值后，长按会反复回落到该 Leader 键，预设随之反复切换。"));
                     }
                 }
 
-                // A special key on the long press owns the press: a release that reached
-                // neither gesture is discarded, so the entry's own click target - the
-                // mapping a quick press used to fire - becomes unreachable.
-                if (gesture is { HasEffectiveLongPress: true } longPressGesture
-                    && longPressGesture.LongPressAction is SpecialKeyTarget longPressKey
-                    && entry.Target is not NoneTarget and not SpecialKeyTarget)
-                {
-                    var click = MappingDescriptions.Target(entry.Target);
-                    conflicts.Add(new SpecialKeyConflict(
-                        longPressKey.Kind,
-                        button,
-                        code,
-                        entry.Id,
-                        entry.Id,
-                        $"「{MappingDescriptions.SpecialKey(longPressKey)}」设在{label}的长按上，但该按钮的单击映射（{click}）会被长按吞掉：快速按下不再触发{click}，只有长按才触发全局键。"));
-                }
-
-                // Another entry on the same button whose click also fires: one press edge
-                // runs both mappings, so every trigger of the global key drags the other
-                // mapping's output along with it.
+                // Another entry on the same button whose click also fires: one press runs
+                // both mappings, so every trigger of the global key drags the other mapping's
+                // output along with it. The engine swallows nothing any more - a long press
+                // with an action of its own still lets the quick press fire the click - so no
+                // sibling is excluded here.
                 if (entry.Target is SpecialKeyTarget own)
                 {
                     foreach (var other in entries)
                     {
-                        if (ReferenceEquals(other, entry)
-                            || other.Target is NoneTarget
-                            || SwallowsClick(other))
+                        if (ReferenceEquals(other, entry) || other.Target is NoneTarget)
                         {
                             continue;
                         }
@@ -264,19 +261,6 @@ public static class SpecialKeyConflicts
 
         return null;
     }
-
-    /// <summary>
-    /// True when a gesture's long press owns the press: a real function of its own - not
-    /// 无功能, and not a complex shortcut program, whose click and double-click stay
-    /// independent of the long press it runs from - makes an early release fire nothing.
-    /// </summary>
-    private static bool SwallowsClick(MappingEntry entry)
-        => entry.Source is ButtonBinding { Gesture: { } gesture } && SwallowsClick(gesture);
-
-    private static bool SwallowsClick(ButtonGesture gesture)
-        => gesture.HasEffectiveLongPress
-        && gesture.HasLongPressFunction
-        && gesture.LongPressAction is not ComplexShortcutTarget;
 
     /// <summary>A pinned timing as the user reads it: 0.25 秒, never 0.25000012 秒.</summary>
     private static string Seconds(float seconds)
@@ -651,9 +635,10 @@ public partial class MappingEditorViewModel : ObservableObject
 
     /// <summary>
     /// Every collision the current draft has with the profile's other mappings on the same
-    /// button - its own gestures swallowing a leader switch, another mapping firing beside
-    /// the global key, a precision key the engine would never engage. Recomputed on every
-    /// draft edit and every source move, so the hint below is live while the user configures.
+    /// button - its own gestures delaying or repeating a leader switch, another mapping
+    /// firing beside the global key, a precision key the engine would never engage.
+    /// Recomputed on every draft edit and every source move, so the hint below is live while
+    /// the user configures.
     /// </summary>
     public IReadOnlyList<SpecialKeyConflict> DraftSpecialKeyConflicts { get; private set; } = [];
 
@@ -1075,6 +1060,10 @@ public partial class MappingEditorViewModel : ObservableObject
         {
             _clickRepeatInterval = value;
             OnPropertyChanged(nameof(ClickRepeatIntervalSeconds));
+
+            // The repeat interval is named in the leader-key collision hint, so an edit to it
+            // re-measures the draft rather than leaving the old number on screen.
+            RefreshSpecialKeyConflicts();
         }
     }
 
@@ -1957,6 +1946,10 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(HasLongPress));
         OnPropertyChanged(nameof(HasAnyGesture));
         OnPropertyChanged(nameof(ShowClickRepeatInterval));
+
+        // Auto-repeat on a leader key's button is a collision, and switching it off resolves
+        // one: both directions re-measure the draft, so the hint never outruns the edit.
+        RefreshSpecialKeyConflicts();
     }
 
     partial void OnDoubleClickEnabledChanged(bool value)
