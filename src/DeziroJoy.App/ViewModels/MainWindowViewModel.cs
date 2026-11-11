@@ -8,6 +8,7 @@ using DeziroJoy.App.Services;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Profiles;
+using DeziroJoy.Platform.Linux;
 
 namespace DeziroJoy.App.ViewModels;
 
@@ -100,6 +101,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private readonly Task? _startupUpdateCheck;
 
+    /// <summary>
+    /// One-shot platform probe the status area consults when no controller is connected. The
+    /// render process owns no devices and no sink - the daemon is the mapping authority - so
+    /// this is how "connect a gamepad" gets replaced by the actual reason (unreadable nodes, no
+    /// nodes at all, uinput unwritable). Tests inject a stub; production asks the kernel.
+    /// </summary>
+    private readonly Func<LinuxRuntimeHints> _runtimeHints;
+
     private MappingEntry? _editingEntry;
 
     /// <summary>
@@ -130,7 +139,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         DaemonController? daemon = null,
         bool daemonRequired = false,
         ThemeService? settings = null,
-        IUpdateService? updateService = null)
+        IUpdateService? updateService = null,
+        Func<LinuxRuntimeHints>? runtimeHints = null)
     {
         _host = host;
         _daemon = daemon;
@@ -142,6 +152,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _elevationService = elevationService ?? new ElevationService();
         _updateService = updateService ?? new UpdateService();
         _ownsUpdateService = updateService is null;
+        _runtimeHints = runtimeHints ?? LinuxRuntimeProbe.Probe;
         Editor = new MappingEditorViewModel();
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
@@ -2038,17 +2049,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 ? daemonDevice is not null
                     ? $"{daemonDevice.Name} · {MappingDescriptions.Layout(daemonDevice.Layout)}"
                     : "已连接手柄 · 等待设备信息"
-                : wasConnected
-                    ? "手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接"
-                    : "未检测到手柄，请连接手柄";
+                : NoControllerText(wasConnected);
             return;
         }
 
         if (ActiveController is null)
         {
-            StatusMessage = wasConnected
-                ? "手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接"
-                : "未检测到手柄，请连接手柄";
+            StatusMessage = NoControllerText(wasConnected);
             return;
         }
 
@@ -2059,6 +2066,45 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             : MappingOwner == MappingOwner.AnotherProcess
                 ? $"{device} · 启动被拒绝：另一个进程（常驻服务或其他 DeziroJoy 实例）正在注入映射"
                 : $"{device} · 映射未启动";
+    }
+
+    /// <summary>
+    /// The "no gamepad" line, plus whatever the platform's one-shot probe can say about why.
+    /// "Connect a gamepad" is useless advice when the nodes are unreadable or absent, so the
+    /// evdev scan (permission / no nodes / nothing that looks like a pad) and the uinput check
+    /// are quoted here - the same words the daemon prints and the settings card explains.
+    /// </summary>
+    private string NoControllerText(bool wasConnected)
+    {
+        if (wasConnected)
+        {
+            // Worded exactly like a local disconnect: a pad the daemon lost is not one never
+            // plugged in, and the idle-timer case must not read as "connect a gamepad".
+            return "手柄已断开连接，可能已进入休眠，请按手柄电源键唤醒；若仍无反应请检查连接";
+        }
+
+        var text = "未检测到手柄，请连接手柄";
+
+        try
+        {
+            var hints = _runtimeHints();
+
+            if (hints.DeviceGuidance is { Length: > 0 } device)
+            {
+                text += $" · {device}";
+            }
+
+            if (hints.OutputGuidance is { Length: > 0 } output)
+            {
+                text += $" · 注入不可用：{output}";
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A probe is diagnostics, never a reason to break the status line.
+        }
+
+        return text;
     }
 
     private void Activate(ControllerRuntime runtime)

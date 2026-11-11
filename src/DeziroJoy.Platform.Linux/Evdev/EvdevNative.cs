@@ -8,7 +8,8 @@ internal static partial class EvdevNative
 
     public const int ONonBlock = 0x800;
 
-    public const int MaxEventDevices = 32;
+    /// <summary>EACCES on Linux: the node exists but this user may not open it.</summary>
+    public const int ErrnoAccessDenied = 13;
 
     public const int EventSize = 24;
 

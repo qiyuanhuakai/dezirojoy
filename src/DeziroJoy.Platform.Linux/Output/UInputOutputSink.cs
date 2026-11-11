@@ -12,21 +12,26 @@ namespace DeziroJoy.Platform.Linux.Output;
 /// <summary>
 /// Experimental Linux output sink: creates a virtual keyboard/mouse through /dev/uinput.
 /// Kernel-level, so it works under both X11 and Wayland. Needs write access to
-/// /dev/uinput (root, or a udev rule such as:
-/// KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput").
+/// /dev/uinput (member of the "input" group, or the udev rule quoted by
+/// <see cref="LinuxDeviceAccess.UdevRulesText"/>). When the node will not open the failure
+/// message and <see cref="ProbeUnavailableReason"/> both spell the fix out - the old
+/// NullOutputSink degradation was silent, which is how "mapping does nothing" shipped.
 /// </summary>
 public sealed class UInputOutputSink : IOutputSink
 {
+    /// <summary>The kernel's virtual-input device node.</summary>
+    internal const string DevicePath = "/dev/uinput";
+
     private readonly int _fd;
     private bool _disposed;
 
     public unsafe UInputOutputSink(string deviceName = "DeziroJoy Virtual Gamepad")
     {
-        _fd = UInputNative.Open("/dev/uinput", UInputNative.OWrOnly);
+        _fd = UInputNative.Open(DevicePath, UInputNative.OWrOnly);
         if (_fd < 0)
         {
             var error = Marshal.GetLastPInvokeError();
-            throw new InvalidOperationException($"无法打开 /dev/uinput (errno {error})，请确认 uinput 模块已加载且当前用户有写权限。");
+            throw new InvalidOperationException(BuildOpenFailure(error));
         }
 
         try
@@ -75,6 +80,38 @@ public sealed class UInputOutputSink : IOutputSink
             throw;
         }
     }
+
+    /// <summary>
+    /// Opens /dev/uinput and closes it again without creating a virtual device, answering
+    /// whether injection could work at all. The GUI owns no sink - the daemon injects - but a
+    /// failed sink used to degrade to <see cref="NullOutputSink"/> with nothing visible, so the
+    /// status area asks this instead of showing silence. Null means writable.
+    /// </summary>
+    public static string? ProbeUnavailableReason()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return null;
+        }
+
+        var fd = UInputNative.Open(DevicePath, UInputNative.OWrOnly);
+        if (fd >= 0)
+        {
+            UInputNative.Close(fd);
+            return null;
+        }
+
+        return BuildOpenFailure(Marshal.GetLastPInvokeError());
+    }
+
+    /// <summary>
+    /// The one wording for "uinput will not open". It quotes the same group command and udev
+    /// rule the evdev diagnostic uses, so a user who reads either surface gets the same fix.
+    /// </summary>
+    internal static string BuildOpenFailure(int errno)
+        => $"无法打开 /dev/uinput（errno {errno}）：请确认 uinput 模块已加载，且当前用户有写权限；"
+            + $"可执行 {LinuxDeviceAccess.InputGroupCommand} 后重新登录，"
+            + $"或添加 udev 规则 {LinuxDeviceAccess.UdevRulesPath}：{LinuxDeviceAccess.UdevRulesText}";
 
     public void KeyDown(GamepadKey key) => EmitKey(LinuxKeyCodes.ToEvdevCode(key), 1);
 

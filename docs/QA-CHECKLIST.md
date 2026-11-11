@@ -105,6 +105,39 @@
 （见 `docs/ELEVATION-AND-DAEMON.md`；另一种可能是目标程序校验
 `RAWINPUTHEADER.hDevice`，那种情况提权无效，需要虚拟 HID 驱动）。
 
+### Linux：同用户常驻与设备访问权（X11/Wayland 均适用）
+
+X11 不是变量：输入走内核级 evdev/uinput，与显示服务器无关。Linux 上不需要提权
+（uinput 不受 UIPI 约束，守护进程以当前用户运行），要验证的是**设备访问权**与
+**systemd 用户单元**：
+
+- [ ] 手柄已连接且 `ls /dev/input/event*` 能看到节点：GUI「连接」卡片显示设备名，
+      daemon 摘要 `devices detected: N`（N>0）
+- [ ] 拔掉手柄：GUI 状态区提示检查连接与蓝牙配对（daemon 摘要有对应指引）
+- [ ] 用户不在 `input` 组时（`id` 输出无 input）：GUI 状态区与 daemon 摘要都出现
+      `sudo usermod -aG input $USER` 指引与 errno，不再静默显示「未检测到手柄」
+- [ ] 执行 `sudo usermod -aG $USER input`（或写入
+      `/etc/udev/rules.d/99-dezirojoy.rules`：`KERNEL=="event*",GROUP="input",MODE="0660"`
+      与 `KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"`）
+      并重新登录后：手柄被检测到，映射生效（应用内 opt-in，安装器不注册 udev）
+- [ ] `/dev/uinput` 不可写时（`ls -l /dev/uinput` 非当前用户/组）：daemon 摘要的
+      `output sink` 一行带出无法打开的原因与修复指引，不再静默降级为空注入
+- [ ] 设置面板「后台服务」卡片：安装常驻 → 写入 `~/.config/systemd/user/dezirojoy-daemon.service`
+      并启动，`systemctl --user status dezirojoy-daemon.service` 为 active；
+      卡片显示「已安装并正在运行」
+- [ ] 单元文件内容：`Restart=on-failure`、`ExecStart` 指向安装的二进制加 `--daemon`、
+      `WantedBy=default.target`，且**不**依赖 `graphical-session.target`
+      （无图形会话的 SSH/控制台同样要能常驻）
+- [ ] 注销重新登录后 daemon 自动运行；`loginctl show-user $USER -p Linger` 为
+      `Linger=no` 时退出登录即结束——需 `loginctl enable-linger $USER` 才能跨登录常驻
+- [ ] 「登录时自启动」勾选：`~/.config/autostart/DeziroJoy.desktop` 生成，
+      `desktop-file-validate ~/.config/autostart/DeziroJoy.desktop` 无错误；
+      取消勾选后文件移除
+- [ ] 卸载常驻：单元停止、禁用并删除，`systemctl --user status` 显示不存在
+- [ ] CLI：`DeziroJoy --install-daemon` / `--uninstall-daemon` / `--install-autostart` /
+      `--uninstall-autostart` 在 Linux 全部可用（不再一律 exit 2）
+- [ ] daemon 日志：`journalctl --user -u dezirojoy-daemon -f` 能看到启动摘要与设备指引
+
 ## 11. 配置导入/导出
 
 - [ ] 导出一个配置文件，内容为可读 JSON
@@ -148,7 +181,9 @@
 
 - [ ] 只配了单击的按键：手感与 alpha.1 一致（零延迟，不应有可感知的迟滞）
 - [ ] 配了双击的按键：快速按两次触发双击动作；单击慢按不触发
-- [ ] 配了长按的按键：按住到设定时长才触发；短按不触发
+- [ ] 配了长按的按键：按住到设定时长才触发长按动作；未达阈值就松手时触发单击自己的目标
+      （仅当单击目标为「无功能」时短按不触发——那种配置下这次按键两个功能都没达到，
+      按丢弃处理，绝不猜测）
 - [ ] 长按 + 连续重复：按住不放按设定间隔重复触发（像电脑上长按方向键）
 - [ ] 长 tick 不丢重复单位：daemon 卡顿或休眠恢复后的一个长 tick 里，单击重复与长按重复
   都按实际经过的间隔补足；同时配置两种重复间隔时单击重复优先，不误触发已惰化的长按
@@ -333,8 +368,13 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   返回 ERROR_INVALID_FUNCTION、阻塞读零报告——即该接口不承载输入，
   额外按键根本不在其中。读取这类按键需要自写过滤驱动（Steam / ReWASD
   的做法），应用层无解
-- Linux 上 evdev 走 raw-code 通道，可以识别
+- Linux 上 evdev 走 raw-code 通道，可以识别超出 Xbox 布局的按键；扫描枚举
+  `/dev/input` 目录（不再限于 event0..31），无权限/无节点/无手柄三种空结果在 GUI
+  状态区与 daemon 摘要中分别给出可操作指引（见第 10 节 Linux 小节）
 - 需要 Windows 8+（XInput 1.4）
 - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入输入，
   且失败时错误码不指明源于 UIPI。必须提权运行
-- daemon 输出目前只写 stdout；计划任务方式运行时需要重定向或未来的日志文件
+- Linux 上不需要提权（uinput 内核级接口，不受 UIPI 约束）；常驻通过 systemd
+  用户单元实现，退出登录后继续常驻需 `loginctl enable-linger`
+- daemon 输出写 stdout：Windows 计划任务运行时需重定向或未来的日志文件；
+  Linux systemd 用户单元运行为 `journalctl --user -u dezirojoy-daemon`

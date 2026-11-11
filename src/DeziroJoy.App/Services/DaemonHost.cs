@@ -5,6 +5,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.Core.Mapping;
+using DeziroJoy.Platform.Linux.Evdev;
 using DeziroJoy.Platform.Windows.Output;
 
 namespace DeziroJoy.App.Services;
@@ -201,14 +202,49 @@ public static class DaemonHost
         var sink = composition.Sink.GetType().Name;
         var sinkNote = composition.SinkError is null ? string.Empty : $"（{composition.SinkError}）";
         var elevation = DescribeElevation(composition);
+        var deviceNote = BuildDeviceNote(composition);
 
-        return string.Join(
-            Environment.NewLine,
+        var lines = new List<string>
+        {
             "[DeziroJoy] daemon starting · no UI stack loaded",
             $"[DeziroJoy] platform: {EngineComposition.PlatformName}",
             $"[DeziroJoy] output sink: {sink}{sinkNote}",
             $"[DeziroJoy] devices detected: {devices}",
-            $"[DeziroJoy] engine started · interval {interval.TotalMilliseconds:0.#} ms · elevation: {elevation}");
+        };
+
+        if (deviceNote is not null)
+        {
+            lines.Add($"[DeziroJoy] {deviceNote}");
+        }
+
+        lines.Add($"[DeziroJoy] engine started · interval {interval.TotalMilliseconds:0.#} ms · elevation: {elevation}");
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    /// <summary>
+    /// Why the device count is what it is, on the platform that can tell. A zero count with no
+    /// explanation is the failure this exists for: "nothing plugged in", "no permission" and
+    /// "no input subsystem" need three different fixes, and the daemon's stdout - the journal
+    /// under systemd - is the only place any of them is visible.
+    /// </summary>
+    private static string? BuildDeviceNote(EngineComposition composition)
+    {
+        if (composition.Host.Controllers.Count > 0)
+        {
+            return null;
+        }
+
+        if (composition.Provider is not EvdevGamepadProvider evdev)
+        {
+            return null;
+        }
+
+        var diagnostic = evdev.LastScanDiagnostic;
+
+        return diagnostic is null || string.IsNullOrEmpty(diagnostic.Guidance)
+            ? null
+            : diagnostic.Guidance;
     }
 
     /// <summary>Renders the shutdown line printed once the engine has been stopped.</summary>

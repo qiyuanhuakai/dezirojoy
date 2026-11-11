@@ -205,7 +205,10 @@ public sealed class MainWindowViewModelDaemonTests
         await viewModel.ToggleEngineCommand.ExecuteAsync(null);
 
         Assert.False(viewModel.HasController);
-        Assert.Equal("未检测到手柄，请连接手柄", viewModel.StatusMessage);
+
+        // StartsWith, not Equal: the Linux probe appends machine-specific guidance to the
+        // "no gamepad" line; the wording itself is pinned by MainWindowViewModelDiagnosticTests.
+        Assert.StartsWith("未检测到手柄，请连接手柄", viewModel.StatusMessage);
     }
 
     [Fact]

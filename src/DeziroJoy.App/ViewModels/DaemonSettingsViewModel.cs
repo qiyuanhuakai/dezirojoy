@@ -1,14 +1,16 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeziroJoy.App.Services;
+using DeziroJoy.Platform.Linux;
 
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>
 /// Sidebar binding for the resident-daemon and logon-autostart settings. All state is read from
-/// the real <see cref="IDaemonService"/> (schtasks + process token); nothing is fabricated. The
-/// service defaults to the Windows implementation and degrades to "unsupported" elsewhere, so the
-/// card is safe to construct on any platform and is unit-tested with a fake.
+/// the real <see cref="IDaemonService"/> (schtasks + process token on Windows, a systemd user
+/// unit on Linux); nothing is fabricated. The service defaults to the platform implementation
+/// through <see cref="PlatformFactory.CreateDaemonService"/>, so the card is safe to construct on
+/// any platform and is unit-tested with a fake.
 /// </summary>
 public partial class DaemonSettingsViewModel : ObservableObject
 {
@@ -17,23 +19,53 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     public DaemonSettingsViewModel(IDaemonService? service = null)
     {
-        _service = service ?? new WindowsDaemonService();
+        _service = service ?? PlatformFactory.CreateDaemonService();
         RefreshFromService();
     }
 
     public bool IsSupported => _service.IsSupported;
 
+    /// <summary>
+    /// True where the daemon runs as the current user and elevation changes nothing by design
+    /// (Linux: uinput is a kernel interface UIPI does not gate). The card then swaps the Windows
+    /// UIPI wording for the platform's own explanation instead of claiming "not applicable".
+    /// </summary>
+    public bool IsSameUserModel => _service.IsSameUserModel;
+
     public bool IsElevated => _service.IsElevated;
 
     public bool IsDaemonInstalled => _service.IsDaemonInstalled;
 
+    /// <summary>Whether the resident daemon is running right now; only reported where known.</summary>
+    public bool IsDaemonRunning => _service.IsDaemonRunning;
+
     public string? DaemonRunLevel => _service.DaemonRunLevel;
 
-    public string DaemonStateText => !IsSupported
-        ? "常驻服务：当前平台不支持"
-        : IsDaemonInstalled
-            ? "常驻服务：已安装"
-            : "常驻服务：未安装";
+    public string DaemonStateText
+    {
+        get
+        {
+            if (!IsSupported)
+            {
+                return "常驻服务：当前平台不支持";
+            }
+
+            if (IsSameUserModel)
+            {
+                // Linux: the unit file is the install and systemd's own state is the run
+                // state, so "installed" and "running" are two different facts here.
+                return IsDaemonInstalled
+                    ? IsDaemonRunning
+                        ? "常驻服务：已安装并正在运行（systemd 用户单元）"
+                        : "常驻服务：已安装但未运行（systemd 用户单元）"
+                    : "常驻服务：未安装（systemd 用户单元）";
+            }
+
+            return IsDaemonInstalled
+                ? "常驻服务：已安装"
+                : "常驻服务：未安装";
+        }
+    }
 
     /// <summary>
     /// Injection reach is decided by the daemon's run level, not this window's token: the GUI
@@ -46,6 +78,14 @@ public partial class DaemonSettingsViewModel : ObservableObject
             if (!IsSupported)
             {
                 return "注入权限：不适用";
+            }
+
+            if (IsSameUserModel)
+            {
+                return
+                    "注入权限：Linux 为同用户设计——uinput 是内核级接口，不受 Windows UIPI 约束，"
+                    + "守护进程以当前用户身份运行，无需提权。注入只取决于设备访问权："
+                    + LinuxDeviceAccess.DeviceAccessGuidance;
             }
 
             if (!IsDaemonInstalled)
@@ -76,7 +116,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _autostartEnabled;
 
-    /// <summary>Re-reads the task scheduler and token, then republishes every derived property.</summary>
+    /// <summary>Re-reads the scheduler and token, then republishes every derived property.</summary>
     public void RefreshFromService()
     {
         _service.Refresh();
@@ -86,8 +126,10 @@ public partial class DaemonSettingsViewModel : ObservableObject
         _suppressAutostartChange = false;
 
         OnPropertyChanged(nameof(IsSupported));
+        OnPropertyChanged(nameof(IsSameUserModel));
         OnPropertyChanged(nameof(IsElevated));
         OnPropertyChanged(nameof(IsDaemonInstalled));
+        OnPropertyChanged(nameof(IsDaemonRunning));
         OnPropertyChanged(nameof(DaemonRunLevel));
         OnPropertyChanged(nameof(DaemonStateText));
         OnPropertyChanged(nameof(ElevationText));

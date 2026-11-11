@@ -65,4 +65,12 @@ public static class PlatformFactory
         error = "当前平台不支持输出模拟";
         return false;
     }
+
+    /// <summary>
+    /// The resident-daemon service for this platform: a systemd user unit on Linux, a scheduled
+    /// task on Windows. The settings card defaults to this so the Linux card is operable
+    /// instead of "unsupported", and tests inject their own.
+    /// </summary>
+    public static IDaemonService CreateDaemonService()
+        => OperatingSystem.IsLinux() ? new LinuxDaemonService() : new WindowsDaemonService();
 }
