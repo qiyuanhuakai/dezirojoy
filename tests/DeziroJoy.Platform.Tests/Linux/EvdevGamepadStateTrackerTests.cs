@@ -719,6 +719,26 @@ public class EvdevGamepadStateTrackerTests
     }
 
     [Fact]
+    public void An_Extreme_Rest_Value_Does_Not_Overflow_The_Orientation_Comparison()
+    {
+        // A rest value one below the declared minimum - what pathological firmware reports.
+        // Widening the operands is what keeps it forward: the int subtraction Max - Rest
+        // wraps to a large negative, which compared as "rest near max" and inverted a
+        // forward axis, so the seeded rest read as pressed and the endpoints swapped.
+        var tracker = TrackerWith(
+            EvdevCodes.AbsZ,
+            new EvdevAxisRange(int.MinValue + 1, 0, Rest: int.MinValue));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, int.MinValue + 1));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 0));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
     public void Reset_Clears_The_State_But_Keeps_The_Trigger_Orientation()
     {
         // Orientation is device calibration, not runtime state, so a Reset must not forget

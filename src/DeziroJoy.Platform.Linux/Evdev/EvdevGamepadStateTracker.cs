@@ -175,7 +175,11 @@ public sealed class EvdevGamepadStateTracker
 
             // Alternate trigger codes: the kernel's HID simulation mapping gives pads and
             // wheels ABS_GAS/ABS_BRAKE instead of ABS_Z/ABS_RZ. Gas accelerates (right
-            // trigger), brake stops (left trigger), the side each pedal sits on.
+            // trigger), brake stops (left trigger), the side each pedal sits on. A device
+            // that reports both codes of a pair (ABS_Z with ABS_BRAKE, ABS_RZ with
+            // ABS_GAS) shares one pressed-state slot between them: each code keeps the
+            // orientation its own rest value implies, and whichever axis reported last
+            // sets the slot.
             case EvdevCodes.AbsGas:
                 SetTrigger(value, EvdevCodes.AbsGas, GamepadButton.RightTrigger, ref _rightTriggerPressed);
                 break;
@@ -273,8 +277,11 @@ public sealed class EvdevGamepadStateTracker
         var span = range.Max - range.Min;
 
         // The rest value is seeded calibration, never the live event, so the orientation is
-        // fixed per device; evaluating it from the live value would flip mid-press.
-        var inverted = (long)(range.Max - range.Rest) < (long)(range.Rest - range.Min);
+        // fixed per device; evaluating it from the live value would flip mid-press. The
+        // operands are widened before the subtraction: a rest value outside the declared
+        // range (pathological firmware) would otherwise wrap the int subtraction and read
+        // as the opposite orientation.
+        var inverted = (long)range.Max - range.Rest < (long)range.Rest - range.Min;
         var travel = span <= 0 ? 0f : (inverted ? range.Max - value : value - range.Min) / (float)span;
 
         if (travel >= TriggerPressPoint)

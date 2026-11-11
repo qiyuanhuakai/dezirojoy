@@ -107,10 +107,17 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         return BuildDiagnostic(directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno, unhandledAxes);
     }
 
-    private void Scan()
+    private void Scan() => Scan(EvdevNodes.DirectoryPath);
+
+    /// <summary>
+    /// The scan itself, over <paramref name="deviceDirectory"/> instead of the live
+    /// <c>/dev/input</c>: tests point it at a fixture tree, the same way
+    /// <see cref="ProbeOnce"/> does.
+    /// </summary>
+    internal void Scan(string deviceDirectory)
     {
-        var directoryExists = EvdevNodes.DirectoryExists();
-        var nodes = EvdevNodes.Enumerate();
+        var directoryExists = EvdevNodes.DirectoryExists(deviceDirectory);
+        var nodes = EvdevNodes.Enumerate(deviceDirectory);
         var present = new HashSet<string>(StringComparer.Ordinal);
 
         var nodeCount = 0;
@@ -127,11 +134,16 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
 
             lock (_sync)
             {
-                if (_devices.Any(d => string.Equals(d.Path, path, StringComparison.Ordinal)))
+                var existing = _devices.FirstOrDefault(d => string.Equals(d.Path, path, StringComparison.Ordinal));
+                if (existing is not null)
                 {
                     // Already served: it passed the capability check when it was opened, so it
-                    // still counts as a gamepad even though this scan opens nothing.
+                    // still counts as a gamepad even though this scan opens nothing - and its
+                    // axis diagnostic carries over, so a re-scan (hot-plug, or the periodic
+                    // GetConnected refresh) does not report a served pad as having no
+                    // unmapped axes.
                     gamepadCount++;
+                    unhandledAxes.AddRange(existing.UnhandledAxes);
                     continue;
                 }
             }
@@ -171,6 +183,22 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
 
         LastScanDiagnostic = BuildDiagnostic(
             directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno, unhandledAxes);
+    }
+
+    /// <summary>
+    /// Test seam: registers a device as already served, the way a previous scan's open left
+    /// it, so a test can drive the "already served" branch of <see cref="Scan(string)"/>.
+    /// A fixture tree cannot open as a gamepad on its own - regular files answer every
+    /// evdev ioctl with ENOTTY - so without this the re-scan path is unreachable off a real
+    /// kernel with a real pad attached. No reader thread is started; the scan only reads
+    /// the device's path and its diagnostic.
+    /// </summary>
+    internal void RegisterServedDevice(Device device)
+    {
+        lock (_sync)
+        {
+            _devices.Add(device);
+        }
     }
 
     private static EvdevScanDiagnostic BuildDiagnostic(
@@ -505,7 +533,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         }
     }
 
-    private sealed class Device
+    internal sealed class Device
     {
         public required string Path { get; init; }
 
