@@ -44,6 +44,8 @@ public class LinuxDaemonServiceTests : IDisposable
     [Fact]
     public void Install_Writes_The_Unit_Then_Reloads_Enables_And_Starts_It()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         var service = CreateService();
 
         var result = service.InstallDaemon();
@@ -61,6 +63,8 @@ public class LinuxDaemonServiceTests : IDisposable
     [Fact]
     public void The_Unit_Restarts_On_Failure_And_Never_Depends_On_A_Graphical_Session()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         var service = CreateService();
 
         service.InstallDaemon();
@@ -79,6 +83,8 @@ public class LinuxDaemonServiceTests : IDisposable
     [Fact]
     public void The_Unit_ExecStart_Points_At_The_Installed_Binary_With_The_Daemon_Flag()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         var service = CreateService();
 
         service.InstallDaemon();
@@ -91,6 +97,8 @@ public class LinuxDaemonServiceTests : IDisposable
     [Fact]
     public void A_Systemctl_Failure_Is_Reported_With_Its_Output()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         _systemCtl.Fail("enable", exitCode: 1, standardError: "Failed to connect to bus: No medium found");
         var service = CreateService();
 
@@ -103,6 +111,8 @@ public class LinuxDaemonServiceTests : IDisposable
     [Fact]
     public void Running_Through_DotNet_Run_Is_Refused_Because_The_Muxer_Would_Be_Registered()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         var service = CreateService(executable: () => "/usr/bin/dotnet");
 
         var result = service.InstallDaemon();
@@ -115,6 +125,8 @@ public class LinuxDaemonServiceTests : IDisposable
     [Fact]
     public void Uninstall_Stops_Disables_And_Removes_The_Unit()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         var service = CreateService();
         service.InstallDaemon();
 
