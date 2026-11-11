@@ -101,6 +101,10 @@ public class EvdevProbeTests
     [Fact]
     public void Readable_Nodes_Without_Gamepad_Capabilities_Report_NoGamepad()
     {
+        // The probe walks the fixture nodes with real open()/ioctl() calls: the P/Invoke into
+        // libc is exactly what does not exist off Linux.
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the probe's real open()/ioctl() P/Invoke only exists on Linux");
+
         var directory = TempDirectory();
 
         try
@@ -138,6 +142,9 @@ public class EvdevProbeTests
     [Fact]
     public void A_Node_Past_The_Old_Event31_Limit_Is_Seen()
     {
+        // Same probe path as above: every fixture node is opened through libc.
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the probe's real open()/ioctl() P/Invoke only exists on Linux");
+
         // The bug being fixed: a 33rd event node was invisible to the old scan.
         var directory = TempDirectory();
 
