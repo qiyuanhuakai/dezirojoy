@@ -226,25 +226,45 @@ public static class DaemonHost
     /// Why the device count is what it is, on the platform that can tell. A zero count with no
     /// explanation is the failure this exists for: "nothing plugged in", "no permission" and
     /// "no input subsystem" need three different fixes, and the daemon's stdout - the journal
-    /// under systemd - is the only place any of them is visible.
+    /// under systemd - is the only place any of them is visible. A non-zero count is explained
+    /// too when the pads it found report axes no mapping can reach: those are quoted for an
+    /// <c>evtest</c> comparison instead of passing for a broken stick. See
+    /// <see cref="BuildDeviceNote(EvdevScanDiagnostic?, int)"/> for the per-diagnostic rule.
     /// </summary>
     private static string? BuildDeviceNote(EngineComposition composition)
     {
-        if (composition.Host.Controllers.Count > 0)
-        {
-            return null;
-        }
-
         if (composition.Provider is not EvdevGamepadProvider evdev)
         {
             return null;
         }
 
-        var diagnostic = evdev.LastScanDiagnostic;
+        return BuildDeviceNote(evdev.LastScanDiagnostic, composition.Host.Controllers.Count);
+    }
 
-        return diagnostic is null || string.IsNullOrEmpty(diagnostic.Guidance)
-            ? null
-            : diagnostic.Guidance;
+    /// <summary>
+    /// The device note for one scan diagnostic and the pad count the host is actually serving,
+    /// or null when there is nothing to say. A connected pad used to suppress the note
+    /// entirely, which hid the unhandled-axis diagnostic a user needs to compare a dead stick
+    /// or trigger against <c>evtest</c>. With a pad only the axis segment is quoted:
+    /// <see cref="EvdevScanDiagnostic.Guidance"/> already drops the outcome wording once a
+    /// gamepad was found, so it is exactly that segment - and empty when every reported axis
+    /// is handled, leaving a healthy pad silent. A diagnostic that disagrees with the
+    /// connected pad (a stale scan still reading "nothing plugged in") says nothing rather
+    /// than contradicting the device in view. Without a pad the full guidance - outcome plus
+    /// any unhandled axes - stays as it was.
+    /// </summary>
+    internal static string? BuildDeviceNote(EvdevScanDiagnostic? diagnostic, int controllerCount)
+    {
+        if (diagnostic is null)
+        {
+            return null;
+        }
+
+        var quoteable = controllerCount == 0 || diagnostic.Outcome == EvdevScanOutcome.GamepadsFound;
+
+        return quoteable && !string.IsNullOrEmpty(diagnostic.Guidance)
+            ? diagnostic.Guidance
+            : null;
     }
 
     /// <summary>Renders the shutdown line printed once the engine has been stopped.</summary>
