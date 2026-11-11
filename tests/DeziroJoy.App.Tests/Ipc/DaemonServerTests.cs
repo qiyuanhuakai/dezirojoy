@@ -148,7 +148,14 @@ internal sealed class FakeDaemonHost : IDaemonHost
             foreach (var (deviceId, profile) in profiles)
             {
                 // Mirror EngineHost.SwitchPresetSlot: the runtime is tagged with the slot it moves
-                // to, so a device left off the app-wide slot is observable through GetProfile.
+                // to, so a device left off the app-wide slot is observable through GetProfile -
+                // and a device already running the target slot is left alone rather than reloaded
+                // for a switch that changes nothing.
+                if (GetProfile(deviceId) is { PresetSlot: var current } && current == slot)
+                {
+                    continue;
+                }
+
                 Reload(deviceId, profile with { PresetSlot = slot });
             }
         }
@@ -1629,6 +1636,77 @@ public class DaemonServerTests
         var snapshot = Assert.IsType<StateChangedMessage>(
             await server.ProcessAsync(new GetStateMessage("req-state")));
         Assert.Equal(2, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task A_Leader_Request_Leaves_A_Device_Without_The_Target_Slot_On_Its_Own_Configuration()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "pad-1 主配置",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "pad-1 第二套",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-2", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "pad-2 主配置",
+            DeviceId = "pad-2",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.AddDevice("pad-2");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        // The leader key asks for slot 2; pad-2 holds nothing there, so it is not reloaded and
+        // keeps running its own configuration while the app-wide slot moves.
+        server.RequestPresetSlotSwitch(2);
+
+        Assert.Equal(["pad-1"], host.ReloadedDevices);
+        Assert.Equal("pad-1 第二套", host.GetProfile("pad-1")!.Name);
+        Assert.Null(host.GetProfile("pad-2"));
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-state")));
+        Assert.Equal(2, snapshot.Snapshot.ActivePresetSlot);
+    }
+
+    [Fact]
+    public async Task A_Switch_To_The_Slot_A_Device_Already_Runs_Does_Not_Reload_It()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.SaveSlot("pad-1", 1, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "主配置",
+            DeviceId = "pad-1",
+        });
+        presets.SaveSlot("pad-1", 2, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic) with
+        {
+            Name = "第二套",
+            DeviceId = "pad-1",
+        });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        host.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        host.ReloadedDevices.Clear();
+        var server = CreateServer(host, NewStore(), profileStore: store);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SwitchPresetSlotMessage("req-1", "pad-1", 1)));
+
+        Assert.True(ack.Accepted);
+        Assert.Empty(host.ReloadedDevices);
+        Assert.Equal(1, host.GetProfile("pad-1")!.PresetSlot);
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-state")));
+        Assert.Equal(1, snapshot.Snapshot.ActivePresetSlot);
     }
 
     [Fact]

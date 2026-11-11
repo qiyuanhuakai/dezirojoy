@@ -242,6 +242,25 @@ public sealed class MappingEngine
     }
 
     /// <summary>
+    /// Adopts a just-polled input snapshot as the edge baseline without ticking: every button
+    /// it reports held counts as already-pressed, so no press edge is fabricated for input the
+    /// user never re-pressed, while a release still forms a real edge. The host primes a
+    /// freshly built engine this way after a profile reload: the reload discards the old
+    /// engine's edge memory while the pad keeps reporting the same held buttons, and without
+    /// this the next tick would see a fake press edge for each of them - re-firing a held key
+    /// the reload just released, or toggling a leader key once per held tick. Gesture state is
+    /// deliberately left alone: a fresh engine starts every cycle at Idle, so an in-flight
+    /// gesture is cancelled rather than resumed and a held button never re-arms mid-cycle.
+    /// </summary>
+    public void AdoptBaseline(IGamepadState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        _previousButtons = state.PressedButtons;
+        RefreshPreviousExtraButtons(state);
+    }
+
+    /// <summary>
     /// Builds the smoothing processor a gesture action needs when it names a continuous target.
     /// A gesture action is only ever tapped, so this exists purely so a mouse-moving gesture
     /// action ramps exactly like the mapping's own target would.
@@ -362,20 +381,30 @@ public sealed class MappingEngine
     }
 
     /// <summary>
-    /// Seeds each Press-mode leader's toggle from the profile's current slot, so the first
-    /// press after construction moves to the slot the profile is not on.
+    /// Anchors every Press-mode leader's toggle to the slot the profile actually runs, so the
+    /// first press after construction - or after <see cref="Reset"/> - moves to the slot the
+    /// profile is not on. The host also calls this on a running engine when the active slot
+    /// moved without reloading it (a preset switch that left the device on its own slot): the
+    /// latch is seeded once at construction, and a leader press whose switch never landed
+    /// leaves it flipped, so the next press would ask for the slot the device is already on.
     /// </summary>
-    private void SeedLeaderLatches()
+    public void SyncLeaderLatches(int currentSlot)
     {
         _leaderLatches.Clear();
         foreach (var mapping in _mappings)
         {
             if (mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Press } leader)
             {
-                _leaderLatches[mapping.Id] = _profile.PresetSlot == leader.SlotB;
+                _leaderLatches[mapping.Id] = currentSlot == leader.SlotB;
             }
         }
     }
+
+    /// <summary>
+    /// Seeds each Press-mode leader's toggle from the profile's current slot, so the first
+    /// press after construction moves to the slot the profile is not on.
+    /// </summary>
+    private void SeedLeaderLatches() => SyncLeaderLatches(_profile.PresetSlot);
 
     /// <summary>
     /// Flips the latch of every Toggle-mode precision button that saw a new press edge this
