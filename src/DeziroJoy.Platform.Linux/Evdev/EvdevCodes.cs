@@ -23,6 +23,14 @@ public static class EvdevCodes
 
     public const ushort AbsRz = 0x05;
 
+    // ABS_GAS 0x09 / ABS_BRAKE 0x0a: what the kernel's HID simulation mapping gives pads and
+    // wheels that report their triggers (pedals) through the Simulation usage page instead
+    // of ABS_Z/ABS_RZ. The tracker treats them as alternate trigger axis codes, so such a
+    // device works without knowing its exact shape.
+    public const ushort AbsGas = 0x09;
+
+    public const ushort AbsBrake = 0x0a;
+
     public const ushort AbsHat0X = 0x10;
 
     public const ushort AbsHat0Y = 0x11;

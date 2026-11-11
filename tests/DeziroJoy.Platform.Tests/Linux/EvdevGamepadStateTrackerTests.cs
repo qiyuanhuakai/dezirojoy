@@ -18,6 +18,10 @@ public class EvdevGamepadStateTrackerTests
         [EvdevCodes.AbsRz] = new EvdevAxisRange(0, 255),
     });
 
+    /// <summary>A tracker that knows exactly one axis, with the rest value it was seeded with.</summary>
+    private static EvdevGamepadStateTracker TrackerWith(ushort axis, EvdevAxisRange range)
+        => new(new Dictionary<ushort, EvdevAxisRange> { [axis] = range });
+
     [Fact]
     public void Every_Button_Code_Maps_To_The_Right_Logical_Button()
     {
@@ -267,7 +271,11 @@ public class EvdevGamepadStateTrackerTests
         tracker.Apply(new EvdevEvent(EvdevCodes.EvSyn, 0, 0));
 
         Assert.Equal(GamepadButtonMask.None, tracker.Snapshot().PressedButtons);
-        Assert.Equal(0f, tracker.Snapshot().LeftStickX);
+
+        // Seeded, not moved: the canonical -32768..32767 range has an odd span, so its rest
+        // value 0 normalizes to 1.5e-5 rather than an exact 0 - the same value an event
+        // reporting 0 produces, which is why the stick tests above use precision 4.
+        Assert.Equal(0f, tracker.Snapshot().LeftStickX, 4);
     }
 
     [Fact]
@@ -474,5 +482,256 @@ public class EvdevGamepadStateTrackerTests
 
         Assert.Equal(0f, state.LeftStickY, 4);
         Assert.Equal(0f, state.RightStickY, 4);
+    }
+
+    [Fact]
+    public void AbsGas_Presses_The_Right_Trigger_And_AbsBrake_The_Left()
+    {
+        // input-event-codes.h: ABS_GAS 0x09, ABS_BRAKE 0x0a. The kernel's HID simulation
+        // mapping reports triggers on these codes for pads and wheels that use the
+        // Simulation usage page instead of ABS_Z/ABS_RZ; gas accelerates (right trigger),
+        // brake stops (left trigger), the side each pedal sits on.
+        Assert.Equal((ushort)0x09, EvdevCodes.AbsGas);
+        Assert.Equal((ushort)0x0a, EvdevCodes.AbsBrake);
+
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 140));
+
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsBrake, 140));
+
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+    }
+
+    [Fact]
+    public void Gas_And_Brake_Use_The_Same_Hysteresis_Band_As_Z_And_Rz()
+    {
+        var tracker = CreateTracker();
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 139));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsBrake, 139));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 140));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsBrake, 140));
+
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 115));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsBrake, 115));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Gas_And_Brake_Thresholds_Scale_With_Their_Declared_Range()
+    {
+        // Same contract as ABS_Z on a 0..1023 range: the thresholds are fractions of the
+        // declared travel, so a 10-bit gas axis presses at >= 562, not at the 0..255 numbers.
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsGas] = new EvdevAxisRange(0, 1023),
+            [EvdevCodes.AbsBrake] = new EvdevAxisRange(0, 1023),
+        });
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 500));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 562));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsBrake, 461));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsBrake, 562));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Trigger_Missing_From_The_Device_Ranges_Falls_Back_To_Its_Zero_Based_Default()
+    {
+        // EVIOCGABS failed for this axis (or the tracker was built partial): the fallback
+        // must be the semantic 0..255, not the stick's -32768..32767, where a resting 0
+        // would sit at half travel and leave the trigger a noise flick away from pressed.
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsX] = FullStickRange,
+        });
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 140));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRz, 0));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+    }
+
+    [Fact]
+    public void A_Stick_Missing_From_The_Device_Ranges_Falls_Back_To_The_Full_Range()
+    {
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>());
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsX, -32768));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRx, 32767));
+
+        Assert.Equal(-1f, tracker.Snapshot().LeftStickX);
+        Assert.Equal(1f, tracker.Snapshot().RightStickX);
+    }
+
+    [Fact]
+    public void DefaultAxisRanges_Give_Triggers_A_Zero_Based_Range_And_Sticks_The_Full_Range()
+    {
+        // The fallback table itself, pinned: a trigger default of -32768..32767 would put
+        // its rest value at half travel, and a stick default of 0..255 would halve it.
+        Assert.Equal(new EvdevAxisRange(0, 255), EvdevGamepadStateTracker.DefaultAxisRanges[EvdevCodes.AbsZ]);
+        Assert.Equal(new EvdevAxisRange(0, 255), EvdevGamepadStateTracker.DefaultAxisRanges[EvdevCodes.AbsRz]);
+        Assert.Equal(new EvdevAxisRange(0, 255), EvdevGamepadStateTracker.DefaultAxisRanges[EvdevCodes.AbsGas]);
+        Assert.Equal(new EvdevAxisRange(0, 255), EvdevGamepadStateTracker.DefaultAxisRanges[EvdevCodes.AbsBrake]);
+        Assert.Equal(new EvdevAxisRange(-32768, 32767), EvdevGamepadStateTracker.DefaultAxisRanges[EvdevCodes.AbsX]);
+        Assert.Equal(new EvdevAxisRange(-32768, 32767), EvdevGamepadStateTracker.DefaultAxisRanges[EvdevCodes.AbsRy]);
+    }
+
+    [Fact]
+    public void The_First_Snapshot_Reflects_The_Rest_Values_The_Device_Reported()
+    {
+        // Open-time seeding: a stick resting ~10% off-center and a trigger resting at the
+        // axis maximum must both show in the very first snapshot, before any event arrives.
+        // Waiting for the first event left the display at the neutral default until the
+        // user happened to move something.
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsX] = new EvdevAxisRange(-32768, 32767, Rest: 3276),
+            [EvdevCodes.AbsZ] = new EvdevAxisRange(0, 255, Rest: 255),
+        });
+
+        var state = tracker.Snapshot();
+
+        // 3276 of the 65535-wide canonical range is ~10% off center.
+        Assert.Equal(0.1f, state.LeftStickX, 3);
+        Assert.False(state.IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Stick_Resting_Off_Center_Seeds_Off_Center_With_The_Y_Inversion()
+    {
+        // ABS_Y rests at its raw maximum - pushed down - so the seeded state is -1, not +1.
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsY] = new EvdevAxisRange(-32768, 32767, Rest: 32767),
+        });
+
+        Assert.Equal(-1f, tracker.Snapshot().LeftStickY);
+    }
+
+    [Fact]
+    public void A_Forward_Trigger_Resting_At_Minimum_Keeps_Its_Usual_Orientation()
+    {
+        var tracker = TrackerWith(EvdevCodes.AbsZ, new EvdevAxisRange(0, 255, Rest: 0));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 139));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 140));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 115));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Reverse_Trigger_Resting_At_Maximum_Stays_Released_And_Presses_Toward_Minimum()
+    {
+        // The "扳机常亮" shape: a wheel or pedal axis that rests at the axis maximum. Read
+        // forward, rest is full travel - permanently lit - so the seeded rest value orients
+        // the travel: rest near max means pressed = toward min.
+        var tracker = TrackerWith(EvdevCodes.AbsZ, new EvdevAxisRange(0, 255, Rest: 255));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        // Inverted travel of 139 is (255-139)/255 = 0.455: inside the band, still released.
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 139));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 115));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 140));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 0));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Reverse_Trigger_On_A_1023_Scale_Inverts_The_Same_Way()
+    {
+        var tracker = TrackerWith(EvdevCodes.AbsZ, new EvdevAxisRange(0, 1023, Rest: 1023));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 500));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 461));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 562));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void A_Reverse_Alternate_Trigger_Code_Is_Oriented_From_Its_Rest_Too()
+    {
+        // Orientation follows the seeded rest, not the axis code: an inverted ABS_GAS
+        // behaves exactly like an inverted ABS_Z.
+        var tracker = TrackerWith(EvdevCodes.AbsGas, new EvdevAxisRange(0, 255, Rest: 255));
+
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 0));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsGas, 255));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.RightTrigger));
+    }
+
+    [Fact]
+    public void A_Rest_Value_At_Midpoint_Keeps_The_Forward_Orientation()
+    {
+        // Only a rest value strictly nearer the maximum inverts: a midpoint rest is
+        // ambiguous, and forward is the conventional reading.
+        var tracker = TrackerWith(EvdevCodes.AbsZ, new EvdevAxisRange(0, 255, Rest: 127));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 140));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 115));
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+    }
+
+    [Fact]
+    public void Reset_Clears_The_State_But_Keeps_The_Trigger_Orientation()
+    {
+        // Orientation is device calibration, not runtime state, so a Reset must not forget
+        // it: after Reset the reverse trigger still reads pressed toward its minimum.
+        var tracker = TrackerWith(EvdevCodes.AbsZ, new EvdevAxisRange(0, 255, Rest: 255));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 0));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Reset();
+        Assert.False(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 0));
+        Assert.True(tracker.Snapshot().IsPressed(GamepadButton.LeftTrigger));
     }
 }

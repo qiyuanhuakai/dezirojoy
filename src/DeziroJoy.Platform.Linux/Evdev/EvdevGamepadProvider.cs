@@ -77,6 +77,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         var nodeCount = 0;
         var deniedCount = 0;
         var gamepadCount = 0;
+        var unhandledAxes = new List<EvdevUnhandledAxis>();
         string? firstDeniedPath = null;
         int? firstErrno = null;
 
@@ -88,6 +89,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             {
                 case EvdevOpenResult.Opened:
                     gamepadCount++;
+                    unhandledAxes.AddRange(device.UnhandledAxes);
 
                     // The probe owns no readers, so the descriptor it just built is released
                     // immediately; only the classification survives.
@@ -102,7 +104,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             }
         }
 
-        return BuildDiagnostic(directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno);
+        return BuildDiagnostic(directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno, unhandledAxes);
     }
 
     private void Scan()
@@ -114,6 +116,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         var nodeCount = 0;
         var deniedCount = 0;
         var gamepadCount = 0;
+        var unhandledAxes = new List<EvdevUnhandledAxis>();
         string? firstDeniedPath = null;
         int? firstErrno = null;
 
@@ -143,6 +146,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
 
                     StartReader(device);
                     gamepadCount++;
+                    unhandledAxes.AddRange(device.UnhandledAxes);
                     break;
 
                 case EvdevOpenResult.AccessDenied:
@@ -165,7 +169,8 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             }
         }
 
-        LastScanDiagnostic = BuildDiagnostic(directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno);
+        LastScanDiagnostic = BuildDiagnostic(
+            directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno, unhandledAxes);
     }
 
     private static EvdevScanDiagnostic BuildDiagnostic(
@@ -174,7 +179,8 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         int deniedCount,
         int gamepadCount,
         string? firstDeniedPath,
-        int? firstErrno)
+        int? firstErrno,
+        List<EvdevUnhandledAxis> unhandledAxes)
         => new()
         {
             Outcome = EvdevScanDiagnostic.ClassifyOutcome(directoryExists, nodeCount, deniedCount, gamepadCount),
@@ -183,6 +189,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             GamepadCount = gamepadCount,
             FirstDeniedPath = firstDeniedPath,
             Errno = firstErrno,
+            UnhandledAxes = unhandledAxes,
         };
 
     private enum EvdevOpenResult
@@ -222,12 +229,15 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
                 return EvdevOpenResult.NotAGamepad;
             }
 
+            var ranges = ReadAxisRanges(fd);
+
             device = new Device
             {
                 Path = path,
                 Name = name,
-                Tracker = new EvdevGamepadStateTracker(ReadAxisRanges(fd)),
+                Tracker = new EvdevGamepadStateTracker(HandledAxisRanges(ranges)),
                 ButtonCount = ReadButtonCount(fd),
+                UnhandledAxes = FindUnhandledAxes(path, ranges),
                 Fd = fd,
             };
 
@@ -239,6 +249,29 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             throw;
         }
     }
+
+    /// <summary>
+    /// Narrows the device's full axis table to the codes the tracker maps, so the tracker
+    /// sees exactly its own axes and nothing else.
+    /// </summary>
+    private static Dictionary<ushort, EvdevAxisRange> HandledAxisRanges(Dictionary<ushort, EvdevAxisRange> ranges)
+        => ranges.Where(pair => EvdevGamepadStateTracker.IsHandledAbsCode(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+
+    /// <summary>
+    /// The ABS axes this device reports that the tracker does not map - the raw codes and
+    /// declared ranges a user can line up against <c>evtest</c> output. An axis that arrives
+    /// here is one the app can never light up, which is otherwise indistinguishable from a
+    /// broken stick; listing it turns "nothing happens" into a code to search for. Pure over
+    /// the range table so both directions are pinned by tests.
+    /// </summary>
+    internal static IReadOnlyList<EvdevUnhandledAxis> FindUnhandledAxes(
+        string devicePath,
+        IReadOnlyDictionary<ushort, EvdevAxisRange> ranges)
+        => ranges.Where(pair => !EvdevGamepadStateTracker.IsHandledAbsCode(pair.Key))
+            .OrderBy(pair => pair.Key)
+            .Select(pair => new EvdevUnhandledAxis(pair.Key, pair.Value.Min, pair.Value.Max, pair.Value.Rest, devicePath))
+            .ToList();
 
     private static unsafe string ReadDeviceName(int fd)
     {
@@ -364,24 +397,42 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         return count;
     }
 
+    /// <summary>
+    /// Reads EVIOCGABS for every absolute axis the device declares, keeping each axis's
+    /// current value as its seeded rest. Walking the EVIOCGBIT(EV_ABS) mask instead of a
+    /// fixed code list is what lets an unrecognized axis be reported with its real range,
+    /// and what keeps the rest value that used to be dropped on the floor.
+    /// </summary>
     private static unsafe Dictionary<ushort, EvdevAxisRange> ReadAxisRanges(int fd)
     {
         var ranges = new Dictionary<ushort, EvdevAxisRange>();
+        Span<byte> absBits = stackalloc byte[8];
 
-        foreach (var axis in new ushort[]
-                 {
-                     EvdevCodes.AbsX, EvdevCodes.AbsY, EvdevCodes.AbsRx, EvdevCodes.AbsRy, EvdevCodes.AbsZ, EvdevCodes.AbsRz,
-                 })
+        fixed (byte* pointer = absBits)
         {
-            var info = new InputAbsinfo();
-            var pointer = &info;
+            if (EvdevNative.Ioctl(fd, EvdevNative.EvIocGBitAbs, pointer) < 0)
+            {
+                return ranges;
+            }
+        }
 
-            if (EvdevNative.Ioctl(fd, EvdevNative.EvIocGAbs | axis, pointer) < 0)
+        var absMask = BinaryPrimitives.ReadUInt64LittleEndian(absBits);
+
+        for (ushort axis = 0; axis < 64; axis++)
+        {
+            if ((absMask & (1UL << axis)) == 0)
             {
                 continue;
             }
 
-            ranges[axis] = new EvdevAxisRange(info.Minimum, info.Maximum);
+            var info = new InputAbsinfo();
+
+            if (EvdevNative.Ioctl(fd, EvdevNative.EvIocGAbs | axis, &info) < 0)
+            {
+                continue;
+            }
+
+            ranges[axis] = new EvdevAxisRange(info.Minimum, info.Maximum, info.Value);
         }
 
         return ranges;
@@ -463,6 +514,9 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         public required EvdevGamepadStateTracker Tracker { get; init; }
 
         public int? ButtonCount { get; init; }
+
+        /// <summary>ABS axes the tracker does not map, with raw codes and ranges (may be empty).</summary>
+        public required IReadOnlyList<EvdevUnhandledAxis> UnhandledAxes { get; init; }
 
         public int Fd { get; set; }
 
