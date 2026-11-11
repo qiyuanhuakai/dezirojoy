@@ -2,9 +2,10 @@ namespace DeziroJoy.Platform.Linux;
 
 /// <summary>
 /// The device-access facts every Linux surface quotes: the group command, the opt-in udev
-/// rules and the linger note. They live in one place so the evdev scan diagnostic, the uinput
-/// error, the settings card, the daemon log and the docs all print the same words - a user
-/// who copies the rule out of one place must not get a different rule out of another.
+/// rules, the linger note, and the one-click fix's helper path and notice. They live in one
+/// place so the evdev scan diagnostic, the uinput error, the settings card, the fix helper
+/// invocation, the daemon log and the docs all print the same words - a user who copies the
+/// rule out of one place must not get a different rule out of another.
 /// </summary>
 public static class LinuxDeviceAccess
 {
@@ -30,6 +31,20 @@ public static class LinuxDeviceAccess
 
     /// <summary>Keeps the user's systemd instance - and so the resident daemon - alive after logout.</summary>
     public const string LingerCommand = "loginctl enable-linger $USER";
+
+    /// <summary>
+    /// Where the packaged one-click fix helper lives. The installers ship the helper but never
+    /// run it: the app invokes it through pkexec only when the user asks for the fix, so the
+    /// opt-in principle (安装器不注册规则) survives the one-click path.
+    /// </summary>
+    public const string FixHelperPath = "/opt/dezirojoy/fix-device-access.sh";
+
+    /// <summary>
+    /// What the one-click fix changes on the machine, stated before the user takes it: the
+    /// udev rules file, the input group, and the re-login the group change needs.
+    /// </summary>
+    public const string FixNotice =
+        "一键修复将写入 " + UdevRulesPath + "（udev 规则）并把当前用户加入 input 组，需要重新登录后生效。";
 
     /// <summary>
     /// The permission fix as one quotable sentence: read access for the pads, write access for

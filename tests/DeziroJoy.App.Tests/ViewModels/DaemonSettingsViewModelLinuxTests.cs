@@ -14,8 +14,8 @@ namespace DeziroJoy.App.Tests.ViewModels;
 [Collection("DeziroJoy.LinuxAutostart")]
 public class DaemonSettingsViewModelLinuxTests
 {
-    private static DaemonSettingsViewModel LinuxCard(FakeLinuxDaemonService service)
-        => new(service);
+    private static DaemonSettingsViewModel LinuxCard(FakeLinuxDaemonService service, IDeviceAccessFixer? fixer = null)
+        => new(service, fixer);
 
     [Fact]
     public void The_Card_Is_Supported_And_Operable_On_Linux()
@@ -213,6 +213,136 @@ public class DaemonSettingsViewModelLinuxTests
     }
 
     [Fact]
+    public async Task The_Fix_Button_Runs_The_Fixer_And_Reports_The_Outcome()
+    {
+        var fixer = new FakeDeviceAccessFixer
+        {
+            Result = DeviceAccessFixResult.Fixed(
+                "已修复设备访问权限：已写入 /etc/udev/rules.d/99-dezirojoy.rules；已将 qiyuaner 加入 input 组（重新登录后生效）。"),
+        };
+        var vm = LinuxCard(new FakeLinuxDaemonService(), fixer);
+
+        Assert.True(vm.CanFixDeviceAccess);
+
+        await vm.FixDeviceAccessCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, fixer.Calls);
+        Assert.Contains("已修复", vm.DeviceAccessFixStatus);
+        Assert.True(vm.HasDeviceAccessFixStatus);
+        Assert.False(vm.IsFixingDeviceAccess);
+        Assert.True(vm.CanFixDeviceAccess);
+
+        // A successful fix leaves nothing to explain, so the tooltip stays the plain notice.
+        Assert.Empty(vm.DeviceAccessFixNote);
+        Assert.Equal(LinuxDeviceAccess.FixNotice, vm.DeviceAccessFixTooltip);
+    }
+
+    [Fact]
+    public async Task While_The_Fix_Runs_The_Button_Is_Inoperable_And_The_Status_Says_So()
+    {
+        var gate = new TaskCompletionSource<DeviceAccessFixResult>();
+        var fixer = new FakeDeviceAccessFixer { Pending = gate.Task };
+        var vm = LinuxCard(new FakeLinuxDaemonService(), fixer);
+
+        var running = vm.FixDeviceAccessCommand.ExecuteAsync(null);
+
+        // pkexec blocks on the polkit dialog for as long as the user takes to answer it, so
+        // the fixing state is observable and the button is disabled against a second run.
+        Assert.True(vm.IsFixingDeviceAccess);
+        Assert.False(vm.CanFixDeviceAccess);
+        Assert.Contains("正在修复", vm.DeviceAccessFixStatus);
+
+        gate.SetResult(DeviceAccessFixResult.Fixed("已修复设备访问权限。"));
+        await running;
+
+        Assert.False(vm.IsFixingDeviceAccess);
+        Assert.True(vm.CanFixDeviceAccess);
+        Assert.Contains("已修复", vm.DeviceAccessFixStatus);
+    }
+
+    [Fact]
+    public async Task A_Degraded_Fix_Keeps_The_Manual_Commands_And_Explains_Itself_In_The_Tooltip()
+    {
+        var reason = "未找到 pkexec（当前 PATH 中可能没有它，或未安装 polkit）";
+        var fixer = new FakeDeviceAccessFixer
+        {
+            Result = DeviceAccessFixResult.Degraded(
+                reason,
+                $"一键修复不可用：{reason}。请手动执行：{LinuxDeviceAccess.DeviceAccessGuidance}"),
+        };
+        var vm = LinuxCard(new FakeLinuxDaemonService(), fixer);
+
+        await vm.FixDeviceAccessCommand.ExecuteAsync(null);
+
+        // The degradation hands over the same fix as copyable commands - the wording every
+        // other Linux surface already quotes - instead of a dead button.
+        Assert.Contains(LinuxDeviceAccess.InputGroupCommand, vm.DeviceAccessFixStatus);
+        Assert.Contains(LinuxDeviceAccess.UdevRulesPath, vm.DeviceAccessFixStatus);
+
+        // The tooltip states what the fix changes and why the one-click path was not used.
+        Assert.Contains(LinuxDeviceAccess.FixNotice, vm.DeviceAccessFixTooltip);
+        Assert.Contains("重新登录", vm.DeviceAccessFixTooltip);
+        Assert.Contains(reason, vm.DeviceAccessFixTooltip);
+    }
+
+    [Fact]
+    public async Task A_Failed_Fix_Reports_The_Reason_Too()
+    {
+        var fixer = new FakeDeviceAccessFixer
+        {
+            Result = DeviceAccessFixResult.Failed("探测失败", "无法探测设备访问状态：boom"),
+        };
+        var vm = LinuxCard(new FakeLinuxDaemonService(), fixer);
+
+        await vm.FixDeviceAccessCommand.ExecuteAsync(null);
+
+        Assert.Contains("无法探测设备访问状态：boom", vm.DeviceAccessFixStatus);
+        Assert.Contains("探测失败", vm.DeviceAccessFixTooltip);
+    }
+
+    [Fact]
+    public async Task A_Fix_With_Nothing_To_Do_Says_So_Without_A_Note()
+    {
+        var fixer = new FakeDeviceAccessFixer
+        {
+            Result = DeviceAccessFixResult.NoGap("未检测到设备访问缺口：手柄节点可读、/dev/uinput 可写，无需修复。"),
+        };
+        var vm = LinuxCard(new FakeLinuxDaemonService(), fixer);
+
+        await vm.FixDeviceAccessCommand.ExecuteAsync(null);
+
+        Assert.Contains("无需修复", vm.DeviceAccessFixStatus);
+        Assert.Empty(vm.DeviceAccessFixNote);
+        Assert.Equal(LinuxDeviceAccess.FixNotice, vm.DeviceAccessFixTooltip);
+    }
+
+    [Fact]
+    public async Task A_Daemon_Operation_Does_Not_Clobber_The_Fix_Status()
+    {
+        var fixer = new FakeDeviceAccessFixer
+        {
+            Result = DeviceAccessFixResult.Fixed("已修复设备访问权限。"),
+        };
+        var vm = LinuxCard(new FakeLinuxDaemonService { IsDaemonInstalled = true }, fixer);
+
+        await vm.FixDeviceAccessCommand.ExecuteAsync(null);
+        vm.StartDaemonCommand.Execute(null);
+
+        // The two actions report on their own lines, so neither erases the other's outcome.
+        Assert.Contains("已启动", vm.StatusMessage);
+        Assert.Contains("已修复", vm.DeviceAccessFixStatus);
+    }
+
+    [Fact]
+    public void The_Fix_Is_Not_Offered_Where_There_Is_No_Device_Access_Model()
+    {
+        // Windows has no evdev/uinput permission model to repair, so the card offers nothing.
+        var vm = new DaemonSettingsViewModel(new FakeDaemonService());
+
+        Assert.False(vm.CanFixDeviceAccess);
+    }
+
+    [Fact]
     public void The_Buttons_Drive_Systemctl_Through_The_Real_Service()
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd user unit only exists on Linux");
@@ -406,6 +536,28 @@ public class DaemonSettingsViewModelLinuxTests
             IsAutostartInstalled = enabled;
 
             return DaemonActionResult.Completed(enabled ? "已启用登录自启动" : "已关闭登录自启动");
+        }
+    }
+
+    /// <summary>
+    /// In-memory <see cref="IDeviceAccessFixer"/>: records the calls and answers either from
+    /// <see cref="Result"/> or, when <see cref="Pending"/> is set, blocks on it - so the card's
+    /// fixing state can be observed mid-run without a real pkexec dialog. The production fixer
+    /// itself is covered by <see cref="Services.DeviceAccessFixerTests"/>.
+    /// </summary>
+    internal sealed class FakeDeviceAccessFixer : IDeviceAccessFixer
+    {
+        public DeviceAccessFixResult Result { get; set; } =
+            DeviceAccessFixResult.Fixed("已修复设备访问权限（测试）。");
+
+        public Task<DeviceAccessFixResult>? Pending { get; set; }
+
+        public int Calls { get; private set; }
+
+        public DeviceAccessFixResult Fix()
+        {
+            Calls++;
+            return Pending is null ? Result : Pending.GetAwaiter().GetResult();
         }
     }
 }

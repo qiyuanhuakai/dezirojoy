@@ -10,16 +10,20 @@ namespace DeziroJoy.App.ViewModels;
 /// the real <see cref="IDaemonService"/> (schtasks + process token on Windows, a systemd user
 /// unit on Linux); nothing is fabricated. The service defaults to the platform implementation
 /// through <see cref="PlatformFactory.CreateDaemonService"/>, so the card is safe to construct on
-/// any platform and is unit-tested with a fake.
+/// any platform and is unit-tested with a fake. On the same-user platform the card also drives
+/// the one-click device-access fix through <see cref="IDeviceAccessFixer"/> - the Linux-only
+/// permission repair mapping depends on - and publishes its outcome with its own status line.
 /// </summary>
 public partial class DaemonSettingsViewModel : ObservableObject
 {
     private readonly IDaemonService _service;
+    private readonly IDeviceAccessFixer _deviceAccessFixer;
     private bool _suppressAutostartChange;
 
-    public DaemonSettingsViewModel(IDaemonService? service = null)
+    public DaemonSettingsViewModel(IDaemonService? service = null, IDeviceAccessFixer? deviceAccessFixer = null)
     {
         _service = service ?? PlatformFactory.CreateDaemonService();
+        _deviceAccessFixer = deviceAccessFixer ?? new DeviceAccessFixer();
         RefreshFromService();
     }
 
@@ -156,6 +160,46 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     public bool HasStatusMessage => !string.IsNullOrEmpty(StatusMessage);
 
+    /// <summary>
+    /// The one-click device-access fix is a Linux-only affordance: evdev/uinput permissions
+    /// are the platform's own model (the same reason the card swaps its wording on the
+    /// same-user platform), so the card offers the button nowhere else.
+    /// </summary>
+    public bool CanFixDeviceAccess => IsSameUserModel && !IsFixingDeviceAccess;
+
+    /// <summary>True while the fix runs; the button is disabled against it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanFixDeviceAccess))]
+    private bool _isFixingDeviceAccess;
+
+    /// <summary>
+    /// The fix's own status line - fixing / fixed / degraded / failed / nothing to fix - kept
+    /// separate from <see cref="StatusMessage"/> so a daemon operation can never overwrite the
+    /// outcome the user just asked for.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDeviceAccessFixStatus))]
+    private string _deviceAccessFixStatus = string.Empty;
+
+    public bool HasDeviceAccessFixStatus => DeviceAccessFixStatus.Length > 0;
+
+    /// <summary>
+    /// Why the last fix degraded or failed, or empty. The button's tooltip always states what
+    /// the fix changes; after a degraded run it also carries the reason, so a machine without
+    /// a polkit agent gets an explanation instead of a button that silently does nothing.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DeviceAccessFixTooltip))]
+    private string _deviceAccessFixNote = string.Empty;
+
+    /// <summary>
+    /// The button's tooltip: what the fix will change (rules file + input group + re-login),
+    /// plus the last degradation reason where there is one.
+    /// </summary>
+    public string DeviceAccessFixTooltip => DeviceAccessFixNote.Length > 0
+        ? $"{LinuxDeviceAccess.FixNotice}\n上次未使用一键修复的原因：{DeviceAccessFixNote}"
+        : LinuxDeviceAccess.FixNotice;
+
     [ObservableProperty]
     private bool _autostartEnabled;
 
@@ -182,6 +226,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(DaemonRunLevel));
         OnPropertyChanged(nameof(DaemonStateText));
         OnPropertyChanged(nameof(ElevationText));
+        OnPropertyChanged(nameof(CanFixDeviceAccess));
+        OnPropertyChanged(nameof(DeviceAccessFixTooltip));
     }
 
     partial void OnAutostartEnabledChanged(bool value)
@@ -208,6 +254,44 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     [RelayCommand]
     private void Refresh() => RefreshFromService();
+
+    /// <summary>
+    /// The one-click device-access fix. pkexec blocks on the polkit authentication dialog,
+    /// which can take as long as the user takes to answer it, so the work runs off the UI
+    /// thread and the card reports the fixing state while it does. Every outcome is published
+    /// verbatim from <see cref="IDeviceAccessFixer"/>: fixed, degraded (with the manual
+    /// commands and the reason), failed, or nothing to fix.
+    /// </summary>
+    [RelayCommand]
+    private async Task FixDeviceAccess()
+    {
+        if (IsFixingDeviceAccess)
+        {
+            return;
+        }
+
+        IsFixingDeviceAccess = true;
+        DeviceAccessFixStatus = "正在修复设备访问权限…";
+
+        try
+        {
+            var result = await Task.Run(() => _deviceAccessFixer.Fix());
+
+            DeviceAccessFixStatus = result.Message;
+            DeviceAccessFixNote = result.Reason ?? string.Empty;
+        }
+        catch (Exception exception)
+        {
+            // The fixer is written not to throw; a crash here must still leave the card
+            // usable and say what happened.
+            DeviceAccessFixStatus = $"修复设备访问权限失败：{exception.Message}";
+            DeviceAccessFixNote = string.Empty;
+        }
+        finally
+        {
+            IsFixingDeviceAccess = false;
+        }
+    }
 
     private void ApplyResult(DaemonActionResult result)
     {
