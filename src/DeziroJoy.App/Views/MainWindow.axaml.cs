@@ -11,12 +11,16 @@ using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
 using DeziroJoy.App.Views.Controls;
+using System.Buffers.Binary;
 using System.ComponentModel;
 
 namespace DeziroJoy.App;
 
 public partial class MainWindow : Window
 {
+    /// <summary>The PNG signature every icon frame in a Vista-and-later .ico starts with.</summary>
+    private static readonly byte[] PngMagic = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
     private static readonly TimeSpan PreviewInterval = TimeSpan.FromMilliseconds(16);
 
     // A busy UI thread delays the tick; the sweep follows real elapsed time so it stays in
@@ -130,8 +134,19 @@ public partial class MainWindow : Window
         var iconUri = new Uri(
             $"avares://{GetType().Assembly.GetName().Name}/!__AvaloniaDefaultWindowIcon");
 
-        using (var stream = AssetLoader.Open(iconUri))
+        // The X11 backend decodes the .ico through Skia, which reads only the first
+        // frame - 16x16 here - and X11IconData then caps the _NET_WM_ICON payload at
+        // 128px, so panels and taskbars would only ever be handed a 16px icon. Hand
+        // the window the largest frame instead (256x256, capped to 128 by Avalonia);
+        // the tray keeps its own path through the same resource. Windows keeps the
+        // whole .ico, where CreateIconFromResourceEx picks the best frame per size.
+        if (OperatingSystem.IsLinux() && LoadLargestIconFrame(iconUri) is { } frame)
         {
+            Icon = new WindowIcon(frame);
+        }
+        else
+        {
+            using var stream = AssetLoader.Open(iconUri);
             Icon = new WindowIcon(stream);
         }
 
@@ -140,6 +155,87 @@ public partial class MainWindow : Window
         {
             titleBarIcon.Source = new Bitmap(stream);
         }
+    }
+
+    /// <summary>
+    /// Reads the largest PNG-compressed frame out of the <c>.ico</c> window icon
+    /// resource as a bitmap. Returns null when the resource is not a multi-frame
+    /// .ico this understands, and the caller keeps the whole-resource icon.
+    /// </summary>
+    private static Bitmap? LoadLargestIconFrame(Uri iconUri)
+    {
+        byte[] icon;
+        using (var stream = AssetLoader.Open(iconUri))
+        {
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            icon = buffer.ToArray();
+        }
+
+        // Layout: a 6-byte header (reserved u16, type u16, count u16) followed by
+        // `count` 16-byte directory entries - width u8, height u8, palette u8,
+        // reserved u8, planes u16, bits-per-pixel u16, bytes-in-resource u32 LE,
+        // image-offset u32 LE. A dimension byte of 0 encodes 256.
+        const int headerSize = 6;
+        const int entrySize = 16;
+
+        if (icon.Length < headerSize)
+        {
+            return null;
+        }
+
+        var entries = BinaryPrimitives.ReadUInt16LittleEndian(icon.AsSpan(4));
+        var bestOffset = 0;
+        var bestLength = 0;
+        var bestPixels = -1;
+
+        for (var i = 0; i < entries; i++)
+        {
+            var start = headerSize + (i * entrySize);
+            if (start + entrySize > icon.Length)
+            {
+                return null;
+            }
+
+            var entry = icon.AsSpan(start, entrySize);
+            var width = entry[0] == 0 ? 256 : entry[0];
+            var height = entry[1] == 0 ? 256 : entry[1];
+            var length = BinaryPrimitives.ReadInt32LittleEndian(entry.Slice(8, 4));
+            var offset = BinaryPrimitives.ReadInt32LittleEndian(entry.Slice(12, 4));
+
+            // length > 0 is already established, so icon.Length - length cannot
+            // overflow and offset > icon.Length - length is the wrap-safe form of
+            // offset + length > icon.Length.
+            if (width <= 0 || height <= 0 || length <= 0 || offset < 0
+                || offset > icon.Length - length)
+            {
+                continue;
+            }
+
+            // Only PNG-compressed entries decode on their own; a BMP entry would need
+            // its DIB header stripped first, so it is skipped.
+            if (length < PngMagic.Length
+                || !icon.AsSpan(offset, PngMagic.Length).SequenceEqual(PngMagic))
+            {
+                continue;
+            }
+
+            var pixels = width * height;
+            if (pixels > bestPixels)
+            {
+                bestPixels = pixels;
+                bestOffset = offset;
+                bestLength = length;
+            }
+        }
+
+        if (bestPixels < 0)
+        {
+            return null;
+        }
+
+        using var frame = new MemoryStream(icon, bestOffset, bestLength, writable: false);
+        return new Bitmap(frame);
     }
 
     private MainWindowViewModel ViewModel => (MainWindowViewModel)DataContext!;

@@ -6,8 +6,14 @@
 #
 # Payload layout:
 #   /opt/dezirojoy/                        the complete self-contained publish output
-#   /opt/dezirojoy/dezirojoy.ico           application icon, referenced by the desktop entry
+#   /opt/dezirojoy/dezirojoy.ico           application icon, kept for compatibility
 #   /usr/share/applications/dezirojoy.desktop
+#   /usr/share/icons/hicolor/<size>/apps/dezirojoy.png
+#                                           one PNG per hicolor size (16/24/32/48/64/
+#                                           128/256), the .ico's own PNG frames committed
+#                                           under src/DeziroJoy.App/Assets/ and installed
+#                                           as-is; this is what the desktop entry's
+#                                           Icon=dezirojoy theme name resolves against
 #
 # The package deliberately ships no maintainer scripts, no systemd units, no cron jobs
 # and no udev rules: login autostart and the elevated resident daemon stay opt-in
@@ -89,6 +95,23 @@ cp -a "$publish/." "$stage/opt/dezirojoy/"
 chmod 0755 "$stage/opt/dezirojoy/DeziroJoy"
 cp "$icon" "$stage/opt/dezirojoy/dezirojoy.ico"
 install -m 0644 "$desktop" "$stage/usr/share/applications/dezirojoy.desktop"
+
+# The icon-theme payload: one PNG per hicolor size, installed as-is from the frames
+# committed under Assets/. No tool is involved - the Ubuntu CI runners ship no
+# ImageMagick, and unpacking the .ico at build time would have made the release
+# .deb depend on it. The loop is also the completeness check: a missing size fails
+# the build here rather than shipping a package whose icons silently do not exist.
+# Re-extract the frames (Assets/dezirojoy-<size>.png, byte-exact PNG entries of the
+# .ico) whenever the icon is re-cut.
+for required in 16 24 32 48 64 128 256; do
+  frame="$repo_root/src/DeziroJoy.App/Assets/dezirojoy-$required.png"
+  if [ ! -f "$frame" ]; then
+    echo "icon theme source missing: $frame" >&2
+    exit 1
+  fi
+
+  install -Dm644 "$frame" "$stage/usr/share/icons/hicolor/${required}x${required}/apps/dezirojoy.png"
+done
 
 installed_size=$(du -sk --exclude=DEBIAN "$stage" | cut -f1)
 
