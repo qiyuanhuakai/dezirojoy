@@ -39,6 +39,15 @@ public partial class DaemonSettingsViewModel : ObservableObject
     /// <summary>Whether the resident daemon is running right now; only reported where known.</summary>
     public bool IsDaemonRunning => _service.IsDaemonRunning;
 
+    /// <summary>
+    /// The start button is operable only on the same-user platform (Linux), with the unit
+    /// installed and not yet running; the stop button is its exact mirror. Windows keeps
+    /// neither - a scheduled task has no standalone start - so both are false there.
+    /// </summary>
+    public bool CanStartDaemon => IsSameUserModel && IsDaemonInstalled && !IsDaemonRunning;
+
+    public bool CanStopDaemon => IsSameUserModel && IsDaemonInstalled && IsDaemonRunning;
+
     public string? DaemonRunLevel => _service.DaemonRunLevel;
 
     public string DaemonStateText
@@ -130,6 +139,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsElevated));
         OnPropertyChanged(nameof(IsDaemonInstalled));
         OnPropertyChanged(nameof(IsDaemonRunning));
+        OnPropertyChanged(nameof(CanStartDaemon));
+        OnPropertyChanged(nameof(CanStopDaemon));
         OnPropertyChanged(nameof(DaemonRunLevel));
         OnPropertyChanged(nameof(DaemonStateText));
         OnPropertyChanged(nameof(ElevationText));
@@ -150,6 +161,12 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     [RelayCommand]
     private void UninstallDaemon() => ApplyResult(_service.UninstallDaemon());
+
+    [RelayCommand]
+    private void StartDaemon() => ApplyResult(_service.StartDaemon());
+
+    [RelayCommand]
+    private void StopDaemon() => ApplyResult(_service.StopDaemon());
 
     [RelayCommand]
     private void Refresh() => RefreshFromService();

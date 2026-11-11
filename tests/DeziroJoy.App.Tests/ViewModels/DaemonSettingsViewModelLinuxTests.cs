@@ -11,6 +11,7 @@ namespace DeziroJoy.App.Tests.ViewModels;
 /// Windows wording stays exactly where it was - the two paths share one view model and must
 /// not drift into each other.
 /// </summary>
+[Collection("DeziroJoy.LinuxAutostart")]
 public class DaemonSettingsViewModelLinuxTests
 {
     private static DaemonSettingsViewModel LinuxCard(FakeLinuxDaemonService service)
@@ -97,11 +98,147 @@ public class DaemonSettingsViewModelLinuxTests
         Assert.True(vm.IsDaemonRunning);
     }
 
+    [Fact]
+    public void Start_And_Stop_Drive_The_Service_And_The_Running_State()
+    {
+        var service = new FakeLinuxDaemonService { IsDaemonInstalled = true, IsDaemonRunning = false };
+        var vm = LinuxCard(service);
+
+        Assert.True(vm.CanStartDaemon);
+        Assert.False(vm.CanStopDaemon);
+
+        vm.StartDaemonCommand.Execute(null);
+
+        Assert.Equal(1, service.StartCalls);
+        Assert.True(vm.IsDaemonRunning);
+        Assert.True(vm.CanStopDaemon);
+        Assert.False(vm.CanStartDaemon);
+        Assert.Contains("已启动", vm.StatusMessage);
+
+        vm.StopDaemonCommand.Execute(null);
+
+        Assert.Equal(1, service.StopCalls);
+        Assert.False(vm.IsDaemonRunning);
+        Assert.True(vm.CanStartDaemon);
+        Assert.Contains("已停止", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void The_Start_Stop_Buttons_Are_Inoperable_Before_The_Install()
+    {
+        var service = new FakeLinuxDaemonService();
+        var vm = LinuxCard(service);
+
+        Assert.False(vm.CanStartDaemon);
+        Assert.False(vm.CanStopDaemon);
+
+        // Driven anyway, the service refuses instead of pretending: a unit that was never
+        // installed cannot start, and the card reports exactly that.
+        vm.StartDaemonCommand.Execute(null);
+
+        Assert.Equal(1, service.StartCalls);
+        Assert.Contains("尚未安装", vm.StatusMessage);
+        Assert.False(vm.IsDaemonRunning);
+    }
+
+    [Fact]
+    public void The_Buttons_Drive_Systemctl_Through_The_Real_Service()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd user unit only exists on Linux");
+
+        var systemCtl = new FakeSystemCtl();
+        var unitDirectory = Path.Combine(Path.GetTempPath(), "dezirojoy-vm-systemd-" + Guid.NewGuid().ToString("N"));
+        var autostartDirectory = Path.Combine(Path.GetTempPath(), "dezirojoy-vm-autostart-" + Guid.NewGuid().ToString("N"));
+        AutostartInstaller.LinuxAutostartDirectory = () => autostartDirectory;
+
+        try
+        {
+            var service = new LinuxDaemonService(systemCtl, () => unitDirectory, () => "/opt/dezirojoy/DeziroJoy");
+            var vm = new DaemonSettingsViewModel(service);
+
+            vm.InstallDaemonCommand.Execute(null);
+            Assert.True(vm.IsDaemonInstalled);
+            Assert.True(vm.IsDaemonRunning);
+
+            vm.StopDaemonCommand.Execute(null);
+
+            Assert.Contains($"stop {LinuxDaemonService.UnitName}", systemCtl.Calls);
+            Assert.False(vm.IsDaemonRunning);
+            Assert.True(vm.CanStartDaemon);
+            Assert.False(vm.CanStopDaemon);
+
+            vm.StartDaemonCommand.Execute(null);
+
+            Assert.Contains($"start {LinuxDaemonService.UnitName}", systemCtl.Calls);
+            Assert.True(vm.IsDaemonRunning);
+            Assert.True(vm.CanStopDaemon);
+            Assert.False(vm.CanStartDaemon);
+        }
+        finally
+        {
+            AutostartInstaller.LinuxAutostartDirectory = static () => Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "autostart");
+
+            TryDelete(unitDirectory);
+            TryDelete(autostartDirectory);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Records every systemctl invocation and mirrors real systemd's state: is-active answers
+    /// from the recorded state, start flips it on and stop flips it off. There is no is-enabled
+    /// branch because the service reads the autostart state from the XDG entry, never from the
+    /// unit - wiring those two together was the reviewed P1.
+    /// </summary>
+    private sealed class FakeSystemCtl : ISystemCtl
+    {
+        public List<string> Calls { get; } = [];
+
+        public bool Active { get; set; } = true;
+
+        public SystemCtlResult Run(string arguments)
+        {
+            Calls.Add(arguments);
+
+            if (arguments.StartsWith("is-active", StringComparison.Ordinal))
+            {
+                return new SystemCtlResult(Active ? 0 : 3, Active ? "active" : "inactive", string.Empty);
+            }
+
+            if (arguments.StartsWith("start", StringComparison.Ordinal))
+            {
+                Active = true;
+            }
+            else if (arguments.StartsWith("stop", StringComparison.Ordinal))
+            {
+                Active = false;
+            }
+
+            return new SystemCtlResult(0, string.Empty, string.Empty);
+        }
+    }
+
     /// <summary>
     /// In-memory same-user service: mutates on a completed operation and records autostart
-    /// requests, so the card's Linux wording is pinned without a systemd instance.
+    /// requests, so the card's Linux wording is pinned without a systemd instance. Internal so
+    /// the GUI tests can render the Linux card over the same double.
     /// </summary>
-    private sealed class FakeLinuxDaemonService : IDaemonService
+    internal sealed class FakeLinuxDaemonService : IDaemonService
     {
         public bool IsSupported => true;
 
@@ -118,6 +255,10 @@ public class DaemonSettingsViewModelLinuxTests
         public string? DaemonRunLevel => null;
 
         public List<bool> AutostartRequests { get; } = [];
+
+        public int StartCalls { get; private set; }
+
+        public int StopCalls { get; private set; }
 
         public void Refresh()
         {
@@ -140,6 +281,34 @@ public class DaemonSettingsViewModelLinuxTests
             IsDaemonRunning = false;
 
             return DaemonActionResult.Completed("已停止并移除 systemd 用户单元 dezirojoy-daemon.service。");
+        }
+
+        public DaemonActionResult StartDaemon()
+        {
+            StartCalls++;
+
+            if (!IsDaemonInstalled)
+            {
+                return DaemonActionResult.Failed("常驻服务尚未安装，无法启动。");
+            }
+
+            IsDaemonRunning = true;
+
+            return DaemonActionResult.Completed("已启动 systemd 用户单元 dezirojoy-daemon.service。");
+        }
+
+        public DaemonActionResult StopDaemon()
+        {
+            StopCalls++;
+
+            if (!IsDaemonInstalled)
+            {
+                return DaemonActionResult.Failed("常驻服务尚未安装，无法停止。");
+            }
+
+            IsDaemonRunning = false;
+
+            return DaemonActionResult.Completed("已停止 systemd 用户单元 dezirojoy-daemon.service，重新启动前不会运行。");
         }
 
         public DaemonActionResult SetAutostart(bool enabled)

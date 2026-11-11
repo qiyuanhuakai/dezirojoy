@@ -1,15 +1,20 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
              x:Class="DeziroJoy.App.Views.Controls.DaemonSettingsCard"
              x:DataType="vm:DaemonSettingsViewModel">
+    <UserControl.Resources>
+        <conv:BoolNegationConverter x:Key="Not" />
+    </UserControl.Resources>
     <Border Classes="card">
         <StackPanel>
             <TextBlock Classes="cardTitle" Text="后台服务" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                        Text="登录后运行映射，无需保持主窗口打开。" />
 
-            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="{Binding DaemonStateText}" />
+            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" x:Name="DaemonStateText"
+                       Text="{Binding DaemonStateText}" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding ElevationText}" />
 
             <WrapPanel Margin="0,12,0,0">
@@ -21,16 +26,38 @@
                         IsEnabled="{Binding IsSupported}" Command="{Binding RefreshCommand}" />
             </WrapPanel>
 
+            <!-- Linux only: the systemd user unit starts and stops on its own, separately from
+                 installing or uninstalling it. Windows has no such split - a scheduled task
+                 either exists and runs at logon or does not - so the row stays hidden there. -->
+            <WrapPanel IsVisible="{Binding IsSameUserModel}" x:Name="DaemonRuntimeRow">
+                <Button Classes="ghost" Margin="0,0,8,8" Content="启动常驻"
+                        x:Name="StartDaemonButton"
+                        IsEnabled="{Binding CanStartDaemon}" Command="{Binding StartDaemonCommand}" />
+                <Button Classes="ghost" Margin="0,0,8,8" Content="停止常驻"
+                        x:Name="StopDaemonButton"
+                        IsEnabled="{Binding CanStopDaemon}" Command="{Binding StopDaemonCommand}" />
+            </WrapPanel>
+
             <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0">
                 <StackPanel>
                     <CheckBox Content="登录时自启动" IsEnabled="{Binding IsSupported}"
                               IsChecked="{Binding AutostartEnabled, Mode=TwoWay}" />
+                    <!-- Windows keeps its original wording verbatim. -->
                     <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               x:Name="AutostartHintText"
+                               IsVisible="{Binding IsSameUserModel, Converter={StaticResource Not}}"
                                Text="登录后启动主程序；常驻服务负责后台映射。安装或卸载需要管理员权限。" />
+                    <!-- Linux: a systemd user unit needs no administrator, so that sentence
+                         would be false here and is left out. -->
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               x:Name="AutostartHintLinuxText"
+                               IsVisible="{Binding IsSameUserModel}"
+                               Text="登录后启动主程序；常驻服务负责后台映射。" />
                 </StackPanel>
             </Border>
 
             <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                       x:Name="DaemonStatusText"
                        IsVisible="{Binding HasStatusMessage}"
                        Foreground="{DynamicResource AccentBrush}"
                        Text="{Binding StatusMessage}" />
