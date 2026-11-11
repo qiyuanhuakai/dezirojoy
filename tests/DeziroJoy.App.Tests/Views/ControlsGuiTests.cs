@@ -133,31 +133,40 @@ public sealed class ControlsGuiTests
         var leftThumb = control.FindControl<Ellipse>("LeftStickThumb")!;
         var rightThumb = control.FindControl<Ellipse>("RightStickThumb")!;
 
-        // Core's contract is positive stick Y = up; canvas Y grows downward, so a stick pushed
-        // up must move the thumb UP the screen, to a smaller Canvas.Top. This sign is the whole
-        // bug: adding instead of subtracting mirrored the preview against the physical stick.
-        // Full deflection rides the shared deadzone's ramp, whose float arithmetic lands a
-        // hair under 1: the sign is the contract, the sub-pixel epsilon is the ramp.
-        viewModel.Update(GamepadState.Create(default, 0f, 1f, 0f, 1f));
+        // The cap now eases between directions instead of teleporting, so hold each input long
+        // enough to settle on the full-deflection pose before reading the sign.
+        Settle(viewModel, GamepadState.Create(default, 0f, 1f, 0f, 1f));
 
         Assert.Equal(113d, Canvas.GetTop(leftThumb), 4);
         Assert.Equal(177d, Canvas.GetTop(rightThumb), 4);
 
-        viewModel.Update(GamepadState.Create(default, 0f, -1f, 0f, -1f));
+        Settle(viewModel, GamepadState.Create(default, 0f, -1f, 0f, -1f));
 
         Assert.Equal(165d, Canvas.GetTop(leftThumb), 4);
         Assert.Equal(229d, Canvas.GetTop(rightThumb), 4);
 
         // Horizontal is unambiguous on every platform: pushing right is a larger Canvas.Left.
-        viewModel.Update(GamepadState.Create(default, 1f, 0f, 1f, 0f));
+        Settle(viewModel, GamepadState.Create(default, 1f, 0f, 1f, 0f));
 
         Assert.Equal(133d, Canvas.GetLeft(leftThumb), 4);
         Assert.Equal(493d, Canvas.GetLeft(rightThumb), 4);
 
-        viewModel.Update(GamepadState.Create(default, -1f, 0f, -1f, 0f));
+        Settle(viewModel, GamepadState.Create(default, -1f, 0f, -1f, 0f));
 
         Assert.Equal(81d, Canvas.GetLeft(leftThumb), 4);
         Assert.Equal(441d, Canvas.GetLeft(rightThumb), 4);
+    }
+
+    /// <summary>
+    /// Feeds one input for enough samples that the smoothed cap settles on its target pose; the
+    /// short time constant is well under a screen's worth of frames, so 60 samples is exact.
+    /// </summary>
+    private static void Settle(GamepadVisualizerViewModel viewModel, GamepadState state)
+    {
+        for (var i = 0; i < 60; i++)
+        {
+            viewModel.Update(state);
+        }
     }
 
     [AvaloniaFact]

@@ -114,12 +114,12 @@ public partial class GamepadVisualizer : UserControl
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(GamepadVisualizerViewModel.LeftStickX)
-            or nameof(GamepadVisualizerViewModel.LeftStickY)
-            or nameof(GamepadVisualizerViewModel.RightStickX)
-            or nameof(GamepadVisualizerViewModel.RightStickY)
-            or nameof(GamepadVisualizerViewModel.LeftMagnitude)
-            or nameof(GamepadVisualizerViewModel.RightMagnitude))
+        // The view model republishes the whole stick frame as one unit under an empty-name
+        // notification (the INotifyPropertyChanged "everything refreshed" convention). Redrawing
+        // on that single signal keeps every material layer on the same position and magnitude
+        // snapshot; the per-axis names this replaced fired up to six times per sample and placed
+        // the sheen a half-updated frame ahead of the cap.
+        if (e.PropertyName is null or "")
         {
             UpdateThumbs();
         }

@@ -1221,8 +1221,8 @@ public sealed class GamepadVisualizerTests
 
     /// <summary>
     /// The deadzone gates the preview, it does not damp it: a clear push moves every cap layer
-    /// off its base coordinates in real time, and releasing back below the deadzone returns
-    /// the whole stack to exactly the rest pose - no residual twitch, no opacity flicker.
+    /// off its base coordinates in real time, and releasing back below the deadzone eases the
+    /// whole stack home to exactly the rest pose - no residual twitch, no opacity flicker.
     /// </summary>
     [AvaloniaFact]
     public void A_Clear_Push_Moves_Every_Cap_Layer_And_The_Release_Parks_It_Again()
@@ -1256,13 +1256,60 @@ public sealed class GamepadVisualizerTests
         Assert.Equal(thumb.Opacity, tread.Opacity, 6);
         Assert.Equal(thumb.Opacity, centre.Opacity, 6);
 
+        // Releasing back below the deadzone eases the whole stack toward the rest pose over a few
+        // samples rather than snapping, then parks it exactly - no residual twitch, no opacity
+        // flicker. The first eased frame is off-centre but already closing on it.
         viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 0.02f, -0.01f, 0f, 0f));
+
+        Assert.True(Canvas.GetLeft(thumb) > restLeft && Canvas.GetLeft(thumb) < 133d,
+            "the release must begin easing the cap toward centre, not snap it home");
+
+        for (var i = 0; i < 60; i++)
+        {
+            viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 0.02f, -0.01f, 0f, 0f));
+        }
 
         Assert.Equal(restLeft, Canvas.GetLeft(thumb), 6);
         Assert.Equal(restTop, Canvas.GetTop(thumb), 6);
         Assert.Equal(0.55, thumb.Opacity, 6);
         Assert.Equal(restLeft, Canvas.GetLeft(sheen), 6);
         Assert.Equal(restLeft, Canvas.GetLeft(centre) - 6, 6);
+    }
+
+    /// <summary>
+    /// Every cap layer reads the same smoothed frame, so they stay in lockstep even mid-glide: a
+    /// half-eased position puts the sheen, tread and centre on the cap's exact coordinates and
+    /// rides one shared opacity, with no layer left a frame behind and no brightness drifting out
+    /// of step with the position.
+    /// </summary>
+    [AvaloniaFact]
+    public void Every_Cap_Layer_Stays_In_Lockstep_Mid_Smoothing()
+    {
+        var viewModel = new GamepadVisualizerViewModel();
+        var control = new GamepadVisualizer { DataContext = viewModel };
+
+        // Arm at full deflection, then step the input part-way back so the cap is caught
+        // mid-glide rather than settled on a target.
+        viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 1f, 0f, 0f, 0f));
+        viewModel.Update(GamepadState.Create(GamepadButtonMask.None, 0.4f, 0f, 0f, 0f));
+
+        foreach (var side in new[] { "Left", "Right" })
+        {
+            var thumb = control.FindControl<Control>($"{side}StickThumb")!;
+            var sheen = control.FindControl<Control>($"{side}StickThumbSheen")!;
+            var tread = control.FindControl<Control>($"{side}StickThumbTread")!;
+            var centre = control.FindControl<Control>($"{side}StickThumbCentre")!;
+
+            Assert.Equal(Canvas.GetLeft(thumb), Canvas.GetLeft(sheen));
+            Assert.Equal(Canvas.GetTop(thumb), Canvas.GetTop(sheen));
+            Assert.Equal(Canvas.GetLeft(thumb), Canvas.GetLeft(tread));
+            Assert.Equal(Canvas.GetTop(thumb), Canvas.GetTop(tread));
+            Assert.Equal(Canvas.GetLeft(thumb) + 6, Canvas.GetLeft(centre));
+            Assert.Equal(Canvas.GetTop(thumb) + 6, Canvas.GetTop(centre));
+            Assert.Equal(thumb.Opacity, sheen.Opacity, 6);
+            Assert.Equal(thumb.Opacity, tread.Opacity, 6);
+            Assert.Equal(thumb.Opacity, centre.Opacity, 6);
+        }
     }
 
     [AvaloniaFact]
