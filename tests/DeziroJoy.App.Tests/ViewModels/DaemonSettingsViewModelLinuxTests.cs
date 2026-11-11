@@ -127,8 +127,9 @@ public class DaemonSettingsViewModelLinuxTests
         {
             IsDaemonInstalled = true;
             IsDaemonRunning = true;
-            IsAutostartInstalled = true;
 
+            // Installing the unit deliberately does not install the XDG autostart entry:
+            // the two are independent switches, exactly like the real service.
             return DaemonActionResult.Completed(
                 $"已安装并启动 systemd 用户单元，登录时将自动运行。若需退出登录后继续常驻，请执行 {LinuxDeviceAccess.LingerCommand}。");
         }

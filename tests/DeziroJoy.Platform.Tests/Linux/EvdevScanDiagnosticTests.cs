@@ -122,6 +122,30 @@ public class EvdevScanDiagnosticTests
         Assert.Contains("loginctl enable-linger", LinuxDeviceAccess.LingerCommand);
     }
 
+    [Fact]
+    public void The_Udev_Rules_Are_Two_Lines_So_A_User_Can_Paste_Them_Verbatim()
+    {
+        // udev rules are line-based: a single joined line applies neither rule, so the shared
+        // text must keep them separated for every surface that quotes it.
+        var lines = LinuxDeviceAccess.UdevRulesText.Split('\n');
+
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("KERNEL==\"event*\"", lines[0]);
+        Assert.Contains("KERNEL==\"uinput\"", lines[1]);
+        Assert.Contains("static_node=uinput", lines[1]);
+    }
+
+    [Fact]
+    public void The_Guidance_Quotes_The_Rules_As_Two_Separate_Lines()
+    {
+        var diagnostic = Diagnostic(EvdevScanOutcome.AccessDenied, firstDeniedPath: "/dev/input/event3", errno: 13, nodeCount: 2);
+
+        var lines = diagnostic.Guidance.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Contains(lines, line => line.Contains("KERNEL==\"event*\"", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains("KERNEL==\"uinput\"", StringComparison.Ordinal));
+    }
+
     private static EvdevScanDiagnostic Diagnostic(
         EvdevScanOutcome outcome,
         string? firstDeniedPath = null,

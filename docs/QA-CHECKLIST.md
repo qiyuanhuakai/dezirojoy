@@ -116,7 +116,7 @@ X11 不是变量：输入走内核级 evdev/uinput，与显示服务器无关。
 - [ ] 拔掉手柄：GUI 状态区提示检查连接与蓝牙配对（daemon 摘要有对应指引）
 - [ ] 用户不在 `input` 组时（`id` 输出无 input）：GUI 状态区与 daemon 摘要都出现
       `sudo usermod -aG input $USER` 指引与 errno，不再静默显示「未检测到手柄」
-- [ ] 执行 `sudo usermod -aG $USER input`（或写入
+- [ ] 执行 `sudo usermod -aG input $USER`（或写入
       `/etc/udev/rules.d/99-dezirojoy.rules`：`KERNEL=="event*",GROUP="input",MODE="0660"`
       与 `KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"`）
       并重新登录后：手柄被检测到，映射生效（应用内 opt-in，安装器不注册 udev）

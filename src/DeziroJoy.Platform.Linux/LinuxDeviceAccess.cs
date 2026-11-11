@@ -19,11 +19,13 @@ public static class LinuxDeviceAccess
     public const string UdevRulesPath = "/etc/udev/rules.d/99-dezirojoy.rules";
 
     /// <summary>
-    /// The rules themselves: the input group may read every event node, and /dev/uinput gets a
-    /// static node the same group may write - the kernel module alone does not create it.
+    /// The rules themselves, one rule per line: the input group may read every event node,
+    /// and /dev/uinput gets a static node the same group may write - the kernel module alone
+    /// does not create it. Newline-joined on purpose: a user copies this verbatim into the
+    /// rules file, and udev rules are line-based, so a single joined line would apply neither.
     /// </summary>
     public const string UdevRulesText =
-        "KERNEL==\"event*\",GROUP=\"input\",MODE=\"0660\"；" +
+        "KERNEL==\"event*\",GROUP=\"input\",MODE=\"0660\"" + "\n" +
         "KERNEL==\"uinput\",GROUP=\"input\",MODE=\"0660\",OPTIONS+=\"static_node=uinput\"";
 
     /// <summary>Keeps the user's systemd instance - and so the resident daemon - alive after logout.</summary>

@@ -56,6 +56,13 @@ public interface IDaemonService
     /// </summary>
     bool IsDaemonRunning => false;
 
+    /// <summary>
+    /// True when the GUI's logon-autostart entry is registered - the exact registration
+    /// <see cref="SetAutostart"/> writes (a scheduled task on Windows, the XDG .desktop on
+    /// Linux). This is deliberately a different object from the daemon's own registration:
+    /// the daemon task/unit decides whether background mapping starts at logon, while this
+    /// one starts the windowed app, and the two toggle independently.
+    /// </summary>
     bool IsAutostartInstalled { get; }
 
     /// <summary>
@@ -404,7 +411,13 @@ public sealed class LinuxDaemonService : IDaemonService
 
         IsDaemonInstalled = File.Exists(UnitPath);
         IsDaemonRunning = Query("is-active", "active");
-        IsAutostartInstalled = Query("is-enabled", "enabled");
+
+        // The autostart toggle manages the XDG entry, so it must read the XDG entry: reading
+        // the daemon unit's is-enabled here would make the displayed state disagree with what
+        // SetAutostart writes (and with the Windows task-based semantics), snapping the toggle
+        // back on a machine whose unit is enabled but whose entry was never installed - and
+        // off a machine whose entry exists without any unit.
+        IsAutostartInstalled = AutostartInstaller.IsInstalled();
     }
 
     public DaemonActionResult InstallDaemon()

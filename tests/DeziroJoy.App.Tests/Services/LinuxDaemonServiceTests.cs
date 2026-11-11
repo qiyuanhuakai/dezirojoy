@@ -128,28 +128,45 @@ public class LinuxDaemonServiceTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_Reads_The_File_The_Active_State_And_The_Enabled_State()
+    public void Refresh_Reads_The_Unit_File_The_Active_State_And_The_Xdg_Entry()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
         var service = CreateService();
         service.InstallDaemon();
 
+        // Installing the daemon unit must NOT count as installing the GUI autostart entry:
+        // the two are independent switches, and a toggle fed by the unit's is-enabled would
+        // show ON here and snap back after every refresh.
         service.Refresh();
-
         Assert.True(service.IsDaemonInstalled);
         Assert.True(service.IsDaemonRunning);
+        Assert.False(service.IsAutostartInstalled);
+
+        // The autostart state comes from the XDG entry, never from the unit's enablement:
+        // the reviewed P1 was exactly that mis-wiring, and no command proves the fix like
+        // the absence of this one.
+        Assert.DoesNotContain(
+            _systemCtl.Calls,
+            call => call.StartsWith("is-enabled", StringComparison.Ordinal));
+
+        // The autostart state tracks the entry SetAutostart writes, not the unit.
+        service.SetAutostart(enabled: true);
+        service.Refresh();
         Assert.True(service.IsAutostartInstalled);
+        Assert.True(service.IsDaemonInstalled);
+
+        service.SetAutostart(enabled: false);
+        service.Refresh();
+        Assert.False(service.IsAutostartInstalled);
 
         _systemCtl.Active = false;
         service.Refresh();
         Assert.True(service.IsDaemonInstalled);
         Assert.False(service.IsDaemonRunning);
-        Assert.True(service.IsAutostartInstalled);
+        Assert.False(service.IsAutostartInstalled);
 
         File.Delete(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName));
-
-        // systemd reports a removed unit as inactive and disabled, so the fake says so too.
-        _systemCtl.Active = false;
-        _systemCtl.Enabled = false;
         service.Refresh();
         Assert.False(service.IsDaemonInstalled);
         Assert.False(service.IsDaemonRunning);
@@ -162,6 +179,7 @@ public class LinuxDaemonServiceTests : IDisposable
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the XDG path only exists on Linux");
 
         var service = CreateService();
+        service.InstallDaemon();
 
         var enabled = service.SetAutostart(enabled: true);
 
@@ -170,10 +188,22 @@ public class LinuxDaemonServiceTests : IDisposable
         Assert.True(File.Exists(desktop));
         Assert.Contains("Exec=\"/opt/dezirojoy/DeziroJoy\"", File.ReadAllText(desktop));
 
+        // The displayed toggle state must come from the entry that was just written - the
+        // review's P1 was exactly this round-trip going unasserted.
+        service.Refresh();
+        Assert.True(service.IsAutostartInstalled);
+
         var disabled = service.SetAutostart(enabled: false);
 
         Assert.Equal(DaemonOp.Completed, disabled.Result);
         Assert.False(File.Exists(desktop));
+
+        service.Refresh();
+        Assert.False(service.IsAutostartInstalled);
+
+        // The daemon unit is untouched by the toggle: still installed, still running.
+        Assert.True(service.IsDaemonInstalled);
+        Assert.True(service.IsDaemonRunning);
     }
 
     [Fact]
@@ -223,16 +253,16 @@ public class LinuxDaemonServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Records every systemctl invocation and answers by verb: is-active and is-enabled report
-    /// configurable state, everything else succeeds unless a failure was armed.
+    /// Records every systemctl invocation and answers by verb: is-active reports configurable
+    /// state, everything else succeeds unless a failure was armed. There is no is-enabled
+    /// branch because the service reads the autostart state from the XDG entry, never from the
+    /// unit - wiring those two together was the reviewed P1.
     /// </summary>
     private sealed class FakeSystemCtl : ISystemCtl
     {
         public List<string> Calls { get; } = [];
 
         public bool Active { get; set; } = true;
-
-        public bool Enabled { get; set; } = true;
 
         private readonly Dictionary<string, SystemCtlResult> _failures = new(StringComparer.Ordinal);
 
@@ -254,11 +284,6 @@ public class LinuxDaemonServiceTests : IDisposable
             if (arguments.StartsWith("is-active", StringComparison.Ordinal))
             {
                 return new SystemCtlResult(Active ? 0 : 3, Active ? "active" : "inactive", string.Empty);
-            }
-
-            if (arguments.StartsWith("is-enabled", StringComparison.Ordinal))
-            {
-                return new SystemCtlResult(Enabled ? 0 : 1, Enabled ? "enabled" : "disabled", string.Empty);
             }
 
             return new SystemCtlResult(0, string.Empty, string.Empty);
