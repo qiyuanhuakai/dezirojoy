@@ -79,18 +79,19 @@ jobs:
             fi
           done < <(grep -oP "Join-Path \\\$repoRoot '\K[^']*" "$script" || true)
 
-      # The Windows installer ships a Simplified Chinese interface built from Inno
-      # Setup's own ChineseSimplified.isl - which the Inno installer places in the
-      # compiler's Languages subdirectory, referenced as
-      # compiler:Languages\ChineseSimplified.isl (only Default.isl sits next to
-      # ISCC itself) - with English kept as the fallback (M30). Both languages are
-      # declared in the .iss [Languages] section, and the wizard's custom texts -
-      # the desktop-icon task and the launch-after-install entry - must be
-      # referenced through the language files ({cm:...}): a hard-coded English
-      # string there would stay English on a Chinese install. This is a static
-      # grep, so it needs no Inno install and fails before the publish instead of
-      # at the compile; build-and-verify.ps1 additionally checks the resolved
-      # ISCC's Languages\ChineseSimplified.isl and its message keys.
+      # The Windows installer ships a Simplified Chinese interface built from the
+      # repository's own ChineseSimplified.isl - Inno Setup's official translation
+      # (since 6.5.0, unchanged for 6.7.1), referenced as
+      # Languages\ChineseSimplified.isl relative to the .iss, so the build no
+      # longer depends on the runner's Inno install carrying that language file -
+      # with English kept as the fallback (M30). Both languages are declared in
+      # the .iss [Languages] section, and the wizard's custom texts - the
+      # desktop-icon task and the launch-after-install entry - must be referenced
+      # through the language files ({cm:...}): a hard-coded English string there
+      # would stay English on a Chinese install. This is a static grep, so it
+      # needs no Inno install and fails before the publish instead of at the
+      # compile; build-and-verify.ps1 additionally checks that the repository's
+      # Languages\ChineseSimplified.isl exists and defines its message keys.
       - name: Verify installer localization (static)
         if: runner.os == 'Windows'
         shell: bash
@@ -101,8 +102,8 @@ jobs:
 
           grep -Pq '^\s*Name:\s*"english"\s*;\s*MessagesFile:\s*"compiler:Default\.isl"\s*$' "$iss" \
             || { echo "$iss must keep English (compiler:Default.isl) as the fallback language"; exit 1; }
-          grep -Pq '^\s*Name:\s*"chinesesimplified"\s*;\s*MessagesFile:\s*"compiler:Languages\\ChineseSimplified\.isl"\s*$' "$iss" \
-            || { echo "$iss must declare Simplified Chinese (compiler:Languages\ChineseSimplified.isl)"; exit 1; }
+          grep -Pq '^\s*Name:\s*"chinesesimplified"\s*;\s*MessagesFile:\s*"Languages\\ChineseSimplified\.isl"\s*$' "$iss" \
+            || { echo "$iss must declare Simplified Chinese (Languages\ChineseSimplified.isl)"; exit 1; }
           grep -Pq '^\s*Name:\s*"desktopicon"\s*;\s*Description:\s*"\{cm:CreateDesktopIcon\}"' "$iss" \
             || { echo "the desktopicon task must be localized through {cm:CreateDesktopIcon}"; exit 1; }
           grep -Pq 'Description:\s*"\{cm:LaunchProgram,\{#MyAppName\}\}"' "$iss" \
@@ -385,9 +386,10 @@ jobs:
           ### 本版更新
 
           - **安装器简体中文界面**：Windows 安装器此前只加载英文语言文件，整个
-            向导是英文界面。现在 [Languages] 增加 Inno Setup 自带的简体中文语言
-            文件（`compiler:Languages\ChineseSimplified.isl`，LanguageID
-            $0804），不引入外部翻译文件：欢迎、目录、任务（含桌面图标）、准备
+            向导是英文界面。现在 [Languages] 增加简体中文语言文件，改为仓库自带
+            Inno Setup 官方简体中文翻译（`Languages\ChineseSimplified.isl`，
+            LanguageID $0804，6.5.0 起提供、兼容 Inno 6.7.1），不再依赖编译器
+            的语言目录：欢迎、目录、任务（含桌面图标）、准备
             安装、完成与卸载等标准页面随语言文件本地化，自定义文案（桌面图标
             任务、「安装后运行」）改经语言文件的消息键引用而非硬编码英文。多语言
             时安装程序显示语言选择对话框并按系统语言预选，English 保留为回退。

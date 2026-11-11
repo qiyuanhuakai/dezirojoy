@@ -1,0 +1,6 @@
+# Inno Setup's language files ship with Windows (CRLF) line endings. Keep them
+# byte-for-byte (no eol normalization) so the vendored ChineseSimplified.isl
+# matches the official translation exactly and Inno's parser sees the shipped
+# bytes; the repository-wide `* text=auto eol=lf` would otherwise rewrite CRLF
+# to LF on checkin and silently diverge from the source.
+*.isl -text

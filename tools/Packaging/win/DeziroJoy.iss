@@ -80,16 +80,17 @@ WizardStyle=modern
 CloseApplications=yes
 
 [Languages]
-; English is compiled into Setup itself and stays the fallback. Simplified Chinese
-; comes from Inno Setup's own ChineseSimplified.isl (LanguageID $0804), which the
-; Inno installer places in the compiler's Languages subdirectory - hence the
-; "compiler:Languages\" prefix; only Default.isl sits next to ISCC itself - so no
-; external translation file ships. With more than one language declared, Setup
-; shows the language dialog (ShowLanguageDialog=auto) and preselects the system
-; language; English remains selectable there and is what an unknown locale falls
-; back to.
+; English is compiled into Setup itself and stays the fallback (compiler:Default.isl
+; is the one file that always sits next to ISCC). Simplified Chinese ships with the
+; repository instead of being read from the compiler: Inno Setup's own
+; ChineseSimplified.isl (LanguageID $0804, the official translation since 6.5.0 and
+; unchanged for 6.7.1) lives next to this script under Languages\ and is referenced
+; relative to it, so the build no longer depends on the runner's Inno install
+; carrying that language file. With more than one language declared, Setup shows the
+; language dialog (ShowLanguageDialog=auto) and preselects the system language;
+; English remains selectable there and is what an unknown locale falls back to.
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
