@@ -451,19 +451,24 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
 按钮）。它把"照抄命令"升级为显式动作，但**不改变 opt-in 原则**：安装器与包体仍然不注册
 任何规则，helper 脚本随包放在 `/opt/dezirojoy` 里也只是待命，只有用户点击按钮才会运行。
 
-流程（`DeviceAccessFixer`，测试以 mock 进程覆盖各分支）：
+流程（`DeviceAccessFixer`，测试以 mock 进程/探针覆盖各分支）：
 
-1. 先跑 `LinuxRuntimeProbe.Probe()` 定位缺口（evdev 不可读 / uinput 不可写 / 无节点）。
-   无缺口时直接告知"无需修复"，不提权、不跑任何进程。
-2. 有缺口时把 `LinuxDeviceAccess.UdevRulesText`（规则文本的单一来源）写入临时文件，
+1. 先探测，且**只按权限信号判定缺口**：`EvdevGamepadProvider.ProbeOnce()` 的拒读节点数
+   （`DeniedNodeCount`，含"有手柄可读但有节点被拒"的逐节点形态）与 `/dev/uinput` 可写性
+   （`UInputOutputSink.ProbeUnavailableReason()`）。两者皆无为 NoGap：直接告知"无需修复"，
+   不提权、不跑任何进程。
+2. **没有手柄不是缺口**：evdev 扫描的展示用 Hint（"未识别到手柄"/"没有 event 节点"/"没有
+   输入子系统"）不是权限信号——udev 规则授予权限，不能凭空创建设备。权限正常但没插手柄时
+   点按钮同样得到 NoGap，而不是白跑一次 pkexec。
+3. 有缺口时把 `LinuxDeviceAccess.UdevRulesText`（规则文本的单一来源）写入临时文件，
    用 `pkexec` 运行随包 helper `tools/Packaging/linux/fix-device-access.sh`（装入
    `/opt/dezirojoy/fix-device-access.sh`）：安装上述规则 → `udevadm control --reload &&
    udevadm trigger` → `usermod -aG input <调用者>`。helper 自身不含规则副本，规则正文
    始终由应用生成，两处不会漂移。
-3. 无 polkit 代理、pkexec 不在 PATH、对话框被取消或 helper 缺失（非 deb 安装）时降级：
-   状态行回退为可照抄的命令（即 `DeviceAccessGuidance` 文案），按钮 tooltip 说明本次
-   降级的原因。
-4. UI 明示修改内容：tooltip 写明将写入 `/etc/udev/rules.d` 并把当前用户加入 input 组；
+4. 无 polkit 代理、pkexec 不在 PATH、对话框被取消、helper 缺失（非 deb 安装）或 helper
+   因工具缺失/执行失败未能完成承诺步骤（非 0 退出）时降级：状态行回退为可照抄的命令
+   （即 `DeviceAccessGuidance` 文案，stderr 原因在前），按钮 tooltip 说明本次降级的原因。
+5. UI 明示修改内容：tooltip 写明将写入 `/etc/udev/rules.d` 并把当前用户加入 input 组；
    udev 规则重载后对后续 open 立即生效，而组变更需要重新登录。
 
 边界：一键修复只解决设备访问权。权限修好但注入仍然无效时，原因在注入路径本身

@@ -12,8 +12,12 @@ public enum DeviceAccessFixOutcome
     Unsupported,
 
     /// <summary>
-    /// The probe found no gap - the event nodes are readable and /dev/uinput is writable -
-    /// so there was nothing to fix and nothing was run.
+    /// The probe found no permission gap - every event node opened for this user and
+    /// /dev/uinput is writable - so there was nothing to fix and nothing was run. A missing
+    /// gamepad is deliberately NOT a gap: "no gamepad found", "no event nodes" and "no input
+    /// subsystem" describe absent hardware, not absent permissions, and the udev rules grant
+    /// permissions without being able to create a device. With the permissions in order the
+    /// fix has nothing to do, so the button says exactly that instead of elevating.
     /// </summary>
     NoGap,
 
@@ -24,10 +28,11 @@ public enum DeviceAccessFixOutcome
     Fixed,
 
     /// <summary>
-    /// Elevation was unavailable - no pkexec on PATH, no packaged helper, or pkexec itself
-    /// failed (a desktop without a polkit agent, a dismissed authentication dialog) - so the
-    /// user gets the same fix as copyable commands instead, in the wording every other Linux
-    /// surface already quotes.
+    /// Elevation was unavailable or incomplete - no pkexec on PATH, no packaged helper, a
+    /// pkexec that failed (a desktop without a polkit agent, a dismissed authentication
+    /// dialog), or a helper that could not finish its promised steps - so the user gets the
+    /// same fix as copyable commands instead, in the wording every other Linux surface
+    /// already quotes.
     /// </summary>
     Degraded,
 
@@ -64,12 +69,14 @@ public readonly record struct DeviceAccessFixResult(
 
 /// <summary>
 /// Repairs the Linux device access that mapping depends on - readable <c>/dev/input/event*</c>
-/// nodes and a writable <c>/dev/uinput</c> - from one button press. It first asks
-/// <see cref="LinuxRuntimeProbe"/> where the gap is, then runs the packaged helper as root
-/// through pkexec, and degrades to the copyable manual commands wherever the elevated path is
-/// unavailable. The helper never runs unprompted: this is the user's explicit opt-in, exactly
-/// the principle that keeps the installers from registering udev rules on their own
-/// (docs/ELEVATION-AND-DAEMON.md 5.2).
+/// nodes and a writable <c>/dev/uinput</c> - from one button press. It first asks the kernel
+/// where the permission gap is - an event node this user may not open, or an unwritable
+/// /dev/uinput - then runs the packaged helper as root through pkexec, and degrades to the
+/// copyable manual commands wherever the elevated path is unavailable. The gate is permission
+/// signals only: a machine with no gamepad plugged in has no gap, because udev rules grant
+/// permissions and cannot create a device. The helper never runs unprompted: this is the
+/// user's explicit opt-in, exactly the principle that keeps the installers from registering
+/// udev rules on their own (docs/ELEVATION-AND-DAEMON.md 5.2).
 /// </summary>
 public interface IDeviceAccessFixer
 {

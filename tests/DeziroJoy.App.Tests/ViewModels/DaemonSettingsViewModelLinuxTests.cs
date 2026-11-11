@@ -344,7 +344,8 @@ public class DaemonSettingsViewModelLinuxTests
 
     [Fact]
     public void The_Buttons_Drive_Systemctl_Through_The_Real_Service()
-    {        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd user unit only exists on Linux");
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd user unit only exists on Linux");
 
         var systemCtl = new FakeSystemCtl();
         var unitDirectory = Path.Combine(Path.GetTempPath(), "dezirojoy-vm-systemd-" + Guid.NewGuid().ToString("N"));

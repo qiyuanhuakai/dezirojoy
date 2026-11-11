@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using DeziroJoy.Platform.Linux;
+using DeziroJoy.Platform.Linux.Evdev;
+using DeziroJoy.Platform.Linux.Output;
 
 namespace DeziroJoy.App.Services;
 
@@ -56,9 +58,14 @@ internal sealed class ProcessRunner : IProcessRunner
 /// The one-click device-access fix. The flow is deliberately ordered so that every failure
 /// mode lands on an honest state:
 /// <list type="number">
-/// <item>Probe first (<see cref="LinuxRuntimeProbe.Probe"/>): the fix aims at the gap the
-/// kernel actually reports - unreadable event nodes, an unwritable /dev/uinput, or no nodes
-/// at all - and a machine with no gap is told so instead of running pkexec for nothing.</item>
+/// <item>Probe first - and gate on <em>permission</em> signals only: an event node this user
+/// may not open (the evdev scan's denied count) or an unwritable /dev/uinput. The evdev
+/// scan's display-oriented hint is deliberately NOT the gate: "no gamepad found", "no event
+/// nodes" and "no input subsystem" are not permission gaps - the udev rules grant permissions
+/// and cannot create a device - so a machine whose permissions are in order is told "nothing
+/// to fix" and no pkexec runs, even with no pad plugged in. A denied node next to an already
+/// working pad still counts: permissions are per-node, and the user asked for device access
+/// to be repaired.</item>
 /// <item>Stage the rules: the udev text is generated from
 /// <see cref="LinuxDeviceAccess.UdevRulesText"/> - the same single source every other surface
 /// quotes - into a temporary file, so the helper installs the app's rules verbatim instead of
@@ -68,27 +75,31 @@ internal sealed class ProcessRunner : IProcessRunner
 /// login, which the result says.</item>
 /// <item>Degrade wherever the elevated path is unavailable - no pkexec, no packaged helper
 /// (a build that was never installed as a .deb), or a pkexec that failed because the desktop
-/// has no polkit agent or the dialog was dismissed - and hand the user the copyable manual
-/// commands instead, with the reason on the button's tooltip.</item>
+/// has no polkit agent, the dialog was dismissed, or the helper could not finish its promised
+/// steps - and hand the user the copyable manual commands instead, with the reason on the
+/// button's tooltip.</item>
 /// </list>
 /// </summary>
 public sealed class DeviceAccessFixer : IDeviceAccessFixer
 {
     private readonly IProcessRunner _process;
-    private readonly Func<LinuxRuntimeHints> _probe;
+    private readonly Func<EvdevScanDiagnostic> _evdevProbe;
+    private readonly Func<string?> _uinputProbe;
     private readonly Func<string> _helperPath;
 
     /// <summary>
     /// Internal so the seams stay an implementation detail: production and the settings card
-    /// use the defaults, tests inject a fake runner, a fake probe and a fake helper path.
+    /// use the defaults, tests inject a fake runner and fake probes.
     /// </summary>
     internal DeviceAccessFixer(
         IProcessRunner? process = null,
-        Func<LinuxRuntimeHints>? probe = null,
+        Func<EvdevScanDiagnostic>? evdevProbe = null,
+        Func<string?>? uinputProbe = null,
         Func<string>? helperPath = null)
     {
         _process = process ?? new ProcessRunner();
-        _probe = probe ?? LinuxRuntimeProbe.Probe;
+        _evdevProbe = evdevProbe ?? (static () => EvdevGamepadProvider.ProbeOnce());
+        _uinputProbe = uinputProbe ?? UInputOutputSink.ProbeUnavailableReason;
         _helperPath = helperPath ?? (static () => LinuxDeviceAccess.FixHelperPath);
     }
 
@@ -99,11 +110,13 @@ public sealed class DeviceAccessFixer : IDeviceAccessFixer
             return DeviceAccessFixResult.Unsupported("设备访问修复仅支持 Linux（evdev/uinput 权限模型）。");
         }
 
-        LinuxRuntimeHints hints;
+        EvdevScanDiagnostic evdev;
+        string? uinput;
 
         try
         {
-            hints = _probe();
+            evdev = _evdevProbe();
+            uinput = _uinputProbe();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -112,8 +125,12 @@ public sealed class DeviceAccessFixer : IDeviceAccessFixer
             return DeviceAccessFixResult.Failed("探测失败", $"无法探测设备访问状态：{exception.Message}");
         }
 
-        if (hints.DeviceGuidance is null && hints.OutputGuidance is null)
+        if (evdev.DeniedNodeCount == 0 && uinput is null)
         {
+            // Every event node opened and /dev/uinput is writable: the rules have nothing to
+            // grant. No gamepad, no event nodes or no input subsystem at all are not
+            // permission gaps - a rules file cannot conjure a plugged-in pad - so this is
+            // where "nothing to fix" is reported instead of elevating for nothing.
             return DeviceAccessFixResult.NoGap(
                 "未检测到设备访问缺口：手柄节点可读、/dev/uinput 可写，无需修复。");
         }
@@ -179,7 +196,9 @@ public sealed class DeviceAccessFixer : IDeviceAccessFixer
     /// Why the elevated path did not run. A process that never started is pkexec itself being
     /// absent (no polkit installed, or PATH without it); anything else ran and failed - a
     /// desktop without a polkit authentication agent, a dismissed dialog, or a helper that
-    /// errored - and its own stderr is the most specific reason there is.
+    /// could not finish its promised steps (a missing udevadm or usermod exits non-zero on
+    /// purpose, so a partial fix is never reported as Fixed) - and its own stderr is the most
+    /// specific reason there is, quoted ahead of the generic causes.
     /// </summary>
     private static string DescribeElevationFailure(ProcessResult result)
     {
@@ -193,12 +212,13 @@ public sealed class DeviceAccessFixer : IDeviceAccessFixer
         return string.IsNullOrEmpty(detail)
             ? $"pkexec 执行失败（退出码 {result.ExitCode}）"
             : $"pkexec 执行失败（退出码 {result.ExitCode}）：{detail}。"
-                + "可能是桌面上没有 polkit 认证代理，或认证对话框被取消";
+                + "可能原因：桌面上没有 polkit 认证代理、认证对话框被取消，或修复脚本未能完成全部步骤";
     }
 
     /// <summary>
     /// What the helper reports it did, so the success line states facts rather than a fixed
-    /// script: the helper prints one line per action it actually performed.
+    /// script: the helper prints one line per action it actually performed, and exits non-zero
+    /// when a promised step could not run.
     /// </summary>
     private static string DescribeHelperWork(ProcessResult result)
     {

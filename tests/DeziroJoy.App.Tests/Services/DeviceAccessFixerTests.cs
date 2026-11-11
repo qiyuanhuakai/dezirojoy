@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Linux;
+using DeziroJoy.Platform.Linux.Evdev;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Services;
@@ -8,21 +9,38 @@ namespace DeziroJoy.App.Tests.Services;
 /// <summary>
 /// The one-click device-access fix: probe first, then the packaged helper through pkexec, with
 /// the copyable manual commands as the degradation path. Every process goes through the
-/// injected fake runner, so pkexec's polkit dialog never actually opens here - and the rules
-/// the fixer stages are read back off disk to prove they are the single-source text.
+/// injected fake runner and every kernel probe through the injected fakes, so pkexec's polkit
+/// dialog never actually opens here - and the rules the fixer stages are read back off disk to
+/// prove they are the single-source text. The gate is pinned against the real probe shapes:
+/// a machine with no pad plugged in must never reach pkexec.
 /// </summary>
 public class DeviceAccessFixerTests
 {
     private static DeviceAccessFixer CreateFixer(
         FakeProcessRunner process,
-        LinuxRuntimeHints? hints = null,
+        EvdevScanDiagnostic? evdev = null,
+        string? uinput = null,
         string? helperPath = null)
-        => new(process, () => hints ?? Gap(), helperPath is null ? null : () => helperPath);
+        => new(
+            process,
+            () => evdev ?? Diagnostic(EvdevScanOutcome.AccessDenied, deniedNodeCount: 2),
+            () => uinput,
+            helperPath is null ? null : () => helperPath);
 
-    /// <summary>A machine with a permission gap: the evdev nodes exist but cannot be opened.</summary>
-    private static LinuxRuntimeHints Gap() => new(
-        $"权限不足（errno 13）：{LinuxDeviceAccess.InputGroupCommand} 后重新登录",
-        null);
+    /// <summary>
+    /// A scan result in the shape <see cref="EvdevGamepadProvider.ProbeOnce"/> really returns.
+    /// The optional hint is irrelevant to the fixer's gate - only the permission facts are.
+    /// </summary>
+    private static EvdevScanDiagnostic Diagnostic(EvdevScanOutcome outcome, int deniedNodeCount = 0)
+        => new()
+        {
+            Outcome = outcome,
+            NodeCount = 4,
+            DeniedNodeCount = deniedNodeCount,
+            GamepadCount = outcome == EvdevScanOutcome.GamepadsFound ? 1 : 0,
+            FirstDeniedPath = deniedNodeCount > 0 ? "/dev/input/event7" : null,
+            Errno = deniedNodeCount > 0 ? 13 : null,
+        };
 
     /// <summary>
     /// A stand-in for the packaged helper: the fixer only checks that the path exists, so an
@@ -35,13 +53,17 @@ public class DeviceAccessFixerTests
         return path;
     }
 
-    [Fact]
-    public void Without_A_Gap_Nothing_Is_Run()
+    [Theory]
+    [InlineData(EvdevScanOutcome.GamepadsFound)]
+    [InlineData(EvdevScanOutcome.NoGamepad)]
+    [InlineData(EvdevScanOutcome.NoEventNodes)]
+    [InlineData(EvdevScanOutcome.NoInputDirectory)]
+    public void Without_A_Permission_Gap_Nothing_Is_Run(EvdevScanOutcome outcome)
     {
-        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probe only runs on Linux");
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probes only run on Linux");
 
         var process = new FakeProcessRunner();
-        var fixer = CreateFixer(process, new LinuxRuntimeHints(null, null));
+        var fixer = CreateFixer(process, Diagnostic(outcome), uinput: null);
 
         var result = fixer.Fix();
 
@@ -51,9 +73,56 @@ public class DeviceAccessFixerTests
     }
 
     [Fact]
+    public void A_Missing_Gamepad_Is_Not_A_Permission_Gap()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probes only run on Linux");
+
+        // The real shape a healthy machine with no pad plugged in produces: every node opened
+        // (denied count 0), the scan's display hint says "未识别到手柄", uinput is writable.
+        // The hint is not a permission signal, so this must be NoGap - elevating here would
+        // run pkexec and write machine-wide rules for a problem that does not exist.
+        var process = new FakeProcessRunner();
+        var fixer = CreateFixer(process, Diagnostic(EvdevScanOutcome.NoGamepad), uinput: null);
+
+        var result = fixer.Fix();
+
+        Assert.Equal(DeviceAccessFixOutcome.NoGap, result.Outcome);
+        Assert.Empty(process.Calls);
+    }
+
+    [Fact]
+    public void A_Denied_Node_Next_To_A_Working_Pad_Is_Still_A_Gap()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probes only run on Linux");
+
+        // Permissions are per-node: a pad that works does not make a denied sibling node fine,
+        // and the user asked for device access to be repaired.
+        var helper = CreateFakeHelper();
+        var process = new FakeProcessRunner();
+
+        try
+        {
+            var fixer = CreateFixer(
+                process,
+                Diagnostic(EvdevScanOutcome.GamepadsFound, deniedNodeCount: 1),
+                uinput: null,
+                helperPath: helper);
+
+            var result = fixer.Fix();
+
+            Assert.Equal(DeviceAccessFixOutcome.Fixed, result.Outcome);
+            Assert.Single(process.Calls);
+        }
+        finally
+        {
+            File.Delete(helper);
+        }
+    }
+
+    [Fact]
     public void An_Unwritable_UInput_Is_A_Gap_Too()
     {
-        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probe only runs on Linux");
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probes only run on Linux");
 
         var helper = CreateFakeHelper();
         var process = new FakeProcessRunner();
@@ -62,7 +131,8 @@ public class DeviceAccessFixerTests
         {
             var fixer = CreateFixer(
                 process,
-                new LinuxRuntimeHints(null, "无法打开 /dev/uinput（errno 13）：请确认 uinput 模块已加载"),
+                Diagnostic(EvdevScanOutcome.GamepadsFound),
+                uinput: "无法打开 /dev/uinput（errno 13）：请确认 uinput 模块已加载",
                 helperPath: helper);
 
             var result = fixer.Fix();
@@ -93,7 +163,11 @@ public class DeviceAccessFixerTests
 
         try
         {
-            var fixer = CreateFixer(process, helperPath: helper);
+            var fixer = CreateFixer(
+                process,
+                Diagnostic(EvdevScanOutcome.AccessDenied, deniedNodeCount: 2),
+                uinput: null,
+                helperPath: helper);
 
             var result = fixer.Fix();
 
@@ -132,7 +206,11 @@ public class DeviceAccessFixerTests
 
         try
         {
-            var fixer = CreateFixer(process, helperPath: helper);
+            var fixer = CreateFixer(
+                process,
+                Diagnostic(EvdevScanOutcome.AccessDenied, deniedNodeCount: 2),
+                uinput: null,
+                helperPath: helper);
 
             var result = fixer.Fix();
 
@@ -143,6 +221,45 @@ public class DeviceAccessFixerTests
             Assert.Contains(LinuxDeviceAccess.UdevRulesPath, result.Message);
             Assert.Contains("Not authorized", result.Message);
             Assert.Contains("pkexec", result.Reason);
+        }
+        finally
+        {
+            File.Delete(helper);
+        }
+    }
+
+    [Fact]
+    public void A_Helper_That_Could_Not_Finish_Degrades_With_Its_Reason()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "pkexec and udev only exist on Linux");
+
+        // The helper exits non-zero on purpose when a promised step cannot run (no udevadm,
+        // no usermod), so a half-applied fix is never reported as Fixed.
+        var helper = CreateFakeHelper();
+        var process = new FakeProcessRunner
+        {
+            Next = new ProcessResult(
+                1,
+                "已写入 /etc/udev/rules.d/99-dezirojoy.rules",
+                "未找到 udevadm，无法重载 udev 规则（规则已写入 /etc/udev/rules.d/99-dezirojoy.rules，但尚未生效）"),
+        };
+
+        try
+        {
+            var fixer = CreateFixer(
+                process,
+                Diagnostic(EvdevScanOutcome.AccessDenied, deniedNodeCount: 2),
+                uinput: null,
+                helperPath: helper);
+
+            var result = fixer.Fix();
+
+            Assert.Equal(DeviceAccessFixOutcome.Degraded, result.Outcome);
+
+            // The helper's own stderr leads the reason, and the manual commands follow.
+            Assert.Contains("未找到 udevadm", result.Message);
+            Assert.Contains(LinuxDeviceAccess.InputGroupCommand, result.Message);
+            Assert.Contains("udevadm", result.Reason);
         }
         finally
         {
@@ -164,7 +281,11 @@ public class DeviceAccessFixerTests
 
         try
         {
-            var fixer = CreateFixer(process, helperPath: helper);
+            var fixer = CreateFixer(
+                process,
+                Diagnostic(EvdevScanOutcome.AccessDenied, deniedNodeCount: 2),
+                uinput: null,
+                helperPath: helper);
 
             var result = fixer.Fix();
 
@@ -186,7 +307,11 @@ public class DeviceAccessFixerTests
 
         var process = new FakeProcessRunner();
         var missing = Path.Combine(Path.GetTempPath(), "dezirojoy-missing-" + Guid.NewGuid().ToString("N"));
-        var fixer = CreateFixer(process, helperPath: missing);
+        var fixer = CreateFixer(
+            process,
+            Diagnostic(EvdevScanOutcome.AccessDenied, deniedNodeCount: 2),
+            uinput: null,
+            helperPath: missing);
 
         var result = fixer.Fix();
 
@@ -202,10 +327,14 @@ public class DeviceAccessFixerTests
     [Fact]
     public void A_Probe_That_Throws_Is_A_Failure_Not_A_Silent_Success()
     {
-        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probe only runs on Linux");
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev/uinput probes only run on Linux");
 
         var process = new FakeProcessRunner();
-        var fixer = new DeviceAccessFixer(process, () => throw new IOException("boom"), () => "/nonexistent");
+        var fixer = new DeviceAccessFixer(
+            process,
+            () => throw new IOException("boom"),
+            () => null,
+            () => "/nonexistent");
 
         var result = fixer.Fix();
 

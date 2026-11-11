@@ -11,6 +11,10 @@
 #   1. 安装 /etc/udev/rules.d/99-dezirojoy.rules；
 #   2. udevadm control --reload && udevadm trigger（重载即生效，无需重启）；
 #   3. usermod -aG input <调用者>（组变更要重新登录后生效）。
+#
+# 退出码：0 = 承诺的步骤全部完成；非 0 = 有步骤无法完成（工具缺失或执行失败）。
+# 应用据此刻画结果：非 0 时降级为可复制的手动命令，而不是宣称修复成功——半完成状态
+# 必须如实上报，即使规则文件此时已经落盘（手动命令幂等，用户路径仍然正确）。
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -34,7 +38,10 @@ if command -v udevadm >/dev/null 2>&1; then
   udevadm trigger --subsystem-match=input
   echo "已重载 udev 规则"
 else
-  echo "未找到 udevadm，跳过重载（规则已写入，重启或手动 udevadm control --reload 后生效）" >&2
+  # 规则已写入但无法加载：这是一次未完成的修复，必须非 0 退出让应用降级，
+  # 而不是 exit 0 让应用宣称"已修复"。
+  echo "未找到 udevadm，无法重载 udev 规则（规则已写入 $rules_target，但尚未生效）" >&2
+  exit 1
 fi
 
 # pkexec 不设置 SUDO_USER；它把调用者的 uid 放在 PKEXEC_UID 里。
@@ -52,5 +59,7 @@ elif command -v usermod >/dev/null 2>&1; then
   usermod -aG input "$user"
   echo "已将 $user 加入 input 组（重新登录后生效）"
 else
-  echo "未找到 usermod，请手动执行：usermod -aG input $user" >&2
+  # 同上：组变更是承诺的步骤之一，做不到就非 0 退出，由应用给出手动命令。
+  echo "未找到 usermod，无法把 $user 加入 input 组" >&2
+  exit 1
 fi
