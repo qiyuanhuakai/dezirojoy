@@ -445,6 +445,31 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
 `uinput` 一行里的 `static_node=uinput` 不能省：内核模块不会自动创建该节点，缺失时
 即使权限正确也会 ENOENT。
 
+### 5.2.1 一键修复（应用内 opt-in）
+
+上述两种修复可以在设置页「后台服务」卡片上一键完成（仅 Linux 显示「修复设备访问权限」
+按钮）。它把"照抄命令"升级为显式动作，但**不改变 opt-in 原则**：安装器与包体仍然不注册
+任何规则，helper 脚本随包放在 `/opt/dezirojoy` 里也只是待命，只有用户点击按钮才会运行。
+
+流程（`DeviceAccessFixer`，测试以 mock 进程覆盖各分支）：
+
+1. 先跑 `LinuxRuntimeProbe.Probe()` 定位缺口（evdev 不可读 / uinput 不可写 / 无节点）。
+   无缺口时直接告知"无需修复"，不提权、不跑任何进程。
+2. 有缺口时把 `LinuxDeviceAccess.UdevRulesText`（规则文本的单一来源）写入临时文件，
+   用 `pkexec` 运行随包 helper `tools/Packaging/linux/fix-device-access.sh`（装入
+   `/opt/dezirojoy/fix-device-access.sh`）：安装上述规则 → `udevadm control --reload &&
+   udevadm trigger` → `usermod -aG input <调用者>`。helper 自身不含规则副本，规则正文
+   始终由应用生成，两处不会漂移。
+3. 无 polkit 代理、pkexec 不在 PATH、对话框被取消或 helper 缺失（非 deb 安装）时降级：
+   状态行回退为可照抄的命令（即 `DeviceAccessGuidance` 文案），按钮 tooltip 说明本次
+   降级的原因。
+4. UI 明示修改内容：tooltip 写明将写入 `/etc/udev/rules.d` 并把当前用户加入 input 组；
+   udev 规则重载后对后续 open 立即生效，而组变更需要重新登录。
+
+边界：一键修复只解决设备访问权。权限修好但注入仍然无效时，原因在注入路径本身
+（uinput ioctl 失败等），由 5.3 的 sink 错误常驻展示暴露——"提权了还是没反应"不该
+再表现为无声的空注入。
+
 ### 5.3 诊断：空结果不再无声
 
 `EvdevGamepadProvider` 现在**枚举 `/dev/input` 目录**而不是探测 `event0..31`（上限消失），
@@ -458,7 +483,8 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
   因此通过 `LinuxRuntimeProbe` 做一次性探测——枚举 + 开/关节点，不开读线程、不抢设备——
   把"请连接手柄"换成真实原因（权限不足带 errno 与 usermod 命令 / 无节点 / 无输入子系统），
   并附 `uinput` 可写性检查。
-- **设置面板「后台服务」卡片**：注入权限文案说明同用户设计，并引用同一段设备权限指引。
+- **设置面板「后台服务」卡片**：注入权限文案说明同用户设计，并引用同一段设备权限指引；
+  卡片上的「修复设备访问权限」按钮是一键修复的入口（见 [5.2.1 节](#521-一键修复应用内-opt-in)）。
 
 设备识别判据（`EvdevGamepadProvider.LooksLikeGamepad`，纯函数、正反例测试钉住）：
 第二支摇杆（`ABS_RX`/`ABS_RY`）或任一显式手柄按键（`BTN_JOYSTICK`、面部键簇

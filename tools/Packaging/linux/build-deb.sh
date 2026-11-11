@@ -7,6 +7,9 @@
 # Payload layout:
 #   /opt/dezirojoy/                        the complete self-contained publish output
 #   /opt/dezirojoy/dezirojoy.ico           application icon, kept for compatibility
+#   /opt/dezirojoy/fix-device-access.sh    the opt-in device-access fix helper; the app
+#                                          runs it through pkexec when the user asks for
+#                                          the fix, never at install time
 #   /usr/share/applications/dezirojoy.desktop
 #   /usr/share/icons/hicolor/<size>/apps/dezirojoy.png
 #                                           one PNG per hicolor size (16/24/32/48/64/
@@ -77,7 +80,8 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 icon="$repo_root/src/DeziroJoy.App/Assets/dezirojoy.ico"
 desktop="$repo_root/tools/Packaging/linux/dezirojoy.desktop"
-for required in "$icon" "$desktop"; do
+helper="$repo_root/tools/Packaging/linux/fix-device-access.sh"
+for required in "$icon" "$desktop" "$helper"; do
   if [ ! -f "$required" ]; then
     echo "required file missing: $required" >&2
     exit 2
@@ -94,6 +98,13 @@ mkdir -p "$stage/DEBIAN" "$stage/opt/dezirojoy" "$stage/usr/share/applications"
 cp -a "$publish/." "$stage/opt/dezirojoy/"
 chmod 0755 "$stage/opt/dezirojoy/DeziroJoy"
 cp "$icon" "$stage/opt/dezirojoy/dezirojoy.ico"
+
+# The device-access fix helper, shipped executable but inert: it writes the opt-in udev
+# rules only when the app runs it through pkexec on the user's explicit request. Shipping
+# it is what keeps the one-click fix from degrading to manual commands on a .deb install,
+# and it registers nothing by itself - the package still contains no udev rules.
+install -m 0755 "$helper" "$stage/opt/dezirojoy/fix-device-access.sh"
+
 install -m 0644 "$desktop" "$stage/usr/share/applications/dezirojoy.desktop"
 
 # The icon-theme payload: one PNG per hicolor size, installed as-is from the frames

@@ -24,6 +24,23 @@
                        Text="{Binding DaemonEnabledText}" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding ElevationText}" />
 
+            <!-- Linux only: the one-click device-access fix. The installers deliberately never
+                 register udev rules (opt-in), so this button is the user's explicit action -
+                 and its tooltip states what it changes (/etc/udev/rules.d + input group, with a
+                 re-login) before they take it. Without a polkit agent the fix degrades to the
+                 same commands as copyable text, and the tooltip says why. -->
+            <StackPanel IsVisible="{Binding IsSameUserModel}" x:Name="DeviceAccessFixRow" Margin="0,12,0,0">
+                <Button Classes="ghost" Margin="0,0,8,8" Content="修复设备访问权限"
+                        x:Name="FixDeviceAccessButton"
+                        IsEnabled="{Binding CanFixDeviceAccess}"
+                        ToolTip.Tip="{Binding DeviceAccessFixTooltip}"
+                        Command="{Binding FixDeviceAccessCommand}" />
+                <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                           x:Name="DeviceAccessFixStatus"
+                           IsVisible="{Binding HasDeviceAccessFixStatus}"
+                           Text="{Binding DeviceAccessFixStatus}" />
+            </StackPanel>
+
             <WrapPanel Margin="0,12,0,0">
                 <Button Classes="ghost" Margin="0,0,8,8" Content="安装常驻"
                         IsEnabled="{Binding IsSupported}" Command="{Binding InstallDaemonCommand}" />
