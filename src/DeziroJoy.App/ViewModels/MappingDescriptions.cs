@@ -81,6 +81,20 @@ public static class MappingDescriptions
         => target.Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
 
     /// <summary>
+    /// How a leader key engages, worded exactly as the editor's switch-mode picker words it,
+    /// so the 全局特殊键 area and the picker can never name the same mode differently.
+    /// </summary>
+    public static string LeaderSwitchModeLabel(LeaderSwitchMode mode)
+        => mode == LeaderSwitchMode.Hold ? "按住切换" : "按下切换";
+
+    /// <summary>
+    /// How a precision key engages, worded exactly as the editor's trigger-mode picker -
+    /// and the sensitivity panel's read-only readout - words it.
+    /// </summary>
+    public static string PrecisionModeLabel(PrecisionMode mode)
+        => mode == PrecisionMode.Toggle ? "按一下启用，再按一下取消" : "一直按住才触发";
+
+    /// <summary>
     /// What a complex shortcut does, in plain language: the kind plus the steps the script
     /// compiles to. The script is DSL text, so its raw form would read as code rather than
     /// as behaviour; the step list is what the user actually gets. A script that does not

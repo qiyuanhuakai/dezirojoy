@@ -5,6 +5,12 @@ using DeziroJoy.Core.Mapping;
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>One row of the mapping table.</summary>
+/// <remarks>
+/// A row also reports the collisions its button carries: the 精准键 and Leader 键 are
+/// device-level configuration, so when one of them shares this row's button with a setting
+/// that fights it, the row says so - the same verdict the 全局特殊键 area and the editor
+/// show, read from the same analysis.
+/// </remarks>
 public partial class MappingRowViewModel : ObservableObject
 {
     private readonly Action<MappingRowViewModel> _edit;
@@ -17,16 +23,37 @@ public partial class MappingRowViewModel : ObservableObject
         MappingEntry entry,
         Action<MappingRowViewModel> edit,
         Action<MappingRowViewModel> delete,
-        Action<MappingRowViewModel, bool> toggleEnabled)
+        Action<MappingRowViewModel, bool> toggleEnabled,
+        IReadOnlyList<SpecialKeyConflict> conflicts)
     {
         Entry = entry;
         _edit = edit;
         _delete = delete;
         _toggleEnabled = toggleEnabled;
         _isEnabled = entry.Enabled;
+        Conflicts = conflicts;
     }
 
     public MappingEntry Entry { get; }
+
+    /// <summary>
+    /// Every collision this row's button carries that involves this row - a global special
+    /// key its gestures would delay, another mapping that fires beside it. Empty for the
+    /// overwhelming majority of rows, which is why the hint line stays collapsed.
+    /// </summary>
+    public IReadOnlyList<SpecialKeyConflict> Conflicts { get; }
+
+    /// <summary>True while this row is involved in a special-key collision.</summary>
+    public bool HasConflicts => Conflicts.Count > 0;
+
+    /// <summary>
+    /// The collisions as one wrapped paragraph, each sentence naming the setting, the global
+    /// key it collides with and what the collision costs. Hints only - the row never edits
+    /// the configuration on the user's behalf.
+    /// </summary>
+    public string? ConflictHint => Conflicts.Count > 0
+        ? string.Join(" ", Conflicts.Select(conflict => conflict.Message))
+        : null;
 
     public string SourceText => MappingDescriptions.Source(Entry.Source);
 

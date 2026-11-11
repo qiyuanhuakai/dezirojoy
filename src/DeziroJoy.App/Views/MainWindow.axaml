@@ -91,7 +91,7 @@
                         </Border.IsVisible>
                     </Border>
                     <Grid ColumnDefinitions="*,Auto,Auto" Margin="14,9,12,9">
-                        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto" ColumnDefinitions="30,*">
+                        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="30,*">
                             <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="{Binding SourceText}" FontSize="12"
                                        Foreground="{DynamicResource TextPrimaryBrush}" />
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="单击" Classes="gestureLabel" />
@@ -100,6 +100,11 @@
                             <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DoubleClickText}" Classes="gestureValue" />
                             <TextBlock Grid.Row="3" Grid.Column="0" Text="长按" Classes="gestureLabel" />
                             <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding LongPressText}" Classes="gestureValue" />
+                            <!-- The collision line: this row's button carries a global special
+                                 key that fights it, or fights another row's mapping. Collapsed
+                                 for every row that carries no collision. -->
+                            <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Classes="conflictHint"
+                                       IsVisible="{Binding HasConflicts}" Text="{Binding ConflictHint}" />
                         </Grid>
                         <ToggleButton Grid.Column="1" Classes="rowToggle" Margin="8,0,0,0"
                                       VerticalAlignment="Center" FontSize="10" Padding="8,4"
@@ -196,6 +201,18 @@
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="Margin" Value="6,2,0,0" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
+        <!-- A mapping row involved in a special-key collision says so under its three gesture
+             lines: which setting collides with which global key, and what the collision costs
+             at runtime. Danger ink, because the configuration does not do what it looks like
+             it does; wrapping, because a collision is a sentence rather than a label. Only the
+             rows that carry one grow, so an ordinary table reads exactly as before. -->
+        <Style Selector="TextBlock.conflictHint">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,4,0,0" />
         </Style>
 
         <Style Selector="Button.primary">
@@ -638,18 +655,66 @@
             <Border Grid.Column="4" x:Name="RightPanel" MinWidth="0"
                     Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}"
                     BorderThickness="1,0,0,0" Padding="12">
-                <Grid RowDefinitions="Auto,*">
+                <Grid RowDefinitions="Auto,Auto,*">
                     <StackPanel Grid.Row="0">
                         <TextBlock Classes="cardTitle" Text="按键配置" />
                         <TextBlock Classes="hint" Margin="0,4,0,0"
                                    Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
                     </StackPanel>
 
+                    <!-- 全局特殊键. 精准键与 Leader 键 are device-level configuration: every
+                         preset of the device shares them, so they are not one preset's
+                         mapping and do not belong to a row hunt. They lead the page instead,
+                         each naming the button that triggers it and how it engages - 未配置
+                         with the way to configure one when the device carries none - with
+                         every collision on their buttons stated beside them. Editing stays
+                         exactly where it was: the mapping editor, reached through the row's
+                         编辑 affordance or through the mapping's own row below. -->
+                    <Border Grid.Row="1" Classes="card" Margin="0,12,0,0">
+                        <StackPanel>
+                            <TextBlock Classes="cardTitle" Text="全局特殊键" />
+                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="精准键与 Leader 键对整个设备生效（所有预设共享），因此置于映射列表之上；冲突提示只报告，不会自动改动配置。" />
+                            <ItemsControl x:Name="SpecialKeysList" Margin="0,10,0,0" ItemsSource="{Binding SpecialKeys}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:GlobalSpecialKeyItem">
+                                        <StackPanel Margin="0,0,0,10">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBlock Grid.Column="0" Classes="fieldLabel" Margin="0"
+                                                           VerticalAlignment="Center" Text="{Binding Title}" />
+                                                <Button Grid.Column="1" Classes="ghost" Content="编辑"
+                                                        FontSize="10" Padding="8,4" MinHeight="26"
+                                                        IsVisible="{Binding IsConfigured}"
+                                                        Command="{ReflectionBinding DataContext.EditSpecialKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}" />
+                                            </Grid>
+                                            <TextBlock Margin="0,2,0,0" FontSize="12" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                                       Text="{Binding Summary}" />
+                                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                                       IsVisible="{Binding IsConfigured, Converter={StaticResource Not}}"
+                                                       Text="{Binding Guide}" />
+                                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource DangerBrush}"
+                                                       IsVisible="{Binding HasConflicts}"
+                                                       Text="{Binding ConflictHint}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
                     <!-- The scroll content reserves a 16px gutter on the right: the vertical
                          scrollbar is an overlay that paints over the content's edge rather
                          than taking layout space, so without the gutter it would sit on top
                          of the rows' delete buttons (DESIGN 4.3.8). -->
-                    <ScrollViewer Grid.Row="1" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer Grid.Row="2" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
                         <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding Mappings}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>

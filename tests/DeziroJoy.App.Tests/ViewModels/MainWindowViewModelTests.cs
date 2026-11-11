@@ -1191,7 +1191,7 @@ public class MainWindowViewModelTests
     // repeat-click are three different states and must never read the same.
 
     private static MappingRowViewModel RowOf(MappingEntry entry)
-        => new(entry, _ => { }, _ => { }, (_, _) => { });
+        => new(entry, _ => { }, _ => { }, (_, _) => { }, []);
 
     [Fact]
     public void A_Row_Summarizes_The_Click_As_Its_Target_With_Both_Gestures_Off()

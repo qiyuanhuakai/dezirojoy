@@ -2463,4 +2463,306 @@ public class MappingEditorViewModelTests
         Assert.Equal(MappingTargetKind.KeyPress, editor.TargetKind);
         Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
     }
+
+    // ---- Special-key conflict hints while editing ------------------------------
+
+    [Fact]
+    public void A_Fresh_Draft_Collides_With_Nothing()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+        Assert.Empty(editor.DraftSpecialKeyConflicts);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_With_A_Double_Click_Gesture_Says_So_Live()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+
+        editor.DoubleClickEnabled = true;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("Leader 键", editor.SpecialKeyConflictHint!);
+        Assert.Contains("双击窗口", editor.SpecialKeyConflictHint!);
+
+        // Turning the gesture back off clears the hint: the report follows the draft.
+        editor.DoubleClickEnabled = false;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_With_Click_Repeat_Says_So_Live()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        editor.ClickRepeatEnabled = true;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("长按重复触发", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void Turning_Click_Repeat_Off_Clears_The_Hint_It_Raised()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        editor.ClickRepeatEnabled = true;
+        Assert.True(editor.HasSpecialKeyConflict);
+
+        // The user resolved the collision by switching the repeat off: the hint must not
+        // outlive the edit that removed it.
+        editor.ClickRepeatEnabled = false;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+        Assert.Empty(editor.DraftSpecialKeyConflicts);
+    }
+
+    [Fact]
+    public void Editing_The_Click_Repeat_Interval_Updates_The_Hint()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.ClickRepeatEnabled = true;
+
+        Assert.Contains("0.1 秒", editor.SpecialKeyConflictHint!);
+
+        editor.ClickRepeatIntervalSeconds = 0.5;
+
+        Assert.Contains("0.5 秒", editor.SpecialKeyConflictHint!);
+        Assert.DoesNotContain("0.1 秒", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_With_A_Bare_Long_Press_Repeat_Says_So_Live()
+    {
+        var editor = new MappingEditorViewModel();
+
+        // The repeat interval is not editor-editable, but a profile that carries one
+        // round-trips it through the draft, and the hint must name it as it will behave.
+        editor.LoadFrom(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.Back)
+            {
+                Gesture = new ButtonGesture
+                {
+                    LongPressThreshold = ButtonGesture.DefaultLongPressThreshold,
+                    LongPressRepeatInterval = 0.2f,
+                },
+            },
+            Target = new SpecialKeyTarget(SpecialKeyKind.Leader),
+        });
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("重复间隔", editor.SpecialKeyConflictHint!);
+        Assert.Contains("0.2 秒", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void The_Draft_Is_Measured_Against_The_Profiles_Other_Mappings()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        // The window view model hands the other mappings in when the edit opens; the entry
+        // being edited is excluded, so a draft is never measured against itself.
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("另一条映射", editor.SpecialKeyConflictHint!);
+        Assert.Contains("Enter", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void Moving_The_Draft_To_Another_Button_Re_Measures_Against_That_Button()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+
+        Assert.True(editor.HasSpecialKeyConflict);
+
+        // The conflicting mapping sits on Back, so arming the draft for A clears the hint.
+        editor.SelectedButton = GamepadButton.A;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+    }
+
+    [Fact]
+    public void A_Precision_Draft_On_A_Gesture_Position_Says_It_Will_Not_Engage()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.LeftStick };
+        editor.ActiveTargetKind = MappingTargetKind.KeyPress;
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Precision;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("不会生效", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Double_Click_Leader_Draft_Is_Measured_Against_The_Same_Button()
+    {
+        // The normal editor flow reaches a gesture-position leader: switch to the 双击 tab,
+        // pick 特殊键, pick Leader 键. A sibling on the same button fires beside it.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("双击触发「Leader 键」", editor.SpecialKeyConflictHint!);
+        Assert.Contains("两次按下都会触发Enter", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Long_Press_Leader_Draft_Is_Measured_Against_The_Same_Button()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("长按触发「Leader 键」", editor.SpecialKeyConflictHint!);
+        Assert.Contains("Enter一直被按住", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_Sees_A_Siblings_Gesture_Action_Too()
+    {
+        // The sibling's own click is 无功能, but its double-click is a real key: the second
+        // press fires the switch and the key together.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                        DoubleClickAction = new KeyPressTarget(GamepadKey.A),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ];
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("双击：A", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Long_Press_Leader_Draft_Meets_A_Siblings_Double_Click_In_A_Tap_Then_Hold()
+    {
+        // The default editor timings reach the compound interaction: a tap, a release, then a
+        // second press held past the long-press threshold fires the sibling's double-click on
+        // the press edge and the leader switch at the threshold.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                        DoubleClickAction = new KeyPressTarget(GamepadKey.A),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("双击触发A后", editor.SpecialKeyConflictHint!);
+        Assert.Contains("还会触发「Leader 键」切换预设", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Long_Press_Leader_Draft_With_Its_Own_Double_Click_Reports_Nothing()
+    {
+        // The M46 coexistence shape through the normal editor flow: the long-press slot
+        // carries the Leader and the double-click slot is enabled too, so the draft's own
+        // double-click resolves on the second press edge and the long-press cycle the
+        // compound needs never starts - no interaction fires the pair beside the sibling.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                        DoubleClickAction = new KeyPressTarget(GamepadKey.A),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveGestureEnabled = true;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+    }
 }
