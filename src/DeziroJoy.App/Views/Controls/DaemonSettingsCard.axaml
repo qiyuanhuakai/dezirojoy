@@ -15,6 +15,13 @@
 
             <TextBlock Classes="fieldLabel" Margin="0,12,0,0" x:Name="DaemonStateText"
                        Text="{Binding DaemonStateText}" />
+            <!-- Linux only: the unit's own login-autostart state on its own line, so "enabled"
+                 can never be read as "running" - systemd decides the two separately, and the
+                 user's "每次刷新都显示未启用" was exactly that conflation. -->
+            <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                       x:Name="DaemonEnabledText"
+                       IsVisible="{Binding HasDaemonEnabledText}"
+                       Text="{Binding DaemonEnabledText}" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding ElevationText}" />
 
             <WrapPanel Margin="0,12,0,0">

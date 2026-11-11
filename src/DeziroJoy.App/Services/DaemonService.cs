@@ -57,6 +57,24 @@ public interface IDaemonService
     bool IsDaemonRunning => false;
 
     /// <summary>
+    /// True when the resident daemon is registered to start at logon - systemd's "enabled" on
+    /// Linux. Deliberately a separate fact from <see cref="IsDaemonRunning"/>: a unit can be
+    /// enabled and stopped right now, or running but disabled for the next login, and
+    /// conflating the two is what made the card read "未启用" on every refresh. Defaults to
+    /// false so a platform that cannot tell stays honest instead of guessing; on Windows a
+    /// scheduled task runs at logon once installed, so there is no separate enablement there.
+    /// </summary>
+    bool IsDaemonEnabled => false;
+
+    /// <summary>
+    /// Why the last <see cref="Refresh"/> could not determine the daemon state - the systemctl
+    /// stderr summary, or a user-bus environment the GUI is missing - or null when every query
+    /// succeeded. A scheduler that never answered is not the same fact as "not running", and
+    /// the card shows the two differently instead of silently inventing a state.
+    /// </summary>
+    string? DaemonQueryError => null;
+
+    /// <summary>
     /// True when the GUI's logon-autostart entry is registered - the exact registration
     /// <see cref="SetAutostart"/> writes (a scheduled task on Windows, the XDG .desktop on
     /// Linux). This is deliberately a different object from the daemon's own registration:
@@ -371,6 +389,14 @@ internal sealed class ProcessSystemCtl : ISystemCtl
 /// binding the daemon to a graphical login would break exactly the SSH and console sessions
 /// that need mapping most. Surviving a logout needs linger, which the install result says.
 /// </para>
+/// <para>
+/// Refresh reports three separate facts - the unit file on disk, systemd's active state and
+/// systemd's enabled state - and a query it cannot answer (a bus the GUI cannot reach, an
+/// environment without XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS) is reported with its reason
+/// instead of being flattened into "not running": a scheduler that never answered is not a
+/// state. The same honesty runs through the operations - an install whose unit file landed
+/// but whose enable/start failed says "已写单元但启用失败" with the reason and the way out.
+/// </para>
 /// </summary>
 public sealed class LinuxDaemonService : IDaemonService
 {
@@ -380,15 +406,18 @@ public sealed class LinuxDaemonService : IDaemonService
     private readonly ISystemCtl _systemCtl;
     private readonly Func<string> _unitDirectory;
     private readonly Func<string?> _executable;
+    private readonly Func<string, string?> _environmentVariable;
 
     /// <summary>
     /// Internal so the systemctl seam stays an implementation detail: production and the CLI
-    /// use the defaults, tests inject a fake runner and a fixture directory.
+    /// use the defaults, tests inject a fake runner, a fixture directory and a fixture
+    /// environment.
     /// </summary>
     internal LinuxDaemonService(
         ISystemCtl? systemCtl = null,
         Func<string>? unitDirectory = null,
-        Func<string?>? executable = null)
+        Func<string?>? executable = null,
+        Func<string, string?>? environmentVariable = null)
     {
         _systemCtl = systemCtl ?? new ProcessSystemCtl();
         _unitDirectory = unitDirectory ?? (static () => Path.Combine(
@@ -396,6 +425,7 @@ public sealed class LinuxDaemonService : IDaemonService
             "systemd",
             "user"));
         _executable = executable ?? (static () => Environment.ProcessPath);
+        _environmentVariable = environmentVariable ?? Environment.GetEnvironmentVariable;
     }
 
     public bool IsSupported => OperatingSystem.IsLinux();
@@ -409,6 +439,11 @@ public sealed class LinuxDaemonService : IDaemonService
     public bool IsDaemonInstalled { get; private set; }
 
     public bool IsDaemonRunning { get; private set; }
+
+    public bool IsDaemonEnabled { get; private set; }
+
+    /// <inheritdoc/>
+    public string? DaemonQueryError { get; private set; }
 
     public bool IsAutostartInstalled { get; private set; }
 
@@ -424,19 +459,53 @@ public sealed class LinuxDaemonService : IDaemonService
         {
             IsDaemonInstalled = false;
             IsDaemonRunning = false;
+            IsDaemonEnabled = false;
+            DaemonQueryError = null;
             IsAutostartInstalled = false;
             return;
         }
 
         IsDaemonInstalled = File.Exists(UnitPath);
-        IsDaemonRunning = Query("is-active", "active");
 
-        // The autostart toggle manages the XDG entry, so it must read the XDG entry: reading
-        // the daemon unit's is-enabled here would make the displayed state disagree with what
-        // SetAutostart writes (and with the Windows task-based semantics), snapping the toggle
-        // back on a machine whose unit is enabled but whose entry was never installed - and
-        // off a machine whose entry exists without any unit.
+        // The autostart toggle manages the XDG entry, so it must read the XDG entry: deriving
+        // the toggle from the daemon unit's is-enabled would make the displayed state disagree
+        // with what SetAutostart writes (and with the Windows task-based semantics), snapping
+        // the toggle back on a machine whose unit is enabled but whose entry was never
+        // installed - and off a machine whose entry exists without any unit. The unit's own
+        // is-enabled is queried below, but only to report the daemon's enablement.
         IsAutostartInstalled = AutostartInstaller.IsInstalled();
+
+        if (!IsDaemonInstalled)
+        {
+            // Without the unit file there is nothing for systemd to report, and File.Exists is
+            // the definitive answer; querying anyway would only turn "not installed" into a
+            // failure to reach the bus.
+            IsDaemonRunning = false;
+            IsDaemonEnabled = false;
+            DaemonQueryError = null;
+            return;
+        }
+
+        // A GUI launched without the session-bus environment (a menu entry that did not inherit
+        // it, a console session) fails every systemctl call with a cryptic stderr; naming the
+        // missing variables beats reporting "not running" on every refresh forever.
+        if (DescribeMissingBusEnvironment() is { } busError)
+        {
+            IsDaemonRunning = false;
+            IsDaemonEnabled = false;
+            DaemonQueryError = busError;
+            return;
+        }
+
+        var running = QueryState("is-active", RunningStates, StoppedStates);
+        var enabled = QueryState("is-enabled", EnabledStates, DisabledStates);
+
+        IsDaemonRunning = running.Answer ?? false;
+        IsDaemonEnabled = enabled.Answer ?? false;
+
+        // Either unanswered query makes the whole state unreliable, so the first reason wins
+        // and the card shows "could not tell" instead of half a state.
+        DaemonQueryError = running.Error ?? enabled.Error;
     }
 
     public DaemonActionResult InstallDaemon()
@@ -464,19 +533,19 @@ public sealed class LinuxDaemonService : IDaemonService
         var reload = _systemCtl.Run("daemon-reload");
         if (!reload.Succeeded)
         {
-            return DaemonActionResult.Failed(DescribeFailure("重载 systemd 用户配置", reload));
+            return DaemonActionResult.Failed(WrittenButEnableFailed(reload));
         }
 
         var enable = _systemCtl.Run($"enable {UnitName}");
         if (!enable.Succeeded)
         {
-            return DaemonActionResult.Failed(DescribeFailure("启用常驻服务", enable));
+            return DaemonActionResult.Failed(WrittenButEnableFailed(enable));
         }
 
         var start = _systemCtl.Run($"start {UnitName}");
         if (!start.Succeeded)
         {
-            return DaemonActionResult.Failed(DescribeFailure("启动常驻服务", start));
+            return DaemonActionResult.Failed(WrittenButEnableFailed(start));
         }
 
         return DaemonActionResult.Completed(
@@ -527,6 +596,14 @@ public sealed class LinuxDaemonService : IDaemonService
         if (!IsDaemonInstalled)
         {
             return DaemonActionResult.Failed("常驻服务尚未安装，无法启动。");
+        }
+
+        // Starting is one systemctl call like any other: without the bus environment it cannot
+        // succeed, and the missing variable is named here instead of surfacing as a cryptic
+        // "Failed to connect to bus".
+        if (DescribeMissingBusEnvironment() is { } busError)
+        {
+            return DaemonActionResult.Failed($"无法启动常驻服务：{busError}");
         }
 
         var start = _systemCtl.Run($"start {UnitName}");
@@ -610,31 +687,119 @@ public sealed class LinuxDaemonService : IDaemonService
             """;
     }
 
-    private bool Query(string verb, string expectedOutput)
+    /// <summary>
+    /// <c>systemctl --user is-active</c> outputs that mean the daemon is (or is becoming)
+    /// running, and the ones that mean it is not. Anything else printed is a failed query,
+    /// never "not running": a bus that never answered prints no state at all.
+    /// </summary>
+    private static readonly string[] RunningStates = ["active", "activating", "reloading"];
+
+    private static readonly string[] StoppedStates = ["inactive", "failed", "deactivating"];
+
+    /// <summary>
+    /// <c>systemctl --user is-enabled</c> outputs that mean the unit starts the daemon at
+    /// login, and the ones that mean it does not. "static" and friends are enablement facts,
+    /// not failures - only a verb that printed no known state is.
+    /// </summary>
+    private static readonly string[] EnabledStates = ["enabled", "enabled-runtime"];
+
+    private static readonly string[] DisabledStates =
+    [
+        "disabled", "masked", "masked-runtime", "static", "indirect",
+        "linked", "linked-runtime", "alias", "generated", "transient", "not-found",
+    ];
+
+    /// <summary>
+    /// One systemctl state query. The printed state is the answer - a non-zero exit with
+    /// "inactive"/"disabled" is still an answer - and a verb that printed none of its known
+    /// states is a failed query carrying the reason, so the card can say "could not tell"
+    /// instead of silently claiming "not running".
+    /// </summary>
+    private (bool? Answer, string? Error) QueryState(string verb, string[] yesStates, string[] noStates)
     {
         var result = _systemCtl.Run($"{verb} {UnitName}");
+        var state = result.StandardOutput.Trim();
 
-        // The verb's own exit code is the answer; the printed state is checked as well so a
-        // localised or future output can never be mistaken for the expected one.
-        return result.Succeeded
-            && result.StandardOutput.Trim().Equals(expectedOutput, StringComparison.Ordinal);
+        if (yesStates.Contains(state, StringComparer.Ordinal))
+        {
+            return (true, null);
+        }
+
+        if (noStates.Contains(state, StringComparer.Ordinal))
+        {
+            return (false, null);
+        }
+
+        return (null, DescribeReason(result));
+    }
+
+    /// <summary>
+    /// The install's intermediate state. The unit file is written before any systemctl call,
+    /// so a reload/enable/start failure leaves a written unit behind - the exact state that
+    /// used to be reported as a flat failure while every later refresh showed "installed but
+    /// not running" with no explanation. The message names the state, the reason and the way
+    /// out (the file path and the manual command).
+    /// </summary>
+    private string WrittenButEnableFailed(SystemCtlResult result)
+        => $"已写单元但启用失败：{DescribeMissingBusEnvironment() ?? DescribeReason(result)}。"
+            + $"单元文件已写入 {UnitPath}，可从终端执行 systemctl --user enable --now {UnitName} 继续。";
+
+    /// <summary>
+    /// The human-readable reason a systemctl call failed: its stderr (preferred, truncated),
+    /// the exit code when it printed nothing, or the fact that it never ran at all.
+    /// </summary>
+    private static string DescribeReason(SystemCtlResult result)
+    {
+        if (result.ExitCode < 0)
+        {
+            // A negative exit code means the process could not start - no systemctl on PATH.
+            return "systemctl 无法启动（当前 PATH 中可能没有它）";
+        }
+
+        var detail = Summarize(result);
+
+        return string.IsNullOrEmpty(detail)
+            ? $"systemctl 退出码 {result.ExitCode}"
+            : detail;
+    }
+
+    /// <summary>
+    /// The reason <c>systemctl --user</c> cannot reach the user manager from this process, or
+    /// null when it can. Either variable suffices on its own - systemctl falls back from
+    /// DBUS_SESSION_BUS_ADDRESS to <c>$XDG_RUNTIME_DIR/bus</c> - so only their combined absence
+    /// is reported, and it is reported directly because systemctl's own stderr for it is
+    /// cryptic.
+    /// </summary>
+    private string? DescribeMissingBusEnvironment()
+    {
+        if (!string.IsNullOrEmpty(_environmentVariable("XDG_RUNTIME_DIR"))
+            || !string.IsNullOrEmpty(_environmentVariable("DBUS_SESSION_BUS_ADDRESS")))
+        {
+            return null;
+        }
+
+        return "环境缺少 XDG_RUNTIME_DIR 与 DBUS_SESSION_BUS_ADDRESS，systemctl --user 连不上用户总线。"
+            + "请从终端启动 DeziroJoy，或在启动前导出这些变量后重试。";
     }
 
     private static string DescribeFailure(string action, SystemCtlResult result)
+    {
+        var detail = Summarize(result);
+
+        return string.IsNullOrEmpty(detail)
+            ? $"{action}失败（systemctl 退出码 {result.ExitCode}）。"
+            : $"{action}失败：{detail}";
+    }
+
+    /// <summary>stderr preferred, stdout as the fallback, trimmed and truncated for a status line.</summary>
+    private static string Summarize(SystemCtlResult result)
     {
         var detail = string.IsNullOrWhiteSpace(result.StandardError)
             ? result.StandardOutput
             : result.StandardError;
         detail = detail.Trim();
 
-        if (detail.Length > 200)
-        {
-            detail = detail[..200] + "…";
-        }
-
-        return string.IsNullOrEmpty(detail)
-            ? $"{action}失败（systemctl 退出码 {result.ExitCode}）。"
-            : $"{action}失败：{detail}";
+        return detail.Length > 200 ? detail[..200] + "…" : detail;
     }
 
     private bool TryResolveExecutable(out string executable, out string error)

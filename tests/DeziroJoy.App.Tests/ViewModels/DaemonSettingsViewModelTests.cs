@@ -198,4 +198,20 @@ public class DaemonSettingsViewModelTests
         vm.StopDaemonCommand.Execute(null);
         Assert.Contains("不支持", vm.StatusMessage);
     }
+
+    [Fact]
+    public void A_Scheduled_Task_Has_No_Separate_Enablement_Line()
+    {
+        var service = new FakeDaemonService { IsDaemonInstalled = true };
+        var vm = new DaemonSettingsViewModel(service);
+
+        // A Windows scheduled task runs at logon once installed - there is no second state to
+        // show, so the Linux enablement line and the query-failure state stay off this card
+        // and the Windows wording is untouched.
+        Assert.False(vm.IsDaemonEnabled);
+        Assert.Null(vm.DaemonQueryError);
+        Assert.Null(vm.DaemonEnabledText);
+        Assert.False(vm.HasDaemonEnabledText);
+        Assert.Equal("常驻服务：已安装", vm.DaemonStateText);
+    }
 }

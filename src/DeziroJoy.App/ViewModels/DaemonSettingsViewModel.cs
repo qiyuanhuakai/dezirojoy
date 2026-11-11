@@ -40,6 +40,30 @@ public partial class DaemonSettingsViewModel : ObservableObject
     public bool IsDaemonRunning => _service.IsDaemonRunning;
 
     /// <summary>
+    /// Whether the installed unit starts the daemon at logon (systemd's "enabled"). A separate
+    /// fact from <see cref="IsDaemonRunning"/> - enabled and stopped, or running and disabled,
+    /// are both real states - which is why it gets its own line instead of being folded into
+    /// the run state.
+    /// </summary>
+    public bool IsDaemonEnabled => _service.IsDaemonEnabled;
+
+    /// <summary>Why the last refresh could not read the daemon state, or null when it could.</summary>
+    public string? DaemonQueryError => _service.DaemonQueryError;
+
+    /// <summary>
+    /// The unit's login-autostart state as its own line: "已启用（登录自动）" once the unit
+    /// exists on the same-user platform, "未启用（登录不会自动启动）" when it will not start at
+    /// login, and null everywhere else - a Windows scheduled task runs at logon once installed,
+    /// a unit that was never installed has no enablement to show, and a failed query proves
+    /// nothing about enablement either.
+    /// </summary>
+    public string? DaemonEnabledText => IsSameUserModel && IsDaemonInstalled && DaemonQueryError is null
+        ? IsDaemonEnabled ? "已启用（登录自动）" : "未启用（登录不会自动启动）"
+        : null;
+
+    public bool HasDaemonEnabledText => DaemonEnabledText is not null;
+
+    /// <summary>
     /// The start button is operable only on the same-user platform (Linux), with the unit
     /// installed and not yet running; the stop button is its exact mirror. Windows keeps
     /// neither - a scheduled task has no standalone start - so both are false there.
@@ -61,13 +85,23 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
             if (IsSameUserModel)
             {
-                // Linux: the unit file is the install and systemd's own state is the run
-                // state, so "installed" and "running" are two different facts here.
-                return IsDaemonInstalled
-                    ? IsDaemonRunning
-                        ? "常驻服务：已安装并正在运行（systemd 用户单元）"
-                        : "常驻服务：已安装但未运行（systemd 用户单元）"
-                    : "常驻服务：未安装（systemd 用户单元）";
+                // Linux: the unit file is the install, systemd's own states are the run and
+                // enablement states, and a query that never answered is a state of its own.
+                // The user's "每次刷新都显示未启用" was a bus the GUI could not reach being
+                // reported as a run state on every refresh.
+                if (!IsDaemonInstalled)
+                {
+                    return "常驻服务：未安装（systemd 用户单元）";
+                }
+
+                if (DaemonQueryError is { } error)
+                {
+                    return $"常驻服务：已安装，但无法查询状态：{error}";
+                }
+
+                return IsDaemonRunning
+                    ? "常驻服务：已安装并正在运行（systemd 用户单元）"
+                    : "常驻服务：已安装但未运行（systemd 用户单元）";
             }
 
             return IsDaemonInstalled
@@ -139,6 +173,10 @@ public partial class DaemonSettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsElevated));
         OnPropertyChanged(nameof(IsDaemonInstalled));
         OnPropertyChanged(nameof(IsDaemonRunning));
+        OnPropertyChanged(nameof(IsDaemonEnabled));
+        OnPropertyChanged(nameof(DaemonQueryError));
+        OnPropertyChanged(nameof(DaemonEnabledText));
+        OnPropertyChanged(nameof(HasDaemonEnabledText));
         OnPropertyChanged(nameof(CanStartDaemon));
         OnPropertyChanged(nameof(CanStopDaemon));
         OnPropertyChanged(nameof(DaemonRunLevel));
