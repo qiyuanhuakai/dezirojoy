@@ -48,6 +48,7 @@ public class AutostartInstallerLinuxTests : IDisposable
         Assert.Contains("Type=Application", file);
         Assert.Contains("Name=DeziroJoy", file);
         Assert.Contains("Exec=\"/opt/dezirojoy/DeziroJoy\"", file);
+        Assert.Contains("Icon=dezirojoy", file);
         Assert.Contains("Terminal=false", file);
     }
 

@@ -6,8 +6,13 @@
 #
 # Payload layout:
 #   /opt/dezirojoy/                        the complete self-contained publish output
-#   /opt/dezirojoy/dezirojoy.ico           application icon, referenced by the desktop entry
+#   /opt/dezirojoy/dezirojoy.ico           application icon, kept for compatibility
 #   /usr/share/applications/dezirojoy.desktop
+#   /usr/share/icons/hicolor/<size>/apps/dezirojoy.png
+#                                           one PNG per hicolor size (16/24/32/48/64/
+#                                           128/256) unpacked from the .ico above; this
+#                                           is what the desktop entry's Icon=dezirojoy
+#                                           theme name resolves against
 #
 # The package deliberately ships no maintainer scripts, no systemd units, no cron jobs
 # and no udev rules: login autostart and the elevated resident daemon stay opt-in
@@ -78,6 +83,16 @@ for required in "$icon" "$desktop"; do
   fi
 done
 
+# The hicolor payload is unpacked from the .ico with ImageMagick, which the Ubuntu
+# CI runners ship. Checked up front so a missing tool fails the build with a hint
+# instead of shipping a package whose icons silently do not exist.
+for tool in convert identify; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "ImageMagick '$tool' not found: install imagemagick (or icoutils for icotool) to unpack the icon theme payload" >&2
+    exit 1
+  fi
+done
+
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 
@@ -89,6 +104,46 @@ cp -a "$publish/." "$stage/opt/dezirojoy/"
 chmod 0755 "$stage/opt/dezirojoy/DeziroJoy"
 cp "$icon" "$stage/opt/dezirojoy/dezirojoy.ico"
 install -m 0644 "$desktop" "$stage/usr/share/applications/dezirojoy.desktop"
+
+# The icon-theme payload. The .ico already carries one PNG-compressed frame per
+# hicolor size, so ImageMagick unpacks the frames and each one is installed at its
+# native size - no resampling, no recompression of the artwork. This is what makes
+# the desktop entry's Icon=dezirojoy resolvable: without a hicolor payload the
+# theme lookup falls through and menus, taskbars and the autostart entry are left
+# iconless even though the .ico is installed.
+frames="$(mktemp -d)"
+trap 'rm -rf "$stage" "$frames"' EXIT
+convert "$icon" "png:$frames/dezirojoy.png"
+
+installed_sizes=""
+for frame in "$frames"/dezirojoy-*.png; do
+  if [ ! -f "$frame" ]; then
+    echo "no icon frames unpacked from $icon" >&2
+    exit 1
+  fi
+
+  # The pixel size is read from the frame itself, never from the .ico's directory
+  # order, so a re-cut icon cannot land in the wrong hicolor bucket.
+  width="$(identify -format '%w' "$frame")"
+  height="$(identify -format '%h' "$frame")"
+  if [ "$width" != "$height" ]; then
+    echo "icon frame is not square (${width}x${height}): $frame" >&2
+    exit 1
+  fi
+
+  install -Dm644 "$frame" "$stage/usr/share/icons/hicolor/${width}x${width}/apps/dezirojoy.png"
+  installed_sizes="$installed_sizes $width"
+done
+
+for required in 16 24 32 48 64 128 256; do
+  case " $installed_sizes " in
+    *" $required "*) ;;
+    *)
+      echo "dezirojoy.ico has no ${required}px frame: re-cut the icon with one PNG frame per hicolor size so the icon theme stays complete" >&2
+      exit 1
+      ;;
+  esac
+done
 
 installed_size=$(du -sk --exclude=DEBIAN "$stage" | cut -f1)
 
