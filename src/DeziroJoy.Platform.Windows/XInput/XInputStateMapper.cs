@@ -91,6 +91,11 @@ internal static class XInputStateMapper
             buttons |= GamepadButtonMask.RightBumper;
         }
 
+        // Dead on real XInput hardware: wButtons has no 0x0400 bit (see XInputNative.Guide),
+        // so this branch never fires on Windows - the Guide button is an XInput platform
+        // limitation (M53), which is why the visualizer's Guide stays dark there. Kept for
+        // bit alignment with the other buttons and so a synthetic bitmask still round-trips;
+        // real Windows Guide support would need the Raw Input HID path (backlog).
         if ((pad.Buttons & XInputNative.Guide) != 0)
         {
             buttons |= GamepadButtonMask.Guide;

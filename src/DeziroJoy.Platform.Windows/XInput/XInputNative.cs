@@ -32,6 +32,15 @@ internal static partial class XInputNative
 
     public const ushort RightShoulder = 0x0200;
 
+    /// <summary>
+    /// Not a real XInput bit: XINPUT_GAMEPAD.wButtons defines no 0x0400 flag (the real bits
+    /// jump from 0x0200 RIGHT_SHOULDER straight to 0x1000 A), so XInputGetState never sets
+    /// it and this mask is always 0 - XInput cannot report the Guide button (M53; the same
+    /// gap exists in Windows.Gaming.Input.GamepadButtons). Kept only as a placeholder so the
+    /// mapper's per-bit walk stays aligned; never read it as "Windows can deliver Guide".
+    /// The only viable path is Raw Input HID parsing - see the backlog note in
+    /// docs/QA-CHECKLIST.md.
+    /// </summary>
     public const ushort Guide = 0x0400;
 
     public const ushort A = 0x1000;

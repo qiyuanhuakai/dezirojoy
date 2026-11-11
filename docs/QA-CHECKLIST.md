@@ -368,6 +368,16 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   返回 ERROR_INVALID_FUNCTION、阻塞读零报告——即该接口不承载输入，
   额外按键根本不在其中。读取这类按键需要自写过滤驱动（Steam / ReWASD
   的做法），应用层无解
+- Windows 上 Guide 键不可用（XInput 平台限制，非缺陷）：`XINPUT_GAMEPAD.wButtons`
+  没有 Guide 位（真实位定义到 0x0200 后跳到 0x1000，代码中的 `XInputNative.Guide
+  = 0x0400` 是占位常量，恒 0），`Windows.Gaming.Input.GamepadButtons` 同样没有
+  Guide，因此 XInput 通道永不报告 Guide——可视化器 Guide 元素常灭、映射不被 Guide
+  触发，均为可解释状态。Linux 侧 evdev 经 `BTN_MODE`(0x13c) 正常映射 Guide
+  （见下条），不受影响。让 Windows 支持 Guide 的唯一路径是 Raw Input 注册 HID
+  设备并解析手柄 HID 报告中的 Guide 键位（Linux xpad 正是这样映射 `BTN_MODE`），
+  但需新增第二条完整输入通道（raw input 注册、HID 报告描述符/报文解析、设备身份
+  匹配、后台消息循环、与 XInput 双路合并），为单按键维护第二条输入路径性价比低，
+  列入远期 backlog，本 beta 周期不做
 - Linux 上 evdev 走 raw-code 通道，可以识别超出 Xbox 布局的按键；扫描枚举
   `/dev/input` 目录（不再限于 event0..31），无权限/无节点/无手柄三种空结果在 GUI
   状态区与 daemon 摘要中分别给出可操作指引（见第 10 节 Linux 小节）

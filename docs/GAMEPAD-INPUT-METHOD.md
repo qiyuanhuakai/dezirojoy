@@ -171,6 +171,16 @@ RimeSharp，但社区采用度极低，等于自担维护风险。
 - SDL2（为一个次要功能引入重量级依赖）；
 - libpinyin（GPL 与宽松许可冲突）。
 
+### 已知限制：Windows 上 Guide 键不可用
+
+XInput 的 `wButtons` 位图没有 Guide 位（代码中的 `XInputNative.Guide = 0x0400` 是
+占位常量，恒 0），`Windows.Gaming.Input.GamepadButtons` 同样没有 Guide，因此
+Windows 上 XInput 通道永不报告 Guide 按下——可视化器 Guide 元素常灭、Guide 映射
+不触发均为可解释状态，不是缺陷。Linux 侧 evdev 经 `BTN_MODE`(0x13c) 正常识别
+Guide，不受影响。因此输入法的呼出/导航若拟绑定 Guide 键，Windows 上需改选其他
+按键；确需 Guide 的唯一路径是 Raw Input 解析 HID 报告中的 Guide 键位（需第二条
+完整输入通道，成本高，列入远期 backlog，详见 `docs/QA-CHECKLIST.md`「已知限制」）。
+
 ## 参考链接
 
 - Steamworks `ISteamUtils`：https://partner.steamgames.com/doc/api/ISteamUtils
