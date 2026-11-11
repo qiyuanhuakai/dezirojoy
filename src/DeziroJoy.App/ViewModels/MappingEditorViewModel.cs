@@ -58,6 +58,21 @@ public sealed record SpecialKeyConflict(
 }
 
 /// <summary>
+/// Where a special key sits on its button: the mapping's own click, or one of the gesture's
+/// two actions. The trigger decides how the key fires - every press, the second press of a
+/// double, or a hold past the long-press threshold - which is what the conflict wording and
+/// the 全局特殊键 summary both have to name.
+/// </summary>
+public enum SpecialKeyTrigger
+{
+    Click,
+
+    DoubleClick,
+
+    LongPress,
+}
+
+/// <summary>
 /// The conflict rules between the two global special keys and everything else configured on
 /// their trigger buttons. Every rule is stated the way the engine actually behaves - the
 /// gesture machine in <c>ButtonGestureState</c> decides which press resolves to what, and a
@@ -130,7 +145,7 @@ public static class SpecialKeyConflicts
                             code,
                             entry.Id,
                             entry.Id,
-                            $"「Leader 键」设在{label}的单击上，但该按钮还配了双击手势：单击要等双击窗口（{Seconds(ButtonGesture.DefaultDoubleClickWindow)}）结束才切换预设；窗口内按第二次时触发的是双击手势，双击若另配了动作，该次按下不会切换预设。"));
+                            $"「Leader 键」设在{label}的单击上，但该按钮还配了双击手势：单击要等双击窗口（{Seconds(leaderGesture.DoubleClickWindow)}）结束才切换预设；窗口内按第二次时触发的是双击手势，双击若另配了动作，该次按下不会切换预设。"));
                     }
 
                     if (leaderGesture.HasClickRepeat)
@@ -161,28 +176,46 @@ public static class SpecialKeyConflicts
                     }
                 }
 
-                // Another entry on the same button whose click also fires: one press runs
-                // both mappings, so every trigger of the global key drags the other mapping's
-                // output along with it. The engine swallows nothing any more - a long press
-                // with an action of its own still lets the quick press fire the click - so no
-                // sibling is excluded here.
-                if (entry.Target is SpecialKeyTarget own)
+                // Another entry on the same button fires beside the global key. A leader key
+                // triggers from any position, so the sibling's outputs - its own click and
+                // either gesture action - are weighed against the trigger, and the wording
+                // names which gesture resolves the global key. The engine swallows nothing,
+                // so a sibling's quick press always fires beside the key. A precision key
+                // engages from the click alone, so a gesture-position one is rule 6's
+                // business alone; an entry's own click beside its own gesture key is a
+                // deliberate pairing, not a collision with itself.
+                if (KeyOf(entry) is { } own
+                    && TriggerOf(entry) is { } trigger
+                    && (own.Kind == SpecialKeyKind.Leader || trigger == SpecialKeyTrigger.Click))
                 {
+                    var keyName = MappingDescriptions.SpecialKey(own);
+
                     foreach (var other in entries)
                     {
-                        if (ReferenceEquals(other, entry) || other.Target is NoneTarget)
+                        if (ReferenceEquals(other, entry))
                         {
                             continue;
                         }
 
-                        var otherTarget = MappingDescriptions.Target(other.Target);
-                        conflicts.Add(new SpecialKeyConflict(
-                            own.Kind,
-                            button,
-                            code,
-                            entry.Id,
-                            other.Id,
-                            $"{label}上还有另一条映射（单击：{otherTarget}）：每次按下触发「{MappingDescriptions.SpecialKey(own)}」的同时也会触发{otherTarget}。"));
+                        foreach (var (position, target) in OutputsOf(other))
+                        {
+                            // A double press never reaches a long-press threshold and a hold
+                            // never completes a double-click, so those two pairings never
+                            // fire together and are not reported.
+                            if (!FiresTogether(trigger, position))
+                            {
+                                continue;
+                            }
+
+                            var description = MappingDescriptions.Target(target);
+                            conflicts.Add(new SpecialKeyConflict(
+                                own.Kind,
+                                button,
+                                code,
+                                entry.Id,
+                                other.Id,
+                                $"{label}上还有另一条映射（{PositionName(position)}：{description}）：{BesideTheKey(trigger, position, keyName, description)}"));
+                        }
                     }
                 }
 
@@ -261,6 +294,111 @@ public static class SpecialKeyConflicts
 
         return null;
     }
+
+    /// <summary>
+    /// Where the key <see cref="KeyOf"/> found sits, or null when the mapping carries none.
+    /// The priority matches <see cref="KeyOf"/> - the click first, then the double-click,
+    /// then the long press - so the position named is the one the key came from.
+    /// </summary>
+    public static SpecialKeyTrigger? TriggerOf(MappingEntry entry)
+    {
+        if (entry.Target is SpecialKeyTarget)
+        {
+            return SpecialKeyTrigger.Click;
+        }
+
+        if (entry.Source is ButtonBinding { Gesture: { } gesture })
+        {
+            if (gesture.DoubleClickAction is SpecialKeyTarget)
+            {
+                return SpecialKeyTrigger.DoubleClick;
+            }
+
+            if (gesture.LongPressAction is SpecialKeyTarget)
+            {
+                return SpecialKeyTrigger.LongPress;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Every output a mapping emits, each with the gesture that resolves it: its own click
+    /// unless it is 无功能, then the double-click and long-press actions that carry a real
+    /// target. A gesture action left null re-fires the click - which is 无功能 here - and a
+    /// NoneTarget action emits nothing, so neither is an output of its own.
+    /// </summary>
+    private static IEnumerable<(SpecialKeyTrigger Position, MappingTarget Target)> OutputsOf(MappingEntry entry)
+    {
+        if (entry.Target is not NoneTarget)
+        {
+            yield return (SpecialKeyTrigger.Click, entry.Target);
+        }
+
+        if (entry.Source is ButtonBinding { Gesture: { } gesture })
+        {
+            if (gesture.DoubleClickAction is { } doubleClick && doubleClick is not NoneTarget)
+            {
+                yield return (SpecialKeyTrigger.DoubleClick, doubleClick);
+            }
+
+            if (gesture.LongPressAction is { } longPress && longPress is not NoneTarget)
+            {
+                yield return (SpecialKeyTrigger.LongPress, longPress);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a global key triggered from one position and a sibling's output resolved from
+    /// another can fire on the same interaction. Every pairing does but two: a double press
+    /// releases before any long-press threshold, and a hold never completes a double-click,
+    /// so a double-click key and a long-press action never meet.
+    /// </summary>
+    private static bool FiresTogether(SpecialKeyTrigger global, SpecialKeyTrigger sibling)
+        => global == SpecialKeyTrigger.Click
+        || sibling == SpecialKeyTrigger.Click
+        || global == sibling;
+
+    /// <summary>The gesture a position names, the way the editor's switcher names it.</summary>
+    private static string PositionName(SpecialKeyTrigger position) => position switch
+    {
+        SpecialKeyTrigger.DoubleClick => "双击",
+        SpecialKeyTrigger.LongPress => "长按",
+        _ => "单击",
+    };
+
+    /// <summary>
+    /// What it costs when the global key and the sibling's output fire together, worded by
+    /// how each resolves: a click key answers every press, a double-click key the second
+    /// press of a double, a long-press key the hold past the threshold. The sibling's click
+    /// rides every press edge of its own, while its gesture actions wait for their gesture -
+    /// which is why the click-position key meets a long-press action only mid-hold, and the
+    /// double-click key meets the sibling's click on both of its presses.
+    /// </summary>
+    private static string BesideTheKey(
+        SpecialKeyTrigger global,
+        SpecialKeyTrigger sibling,
+        string key,
+        string description) => (global, sibling) switch
+    {
+        (SpecialKeyTrigger.Click, SpecialKeyTrigger.Click) =>
+            $"每次按下触发「{key}」的同时也会触发{description}。",
+        (SpecialKeyTrigger.Click, SpecialKeyTrigger.DoubleClick) =>
+            $"双击该按钮时，每次按下都会触发「{key}」，第二次按下还会触发{description}。",
+        (SpecialKeyTrigger.Click, SpecialKeyTrigger.LongPress) =>
+            $"长按该按钮时，「{key}」在该次按下时已经切换，按住期间还会触发{description}。",
+        (SpecialKeyTrigger.DoubleClick, SpecialKeyTrigger.Click) =>
+            $"双击触发「{key}」时，两次按下都会触发{description}，第二次按下与该切换同发。",
+        (SpecialKeyTrigger.DoubleClick, SpecialKeyTrigger.DoubleClick) =>
+            $"双击触发「{key}」的第二次按下，同时也会触发{description}。",
+        (SpecialKeyTrigger.LongPress, SpecialKeyTrigger.Click) =>
+            $"长按触发「{key}」期间，{description}一直被按住，与该切换同发。",
+        (SpecialKeyTrigger.LongPress, SpecialKeyTrigger.LongPress) =>
+            $"长按触发「{key}」时，同一按住也会触发{description}。",
+        _ => $"触发「{key}」的同时也会触发{description}。",
+    };
 
     /// <summary>A pinned timing as the user reads it: 0.25 秒, never 0.25000012 秒.</summary>
     private static string Seconds(float seconds)

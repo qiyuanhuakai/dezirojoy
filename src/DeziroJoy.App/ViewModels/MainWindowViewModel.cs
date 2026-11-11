@@ -2562,32 +2562,15 @@ public sealed class GlobalSpecialKeyItem
     }
 
     /// <summary>
-    /// The gesture position the key sits on, or null when it is the mapping's own click.
-    /// The priority matches <see cref="SpecialKeyConflicts.KeyOf"/> - the click first, then
-    /// the double-click, then the long press - so the position named is the one the target
-    /// came from. A key the engine would never engage still reads as configured here; that
-    /// verdict is the conflict hint's to give, not the summary's.
+    /// The gesture position the key sits on, or null when it is the mapping's own click. The
+    /// verdict is the analyzer's own, so the summary and the conflict wording can never
+    /// disagree about which gesture carries the key. A key the engine would never engage
+    /// still reads as configured here; that verdict is the conflict hint's to give.
     /// </summary>
-    private static string? PositionOf(MappingEntry entry)
+    private static string? PositionOf(MappingEntry entry) => SpecialKeyConflicts.TriggerOf(entry) switch
     {
-        if (entry.Target is SpecialKeyTarget)
-        {
-            return null;
-        }
-
-        if (entry.Source is ButtonBinding { Gesture: { } gesture })
-        {
-            if (gesture.DoubleClickAction is SpecialKeyTarget)
-            {
-                return "双击";
-            }
-
-            if (gesture.LongPressAction is SpecialKeyTarget)
-            {
-                return "长按";
-            }
-        }
-
-        return null;
-    }
+        SpecialKeyTrigger.DoubleClick => "双击",
+        SpecialKeyTrigger.LongPress => "长按",
+        _ => null,
+    };
 }

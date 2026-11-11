@@ -2629,4 +2629,76 @@ public class MappingEditorViewModelTests
         Assert.True(editor.HasSpecialKeyConflict);
         Assert.Contains("不会生效", editor.SpecialKeyConflictHint!);
     }
+
+    [Fact]
+    public void A_Double_Click_Leader_Draft_Is_Measured_Against_The_Same_Button()
+    {
+        // The normal editor flow reaches a gesture-position leader: switch to the 双击 tab,
+        // pick 特殊键, pick Leader 键. A sibling on the same button fires beside it.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("双击触发「Leader 键」", editor.SpecialKeyConflictHint!);
+        Assert.Contains("两次按下都会触发Enter", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Long_Press_Leader_Draft_Is_Measured_Against_The_Same_Button()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("长按触发「Leader 键」", editor.SpecialKeyConflictHint!);
+        Assert.Contains("Enter一直被按住", editor.SpecialKeyConflictHint!);
+    }
+
+    [Fact]
+    public void A_Leader_Draft_Sees_A_Siblings_Gesture_Action_Too()
+    {
+        // The sibling's own click is 无功能, but its double-click is a real key: the second
+        // press fires the switch and the key together.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                        DoubleClickAction = new KeyPressTarget(GamepadKey.A),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ];
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("双击：A", editor.SpecialKeyConflictHint!);
+    }
 }

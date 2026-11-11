@@ -279,6 +279,36 @@ public class MainWindowViewModelSpecialKeysTests
     }
 
     [Fact]
+    public async Task A_Gesture_Position_Leader_Reports_Its_Sibling_In_The_Top_Area()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(vm, host, provider);
+
+        // The normal flow: arm a fresh mapping on B - which carries the default B -> Enter -
+        // switch to the 双击 tab and make it a Leader 键.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.B;
+        vm.Editor.SelectedGestureKind = GestureKind.DoubleClick;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        var leader = Leader(vm);
+        Assert.True(leader.IsConfigured);
+        Assert.Contains("B 键", leader.Summary);
+        Assert.Contains("双击", leader.Summary);
+
+        // The top area must not give the key a clean bill of health: the sibling fires on
+        // both presses of the double that triggers it.
+        Assert.True(leader.HasConflicts);
+        Assert.Contains("双击触发「Leader 键」", leader.ConflictHint!);
+        Assert.Contains("两次按下都会触发Enter", leader.ConflictHint!);
+
+        // Both involved rows report it too.
+        Assert.Equal(2, vm.Mappings.Count(row => row.HasConflicts));
+    }
+
+    [Fact]
     public async Task The_Editor_Is_Handed_The_Profiles_Other_Mappings_For_Its_Hints()
     {
         var (vm, host, provider, _) = CreateHost();

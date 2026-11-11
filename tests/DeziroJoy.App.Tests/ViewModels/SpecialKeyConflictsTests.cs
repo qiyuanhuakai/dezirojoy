@@ -270,7 +270,8 @@ public class SpecialKeyConflictsTests
     public void A_Sibling_With_A_Long_Press_Action_Double_Fires_Too()
     {
         // No long-press action consumes the press any more, so the sibling's quick press fires
-        // the click beside the leader - the exclusion that once hid this is gone.
+        // the click beside the leader - the exclusion that once hid this is gone. The sibling's
+        // long-press action is an output of its own, so it is reported beside it.
         var mappings = new[]
         {
             Button(GamepadButton.Back, Leader()),
@@ -282,10 +283,10 @@ public class SpecialKeyConflictsTests
                     longPressAction: new KeyPressTarget(GamepadKey.A))),
         };
 
-        var message = Message(SpecialKeyConflicts.Analyze(mappings));
+        var messages = SpecialKeyConflicts.Analyze(mappings).Select(conflict => conflict.Message).ToList();
 
-        Assert.Contains("另一条映射", message);
-        Assert.Contains("Enter", message);
+        Assert.Contains("Back 键上还有另一条映射（单击：Enter）：每次按下触发「Leader 键」的同时也会触发Enter。", messages);
+        Assert.Contains("Back 键上还有另一条映射（长按：A）：长按该按钮时，「Leader 键」在该次按下时已经切换，按住期间还会触发A。", messages);
     }
 
     [Fact]
@@ -342,6 +343,164 @@ public class SpecialKeyConflictsTests
         };
 
         Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void A_Double_Click_Leader_Fires_Beside_A_Sibling_Click_On_Both_Presses()
+    {
+        // The engine's per-mapping gesture state runs the sibling beside the key: the first
+        // press fires Enter, the second fires Enter and the switch.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: Leader())),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（单击：Enter）：双击触发「Leader 键」时，两次按下都会触发Enter，第二次按下与该切换同发。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Long_Press_Leader_Holds_A_Sibling_Click_While_Switching()
+    {
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    longPressAction: Leader())),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（单击：Enter）：长按触发「Leader 键」期间，Enter一直被按住，与该切换同发。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Siblings_Double_Click_Action_Fires_Beside_A_Click_Leader()
+    {
+        // The sibling's own click is 无功能, but its double-click is a real key: the second
+        // press fires two switches and the key, and the click-only view would miss it.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader()),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（双击：A）：双击该按钮时，每次按下都会触发「Leader 键」，第二次按下还会触发A。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Siblings_Long_Press_Action_Fires_Beside_A_Click_Leader()
+    {
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader()),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    longPressAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（长按：A）：长按该按钮时，「Leader 键」在该次按下时已经切换，按住期间还会触发A。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Double_Click_Leader_And_A_Siblings_Long_Press_Never_Fire_Together()
+    {
+        // A double press releases before any long-press threshold, and a hold never
+        // completes a double-click, so the two never meet and nothing is reported.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: Leader())),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    longPressAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void A_Long_Press_Leader_And_A_Siblings_Double_Click_Never_Fire_Together()
+    {
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    longPressAction: Leader())),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void A_Precision_Key_On_A_Gesture_Position_Has_No_Sibling_Rule()
+    {
+        // Rule 6 already says the key never engages, so there is no trigger to collide with.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: Precision())),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)),
+        };
+
+        var conflict = Assert.Single(SpecialKeyConflicts.Analyze(mappings));
+
+        Assert.Contains("不会生效", conflict.Message);
+        Assert.DoesNotContain("另一条映射", conflict.Message);
+    }
+
+    [Fact]
+    public void A_Double_Click_Window_The_Profile_Carries_Is_The_One_Named()
+    {
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader(), Gesture(doubleClickWindow: 0.4f)),
+        };
+
+        Assert.Contains("双击窗口（0.4 秒）", Message(SpecialKeyConflicts.Analyze(mappings)));
     }
 
     [Fact]
