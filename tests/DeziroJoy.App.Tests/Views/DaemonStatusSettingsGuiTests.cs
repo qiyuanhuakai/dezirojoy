@@ -109,6 +109,52 @@ public sealed class DaemonStatusSettingsGuiTests
     }
 
     [AvaloniaFact]
+    public void Linux_Card_Shows_The_Enablement_As_Its_Own_Line()
+    {
+        var service = new DaemonSettingsViewModelLinuxTests.FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = true,
+            IsDaemonEnabled = true,
+        };
+        var vm = new DaemonSettingsViewModel(service);
+        var (_, card) = ShowCard(vm);
+
+        var enabled = card.FindControl<TextBlock>("DaemonEnabledText")!;
+        Assert.True(enabled.IsVisible);
+        Assert.Equal("已启用（登录自动）", enabled.Text);
+
+        // The enablement flips on its own, without the run state moving with it.
+        service.IsDaemonEnabled = false;
+        vm.RefreshCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(enabled.IsVisible);
+        Assert.Equal("未启用（登录不会自动启动）", enabled.Text);
+        Assert.Contains("正在运行", card.FindControl<TextBlock>("DaemonStateText")!.Text);
+    }
+
+    [AvaloniaFact]
+    public void Linux_Card_Reports_A_Failed_Query_Instead_Of_Not_Running()
+    {
+        var service = new DaemonSettingsViewModelLinuxTests.FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = false,
+            DaemonQueryError = "环境缺少 XDG_RUNTIME_DIR 与 DBUS_SESSION_BUS_ADDRESS，systemctl --user 连不上用户总线",
+        };
+        var (_, card) = ShowCard(new DaemonSettingsViewModel(service));
+
+        var state = card.FindControl<TextBlock>("DaemonStateText")!;
+        Assert.Contains("无法查询状态", state.Text);
+        Assert.Contains("XDG_RUNTIME_DIR", state.Text);
+        Assert.DoesNotContain("未运行", state.Text);
+
+        // Nothing is known about the enablement either, so that line stays away.
+        Assert.False(card.FindControl<TextBlock>("DaemonEnabledText")!.IsEffectivelyVisible);
+    }
+
+    [AvaloniaFact]
     public void Windows_Card_Keeps_Its_Wording_And_Hides_Start_Stop()
     {
         var (_, card) = ShowCard(new DaemonSettingsViewModel(
@@ -124,6 +170,9 @@ public sealed class DaemonStatusSettingsGuiTests
         Assert.False(card.FindControl<WrapPanel>("DaemonRuntimeRow")!.IsVisible);
         Assert.False(card.FindControl<Button>("StartDaemonButton")!.IsEffectivelyVisible);
         Assert.False(card.FindControl<Button>("StopDaemonButton")!.IsEffectivelyVisible);
+
+        // A scheduled task runs at logon once installed: no enablement line to show.
+        Assert.False(card.FindControl<TextBlock>("DaemonEnabledText")!.IsEffectivelyVisible);
     }
 
     private static (Window Window, DaemonSettingsCard Card) ShowCard(DaemonSettingsViewModel viewModel)

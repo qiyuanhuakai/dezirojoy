@@ -38,8 +38,21 @@ public class LinuxDaemonServiceTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private LinuxDaemonService CreateService(Func<string?>? executable = null)
-        => new(_systemCtl, () => _unitDirectory, executable ?? (() => "/opt/dezirojoy/DeziroJoy"));
+    private LinuxDaemonService CreateService(
+        Func<string?>? executable = null,
+        Func<string, string?>? environmentVariable = null)
+        => new(
+            _systemCtl,
+            () => _unitDirectory,
+            executable ?? (() => "/opt/dezirojoy/DeziroJoy"),
+            environmentVariable ?? BusEnvironmentPresent);
+
+    /// <summary>
+    /// A session-bus environment that is present, so the service's self-check passes without
+    /// the tests depending on the machine they run on.
+    /// </summary>
+    private static string? BusEnvironmentPresent(string name)
+        => name == "XDG_RUNTIME_DIR" ? "/run/user/1000" : null;
 
     [Fact]
     public void Install_Writes_The_Unit_Then_Reloads_Enables_And_Starts_It()
@@ -95,7 +108,7 @@ public class LinuxDaemonServiceTests : IDisposable
     }
 
     [Fact]
-    public void A_Systemctl_Failure_Is_Reported_With_Its_Output()
+    public void An_Install_That_Fails_After_Writing_The_Unit_Reports_The_Intermediate_State()
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
 
@@ -105,7 +118,34 @@ public class LinuxDaemonServiceTests : IDisposable
         var result = service.InstallDaemon();
 
         Assert.Equal(DaemonOp.Failed, result.Result);
+
+        // The unit file is written before any systemctl call, so a failure here leaves it on
+        // disk: the result says exactly that - with the reason and the way out - instead of a
+        // flat failure that leaves the user wondering why every later refresh shows
+        // "installed but not running".
+        Assert.True(File.Exists(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName)));
+        Assert.Contains("已写单元但启用失败", result.Message);
         Assert.Contains("Failed to connect to bus", result.Message);
+        Assert.Contains(LinuxDaemonService.UnitName, result.Message);
+    }
+
+    [Fact]
+    public void An_Install_That_Cannot_Reach_The_Bus_Says_What_Is_Missing()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        _systemCtl.Fail("daemon-reload", exitCode: 1, standardError: "Failed to connect to bus: No medium found");
+        var service = CreateService(environmentVariable: _ => null);
+
+        var result = service.InstallDaemon();
+
+        // The intermediate state names the actual cause: the GUI has no session-bus
+        // environment, so every systemctl call would fail no matter what the unit says.
+        Assert.Equal(DaemonOp.Failed, result.Result);
+        Assert.Contains("已写单元但启用失败", result.Message);
+        Assert.Contains("XDG_RUNTIME_DIR", result.Message);
+        Assert.Contains("DBUS_SESSION_BUS_ADDRESS", result.Message);
+        Assert.True(File.Exists(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName)));
     }
 
     [Fact]
@@ -140,7 +180,7 @@ public class LinuxDaemonServiceTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_Reads_The_Unit_File_The_Active_State_And_The_Xdg_Entry()
+    public void Refresh_Reads_The_Unit_File_The_Active_Enabled_States_And_The_Xdg_Entry()
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
 
@@ -153,20 +193,24 @@ public class LinuxDaemonServiceTests : IDisposable
         service.Refresh();
         Assert.True(service.IsDaemonInstalled);
         Assert.True(service.IsDaemonRunning);
+        Assert.True(service.IsDaemonEnabled);
         Assert.False(service.IsAutostartInstalled);
+        Assert.Null(service.DaemonQueryError);
 
-        // The autostart state comes from the XDG entry, never from the unit's enablement:
-        // the reviewed P1 was exactly that mis-wiring, and no command proves the fix like
-        // the absence of this one.
-        Assert.DoesNotContain(
+        // The daemon's own enablement is queried for its own reported state - the missing
+        // query behind the user's "每次刷新都显示未启用".
+        Assert.Contains(
             _systemCtl.Calls,
             call => call.StartsWith("is-enabled", StringComparison.Ordinal));
 
-        // The autostart state tracks the entry SetAutostart writes, not the unit.
+        // The autostart state comes from the XDG entry, never from the unit's enablement:
+        // the reviewed P1 was exactly that mis-wiring, and the toggle round-trips below
+        // prove the two do not move together.
         service.SetAutostart(enabled: true);
         service.Refresh();
         Assert.True(service.IsAutostartInstalled);
         Assert.True(service.IsDaemonInstalled);
+        Assert.True(service.IsDaemonEnabled);
 
         service.SetAutostart(enabled: false);
         service.Refresh();
@@ -178,11 +222,96 @@ public class LinuxDaemonServiceTests : IDisposable
         Assert.False(service.IsDaemonRunning);
         Assert.False(service.IsAutostartInstalled);
 
+        // Enablement is its own fact: the unit stops starting at login while everything else
+        // about it stays put.
+        _systemCtl.Enabled = false;
+        service.Refresh();
+        Assert.True(service.IsDaemonInstalled);
+        Assert.False(service.IsDaemonRunning);
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Null(service.DaemonQueryError);
+
         File.Delete(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName));
         service.Refresh();
         Assert.False(service.IsDaemonInstalled);
         Assert.False(service.IsDaemonRunning);
+        Assert.False(service.IsDaemonEnabled);
         Assert.False(service.IsAutostartInstalled);
+    }
+
+    [Fact]
+    public void A_Failed_Query_Is_Reported_With_Its_Reason_Never_As_Not_Running()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        _systemCtl.Fail("is-active", exitCode: 1, standardError: "Failed to connect to bus: No medium found");
+        var service = CreateService();
+        service.InstallDaemon();
+
+        service.Refresh();
+
+        // The bus never answered: that is a failed query, not "not running", and the reason
+        // is what gets reported - the user's "每次刷新都显示未启用" was exactly this failure
+        // being flattened into a state.
+        Assert.False(service.IsDaemonRunning);
+        Assert.NotNull(service.DaemonQueryError);
+        Assert.Contains("Failed to connect to bus", service.DaemonQueryError);
+    }
+
+    [Fact]
+    public void A_Failed_Enablement_Query_Does_Not_Falsely_Report_Enabled()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        _systemCtl.Fail("is-enabled", exitCode: 1, standardError: "boom");
+        var service = CreateService();
+        service.InstallDaemon();
+
+        service.Refresh();
+
+        // The two queries are independent facts: the run state answered, the enablement did
+        // not, so enablement stays unproven and the reason is reported.
+        Assert.True(service.IsDaemonRunning);
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Contains("boom", service.DaemonQueryError);
+    }
+
+    [Fact]
+    public void Refresh_Without_The_Bus_Environment_Reports_It_Instead_Of_Querying()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        var service = CreateService(environmentVariable: _ => null);
+        service.InstallDaemon();
+        var callsAfterInstall = _systemCtl.Calls.Count;
+
+        service.Refresh();
+
+        Assert.True(service.IsDaemonInstalled);
+        Assert.False(service.IsDaemonRunning);
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Contains("XDG_RUNTIME_DIR", service.DaemonQueryError);
+        Assert.Contains("DBUS_SESSION_BUS_ADDRESS", service.DaemonQueryError);
+
+        // The missing environment is named up front: no systemctl call is made to fail first.
+        Assert.Equal(callsAfterInstall, _systemCtl.Calls.Count);
+    }
+
+    [Fact]
+    public void Start_Without_The_Bus_Environment_Says_So_Instead_Of_Failing_Cryptically()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        var service = CreateService(environmentVariable: _ => null);
+        Directory.CreateDirectory(_unitDirectory);
+        File.WriteAllText(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName), "[Unit]");
+        service.Refresh();
+
+        var result = service.StartDaemon();
+
+        Assert.Equal(DaemonOp.Failed, result.Result);
+        Assert.Contains("XDG_RUNTIME_DIR", result.Message);
+        Assert.DoesNotContain(_systemCtl.Calls, call => call.StartsWith("start", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -247,6 +376,8 @@ public class LinuxDaemonServiceTests : IDisposable
         service.Refresh();
         Assert.False(service.IsDaemonInstalled);
         Assert.False(service.IsDaemonRunning);
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Null(service.DaemonQueryError);
         Assert.False(service.IsAutostartInstalled);
     }
 
@@ -265,16 +396,19 @@ public class LinuxDaemonServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Records every systemctl invocation and answers by verb: is-active reports configurable
-    /// state, everything else succeeds unless a failure was armed. There is no is-enabled
-    /// branch because the service reads the autostart state from the XDG entry, never from the
-    /// unit - wiring those two together was the reviewed P1.
+    /// Records every systemctl invocation and answers by verb: is-active reports the
+    /// configurable run state, is-enabled reports the configurable enablement, everything else
+    /// succeeds unless a failure was armed. The enablement state exists because the daemon's
+    /// own is-enabled is now a reported fact - what the service must never do is derive the
+    /// GUI autostart toggle from it (the reviewed P1); the toggle reads the XDG entry.
     /// </summary>
     private sealed class FakeSystemCtl : ISystemCtl
     {
         public List<string> Calls { get; } = [];
 
         public bool Active { get; set; } = true;
+
+        public bool Enabled { get; set; } = true;
 
         private readonly Dictionary<string, SystemCtlResult> _failures = new(StringComparer.Ordinal);
 
@@ -296,6 +430,11 @@ public class LinuxDaemonServiceTests : IDisposable
             if (arguments.StartsWith("is-active", StringComparison.Ordinal))
             {
                 return new SystemCtlResult(Active ? 0 : 3, Active ? "active" : "inactive", string.Empty);
+            }
+
+            if (arguments.StartsWith("is-enabled", StringComparison.Ordinal))
+            {
+                return new SystemCtlResult(Enabled ? 0 : 1, Enabled ? "enabled" : "disabled", string.Empty);
             }
 
             return new SystemCtlResult(0, string.Empty, string.Empty);

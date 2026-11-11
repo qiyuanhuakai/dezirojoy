@@ -31,6 +31,12 @@ public class DaemonSettingsViewModelLinuxTests
         Assert.True(vm.IsDaemonInstalled);
         Assert.Contains("已安装", vm.StatusMessage);
         Assert.Contains("loginctl enable-linger", vm.StatusMessage);
+
+        // Installing enables the unit, and that shows up as its own state - never folded
+        // into "running", and never moving the GUI autostart toggle.
+        Assert.True(vm.IsDaemonEnabled);
+        Assert.Equal("已启用（登录自动）", vm.DaemonEnabledText);
+        Assert.False(vm.AutostartEnabled);
     }
 
     [Fact]
@@ -43,6 +49,58 @@ public class DaemonSettingsViewModelLinuxTests
         service.IsDaemonRunning = true;
 
         Assert.Contains("已安装并正在运行", LinuxCard(service).DaemonStateText);
+    }
+
+    [Fact]
+    public void The_Enablement_Is_Its_Own_State_Not_The_Run_State()
+    {
+        var service = new FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = false,
+            IsDaemonEnabled = true,
+        };
+
+        // Enabled but not running: the unit starts at login even though it is stopped now.
+        Assert.Contains("已安装但未运行", LinuxCard(service).DaemonStateText);
+        Assert.Equal("已启用（登录自动）", LinuxCard(service).DaemonEnabledText);
+
+        service.IsDaemonRunning = true;
+        service.IsDaemonEnabled = false;
+
+        // Running but not enabled: it runs now and will not come back at the next login.
+        Assert.Contains("已安装并正在运行", LinuxCard(service).DaemonStateText);
+        Assert.Equal("未启用（登录不会自动启动）", LinuxCard(service).DaemonEnabledText);
+    }
+
+    [Fact]
+    public void Without_The_Unit_There_Is_No_Enablement_Line()
+    {
+        var vm = LinuxCard(new FakeLinuxDaemonService());
+
+        Assert.Null(vm.DaemonEnabledText);
+        Assert.False(vm.HasDaemonEnabledText);
+    }
+
+    [Fact]
+    public void A_Failed_Query_Is_Its_Own_State_Never_Not_Running()
+    {
+        var service = new FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = false,
+            IsDaemonEnabled = false,
+            DaemonQueryError = "环境缺少 XDG_RUNTIME_DIR 与 DBUS_SESSION_BUS_ADDRESS，systemctl --user 连不上用户总线",
+        };
+
+        var text = LinuxCard(service).DaemonStateText;
+
+        // The scheduler never answered, so the card must not claim it did: no "未运行", the
+        // reason is on screen, and no enablement line is invented from the failed query.
+        Assert.Contains("无法查询状态", text);
+        Assert.Contains("XDG_RUNTIME_DIR", text);
+        Assert.DoesNotContain("未运行", text);
+        Assert.Null(LinuxCard(service).DaemonEnabledText);
     }
 
     [Fact]
@@ -96,6 +154,19 @@ public class DaemonSettingsViewModelLinuxTests
         vm.RefreshCommand.Execute(null);
 
         Assert.True(vm.IsDaemonRunning);
+    }
+
+    [Fact]
+    public void Refresh_Republishes_The_Enablement_State()
+    {
+        var service = new FakeLinuxDaemonService { IsDaemonInstalled = true };
+        var vm = LinuxCard(service);
+
+        service.IsDaemonEnabled = true;
+        vm.RefreshCommand.Execute(null);
+
+        Assert.True(vm.IsDaemonEnabled);
+        Assert.Equal("已启用（登录自动）", vm.DaemonEnabledText);
     }
 
     [Fact]
@@ -153,7 +224,11 @@ public class DaemonSettingsViewModelLinuxTests
 
         try
         {
-            var service = new LinuxDaemonService(systemCtl, () => unitDirectory, () => "/opt/dezirojoy/DeziroJoy");
+            var service = new LinuxDaemonService(
+                systemCtl,
+                () => unitDirectory,
+                () => "/opt/dezirojoy/DeziroJoy",
+                _ => "/run/user/1000");
             var vm = new DaemonSettingsViewModel(service);
 
             vm.InstallDaemonCommand.Execute(null);
@@ -201,15 +276,18 @@ public class DaemonSettingsViewModelLinuxTests
 
     /// <summary>
     /// Records every systemctl invocation and mirrors real systemd's state: is-active answers
-    /// from the recorded state, start flips it on and stop flips it off. There is no is-enabled
-    /// branch because the service reads the autostart state from the XDG entry, never from the
-    /// unit - wiring those two together was the reviewed P1.
+    /// from the recorded state, is-enabled answers from the recorded enablement, start flips
+    /// the former on and stop flips it off. The enablement branch exists because the daemon's
+    /// own is-enabled is a reported fact - the GUI autostart toggle still reads the XDG entry,
+    /// never the unit (the reviewed P1).
     /// </summary>
     private sealed class FakeSystemCtl : ISystemCtl
     {
         public List<string> Calls { get; } = [];
 
         public bool Active { get; set; } = true;
+
+        public bool Enabled { get; set; } = true;
 
         public SystemCtlResult Run(string arguments)
         {
@@ -218,6 +296,11 @@ public class DaemonSettingsViewModelLinuxTests
             if (arguments.StartsWith("is-active", StringComparison.Ordinal))
             {
                 return new SystemCtlResult(Active ? 0 : 3, Active ? "active" : "inactive", string.Empty);
+            }
+
+            if (arguments.StartsWith("is-enabled", StringComparison.Ordinal))
+            {
+                return new SystemCtlResult(Enabled ? 0 : 1, Enabled ? "enabled" : "disabled", string.Empty);
             }
 
             if (arguments.StartsWith("start", StringComparison.Ordinal))
@@ -250,6 +333,10 @@ public class DaemonSettingsViewModelLinuxTests
 
         public bool IsDaemonRunning { get; set; }
 
+        public bool IsDaemonEnabled { get; set; }
+
+        public string? DaemonQueryError { get; set; }
+
         public bool IsAutostartInstalled { get; set; }
 
         public string? DaemonRunLevel => null;
@@ -268,6 +355,7 @@ public class DaemonSettingsViewModelLinuxTests
         {
             IsDaemonInstalled = true;
             IsDaemonRunning = true;
+            IsDaemonEnabled = true;
 
             // Installing the unit deliberately does not install the XDG autostart entry:
             // the two are independent switches, exactly like the real service.
@@ -279,6 +367,7 @@ public class DaemonSettingsViewModelLinuxTests
         {
             IsDaemonInstalled = false;
             IsDaemonRunning = false;
+            IsDaemonEnabled = false;
 
             return DaemonActionResult.Completed("已停止并移除 systemd 用户单元 dezirojoy-daemon.service。");
         }
