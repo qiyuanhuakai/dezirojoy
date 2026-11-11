@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -89,6 +90,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly IElevationService _elevationService;
 
+    private readonly IUpdateService _updateService;
+
+    private readonly bool _ownsUpdateService;
+
+    /// <summary>
+    /// The startup auto-check, or null when the persisted toggle is off. Kept so a test can
+    /// await the fire-and-forget instead of racing it.
+    /// </summary>
+    private readonly Task? _startupUpdateCheck;
+
     private MappingEntry? _editingEntry;
 
     /// <summary>
@@ -118,7 +129,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IElevationService? elevationService = null,
         DaemonController? daemon = null,
         bool daemonRequired = false,
-        ThemeService? settings = null)
+        ThemeService? settings = null,
+        IUpdateService? updateService = null)
     {
         _host = host;
         _daemon = daemon;
@@ -128,12 +140,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _profileStore = profileStore;
         _presets = new PresetStore(_profileStore);
         _elevationService = elevationService ?? new ElevationService();
+        _updateService = updateService ?? new UpdateService();
+        _ownsUpdateService = updateService is null;
         Editor = new MappingEditorViewModel();
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
         Visualizer = new GamepadVisualizerViewModel();
         Appearance = new AppearanceViewModel();
         DaemonSettings = new DaemonSettingsViewModel();
+        Update = new UpdateSettingsViewModel(_updateService, _settings);
 
         // Fixed for the lifetime of the process: elevation is decided at launch.
         IsElevationSupported = _elevationService.IsSupported;
@@ -168,7 +183,44 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ActivePresetSlot = _host.ActivePresetSlot;
         RefreshStatus();
         ApplyInputLease();
+
+        _startupUpdateCheck = RunStartupUpdateCheck();
     }
+
+    /// <summary>
+    /// The update surface of the settings panel: running version, manual check and the
+    /// persisted startup auto-check. Shares the single <see cref="IUpdateService"/> for the
+    /// lifetime of the window.
+    /// </summary>
+    public UpdateSettingsViewModel Update { get; }
+
+    /// <summary>
+    /// Runs the release check once at startup when the persisted toggle is on. The check is
+    /// fire-and-forget: it must never delay the window, its outcome only ever lands in the
+    /// settings panel, and a failure (offline, timeout, API refusal) stays there rather than
+    /// interrupting startup. The returned task is faulted rather than crashing the process,
+    /// and it is exposed through <see cref="StartupUpdateCheck"/> so tests can await it.
+    /// </summary>
+    private Task? RunStartupUpdateCheck()
+    {
+        if (!Update.AutoCheckEnabled)
+        {
+            return null;
+        }
+
+        var check = Update.CheckForUpdatesAsync(_lifetime.Token);
+        _ = check.ContinueWith(
+            static failed => Trace.WriteLine(
+                $"[DeziroJoy] 启动时更新检查未完成：{failed.Exception?.Flatten().InnerException?.Message}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        return check;
+    }
+
+    /// <summary>The startup auto-check task, or null when the toggle is off. For tests.</summary>
+    internal Task? StartupUpdateCheck => _startupUpdateCheck;
 
     public ObservableCollection<ControllerRuntime> Controllers { get; } = [];
 
@@ -2351,6 +2403,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         await DisconnectDaemonAsync();
+
+        // The default service owns an HttpClient this view model created; an injected one is
+        // the caller's to dispose. This runs after the lifetime token is cancelled above, so
+        // an in-flight startup check is already settling rather than racing the disposal.
+        if (_ownsUpdateService && _updateService is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+
         GC.SuppressFinalize(this);
     }
 
