@@ -9,25 +9,21 @@
   the caller's working directory, so the invocation works from anywhere.
 
   What is verified here:
-    * ISCC is resolved together with its language files: the compiler used is the
-      first directory carrying both ISCC.exe and Languages\ChineseSimplified.isl,
-      tried in order - the directory of the compiler the Chocolatey shim's
-      ISCC.shim redirects to (on windows-latest PATH resolves ISCC to that shim,
-      a redirector whose own directory has no Languages subdirectory), then the
-      directory PATH resolves ISCC from, then the standard Inno Setup 6/7 install
-      directories - and when none of them carries the Chinese resource file, the
-      error reports every candidate directory (existence, ISCC.exe, Languages
-      subdirectory and the .isl files in it) plus the shim redirect target, so
-      the next failure is self-diagnosing.
-    * The installer ships a Simplified Chinese interface built from Inno Setup's own
-      ChineseSimplified.isl, which the Inno installer places in the compiler's
-      Languages subdirectory (referenced as compiler:Languages\ChineseSimplified.isl;
-      only Default.isl sits next to ISCC itself), with English kept as the fallback,
-      and the wizard's custom texts (the desktop-icon task and the
-      launch-after-install entry) are referenced through the language files
-      ({cm:...}) instead of hard-coded English, so both languages cover them; the
-      Chinese resource file and the message keys it must define are verified
-      against the resolved ISCC before the compile.
+    * ISCC is resolved to the real Inno compiler: the directory the Chocolatey
+      shim's ISCC.shim redirects to is tried first (on windows-latest PATH
+      resolves ISCC to that shim, a redirector that only forwards to the real
+      compiler), then the directory PATH resolves ISCC from, then the standard
+      Inno Setup 6/7 install directories; the first directory carrying ISCC.exe
+      wins. The Chinese resource file no longer has to sit next to it - the
+      installer references the repository's own translation instead (see below).
+    * The installer ships a Simplified Chinese interface built from the
+      repository's own ChineseSimplified.isl (Inno Setup's official translation,
+      referenced as Languages\ChineseSimplified.isl relative to the .iss), with
+      English kept as the fallback, and the wizard's custom texts (the
+      desktop-icon task and the launch-after-install entry) are referenced through
+      the language files ({cm:...}) instead of hard-coded English, so both
+      languages cover them; the repository translation file and the message keys
+      it must define are verified before the compile.
     * The publish payload (DeziroJoy.exe) carries the machine type the RID implies
       (x64 / ARM64), and the .iss maps the RID to the matching ArchitecturesAllowed /
       ArchitecturesInstallIn64BitMode: those two decide where a setup may install.
@@ -185,11 +181,11 @@ Write-Host "AppId: $resolvedAppId (uninstall key: $uninstallKeyName)"
 
 # --- verify the installer languages (M30) ------------------------------------------
 # The setup must ship a Simplified Chinese interface and keep English as the
-# fallback. Simplified Chinese comes from Inno Setup's own
-# ChineseSimplified.isl (LanguageID $0804), which the Inno installer places in
-# the compiler's Languages subdirectory - referenced as
-# compiler:Languages\ChineseSimplified.isl, because only Default.isl sits next
-# to ISCC itself - so no external translation file ships; with more than one
+# fallback. Simplified Chinese comes from the repository's own
+# ChineseSimplified.isl (Inno Setup's official translation, LanguageID $0804),
+# referenced as Languages\ChineseSimplified.isl relative to the .iss, so the
+# build no longer depends on the runner's Inno install carrying that language
+# file; English stays the compiler:Default.isl fallback. With more than one
 # language declared, Setup shows the language dialog and preselects the system
 # locale, and English stays selectable there. Both entries must be in
 # [Languages] - dropping either the Chinese entry or the English fallback fails
@@ -201,8 +197,8 @@ if (-not $languagesSection) {
 if ($languagesSection -notmatch '(?m)^\s*Name:\s*"english"\s*;\s*MessagesFile:\s*"compiler:Default\.isl"\s*$') {
   throw "DeziroJoy.iss: [Languages] must keep English via compiler:Default.isl as the fallback language"
 }
-if ($languagesSection -notmatch '(?m)^\s*Name:\s*"chinesesimplified"\s*;\s*MessagesFile:\s*"compiler:Languages\\ChineseSimplified\.isl"\s*$') {
-  throw "DeziroJoy.iss: [Languages] must declare Simplified Chinese via compiler:Languages\ChineseSimplified.isl (the .isl files live in the compiler's Languages subdirectory)"
+if ($languagesSection -notmatch '(?m)^\s*Name:\s*"chinesesimplified"\s*;\s*MessagesFile:\s*"Languages\\ChineseSimplified\.isl"\s*$') {
+  throw "DeziroJoy.iss: [Languages] must declare Simplified Chinese via Languages\ChineseSimplified.isl (the repository's own translation file, next to this script)"
 }
 
 # The wizard's custom texts - the desktop-icon task and the launch-after-install
@@ -210,7 +206,7 @@ if ($languagesSection -notmatch '(?m)^\s*Name:\s*"chinesesimplified"\s*;\s*Messa
 # because a hard-coded English string there stays English on a Chinese install
 # and a missing message would print the constant itself. The keys used below are
 # exactly the ones the .iss references; the Chinese resource must define them
-# (checked against the resolved ISCC below).
+# (checked against the repository file below).
 if ($issText -notmatch '(?m)^\s*Name:\s*"desktopicon"\s*;\s*Description:\s*"\{cm:CreateDesktopIcon\}"') {
   throw "DeziroJoy.iss: the desktopicon task must be localized through {cm:CreateDesktopIcon}"
 }
@@ -219,24 +215,19 @@ if ($issText -notmatch 'Description:\s*"\{cm:LaunchProgram,\{#MyAppName\}\}"') {
 }
 Write-Host "installer languages: english (fallback) + chinesesimplified; custom texts via {cm:CreateDesktopIcon} / {cm:LaunchProgram}"
 
-# --- resolve ISCC together with its language files ---------------------------------
+# --- resolve ISCC ------------------------------------------------------------------
 # windows-latest ships Inno Setup 6 on PATH, but a PATH hit is not necessarily the
 # real compiler: the Chocolatey ISCC shim at C:\ProgramData\Chocolatey\bin\ISCC.exe
-# only redirects to it, and the shim's own directory carries no Languages
-# subdirectory. "compiler:Languages\ChineseSimplified.isl" resolves against the
-# directory of the ISCC that actually compiles, so the beta.3-preview run
-# (42962660225) resolved the shim, looked for its Languages\ChineseSimplified.isl
-# and threw before the compile started. The standard-directory fallback added for
-# that run did not close it either: on the next run (42972786624) every candidate
-# directory was missing Languages\ChineseSimplified.isl, because the real Inno
-# Setup on the runner is installed somewhere off the standard list. The shim
-# carries the answer next to itself: a companion text file (ISCC.shim) whose
-# 'path = <real ISCC.exe>' line names the compiler it redirects to. Read it when
-# present - one level only, so a malformed shim cannot loop - and try the
-# redirect target's directory first; otherwise the candidate directories are the
-# one PATH resolves ISCC from, then the standard Inno Setup 6/7 install
-# directories. The compiler used is the first candidate carrying both ISCC.exe
-# and Languages\ChineseSimplified.isl.
+# only redirects to it. The shim carries the answer next to itself: a companion
+# text file (ISCC.shim) whose 'path = <real ISCC.exe>' line names the compiler it
+# redirects to. Read it when present - one level only, so a malformed shim cannot
+# loop - and try the redirect target's directory first; otherwise the candidate
+# directories are the one PATH resolves ISCC from, then the standard Inno Setup
+# 6/7 install directories. The compiler used is the first candidate carrying
+# ISCC.exe. The Chinese resource file no longer participates in this choice: the
+# installer references the repository's own ChineseSimplified.isl, so a runner
+# whose Inno install omits that language file still compiles - the beta.3-preview
+# runs (42962660225, 42972786624, 42975039773) failed exactly there.
 $standardDirs = @(
   "$env:ProgramFiles\Inno Setup 6",
   "${env:ProgramFiles(x86)}\Inno Setup 6",
@@ -251,13 +242,11 @@ $onPath = Get-Command ISCC -ErrorAction SilentlyContinue
 # stripped - and keep the target only when it exists. A missing shim, a shim
 # without a usable path line, or a target that is not there changes nothing: the
 # candidates below then apply exactly as before.
-$shimPath = $null
 $shimTarget = $null
 if ($onPath) {
   $onPathDir = Split-Path -Parent $onPath.Source
   $shimCandidate = Join-Path $onPathDir ([System.IO.Path]::GetFileNameWithoutExtension($onPath.Source) + '.shim')
   if (Test-Path -LiteralPath $shimCandidate) {
-    $shimPath = $shimCandidate
     $shimText = Get-Content -LiteralPath $shimCandidate -Raw
     if ($shimText -match '(?im)^\s*path\s*=\s*(.+)$') {
       $shimTarget = $Matches[1].Trim().Trim('"', "'").Trim()
@@ -266,8 +255,8 @@ if ($onPath) {
       Write-Host "ISCC on PATH ($($onPath.Source)) is a Chocolatey shim; $shimCandidate redirects to $shimTarget"
     }
     else {
-      # Keep the shim path for the diagnostics below, but an unusable target
-      # (no path line, or the file it names is not there) is dropped.
+      # An unusable target (no path line, or the file it names is not there)
+      # is dropped; the candidate directories below then apply as before.
       $shimTarget = $null
     }
   }
@@ -281,20 +270,13 @@ $candidateDirs = @($candidateDirs | Select-Object -Unique)
 
 $compilerDir = $null
 foreach ($dir in $candidateDirs) {
-  if ((Test-Path -LiteralPath (Join-Path $dir 'ISCC.exe')) -and
-      (Test-Path -LiteralPath (Join-Path $dir 'Languages\ChineseSimplified.isl'))) {
+  if (Test-Path -LiteralPath (Join-Path $dir 'ISCC.exe')) {
     $compilerDir = $dir
     break
   }
 }
 if (-not $compilerDir) {
-  # Two different failures, kept apart so the message says which one it is: no
-  # compiler anywhere (as before), or a compiler whose install carries no
-  # ChineseSimplified.isl - the shim resolving to a real Inno whose language
-  # files are missing, or no candidate directory carrying them at all.
-  $anyIscc = @($candidateDirs | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'ISCC.exe') })
-  if ($anyIscc.Count -eq 0) {
-    throw @"
+  throw @"
 ISCC (Inno Setup Compiler) not found.
 Looked for ISCC on PATH and at:
   $env:ProgramFiles\Inno Setup 6\ISCC.exe
@@ -303,67 +285,23 @@ Looked for ISCC on PATH and at:
   ${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe
 Install Inno Setup 6 or newer, or add its directory to PATH.
 "@
-  }
-  # A compiler was found, but none of the candidates carries the Simplified
-  # Chinese messages file. Report every candidate directory the way the next CI
-  # run needs it - whether it exists, whether it holds ISCC.exe, whether it has
-  # a Languages subdirectory and which .isl files that subdirectory actually
-  # contains - plus the Chocolatey shim and the real compiler it redirects to,
-  # so the failure names where Inno really is and what its language directory
-  # holds instead of only which directories were tried. The .isl listing is
-  # truncated to keep the message bounded on a full Inno install.
-  $diag = @()
-  foreach ($dir in $candidateDirs) {
-    if (-not (Test-Path -LiteralPath $dir)) {
-      $diag += "  $dir : directory does not exist"
-      continue
-    }
-    $isccState = if (Test-Path -LiteralPath (Join-Path $dir 'ISCC.exe')) { 'ISCC.exe present' } else { 'ISCC.exe missing' }
-    $langDir = Join-Path $dir 'Languages'
-    if (-not (Test-Path -LiteralPath $langDir)) {
-      $diag += "  $dir : $isccState, no Languages subdirectory"
-      continue
-    }
-    $islNames = @(Get-ChildItem -LiteralPath $langDir -Filter '*.isl' -ErrorAction SilentlyContinue |
-      Select-Object -ExpandProperty Name)
-    if ($islNames.Count -eq 0) {
-      $diag += "  $dir : $isccState, Languages subdirectory holds no .isl files"
-      continue
-    }
-    $shown = @($islNames | Select-Object -First 10)
-    $listing = $shown -join ', '
-    if ($islNames.Count -gt $shown.Count) { $listing += ", ... (+$($islNames.Count - $shown.Count) more)" }
-    $diag += "  $dir : $isccState, Languages holds $($islNames.Count) .isl: $listing"
-  }
-  if ($shimPath) {
-    $diag += "  Chocolatey shim: $shimPath"
-    $diag += "  shim redirect target: $(if ($shimTarget) { $shimTarget } else { 'not resolved (no usable path line, or the target does not exist)' })"
-  }
-  $looked = $diag -join "`n"
-  throw @"
-Inno Setup's Simplified Chinese messages file not found next to any resolved ISCC.
-Looked for Languages\ChineseSimplified.isl in:
-$looked
-(compiler:Languages\ChineseSimplified.isl resolves next to the ISCC used, in its
-Languages subdirectory.) Install Inno Setup 6 or newer with its default
-language files, or add its directory to PATH.
-"@
 }
 
 $iscc = Join-Path $compilerDir 'ISCC.exe'
 if ($shimTarget -and (Split-Path -Parent $shimTarget) -eq $compilerDir) {
   Write-Host "compiling with the real Inno compiler the Chocolatey shim redirects to: $iscc"
 }
-elseif ($onPath -and (Split-Path -Parent $onPath.Source) -ne $compilerDir) {
-  Write-Host "ISCC on PATH ($($onPath.Source)) has no Languages\ChineseSimplified.isl; compiling with the real Inno compiler at $iscc"
-}
 Write-Host "ISCC: $iscc"
 
-# The Simplified Chinese interface is only as real as this file. Verify it
-# defines the messages the installer's custom texts reference: an Inno install
-# stripped of language files, or a translation missing a key, would compile but
-# leave the affected pages showing the raw {cm:...} constant.
-$zhIsl = Join-Path $compilerDir 'Languages\ChineseSimplified.isl'
+# The Simplified Chinese interface is only as real as this file. Verify it is
+# present and defines the messages the installer's custom texts reference: a
+# missing or stripped translation file, or one missing a key, would compile but
+# leave the affected pages showing the raw {cm:...} constant. It ships with the
+# repository next to the .iss, so this no longer depends on the resolved ISCC.
+$zhIsl = Join-Path $repoRoot 'tools/Packaging/win/Languages/ChineseSimplified.isl'
+if (-not (Test-Path -LiteralPath $zhIsl)) {
+  throw "the repository's Simplified Chinese translation is missing: $zhIsl"
+}
 $zhIslText = Get-Content -LiteralPath $zhIsl -Raw
 foreach ($message in @('CreateDesktopIcon', 'LaunchProgram')) {
   if ($zhIslText -notmatch "(?m)^\s*$message\s*=") {
