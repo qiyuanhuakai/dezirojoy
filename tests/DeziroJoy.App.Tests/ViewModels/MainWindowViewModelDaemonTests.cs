@@ -699,6 +699,58 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task A_Special_Key_Edit_In_One_Window_Converges_Every_Window_And_Every_Slot()
+    {
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+
+        // Two independent windows on one daemon, each on its own channel; both hear the
+        // daemon's state broadcasts.
+        var channelA = new ServerChannel(server);
+        var channelB = new ServerChannel(server);
+        server.StateChanged += channelA.Push;
+        server.StateChanged += channelB.Push;
+        await using var controllerA = new DaemonController(new ServerEndpoint(channelA));
+        await using var controllerB = new DaemonController(new ServerEndpoint(channelB));
+        await controllerA.ConnectAsync(TestContext.Current.CancellationToken);
+        await controllerB.ConnectAsync(TestContext.Current.CancellationToken);
+
+        using var presentationA = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        using var presentationB = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        await using var clientA = new MainWindowViewModel(presentationA, store, daemon: controllerA, daemonRequired: true);
+        await using var clientB = new MainWindowViewModel(presentationB, store, daemon: controllerB, daemonRequired: true);
+
+        // Client A commits a Leader key through the real editor path. The daemon applies it to
+        // the active slot and fans the shared subset out to the device's other slots.
+        clientA.AddMappingCommand.Execute(null);
+        clientA.Editor.SelectedButton = GamepadButton.Back;
+        clientA.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        clientA.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        await clientA.CommitEditorCommand.ExecuteAsync(null);
+
+        foreach (var slot in new[] { 1, 2, 3, 4 })
+        {
+            Assert.Contains(
+                presets.LoadSlot("pad-1", slot)!.Mappings,
+                mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+        }
+
+        // Client B never edited anything, yet the pushed snapshot carries the applied body, so
+        // it converges on the same device-global subset.
+        await WaitForCondition(() => clientB.ActiveProfile?.Mappings.Any(
+            mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader }) == true);
+        Assert.Equal(
+            clientA.ActiveProfile!.Mappings.Count(m => m.Target is SpecialKeyTarget),
+            clientB.ActiveProfile!.Mappings.Count(m => m.Target is SpecialKeyTarget));
+    }
+
+    [Fact]
     public async Task Disconnecting_The_Profile_Device_Rebases_To_The_Remaining_Device_Before_Editing()
     {
         var daemonHost = new FakeDaemonHost { HasController = true };

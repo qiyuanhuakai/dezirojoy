@@ -583,6 +583,61 @@ public class EngineHostTests
         Assert.Equal(2, changed);
     }
 
+    [Fact]
+    public void A_Reconnect_Converges_Divergent_Special_Keys_Across_The_Devices_Slots()
+    {
+        var store = new InMemoryProfileStore();
+        var (host, provider, _) = CreateHost(store);
+        var presets = new PresetStore(store);
+        var leader = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 1, SlotB: 2);
+
+        // A device whose slots predate the device-global special-key rule: only some slots
+        // carry the leader, and slot 3's copy names a different pair.
+        presets.SaveSlot("xinput:0", 1, new GamepadProfile
+        {
+            Name = "主配置",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings = [LeaderEntry(leader)],
+        });
+        presets.SaveSlot("xinput:0", 2, new GamepadProfile
+        {
+            Name = "第二套",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings = [],
+        });
+        presets.SaveSlot("xinput:0", 3, new GamepadProfile
+        {
+            Name = "第三套",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings = [LeaderEntry(leader with { SlotB = 4 })],
+        });
+
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        host.RefreshPresence();
+
+        // The runtime was handed the converged profile, and every stored slot agrees.
+        var runtime = host.Controllers.Single();
+        Assert.Equal(
+            leader,
+            runtime.Profile.Mappings.Single(m => m.Target is SpecialKeyTarget).Target);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            Assert.Equal(
+                leader,
+                presets.LoadSlot("xinput:0", slot)!.Mappings.Single(m => m.Target is SpecialKeyTarget).Target);
+        }
+    }
+
+    private static MappingEntry LeaderEntry(SpecialKeyTarget leader) => new()
+    {
+        Source = new ButtonBinding(GamepadButton.Back),
+        Target = leader,
+        Enabled = true,
+    };
+
     private static GamepadProfile LeaderProfile(LeaderSwitchMode switchMode, params GamepadButton[] buttons)
         => new()
         {

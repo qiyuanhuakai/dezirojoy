@@ -248,6 +248,143 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Committing_A_Special_Key_Edit_Propagates_It_To_Every_Preset()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        var presets = new PresetStore(store);
+        var siblingMappingsBefore = new Dictionary<int, IReadOnlyList<Guid>>();
+        foreach (var slot in new[] { 2, 3, 4 })
+        {
+            siblingMappingsBefore[slot] = presets.LoadSlot("xinput:0", slot)!.Mappings.Select(m => m.Id).ToList();
+        }
+
+        // Add a Leader key on the Back button through the real editor path, on slot 1.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.Back;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        Assert.Equal(11, vm.Mappings.Count);
+
+        // The special key is device-global: every slot carries it now.
+        foreach (var slot in new[] { 1, 2, 3, 4 })
+        {
+            var leader = presets.LoadSlot("xinput:0", slot)!.Mappings
+                .Single(m => m.Source is ButtonBinding { Button: GamepadButton.Back }).Target;
+            var special = Assert.IsType<SpecialKeyTarget>(leader);
+            Assert.Equal(SpecialKeyKind.Leader, special.Kind);
+            Assert.Equal(1, special.SlotA);
+            Assert.Equal(2, special.SlotB);
+        }
+
+        // Every other mapping of every sibling slot survived, id for id - the fan-out added
+        // the shared key and touched nothing else.
+        foreach (var (slot, ids) in siblingMappingsBefore)
+        {
+            var after = presets.LoadSlot("xinput:0", slot)!.Mappings.Select(m => m.Id).ToList();
+            Assert.Equal(ids.Count + 1, after.Count);
+            Assert.Equal(ids, after.Take(ids.Count));
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_A_Special_Key_Mapping_Removes_It_From_Every_Preset()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.Back;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        var presets = new PresetStore(store);
+        var siblingMappings = presets.LoadSlot("xinput:0", 2)!.Mappings
+            .Where(m => m.Target is not SpecialKeyTarget)
+            .Select(m => m.Id)
+            .ToArray();
+
+        var leaderRow = vm.Mappings.Single(row => row.Entry.Target is SpecialKeyTarget);
+        await vm.DeleteMappingCommand.ExecuteAsync(leaderRow);
+
+        Assert.Equal(10, vm.Mappings.Count);
+        foreach (var slot in new[] { 1, 2, 3, 4 })
+        {
+            Assert.DoesNotContain(
+                presets.LoadSlot("xinput:0", slot)!.Mappings,
+                m => m.Target is SpecialKeyTarget);
+        }
+
+        // The siblings' own mappings survived the removal, id for id.
+        Assert.Equal(siblingMappings, presets.LoadSlot("xinput:0", 2)!.Mappings.Select(m => m.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task A_Normal_Edit_Leaves_Sibling_Presets_Byte_Identical_While_A_Special_Key_Is_Shared()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.Back;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        var presets = new PresetStore(store);
+        var siblings = new Dictionary<int, string>();
+        foreach (var slot in new[] { 2, 3, 4 })
+        {
+            siblings[slot] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!);
+        }
+
+        // A perfectly ordinary edit on the active slot must not rewrite the siblings: the
+        // shared special-key subset is unchanged, so the fan-out is a no-op for them.
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+        vm.Editor.TargetKind = MappingTargetKind.KeyPress;
+        vm.Editor.SelectedKey = GamepadKey.Space;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        Assert.Equal(12, vm.Mappings.Count);
+        Assert.Equal(12, presets.LoadSlot("xinput:0", 1)!.Mappings.Count);
+        foreach (var (slot, expected) in siblings)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!));
+        }
+    }
+
+    [Fact]
+    public async Task Adding_A_Preset_Carries_The_Shared_Special_Keys_Into_The_New_Slot()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        vm.AddMappingCommand.Execute(null);
+        vm.Editor.SelectedButton = GamepadButton.Back;
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        await vm.AddPresetCommand.ExecuteAsync(null);
+
+        var presets = new PresetStore(store);
+        var added = presets.SlotsInUse("xinput:0").Max();
+        var profile = presets.LoadSlot("xinput:0", added)!;
+        Assert.Equal(5, added);
+        Assert.Contains(profile.Mappings, m => m.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+        Assert.Contains(vm.PresetSlots, item => item.Slot == added);
+    }
+
+    [Fact]
     public async Task PresetSlots_Tracks_The_Connected_Device_And_The_Active_Slot()
     {
         var (vm, host, provider, store) = CreateHost();
@@ -1348,6 +1485,77 @@ public class MainWindowViewModelTests
 
         Assert.False(vm.CloseToTrayEnabled);
         Assert.False(vm.MinimizeToTrayEnabled);
+    }
+
+    [Fact]
+    public async Task The_Migrated_Leader_Reaches_The_Running_Engine_And_Survives_The_Next_Edit()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "dezirojoy-leader-migration", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(directory, "settings.json"),
+                """{"Theme":"Dark","LeaderButton":10,"LeaderMode":1}""");
+
+            var provider = new FakeGamepadProvider();
+            var sink = new RecordingOutputSink();
+            var store = new InMemoryProfileStore();
+            var host = new EngineHost(provider, sink, store);
+            var settings = new ThemeService(directory);
+            settings.Load();
+
+            var vm = new MainWindowViewModel(host, store, settings: settings);
+            await using var _ = vm;
+
+            provider.Add("xinput:0", "Xbox Wireless Controller");
+            provider.SetState("xinput:0", GamepadState.Neutral);
+            SampleHelper.Sample(vm, host);
+
+            // The migration converged every slot, and the runtime was reloaded with the
+            // converged profile - so the leader is live on slot 1 rather than only stored.
+            var presets = new PresetStore(store);
+            Assert.Contains(
+                vm.ActiveProfile!.Mappings,
+                mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+            Assert.Contains(
+                host.Controllers.Single().Profile.Mappings,
+                mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+            foreach (var slot in new[] { 1, 2, 3, 4 })
+            {
+                Assert.Contains(
+                    presets.LoadSlot("xinput:0", slot)!.Mappings,
+                    mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+            }
+
+            // The next ordinary edit commits the migrated profile, so the shared keys are not
+            // fanned back out of the other slots by a pre-migration draft.
+            vm.AddMappingCommand.Execute(null);
+            vm.Editor.SelectedButton = GamepadButton.LeftBumper;
+            vm.Editor.TargetKind = MappingTargetKind.KeyPress;
+            vm.Editor.SelectedKey = GamepadKey.Space;
+            await vm.CommitEditorCommand.ExecuteAsync(null);
+
+            foreach (var slot in new[] { 1, 2, 3, 4 })
+            {
+                Assert.Contains(
+                    presets.LoadSlot("xinput:0", slot)!.Mappings,
+                    mapping => mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader });
+            }
+
+            // The ordinary edit itself stays in the active slot, exactly as it always has.
+            Assert.Contains(
+                presets.LoadSlot("xinput:0", 1)!.Mappings,
+                mapping => mapping.Target is KeyPressTarget { Key: GamepadKey.Space });
+            Assert.DoesNotContain(
+                presets.LoadSlot("xinput:0", 2)!.Mappings,
+                mapping => mapping.Target is KeyPressTarget { Key: GamepadKey.Space });
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

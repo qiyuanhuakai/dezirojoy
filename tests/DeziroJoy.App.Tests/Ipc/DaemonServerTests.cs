@@ -816,6 +816,212 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task Apply_Fans_The_Shared_Special_Key_Subset_Out_To_Every_Slot_Of_The_Device()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var plain = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            presets.SaveSlot("pad-1", slot, plain with { Name = $"Slot {slot}", DeviceId = "pad-1" });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+        await server.ProcessAsync(new HelloMessage("gui-1", IpcContract.ProtocolVersion, "client-1", IpcSession.Current));
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-s", "pad-1", 2));
+
+        var leader = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 1, SlotB: 2);
+        var edited = plain with
+        {
+            Name = "Slot 2 edited",
+            DeviceId = "pad-1",
+            Mappings =
+            [
+                .. plain.Mappings,
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.Back),
+                    Target = leader,
+                    Enabled = true,
+                },
+            ],
+        };
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new ApplyConfigurationMessage(
+                "req-a", 1, "Slot 2 edited", ProfileSerializer.Serialize(edited))));
+
+        Assert.True(ack.Accepted);
+        // The whole fan-out is one revision, not one per slot.
+        Assert.Equal(2, ack.Revision);
+
+        // The device-global special key landed in every slot, and only there: each slot's own
+        // name and mapping count are its own.
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            var profile = presets.LoadSlot("pad-1", slot)!;
+            Assert.Equal(leader, profile.Mappings.Single(m => m.Target is SpecialKeyTarget).Target);
+            Assert.Equal(plain.Mappings.Count + 1, profile.Mappings.Count);
+        }
+
+        Assert.Equal("Slot 1", presets.LoadSlot("pad-1", 1)!.Name);
+        Assert.Equal("Slot 3", presets.LoadSlot("pad-1", 3)!.Name);
+
+        // The pushed snapshot body is the applied profile itself, so a window adopting it
+        // converges on a device whose slots already agree - never on a body that predates
+        // the fan-out, which a later apply would write back.
+        var push = pushes.Last();
+        Assert.Equal(2, push.Snapshot.Revision);
+        var adopted = ProfileSerializer.Deserialize(push.Snapshot.ProfileJson!);
+        Assert.Equal(leader, adopted.Mappings.Single(m => m.Target is SpecialKeyTarget).Target);
+    }
+
+    [Fact]
+    public async Task Apply_Removing_A_Special_Key_Strips_It_From_Every_Slot()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var leader = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 1, SlotB: 2);
+        var plain = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            presets.SaveSlot("pad-1", slot, plain with
+            {
+                Name = $"Slot {slot}",
+                DeviceId = "pad-1",
+                Mappings =
+                [
+                    .. plain.Mappings,
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.Back),
+                        Target = leader,
+                        Enabled = true,
+                    },
+                ],
+            });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-s", "pad-1", 2));
+
+        // The edit drops the leader from the active slot; the fan-out removes it everywhere.
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new ApplyConfigurationMessage(
+                "req-a", 1, "Slot 2 edited", ProfileSerializer.Serialize(
+                    plain with { Name = "Slot 2 edited", DeviceId = "pad-1" }))));
+
+        Assert.True(ack.Accepted);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            Assert.DoesNotContain(presets.LoadSlot("pad-1", slot)!.Mappings, m => m.Target is SpecialKeyTarget);
+        }
+    }
+
+    [Fact]
+    public async Task Apply_Without_Special_Keys_Leaves_Sibling_Slots_Byte_Identical()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var plain = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic);
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            presets.SaveSlot("pad-1", slot, plain with { Name = $"Slot {slot}", DeviceId = "pad-1" });
+        }
+
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, NewStore(), profileStore: store);
+        await server.ProcessAsync(new SwitchPresetSlotMessage("req-s", "pad-1", 2));
+        var siblings = new Dictionary<int, string>();
+        foreach (var slot in new[] { 1, 3 })
+        {
+            siblings[slot] = ProfileSerializer.Serialize(presets.LoadSlot("pad-1", slot)!);
+        }
+
+        // An ordinary edit carries no special key, so the fan-out has nothing to fan out and
+        // the sibling slots are not even re-saved.
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new ApplyConfigurationMessage(
+                "req-a", 1, "Slot 2 edited", ProfileSerializer.Serialize(
+                    plain with { Name = "Slot 2 edited", DeviceId = "pad-1" }))));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal("Slot 2 edited", presets.LoadSlot("pad-1", 2)!.Name);
+        foreach (var (slot, expected) in siblings)
+        {
+            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("pad-1", slot)!));
+        }
+    }
+
+    [Fact]
+    public async Task A_Restarted_Daemon_Heals_Divergent_Slots_Before_Any_Client_Connects()
+    {
+        var stateStore = NewStore();
+        var profileStore = new InMemoryProfileStore();
+        var presets = new PresetStore(profileStore);
+        var leader = new SpecialKeyTarget(SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, SlotA: 1, SlotB: 2);
+        var plain = DefaultProfileLibrary.CreateForLayout(GamepadLayout.Generic);
+
+        // Slots that predate the device-global special-key rule: the primary anchor has no
+        // leader at all, and the two later slots disagree about which pair it flips.
+        presets.SaveSlot("pad-1", 1, plain with { Name = "Primary", DeviceId = "pad-1" });
+        presets.SaveSlot("pad-1", 2, plain with
+        {
+            Name = "Second",
+            DeviceId = "pad-1",
+            Mappings = [.. plain.Mappings, LeaderEntry(leader)],
+        });
+        presets.SaveSlot("pad-1", 3, plain with
+        {
+            Name = "Third",
+            DeviceId = "pad-1",
+            Mappings = [.. plain.Mappings, LeaderEntry(leader with { SlotB = 3 })],
+        });
+
+        // The persisted body is the primary's pre-heal profile, exactly as the last apply
+        // left it - the stale snapshot a client would otherwise adopt and write back.
+        var primaryBefore = ProfileSerializer.Serialize(presets.LoadSlot("pad-1", 1)!);
+        stateStore.Save(new DaemonState(
+            MappingEnabled: true,
+            ProfileName: "Primary",
+            ProfileJson: primaryBefore,
+            Revision: 7,
+            ActivePresetSlot: 1));
+
+        // Constructing the daemon heals the restored body's device and re-reads the body from
+        // the healed slot, before the control channel is ever served.
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var server = CreateServer(host, stateStore, new FakeClock(), profileStore);
+
+        foreach (var slot in new[] { 1, 2, 3 })
+        {
+            Assert.Equal(
+                leader,
+                presets.LoadSlot("pad-1", slot)!.Mappings.Single(m => m.Target is SpecialKeyTarget).Target);
+        }
+
+        var snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("state")));
+        var adopted = ProfileSerializer.Deserialize(snapshot.Snapshot.ProfileJson!);
+        Assert.Equal(leader, adopted.Mappings.Single(m => m.Target is SpecialKeyTarget).Target);
+        Assert.NotEqual(primaryBefore, snapshot.Snapshot.ProfileJson);
+    }
+
+    private static MappingEntry LeaderEntry(SpecialKeyTarget leader) => new()
+    {
+        Source = new ButtonBinding(GamepadButton.Back),
+        Target = leader,
+        Enabled = true,
+    };
+
+    [Fact]
     public async Task SwitchPresetSlot_Rejects_A_Slot_With_No_Stored_Configuration()
     {
         var (server, _, host) = CreateRunning();
