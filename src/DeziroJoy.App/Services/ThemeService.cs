@@ -10,8 +10,9 @@ namespace DeziroJoy.App.Services;
 /// <summary>
 /// Owns the persisted app preferences in <c>settings.json</c> beside the profile store
 /// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
-/// choice, gamepad UI ownership and the independent close/minimize tray policies.
-/// A missing or corrupt file falls back to the documented defaults rather than throwing.
+/// choice, gamepad UI ownership, the independent close/minimize tray policies and the
+/// startup release check. A missing or corrupt file falls back to the documented
+/// defaults rather than throwing.
 /// </summary>
 /// <remarks>
 /// The variant is applied from code rather than declared on the Application
@@ -66,6 +67,13 @@ public sealed class ThemeService
 
     /// <summary>Whether minimizing the window hands the resident role to the tray.</summary>
     public bool MinimizeToTrayEnabled => _settings.MinimizeToTrayEnabled;
+
+    /// <summary>
+    /// Whether the app checks GitHub for a newer release once at startup. Off by default: a
+    /// launch-time network call is something the user opts into, and a manual check is always
+    /// one click away in the settings.
+    /// </summary>
+    public bool AutoCheckUpdatesEnabled => _settings.AutoCheckUpdatesEnabled;
 
     /// <summary>
     /// Reads the persisted preferences. Any unreadable, malformed or unknown
@@ -155,6 +163,18 @@ public sealed class ThemeService
         Save();
     }
 
+    /// <summary>Turns the startup release check on or off and persists it.</summary>
+    public void SetAutoCheckUpdates(bool enabled)
+    {
+        if (_settings.AutoCheckUpdatesEnabled == enabled)
+        {
+            return;
+        }
+
+        _settings = _settings with { AutoCheckUpdatesEnabled = enabled };
+        Save();
+    }
+
     /// <summary>
     /// The retired leader button, read for the one-shot migration into the preset slots
     /// only. New saves never write it, so this is null on every settings file written
@@ -224,6 +244,8 @@ public sealed class ThemeService
         public bool CloseToTrayEnabled { get; init; } = true;
 
         public bool MinimizeToTrayEnabled { get; init; } = true;
+
+        public bool AutoCheckUpdatesEnabled { get; init; }
 
         /// <summary>
         /// The retired leader pair. Kept so an old settings.json still deserializes and can
