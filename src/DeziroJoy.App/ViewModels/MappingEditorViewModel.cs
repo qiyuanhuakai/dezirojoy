@@ -199,6 +199,20 @@ public static class SpecialKeyConflicts
 
                         foreach (var (position, target) in OutputsOf(other))
                         {
+                            // The compound tap-then-hold the two cross pairings name needs the
+                            // long-press side to start a fresh cycle on the second press edge.
+                            // When that mapping carries its own double-click window at least as
+                            // wide as the double-click side's, its ClickPending resolves its own
+                            // double-click on that edge instead - the editor writes equal
+                            // windows, so enabling both gesture slots on one mapping is exactly
+                            // this case - and no interaction fires the pair. A hand-edited
+                            // narrower window still leaves a press in between that fires both,
+                            // so the hint stays there.
+                            if (CompoundBlocked(trigger, position, gesture, OtherGesture(other)))
+                            {
+                                continue;
+                            }
+
                             var description = MappingDescriptions.Target(target);
                             conflicts.Add(new SpecialKeyConflict(
                                 own.Kind,
@@ -349,6 +363,39 @@ public static class SpecialKeyConflicts
         SpecialKeyTrigger.LongPress => "长按",
         _ => "单击",
     };
+
+    /// <summary>The gesture one mapping carries, or null when it carries none.</summary>
+    private static ButtonGesture? OtherGesture(MappingEntry entry)
+        => entry.Source is ButtonBinding { Gesture: { } gesture } ? gesture : null;
+
+    /// <summary>
+    /// True when the compound tap-then-hold the two cross pairings name cannot happen: the
+    /// long-press-side mapping carries its own double-click window at least as wide as the
+    /// double-click side's, so the second press resolves ITS double-click instead of starting
+    /// a long-press cycle. The editor writes equal windows - enabling both gesture slots on
+    /// one mapping is exactly this shape - and a hand-edited narrower window still leaves a
+    /// press in between that fires both, which is why the comparison keeps the hint there.
+    /// Only the two cross pairings are gated: the seven pairings that meet without the
+    /// compound are unaffected by whichever side carries its own double-click.
+    /// </summary>
+    private static bool CompoundBlocked(
+        SpecialKeyTrigger global,
+        SpecialKeyTrigger sibling,
+        ButtonGesture? globalGesture,
+        ButtonGesture? siblingGesture)
+        => (global, sibling) switch
+        {
+            (SpecialKeyTrigger.LongPress, SpecialKeyTrigger.DoubleClick) =>
+                Blocks(longPressSide: globalGesture, doubleClickSide: siblingGesture),
+            (SpecialKeyTrigger.DoubleClick, SpecialKeyTrigger.LongPress) =>
+                Blocks(longPressSide: siblingGesture, doubleClickSide: globalGesture),
+            _ => false,
+        };
+
+    private static bool Blocks(ButtonGesture? longPressSide, ButtonGesture? doubleClickSide)
+        => longPressSide is { HasDoubleClick: true } longPress
+        && doubleClickSide is { } doubleClick
+        && longPress.DoubleClickWindow >= doubleClick.DoubleClickWindow;
 
     /// <summary>
     /// What it costs when the global key and the sibling's output fire together, worded by

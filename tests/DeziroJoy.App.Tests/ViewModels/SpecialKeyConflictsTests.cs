@@ -479,6 +479,150 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
+    public void The_Long_Press_Sides_Own_Double_Click_Eats_The_Compound()
+    {
+        // The long-press side carries its own double-click window at the width the editor
+        // writes, so the second press resolves ITS double-click instead of starting a
+        // long-press cycle: no interaction fires the pair, and the hint would be a claim
+        // about an unreachable interaction. The global's own double-click has no action of
+        // its own here - it re-fires the NoneTarget click, so nothing at all is emitted.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    longPressThreshold: 0.2f,
+                    longPressAction: Leader())),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void The_Siblings_Own_Double_Click_Eats_The_Compound_Too()
+    {
+        // The mirror image: the sibling is the long-press side and carries its own
+        // double-click, so its second press resolves its own double-click (which re-fires
+        // its NoneTarget click) and the long-press cycle never starts.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: Leader())),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    longPressThreshold: 0.2f,
+                    longPressAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void A_Narrower_Own_Double_Click_Still_Leaves_A_Press_That_Fires_Both()
+    {
+        // A hand-edited window narrower than the other side's leaves a band between the two:
+        // a second press there resolves the double-click side while the long-press side has
+        // already started its cycle, so the pair still meets and the hint stays.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: 0.15f,
+                    longPressThreshold: 0.2f,
+                    longPressAction: Leader())),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（双击：A）：双击触发A后，若第二次按下按住越过长按阈值，还会触发「Leader 键」切换预设。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Narrower_Own_Double_Click_On_The_Sibling_Still_Leaves_A_Press_That_Fires_Both()
+    {
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: Leader())),
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: 0.15f,
+                    longPressThreshold: 0.2f,
+                    longPressAction: new KeyPressTarget(GamepadKey.A))),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（长按：A）：双击触发「Leader 键」后，若第二次按下按住越过长按阈值，还会触发A（切换引发的重载通常会取消这次长按）。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void The_Own_Double_Click_Gate_Leaves_The_Seven_Other_Pairings_Alone()
+    {
+        // The gate is scoped to the two cross pairings. A plain hold still reaches a
+        // long-press threshold past its own window, so the pairings that meet without the
+        // compound keep their hints whichever side carries its own double-click.
+        var click = new KeyPressTarget(GamepadKey.Enter);
+        var action = new KeyPressTarget(GamepadKey.A);
+        var ownDoubleClick = Gesture(
+            doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+            longPressThreshold: 0.2f);
+
+        var mappings = new[]
+        {
+            // Click-position leader beside a sibling whose long press carries its own
+            // double-click: the plain hold fires both.
+            Button(GamepadButton.Back, Leader()),
+            Button(GamepadButton.Back, new NoneTarget(), ownDoubleClick with { LongPressAction = action }),
+
+            // Long-press-position leader (own double-click) beside a plain click sibling.
+            Button(GamepadButton.A, new NoneTarget(), ownDoubleClick with { LongPressAction = Leader() }),
+            Button(GamepadButton.A, click),
+
+            // Long-press-position leader (own double-click) beside a long-press sibling
+            // (own double-click): the plain hold fires both.
+            Button(GamepadButton.B, new NoneTarget(), ownDoubleClick with { LongPressAction = Leader() }),
+            Button(GamepadButton.B, new NoneTarget(), ownDoubleClick with { LongPressAction = action }),
+        };
+
+        var messages = SpecialKeyConflicts.Analyze(mappings).Select(conflict => conflict.Message).ToList();
+
+        Assert.Contains("Back 键上还有另一条映射（长按：A）：长按该按钮时，「Leader 键」在该次按下时已经切换，按住期间还会触发A。", messages);
+        Assert.Contains("A 键上还有另一条映射（单击：Enter）：长按触发「Leader 键」期间，Enter一直被按住，与该切换同发。", messages);
+        Assert.Contains("B 键上还有另一条映射（长按：A）：长按触发「Leader 键」时，同一按住也会触发A。", messages);
+        Assert.Equal(3, messages.Count);
+    }
+
+    [Fact]
     public void A_Precision_Key_On_A_Gesture_Position_Has_No_Sibling_Rule()
     {
         // Rule 6 already says the key never engages, so there is no trigger to collide with.

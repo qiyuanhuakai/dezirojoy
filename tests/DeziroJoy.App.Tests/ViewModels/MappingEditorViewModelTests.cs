@@ -2732,4 +2732,37 @@ public class MappingEditorViewModelTests
         Assert.Contains("双击触发A后", editor.SpecialKeyConflictHint!);
         Assert.Contains("还会触发「Leader 键」切换预设", editor.SpecialKeyConflictHint!);
     }
+
+    [Fact]
+    public void A_Long_Press_Leader_Draft_With_Its_Own_Double_Click_Reports_Nothing()
+    {
+        // The M46 coexistence shape through the normal editor flow: the long-press slot
+        // carries the Leader and the double-click slot is enabled too, so the draft's own
+        // double-click resolves on the second press edge and the long-press cycle the
+        // compound needs never starts - no interaction fires the pair beside the sibling.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                        DoubleClickAction = new KeyPressTarget(GamepadKey.A),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.SelectedGestureKind = GestureKind.DoubleClick;
+        editor.ActiveGestureEnabled = true;
+
+        Assert.False(editor.HasSpecialKeyConflict);
+        Assert.Null(editor.SpecialKeyConflictHint);
+    }
 }
