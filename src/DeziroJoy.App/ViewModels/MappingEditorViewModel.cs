@@ -199,14 +199,6 @@ public static class SpecialKeyConflicts
 
                         foreach (var (position, target) in OutputsOf(other))
                         {
-                            // A double press never reaches a long-press threshold and a hold
-                            // never completes a double-click, so those two pairings never
-                            // fire together and are not reported.
-                            if (!FiresTogether(trigger, position))
-                            {
-                                continue;
-                            }
-
                             var description = MappingDescriptions.Target(target);
                             conflicts.Add(new SpecialKeyConflict(
                                 own.Kind,
@@ -350,17 +342,6 @@ public static class SpecialKeyConflicts
         }
     }
 
-    /// <summary>
-    /// Whether a global key triggered from one position and a sibling's output resolved from
-    /// another can fire on the same interaction. Every pairing does but two: a double press
-    /// releases before any long-press threshold, and a hold never completes a double-click,
-    /// so a double-click key and a long-press action never meet.
-    /// </summary>
-    private static bool FiresTogether(SpecialKeyTrigger global, SpecialKeyTrigger sibling)
-        => global == SpecialKeyTrigger.Click
-        || sibling == SpecialKeyTrigger.Click
-        || global == sibling;
-
     /// <summary>The gesture a position names, the way the editor's switcher names it.</summary>
     private static string PositionName(SpecialKeyTrigger position) => position switch
     {
@@ -373,9 +354,10 @@ public static class SpecialKeyConflicts
     /// What it costs when the global key and the sibling's output fire together, worded by
     /// how each resolves: a click key answers every press, a double-click key the second
     /// press of a double, a long-press key the hold past the threshold. The sibling's click
-    /// rides every press edge of its own, while its gesture actions wait for their gesture -
-    /// which is why the click-position key meets a long-press action only mid-hold, and the
-    /// double-click key meets the sibling's click on both of its presses.
+    /// rides every press edge of its own, while its gesture actions wait for their gesture.
+    /// The two cross pairings meet through the compound tap-then-hold: gesture state is
+    /// per-mapping, so a double-click resolves on the second press edge while a long-press
+    /// sibling starts a fresh cycle on that same edge and fires at its threshold mid-hold.
     /// </summary>
     private static string BesideTheKey(
         SpecialKeyTrigger global,
@@ -393,8 +375,12 @@ public static class SpecialKeyConflicts
             $"双击触发「{key}」时，两次按下都会触发{description}，第二次按下与该切换同发。",
         (SpecialKeyTrigger.DoubleClick, SpecialKeyTrigger.DoubleClick) =>
             $"双击触发「{key}」的第二次按下，同时也会触发{description}。",
+        (SpecialKeyTrigger.DoubleClick, SpecialKeyTrigger.LongPress) =>
+            $"双击触发「{key}」后，若第二次按下按住越过长按阈值，还会触发{description}（切换引发的重载通常会取消这次长按）。",
         (SpecialKeyTrigger.LongPress, SpecialKeyTrigger.Click) =>
             $"长按触发「{key}」期间，{description}一直被按住，与该切换同发。",
+        (SpecialKeyTrigger.LongPress, SpecialKeyTrigger.DoubleClick) =>
+            $"双击触发{description}后，若第二次按下按住越过长按阈值，还会触发「{key}」切换预设。",
         (SpecialKeyTrigger.LongPress, SpecialKeyTrigger.LongPress) =>
             $"长按触发「{key}」时，同一按住也会触发{description}。",
         _ => $"触发「{key}」的同时也会触发{description}。",

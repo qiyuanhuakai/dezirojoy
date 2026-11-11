@@ -426,10 +426,11 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
-    public void A_Double_Click_Leader_And_A_Siblings_Long_Press_Never_Fire_Together()
+    public void A_Double_Click_Leader_And_A_Siblings_Long_Press_Meet_In_A_Tap_Then_Hold()
     {
-        // A double press releases before any long-press threshold, and a hold never
-        // completes a double-click, so the two never meet and nothing is reported.
+        // Gesture state is per-mapping, so the compound tap-then-hold reaches both: the
+        // double-click resolves on the second press edge while the sibling starts a fresh
+        // long-press cycle on that same edge and fires mid-hold.
         var mappings = new[]
         {
             Button(
@@ -446,12 +447,16 @@ public class SpecialKeyConflictsTests
                     longPressAction: new KeyPressTarget(GamepadKey.A))),
         };
 
-        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+        Assert.Equal(
+            "Back 键上还有另一条映射（长按：A）：双击触发「Leader 键」后，若第二次按下按住越过长按阈值，还会触发A（切换引发的重载通常会取消这次长按）。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
     }
 
     [Fact]
-    public void A_Long_Press_Leader_And_A_Siblings_Double_Click_Never_Fire_Together()
+    public void A_Long_Press_Leader_And_A_Siblings_Double_Click_Meet_In_A_Tap_Then_Hold()
     {
+        // The mirror image, and the direction the app cannot undo: the sibling's double-click
+        // fires on the second press edge, before the leader switches at the threshold.
         var mappings = new[]
         {
             Button(
@@ -468,7 +473,9 @@ public class SpecialKeyConflictsTests
                     doubleClickAction: new KeyPressTarget(GamepadKey.A))),
         };
 
-        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+        Assert.Equal(
+            "Back 键上还有另一条映射（双击：A）：双击触发A后，若第二次按下按住越过长按阈值，还会触发「Leader 键」切换预设。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
     }
 
     [Fact]

@@ -2701,4 +2701,35 @@ public class MappingEditorViewModelTests
         Assert.True(editor.HasSpecialKeyConflict);
         Assert.Contains("双击：A", editor.SpecialKeyConflictHint!);
     }
+
+    [Fact]
+    public void A_Long_Press_Leader_Draft_Meets_A_Siblings_Double_Click_In_A_Tap_Then_Hold()
+    {
+        // The default editor timings reach the compound interaction: a tap, a release, then a
+        // second press held past the long-press threshold fires the sibling's double-click on
+        // the press edge and the leader switch at the threshold.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = ButtonGesture.DefaultDoubleClickWindow,
+                        DoubleClickAction = new KeyPressTarget(GamepadKey.A),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ];
+        editor.SelectedGestureKind = GestureKind.LongPress;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.HasSpecialKeyConflict);
+        Assert.Contains("双击触发A后", editor.SpecialKeyConflictHint!);
+        Assert.Contains("还会触发「Leader 键」切换预设", editor.SpecialKeyConflictHint!);
+    }
 }
