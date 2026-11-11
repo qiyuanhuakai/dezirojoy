@@ -178,4 +178,24 @@ public class DaemonSettingsViewModelTests
 
         Assert.Contains("未安装", vm.ElevationText);
     }
+
+    [Fact]
+    public void Windows_Hides_The_Standalone_Start_Stop_Controls()
+    {
+        var service = new FakeDaemonService { IsDaemonInstalled = true };
+        var vm = new DaemonSettingsViewModel(service);
+
+        // schtasks has no standalone start or stop: the task either exists and runs at logon
+        // or it does not, so the card exposes neither control - and the service says so if
+        // driven anyway, instead of pretending it started something.
+        Assert.False(vm.IsSameUserModel);
+        Assert.False(vm.CanStartDaemon);
+        Assert.False(vm.CanStopDaemon);
+
+        vm.StartDaemonCommand.Execute(null);
+        Assert.Contains("不支持", vm.StatusMessage);
+
+        vm.StopDaemonCommand.Execute(null);
+        Assert.Contains("不支持", vm.StatusMessage);
+    }
 }

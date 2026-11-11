@@ -85,6 +85,22 @@ public interface IDaemonService
 
     DaemonActionResult UninstallDaemon();
 
+    /// <summary>
+    /// Starts the already-installed resident daemon without reinstalling it (a systemd user
+    /// unit start on Linux). Defaults to <see cref="DaemonOp.Unsupported"/> so a platform
+    /// whose scheduler has no standalone start stays honest without implementing anything:
+    /// a Windows scheduled task either exists and runs at logon or does not, so there is
+    /// nothing for the card to start there - and the card hides the buttons in that case.
+    /// </summary>
+    DaemonActionResult StartDaemon() => DaemonActionResult.Unsupported("当前平台不支持单独启动常驻服务。");
+
+    /// <summary>
+    /// Stops the running resident daemon without uninstalling it (a systemd user unit stop on
+    /// Linux). The same default rationale as <see cref="StartDaemon"/> applies: Windows has no
+    /// standalone stop to expose.
+    /// </summary>
+    DaemonActionResult StopDaemon() => DaemonActionResult.Unsupported("当前平台不支持单独停止常驻服务。");
+
     DaemonActionResult SetAutostart(bool enabled);
 }
 
@@ -347,7 +363,10 @@ internal sealed class ProcessSystemCtl : ISystemCtl
 /// </para>
 /// <para>
 /// Installing writes the unit, reloads the user manager, enables it for every login and starts
-/// it now; uninstalling stops, disables and removes it. The unit deliberately hangs off
+/// it now; uninstalling stops, disables and removes it. Once installed, the unit also starts
+/// and stops on its own through <see cref="StartDaemon"/> / <see cref="StopDaemon"/> - the
+/// install decides whether the service exists, the start/stop decides whether it runs right
+/// now, and the card exposes the two separately. The unit deliberately hangs off
 /// <c>default.target</c> and never <c>graphical-session.target</c>: uinput works headless, and
 /// binding the daemon to a graphical login would break exactly the SSH and console sessions
 /// that need mapping most. Surviving a logout needs linger, which the install result says.
@@ -496,6 +515,48 @@ public sealed class LinuxDaemonService : IDaemonService
         }
 
         return DaemonActionResult.Completed($"已停止并移除 systemd 用户单元 {UnitName}。");
+    }
+
+    public DaemonActionResult StartDaemon()
+    {
+        if (!IsSupported)
+        {
+            return DaemonActionResult.Unsupported("当前平台不支持常驻服务（仅 Windows 与 Linux）。");
+        }
+
+        if (!IsDaemonInstalled)
+        {
+            return DaemonActionResult.Failed("常驻服务尚未安装，无法启动。");
+        }
+
+        var start = _systemCtl.Run($"start {UnitName}");
+        if (!start.Succeeded)
+        {
+            return DaemonActionResult.Failed(DescribeFailure("启动常驻服务", start));
+        }
+
+        return DaemonActionResult.Completed($"已启动 systemd 用户单元 {UnitName}。");
+    }
+
+    public DaemonActionResult StopDaemon()
+    {
+        if (!IsSupported)
+        {
+            return DaemonActionResult.Unsupported("当前平台不支持常驻服务（仅 Windows 与 Linux）。");
+        }
+
+        if (!IsDaemonInstalled)
+        {
+            return DaemonActionResult.Failed("常驻服务尚未安装，无法停止。");
+        }
+
+        var stop = _systemCtl.Run($"stop {UnitName}");
+        if (!stop.Succeeded)
+        {
+            return DaemonActionResult.Failed(DescribeFailure("停止常驻服务", stop));
+        }
+
+        return DaemonActionResult.Completed($"已停止 systemd 用户单元 {UnitName}，重新启动前不会运行。");
     }
 
     public DaemonActionResult SetAutostart(bool enabled)

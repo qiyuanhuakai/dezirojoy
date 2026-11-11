@@ -1,10 +1,15 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Threading;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
+using DeziroJoy.App.Tests.ViewModels;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
+using DeziroJoy.App.Views.Controls;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Views;
@@ -58,5 +63,96 @@ public sealed class DaemonStatusSettingsGuiTests
             {
             }
         }
+    }
+
+    [AvaloniaFact]
+    public void Linux_Card_Offers_Start_Stop_And_Drops_The_Administrator_Hint()
+    {
+        var service = new DaemonSettingsViewModelLinuxTests.FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = false,
+        };
+        var (_, card) = ShowCard(new DaemonSettingsViewModel(service));
+
+        var start = card.FindControl<Button>("StartDaemonButton")!;
+        var stop = card.FindControl<Button>("StopDaemonButton")!;
+
+        Assert.True(card.FindControl<WrapPanel>("DaemonRuntimeRow")!.IsVisible);
+        Assert.True(start.IsVisible);
+        Assert.True(stop.IsVisible);
+        Assert.True(start.IsEnabled);
+        Assert.False(stop.IsEnabled);
+
+        // The Windows "needs administrator" sentence is gone: installing a systemd user unit
+        // needs no administrator, so the sentence would be false here.
+        Assert.False(card.FindControl<TextBlock>("AutostartHintText")!.IsVisible);
+        var linuxHint = card.FindControl<TextBlock>("AutostartHintLinuxText")!;
+        Assert.True(linuxHint.IsVisible);
+        Assert.DoesNotContain("管理员", linuxHint.Text!);
+    }
+
+    [AvaloniaFact]
+    public void Linux_Card_Start_Button_Wires_The_Command_And_Flips_The_Buttons()
+    {
+        var service = new DaemonSettingsViewModelLinuxTests.FakeLinuxDaemonService { IsDaemonInstalled = true };
+        var (window, card) = ShowCard(new DaemonSettingsViewModel(service));
+
+        var start = card.FindControl<Button>("StartDaemonButton")!;
+        Click(start, window);
+
+        Assert.Equal(1, service.StartCalls);
+        Assert.False(start.IsEnabled);
+        Assert.True(card.FindControl<Button>("StopDaemonButton")!.IsEnabled);
+        Assert.Contains("已启动", card.FindControl<TextBlock>("DaemonStatusText")!.Text);
+        Assert.Contains("正在运行", card.FindControl<TextBlock>("DaemonStateText")!.Text);
+    }
+
+    [AvaloniaFact]
+    public void Windows_Card_Keeps_Its_Wording_And_Hides_Start_Stop()
+    {
+        var (_, card) = ShowCard(new DaemonSettingsViewModel(
+            new FakeDaemonService { IsDaemonInstalled = true }));
+
+        // The Windows wording stays exactly what it was, administrator sentence included.
+        var hint = card.FindControl<TextBlock>("AutostartHintText")!;
+        Assert.True(hint.IsVisible);
+        Assert.Equal("登录后启动主程序；常驻服务负责后台映射。安装或卸载需要管理员权限。", hint.Text);
+        Assert.False(card.FindControl<TextBlock>("AutostartHintLinuxText")!.IsVisible);
+
+        // schtasks has no standalone start or stop, so the card exposes neither.
+        Assert.False(card.FindControl<WrapPanel>("DaemonRuntimeRow")!.IsVisible);
+        Assert.False(card.FindControl<Button>("StartDaemonButton")!.IsEffectivelyVisible);
+        Assert.False(card.FindControl<Button>("StopDaemonButton")!.IsEffectivelyVisible);
+    }
+
+    private static (Window Window, DaemonSettingsCard Card) ShowCard(DaemonSettingsViewModel viewModel)
+    {
+        var card = new DaemonSettingsCard { DataContext = viewModel };
+        var window = new Window
+        {
+            Width = 480,
+            Height = 800,
+            Content = card,
+        };
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        return (window, card);
+    }
+
+    private static void Click(Control target, Window window)
+    {
+        window.Focus();
+        Dispatcher.UIThread.RunJobs();
+
+        window.UpdateLayout();
+        target.BringIntoView();
+        window.UpdateLayout();
+        var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
+        window.MouseDown(point, MouseButton.Left);
+        window.MouseUp(point, MouseButton.Left);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
     }
 }
