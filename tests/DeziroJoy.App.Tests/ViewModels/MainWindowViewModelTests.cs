@@ -986,7 +986,11 @@ public class MainWindowViewModelTests
         Assert.False(vm.IsEngineRunning);
         Assert.False(vm.HasController);
         Assert.False(vm.Visualizer.IsConnected);
-        Assert.Equal("未检测到手柄，请连接手柄", vm.StatusMessage);
+
+        // StartsWith, not Equal: on Linux the status area appends the evdev/uinput probe's
+        // guidance (permission, no nodes, no input subsystem), which is machine state - the
+        // wording itself is pinned by MainWindowViewModelDiagnosticTests.
+        Assert.StartsWith("未检测到手柄，请连接手柄", vm.StatusMessage);
     }
 
     [Fact]

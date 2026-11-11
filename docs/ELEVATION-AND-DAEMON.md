@@ -375,3 +375,97 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `CommandDispatcher` 的失败通道，与本文定稿架构不耦合。
 - **`InvariantGlobalization` 取舍**：已记录于 `docs/MEMORY.md`，按内存之外的理由单独决定，
   不作为本架构的一部分。
+
+---
+
+## 5. Linux：同用户模型、systemd 用户单元与设备访问权
+
+本节记录 Linux 侧与第 4 节**同形态但不同机制**的部分。核心事实：
+**Linux 不存在第 1 至 3 节描述的 UIPI 问题，也不需要提权**——`uinput` 是内核级接口，
+注入目标的高低权限与注入者无关，因此守护进程以**当前用户**身份运行（`DESIGN.md`
+常驻架构一节同此结论）。X11 / Wayland 同样不是变量：evdev 读取与 uinput 写入都在内核里，
+与显示服务器无关。
+
+### 5.1 常驻形态：systemd 用户单元
+
+| 项 | Windows | Linux |
+|---|---|---|
+| 注册处 | 登录计划任务（schtasks） | `~/.config/systemd/user/dezirojoy-daemon.service` |
+| 运行身份 | 提权（`/RL HIGHEST`） | 当前用户 |
+| 安装途径 | 设置卡片 / `--install-daemon`（UAC） | 设置卡片 / `--install-daemon`（无需提权） |
+| 登录自启（GUI） | `DeziroJoy-Autostart` 计划任务 | `~/.config/autostart/DeziroJoy.desktop` |
+| 退出登录后常驻 | 计划任务本就跨登录 | 需 `loginctl enable-linger $USER` |
+
+单元文件内容（由 `LinuxDaemonService.BuildUnitFile` 生成，测试钉住）：
+
+```ini
+[Unit]
+Description=DeziroJoy 手柄映射守护进程（systemd 用户单元）
+After=default.target
+
+[Service]
+Type=simple
+ExecStart="<安装的二进制>" --daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+```
+
+两个刻意的选择：
+
+- **`Restart=on-failure`**：没有 GUI 在场观察崩溃，守护进程必须自己回来。
+- **不依赖 `graphical-session.target`**：uinput 无头可用，把单元绑到图形登录会恰恰破坏
+  最需要映射的 SSH / 控制台会话。登录自启用 `default.target`。
+
+安装 = 写单元 + `daemon-reload` + `enable` + `start`；卸载 = `stop` + `disable` + 删文件
++ `daemon-reload`。GUI 登录自启动（XDG `.desktop`）与单元启用是**两个独立开关**，
+与 Windows 的 daemon 任务 / autostart 任务分离一一对应。
+
+**linger**：用户单元的 systemd 实例随登录会话结束而终止，因此"退出登录后继续常驻"需要
+`loginctl enable-linger $USER`（非 root 执行时可能要求 polkit 认证，见 4.8 的同一约束）。
+安装成功文案会带上这条命令；不配 linger 时，"登录时常驻"仍然成立。
+
+### 5.2 设备访问权：真正的门槛
+
+Linux 上映射失效几乎只有一个原因：**当前用户读不到 `/dev/input/event*` 或写不到
+`/dev/uinput`**。两种修复，均为应用内 opt-in（安装器按
+[`QA-CHECKLIST.md`](QA-CHECKLIST.md) 第 20 节不注册 udev 规则）：
+
+```bash
+# 其一：加入 input 组后重新登录（udev 默认把 event* 与 uinput 归属 input 组）
+sudo usermod -aG input $USER
+
+# 其二：udev 规则 /etc/udev/rules.d/99-dezirojoy.rules
+KERNEL=="event*",GROUP="input",MODE="0660"
+KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
+```
+
+`uinput` 一行里的 `static_node=uinput` 不能省：内核模块不会自动创建该节点，缺失时
+即使权限正确也会 ENOENT。
+
+### 5.3 诊断：空结果不再无声
+
+`EvdevGamepadProvider` 现在**枚举 `/dev/input` 目录**而不是探测 `event0..31`（上限消失），
+每次扫描产出 `EvdevScanDiagnostic`，把空结果分成五种（`GamepadsFound` /
+`NoInputDirectory` / `NoEventNodes` / `AccessDenied` / `NoGamepad`），各带 errno、
+路径与中文指引。三个消费方：
+
+- **daemon 启动摘要**（`DaemonHost.BuildStartupSummary`）：`devices detected: 0` 之后
+  追加一整行指引；systemd 用户单元运行为 `journalctl --user -u dezirojoy-daemon`。
+- **GUI 状态区**（`MainWindowViewModel`）：渲染进程不持有设备（守护进程才是权威），
+  因此通过 `LinuxRuntimeProbe` 做一次性探测——枚举 + 开/关节点，不开读线程、不抢设备——
+  把"请连接手柄"换成真实原因（权限不足带 errno 与 usermod 命令 / 无节点 / 无输入子系统），
+  并附 `uinput` 可写性检查。
+- **设置面板「后台服务」卡片**：注入权限文案说明同用户设计，并引用同一段设备权限指引。
+
+设备识别判据（`EvdevGamepadProvider.LooksLikeGamepad`，纯函数、正反例测试钉住）：
+第二支摇杆（`ABS_RX`/`ABS_RY`）或任一显式手柄按键（`BTN_JOYSTICK`、面部键簇
+`BTN_SOUTH/EAST/NORTH/WEST`、十字键 `BTN_DPAD_UP`、`BTN_TRIGGER_HAPPY`）判为手柄。
+`ABS_X+ABS_Y` 单独**不**判——那正是触摸板（`ABS_X/ABS_Y + BTN_TOUCH`）与数位板的形状，
+而街机摇杆没有右摇杆也仍带上述显式按键。此前"必须有 `ABS_RX`"的判据会静默漏掉街机摇杆类。
+
+`uinput` 打不开时，`UInputOutputSink` 的异常消息与 `ProbeUnavailableReason()` 使用同一
+段文案（errno + usermod + udev 规则），`EngineComposition.SinkError` 把它带进 daemon 摘要
+——不再出现"降级为空注入而界面上什么都没有"的形态。

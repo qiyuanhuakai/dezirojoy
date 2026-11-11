@@ -70,6 +70,36 @@ public class DaemonHostTests
     }
 
     [Fact]
+    public void Startup_Summary_Explains_A_Zero_Device_Count_On_Linux()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the evdev diagnostic only exists on Linux");
+
+        using var composition = new EngineComposition();
+        var summary = DaemonHost.BuildStartupSummary(composition, TimeSpan.FromMilliseconds(2));
+
+        if (composition.Host.Controllers.Count > 0)
+        {
+            // A real gamepad is attached: there is nothing to guide the user towards, and the
+            // summary must not invent advice.
+            Assert.DoesNotContain("usermod", summary);
+            return;
+        }
+
+        // The whole point of the diagnostic: a bare "devices detected: 0" used to be the only
+        // trace, and "no permission" versus "nothing plugged in" need opposite fixes. Which
+        // marker appears depends on the machine (denied nodes, empty directory, readable
+        // non-gamepad nodes), so every non-empty outcome counts.
+        Assert.Contains("devices detected: 0", summary);
+
+        var hasGuidance = summary.Contains("usermod -aG input", StringComparison.Ordinal)
+            || summary.Contains("但没有识别到手柄", StringComparison.Ordinal)
+            || summary.Contains("连接", StringComparison.Ordinal)
+            || summary.Contains("输入子系统", StringComparison.Ordinal);
+
+        Assert.True(hasGuidance, $"expected actionable guidance in the summary:{Environment.NewLine}{summary}");
+    }
+
+    [Fact]
     public void Shutdown_Summary_Dumps_The_Injection_Log_So_A_Failed_Mapping_Has_Evidence()
     {
         using var composition = new EngineComposition();

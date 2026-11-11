@@ -92,6 +92,15 @@ public static class EvdevCodes
 
     public const ushort BtnExtra = 0x114;
 
+    /// <summary>BTN_TOUCH 0x14a - what a touchpad or touchscreen reports next to ABS_X/ABS_Y.</summary>
+    public const ushort BtnTouch = 0x14a;
+
+    /// <summary>
+    /// BTN_JOYSTICK 0x120 - the explicit "this is a joystick" button, reported by arcade sticks
+    /// and flight controls that carry no second stick.
+    /// </summary>
+    public const ushort BtnJoystick = 0x120;
+
     /// <summary>First BTN_* code (BTN_MISC). Codes below this are KEY_* keyboard keys.</summary>
     public const ushort BtnFirst = 0x100;
 

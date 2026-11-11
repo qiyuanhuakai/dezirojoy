@@ -62,9 +62,16 @@ internal static class Program
 
     private static int InstallDaemon()
     {
+        if (OperatingSystem.IsLinux())
+        {
+            // Same-user model: a systemd user unit needs no administrator token, so there is no
+            // elevated relaunch to hand off to - the work happens right here.
+            return Report(new LinuxDaemonService().InstallDaemon());
+        }
+
         if (!OperatingSystem.IsWindows())
         {
-            Console.Error.WriteLine("--install-daemon 仅支持 Windows（依赖 schtasks 计划任务）。");
+            Console.Error.WriteLine("--install-daemon 仅支持 Windows 与 Linux。");
             return 2;
         }
 
@@ -96,9 +103,14 @@ internal static class Program
 
     private static int UninstallDaemon()
     {
+        if (OperatingSystem.IsLinux())
+        {
+            return Report(new LinuxDaemonService().UninstallDaemon());
+        }
+
         if (!OperatingSystem.IsWindows())
         {
-            Console.Error.WriteLine("--uninstall-daemon 仅支持 Windows（依赖 schtasks 计划任务）。");
+            Console.Error.WriteLine("--uninstall-daemon 仅支持 Windows 与 Linux。");
             return 2;
         }
 
@@ -118,9 +130,28 @@ internal static class Program
 
     private static int InstallAutostart()
     {
+        if (OperatingSystem.IsLinux())
+        {
+            // Per-user by design: an XDG autostart entry, no administrator token, no relaunch.
+            var linuxExecutable = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(linuxExecutable) || IsDotNetHost(linuxExecutable))
+            {
+                Console.Error.WriteLine("请直接运行构建产物 DeziroJoy --install-autostart，不要通过 dotnet run。");
+                return 2;
+            }
+
+            var linuxInstalled = AutostartInstaller.Install(linuxExecutable);
+
+            Console.WriteLine(linuxInstalled
+                ? $"已启用登录自启动（{AutostartInstaller.LinuxDesktopPath}）"
+                : "启用登录自启动失败，请检查 ~/.config/autostart 是否可写。");
+
+            return linuxInstalled ? 0 : 1;
+        }
+
         if (!OperatingSystem.IsWindows())
         {
-            Console.Error.WriteLine("--install-autostart 仅支持 Windows（依赖 schtasks 计划任务）。");
+            Console.Error.WriteLine("--install-autostart 仅支持 Windows 与 Linux。");
             return 2;
         }
 
@@ -149,9 +180,20 @@ internal static class Program
 
     private static int UninstallAutostart()
     {
+        if (OperatingSystem.IsLinux())
+        {
+            var linuxRemoved = AutostartInstaller.Uninstall();
+
+            Console.WriteLine(linuxRemoved
+                ? $"已移除登录自启动（{AutostartInstaller.LinuxDesktopPath}）。"
+                : "移除登录自启动失败（可能本来就不存在）。");
+
+            return linuxRemoved ? 0 : 1;
+        }
+
         if (!OperatingSystem.IsWindows())
         {
-            Console.Error.WriteLine("--uninstall-autostart 仅支持 Windows（依赖 schtasks 计划任务）。");
+            Console.Error.WriteLine("--uninstall-autostart 仅支持 Windows 与 Linux。");
             return 2;
         }
 
@@ -181,6 +223,29 @@ internal static class Program
 
         Console.Error.WriteLine("未获得管理员权限（可能取消了 UAC 提示）。请以管理员身份运行后重试。");
         return 1;
+    }
+
+    /// <summary>
+    /// Prints a service operation's message and maps it to an exit code: 0 completed, 1 failed,
+    /// 2 the platform does not support it. The Linux CLI path shares the service's wording with
+    /// the settings card, so the two never disagree about what happened.
+    /// </summary>
+    private static int Report(DaemonActionResult result)
+    {
+        switch (result.Result)
+        {
+            case DaemonOp.Completed:
+                Console.WriteLine(result.Message);
+                return 0;
+
+            case DaemonOp.Unsupported:
+                Console.Error.WriteLine(result.Message);
+                return 2;
+
+            default:
+                Console.Error.WriteLine(result.Message);
+                return 1;
+        }
     }
 
     private static string Describe(string flag) => flag switch

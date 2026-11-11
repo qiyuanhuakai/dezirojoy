@@ -8,14 +8,24 @@ using DeziroJoy.Core.Platform;
 namespace DeziroJoy.Platform.Linux.Evdev;
 
 /// <summary>
-/// Experimental Linux provider: scans /dev/input/event*, keeps a non-blocking reader thread
+/// Experimental Linux provider: enumerates /dev/input, keeps a non-blocking reader thread
 /// per gamepad and serves the latest normalized snapshot. Requires read access to the
-/// evdev nodes (member of the "input" group or a udev rule).
+/// evdev nodes (member of the "input" group or a udev rule) - when that is missing the scan
+/// says so through <see cref="LastScanDiagnostic"/> instead of failing silently.
 /// </summary>
 public sealed class EvdevGamepadProvider : IGamepadProvider
 {
     private readonly Lock _sync = new();
     private readonly List<Device> _devices = [];
+
+    /// <summary>
+    /// What the most recent scan found, and why it found it. Null until the first scan. A zero
+    /// count means nothing on its own - "nothing plugged in", "no permission" and "no input
+    /// subsystem" need three different fixes - so the daemon prints
+    /// <see cref="EvdevScanDiagnostic.Guidance"/> and the GUI status area quotes
+    /// <see cref="EvdevScanDiagnostic.Hint"/>.
+    /// </summary>
+    public EvdevScanDiagnostic? LastScanDiagnostic { get; private set; }
 
     public IReadOnlyList<GamepadDescriptor> GetConnected()
     {
@@ -48,36 +58,98 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         }
     }
 
+    /// <summary>
+    /// One-shot diagnostic scan: opens every event node, classifies it and closes it again,
+    /// keeping no readers and no devices. The GUI is a client of the daemon and owns no devices
+    /// itself, so this is how it explains an empty device table with the same classification
+    /// the daemon's own scan produces - same user, same nodes, same answer.
+    /// </summary>
+    /// <param name="deviceDirectory">
+    /// Defaults to <c>/dev/input</c> on Linux. Tests point it at a fixture tree; passing a
+    /// directory explicitly is also what makes the probe meaningful off Linux.
+    /// </param>
+    public static EvdevScanDiagnostic ProbeOnce(string? deviceDirectory = null)
+    {
+        var directory = deviceDirectory ?? EvdevNodes.DirectoryPath;
+        var directoryExists = EvdevNodes.DirectoryExists(directory);
+        var nodes = EvdevNodes.Enumerate(directory);
+
+        var nodeCount = 0;
+        var deniedCount = 0;
+        var gamepadCount = 0;
+        string? firstDeniedPath = null;
+        int? firstErrno = null;
+
+        foreach (var path in nodes)
+        {
+            nodeCount++;
+
+            switch (TryOpen(path, out var device, out var errno))
+            {
+                case EvdevOpenResult.Opened:
+                    gamepadCount++;
+
+                    // The probe owns no readers, so the descriptor it just built is released
+                    // immediately; only the classification survives.
+                    EvdevNative.Close(device.Fd);
+                    break;
+
+                case EvdevOpenResult.AccessDenied:
+                    deniedCount++;
+                    firstDeniedPath ??= path;
+                    firstErrno ??= errno;
+                    break;
+            }
+        }
+
+        return BuildDiagnostic(directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno);
+    }
+
     private void Scan()
     {
+        var directoryExists = EvdevNodes.DirectoryExists();
+        var nodes = EvdevNodes.Enumerate();
         var present = new HashSet<string>(StringComparer.Ordinal);
 
-        for (var i = 0; i < EvdevNative.MaxEventDevices; i++)
-        {
-            var path = $"/dev/input/event{i}";
-            if (!File.Exists(path))
-            {
-                continue;
-            }
+        var nodeCount = 0;
+        var deniedCount = 0;
+        var gamepadCount = 0;
+        string? firstDeniedPath = null;
+        int? firstErrno = null;
 
+        foreach (var path in nodes)
+        {
+            nodeCount++;
             present.Add(path);
 
             lock (_sync)
             {
                 if (_devices.Any(d => string.Equals(d.Path, path, StringComparison.Ordinal)))
                 {
+                    // Already served: it passed the capability check when it was opened, so it
+                    // still counts as a gamepad even though this scan opens nothing.
+                    gamepadCount++;
                     continue;
                 }
             }
 
-            if (TryOpen(path, out var device))
+            switch (TryOpen(path, out var device, out var errno))
             {
-                lock (_sync)
-                {
-                    _devices.Add(device);
-                }
+                case EvdevOpenResult.Opened:
+                    lock (_sync)
+                    {
+                        _devices.Add(device);
+                    }
 
-                StartReader(device);
+                    StartReader(device);
+                    gamepadCount++;
+                    break;
+
+                case EvdevOpenResult.AccessDenied:
+                    deniedCount++;
+                    firstDeniedPath ??= path;
+                    firstErrno ??= errno;
+                    break;
             }
         }
 
@@ -92,25 +164,62 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
                 }
             }
         }
+
+        LastScanDiagnostic = BuildDiagnostic(directoryExists, nodeCount, deniedCount, gamepadCount, firstDeniedPath, firstErrno);
     }
 
-    private static bool TryOpen(string path, out Device device)
+    private static EvdevScanDiagnostic BuildDiagnostic(
+        bool directoryExists,
+        int nodeCount,
+        int deniedCount,
+        int gamepadCount,
+        string? firstDeniedPath,
+        int? firstErrno)
+        => new()
+        {
+            Outcome = EvdevScanDiagnostic.ClassifyOutcome(directoryExists, nodeCount, deniedCount, gamepadCount),
+            NodeCount = nodeCount,
+            DeniedNodeCount = deniedCount,
+            GamepadCount = gamepadCount,
+            FirstDeniedPath = firstDeniedPath,
+            Errno = firstErrno,
+        };
+
+    private enum EvdevOpenResult
+    {
+        Opened,
+
+        /// <summary>The node opened but reported no gamepad capabilities (mouse, keyboard, pad).</summary>
+        NotAGamepad,
+
+        /// <summary>open() failed with EACCES: the node exists, this user may not read it.</summary>
+        AccessDenied,
+
+        /// <summary>open() failed for some other reason (vanished device, ENODEV, ...).</summary>
+        OpenFailed,
+    }
+
+    private static EvdevOpenResult TryOpen(string path, out Device device, out int errno)
     {
         device = null!;
+        errno = 0;
 
         var fd = EvdevNative.Open(path, EvdevNative.ORdOnly | EvdevNative.ONonBlock);
         if (fd < 0)
         {
-            return false;
+            // File.Exists used to swallow this: a node the user cannot open is not an absent
+            // node, and the two need opposite fixes.
+            errno = Marshal.GetLastPInvokeError();
+            return errno == EvdevNative.ErrnoAccessDenied ? EvdevOpenResult.AccessDenied : EvdevOpenResult.OpenFailed;
         }
 
         try
         {
             var name = ReadDeviceName(fd);
-            if (!LooksLikeGamepad(fd, name))
+            if (!LooksLikeGamepad(fd))
             {
                 EvdevNative.Close(fd);
-                return false;
+                return EvdevOpenResult.NotAGamepad;
             }
 
             device = new Device
@@ -122,7 +231,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
                 Fd = fd,
             };
 
-            return true;
+            return EvdevOpenResult.Opened;
         }
         catch
         {
@@ -152,11 +261,15 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         return Encoding.UTF8.GetString(buffer[..end].ToArray());
     }
 
-    private static unsafe bool LooksLikeGamepad(int fd, string name)
+    /// <summary>
+    /// Reads both capability masks off a live descriptor and classifies it. The ioctls fail on
+    /// anything that is not an evdev node, which is a "not a gamepad", never an error.
+    /// </summary>
+    private static unsafe bool LooksLikeGamepad(int fd)
     {
-        Span<byte> bits = stackalloc byte[8];
+        Span<byte> absBits = stackalloc byte[8];
 
-        fixed (byte* pointer = bits)
+        fixed (byte* pointer = absBits)
         {
             if (EvdevNative.Ioctl(fd, EvdevNative.EvIocGBitAbs, pointer) < 0)
             {
@@ -164,12 +277,58 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
             }
         }
 
-        var mask = BinaryPrimitives.ReadUInt64LittleEndian(bits);
-        var hasLeftStick = (mask & (1UL << EvdevCodes.AbsX)) != 0;
-        var hasRightStick = (mask & (1UL << EvdevCodes.AbsRx)) != 0;
+        Span<byte> keyBits = stackalloc byte[EvdevNative.KeyBitBufferSize];
 
-        return hasLeftStick && hasRightStick;
+        fixed (byte* pointer = keyBits)
+        {
+            if (EvdevNative.Ioctl(fd, EvdevNative.EvIocGBitKey, pointer) < 0)
+            {
+                return false;
+            }
+        }
+
+        return LooksLikeGamepad(BinaryPrimitives.ReadUInt64LittleEndian(absBits), keyBits);
     }
+
+    /// <summary>
+    /// Capability classifier over the raw EVIOCGBIT masks - the one place the rules live, pure
+    /// so both directions are pinned by tests.
+    /// <para>
+    /// A second stick (ABS_RX/ABS_RY) or an explicit gamepad button (BTN_JOYSTICK, the face
+    /// cluster, d-pad keys, BTN_TRIGGER_HAPPY) makes a device a gamepad. ABS_X+ABS_Y alone does
+    /// not: that shape is exactly what a touchpad (ABS_X/ABS_Y + BTN_TOUCH) and a drawing tablet
+    /// report, while arcade sticks that lack a right stick still carry one of the explicit
+    /// gamepad buttons. A device with no absolute axes at all is a keyboard or a mouse.
+    /// </para>
+    /// </summary>
+    internal static bool LooksLikeGamepad(ulong absMask, ReadOnlySpan<byte> keyMask)
+    {
+        if (absMask == 0)
+        {
+            return false;
+        }
+
+        if (HasAbs(absMask, EvdevCodes.AbsRx) || HasAbs(absMask, EvdevCodes.AbsRy))
+        {
+            // A second stick is the strongest signal there is.
+            return true;
+        }
+
+        // BTN_SOUTH is BTN_GAMEPAD (input-event-codes.h aliases 0x130), so the face cluster
+        // covers both spellings; BTN_EAST/NORTH/WEST are the rest of the same cluster.
+        return HasKey(keyMask, EvdevCodes.BtnJoystick)
+            || HasKey(keyMask, EvdevCodes.BtnSouth)
+            || HasKey(keyMask, EvdevCodes.BtnEast)
+            || HasKey(keyMask, EvdevCodes.BtnNorth)
+            || HasKey(keyMask, EvdevCodes.BtnWest)
+            || HasKey(keyMask, EvdevCodes.BtnDpadUp)
+            || HasKey(keyMask, EvdevCodes.BtnTriggerHappy1);
+    }
+
+    private static bool HasAbs(ulong mask, ushort code) => (mask & (1UL << code)) != 0;
+
+    private static bool HasKey(ReadOnlySpan<byte> mask, ushort code)
+        => code / 8 < mask.Length && (mask[code / 8] & (1 << (code % 8))) != 0;
 
     /// <summary>
     /// Asks the kernel how many buttons the device has, via EVIOCGBIT(EV_KEY). Returns null
