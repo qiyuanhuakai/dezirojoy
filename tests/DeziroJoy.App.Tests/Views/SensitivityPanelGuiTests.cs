@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -52,29 +53,29 @@ public sealed class SensitivityPanelGuiTests
         => window.GetLogicalDescendants().OfType<ScrollSensitivityPanel>().First();
 
     [AvaloniaFact]
-    public void PrecisionModeCombo_Round_Trips_Hold_And_Toggle()
+    public void PrecisionMode_Is_A_Readonly_Report_That_Follows_The_Mapping()
     {
         var (window, viewModel, _, _) = BuildWindow();
-        var combo = MouseSensitivityPanelOf(window).FindControl<ComboBox>("PrecisionModeCombo")!;
+        var panel = MouseSensitivityPanelOf(window);
 
-        var hold = viewModel.MouseSensitivity.PrecisionModeOptions.Single(option => option.Value == PrecisionMode.Hold);
-        var toggle = viewModel.MouseSensitivity.PrecisionModeOptions.Single(option => option.Value == PrecisionMode.Toggle);
+        // The trigger method is chosen on the mapping surface, so the panel offers no
+        // editable selector for it - only a read-only report of the current mapping's mode.
+        Assert.Null(panel.FindControl<ComboBox>("PrecisionModeCombo"));
 
-        Assert.Same(hold, combo.SelectedItem);
+        var report = panel.FindControl<TextBlock>("PrecisionModeReport")!;
+        Assert.Equal("一直按住才触发", report.Text);
         Assert.Equal(PrecisionMode.Hold, viewModel.MouseSensitivity.PrecisionMode);
 
-        combo.SelectedItem = toggle;
+        // Loading a mapping moves the report with the setting, so the panel shows what the
+        // mapping actually carries rather than a stale default; the mode still round-trips
+        // through BuildSettings untouched.
+        viewModel.MouseSensitivity.LoadFrom(new MouseStickSettings { PrecisionMode = PrecisionMode.Toggle });
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
         Assert.Equal(PrecisionMode.Toggle, viewModel.MouseSensitivity.PrecisionMode);
         Assert.Equal(PrecisionMode.Toggle, viewModel.MouseSensitivity.BuildSettings().PrecisionMode);
-
-        combo.SelectedItem = hold;
-        Assert.Equal(PrecisionMode.Hold, viewModel.MouseSensitivity.PrecisionMode);
-        Assert.Equal(PrecisionMode.Hold, viewModel.MouseSensitivity.BuildSettings().PrecisionMode);
-
-        // A load moves the selection with the setting, so the combo shows what the
-        // mapping actually carries.
-        viewModel.MouseSensitivity.LoadFrom(new MouseStickSettings { PrecisionMode = PrecisionMode.Toggle });
-        Assert.Same(toggle, combo.SelectedItem);
+        Assert.Equal("按一下启用，再按一下取消", report.Text);
     }
 
     [AvaloniaFact]
@@ -180,8 +181,10 @@ public sealed class SensitivityPanelGuiTests
         var mousePanel = MouseSensitivityPanelOf(window);
         mousePanel.FindControl<Slider>("ScaleXSlider")!.Value = 1.25;
         mousePanel.FindControl<Slider>("ScaleYSlider")!.Value = 0.75;
-        mousePanel.FindControl<ComboBox>("PrecisionModeCombo")!.SelectedItem =
-            viewModel.MouseSensitivity.PrecisionModeOptions.Single(option => option.Value == PrecisionMode.Toggle);
+
+        // The mode now arrives from the mapping (LoadFrom) rather than an in-panel selector;
+        // applying sensitivity must carry it into the profile, and the reload must keep it.
+        viewModel.MouseSensitivity.PrecisionMode = PrecisionMode.Toggle;
 
         viewModel.ApplyMouseSensitivityCommand.Execute(null);
 

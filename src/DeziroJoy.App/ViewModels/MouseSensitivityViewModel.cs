@@ -58,6 +58,20 @@ public partial class MouseSensitivityViewModel : ObservableObject
     [ObservableProperty]
     private PrecisionMode _precisionMode = PrecisionMode.Hold;
 
+    /// <summary>
+    /// The precision mode as the panel reports it. The trigger method is chosen on the
+    /// mapping surface because it belongs to the mapping, so this is a read-only label
+    /// over <see cref="PrecisionMode"/> rather than a selection the panel can change. The
+    /// labels match the mapping surface's precision-mode picker, so the two surfaces never
+    /// name the same mode differently.
+    /// </summary>
+    public string PrecisionModeLabel => PrecisionMode switch
+    {
+        PrecisionMode.Hold => "一直按住才触发",
+        PrecisionMode.Toggle => "按一下启用，再按一下取消",
+        _ => PrecisionMode.ToString(),
+    };
+
     [ObservableProperty]
     private bool _invertY = true;
 
@@ -94,24 +108,6 @@ public partial class MouseSensitivityViewModel : ObservableObject
     [ObservableProperty]
     private double _travelDistance;
 
-    public IReadOnlyList<PrecisionModeOption> PrecisionModeOptions { get; } =
-    [
-        new(PrecisionMode.Hold, "一直按住才触发"),
-        new(PrecisionMode.Toggle, "按一下启用，再按一下取消"),
-    ];
-
-    public PrecisionModeOption? SelectedPrecisionModeOption
-    {
-        get => PrecisionModeOptions.First(option => option.Value == PrecisionMode);
-        set
-        {
-            if (value is not null)
-            {
-                PrecisionMode = value.Value;
-            }
-        }
-    }
-
     public ObservableCollection<CurvePoint> ResponseCurvePoints { get; } = [];
 
     /// <summary>Panel copy for the physical-units differentiator; see <see cref="MappingDescriptions.PhysicalSpeedUnit"/>.</summary>
@@ -128,8 +124,6 @@ public partial class MouseSensitivityViewModel : ObservableObject
     public string ResponseTimeHint { get; } = MappingDescriptions.MouseResponseTime();
 
     public string PrecisionScaleHint { get; } = MappingDescriptions.MousePrecisionScale();
-
-    public string PrecisionModeHint { get; } = MappingDescriptions.MousePrecisionMode();
 
     public string ScaleXHint { get; } = MappingDescriptions.MouseScaleX();
 
@@ -172,7 +166,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
     partial void OnPrecisionModeChanged(PrecisionMode value)
     {
         ApplySettings();
-        OnPropertyChanged(nameof(SelectedPrecisionModeOption));
+        OnPropertyChanged(nameof(PrecisionModeLabel));
     }
 
     partial void OnScaleXChanged(float value) => ApplySettings();
