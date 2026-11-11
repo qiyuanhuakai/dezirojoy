@@ -26,12 +26,12 @@ public class XInputStateMapperTests
     [Fact]
     public void Every_Logical_Button_Is_Mapped_From_The_XInput_Bitmask()
     {
-        var state = XInputStateMapper.ToGamepadState(new XInputGamepad
+        var state = ToState(new XInputGamepad
         {
             Buttons = AllButtons,
             LeftTrigger = 255,
             RightTrigger = 255,
-        });
+        }, "all-buttons");
 
         foreach (var button in Enum.GetValues<GamepadButton>().Where(b => b != GamepadButton.Extra))
         {
@@ -45,12 +45,12 @@ public class XInputStateMapperTests
         // XInput's wButtons bitmask is a fixed 14-button set with no raw-code channel, so
         // unmapped inputs are a Linux/evdev-only escape hatch. The Windows provider must
         // report an empty set rather than invent a code.
-        var state = XInputStateMapper.ToGamepadState(new XInputGamepad
+        var state = ToState(new XInputGamepad
         {
             Buttons = AllButtons,
             LeftTrigger = 255,
             RightTrigger = 255,
-        });
+        }, "no-extra-buttons");
 
         Assert.Empty(state.ExtraButtons);
     }
@@ -58,7 +58,7 @@ public class XInputStateMapperTests
     [Fact]
     public void No_Buttons_Produces_A_Neutral_State()
     {
-        var state = XInputStateMapper.ToGamepadState(default);
+        var state = ToState(default, "neutral");
 
         Assert.Equal(GamepadButtonMask.None, state.PressedButtons);
     }
@@ -73,7 +73,9 @@ public class XInputStateMapperTests
     [InlineData(255, true)]
     public void Triggers_Press_Only_Above_The_Hysteresis_Band(byte triggerValue, bool expectedPressed)
     {
-        var state = ToState(new XInputGamepad { LeftTrigger = triggerValue }, "press-band");
+        // A fresh device id per case: each row starts released, like the evdev theory's
+        // per-case tracker, so the expectations never depend on declaration order.
+        var state = ToState(new XInputGamepad { LeftTrigger = triggerValue }, $"press-band-{triggerValue}");
 
         Assert.Equal(expectedPressed, state.IsPressed(GamepadButton.LeftTrigger));
         Assert.False(state.IsPressed(GamepadButton.RightTrigger));
@@ -182,13 +184,13 @@ public class XInputStateMapperTests
     [Fact]
     public void Stick_Axes_Are_Normalized_To_Unit_Range()
     {
-        var state = XInputStateMapper.ToGamepadState(new XInputGamepad
+        var state = ToState(new XInputGamepad
         {
             ThumbLX = -32768,
             ThumbLY = 32767,
             ThumbRX = 16384,
             ThumbRY = -16384,
-        });
+        }, "stick-axes");
 
         Assert.Equal(-1f, state.LeftStickX);
         Assert.Equal(32767f / 32768f, state.LeftStickY, 5);
@@ -217,5 +219,5 @@ public class XInputStateMapperTests
     }
 
     private static GamepadButtonMask MaskFor(ushort bits)
-        => XInputStateMapper.ToGamepadState(new XInputGamepad { Buttons = bits }).PressedButtons;
+        => ToState(new XInputGamepad { Buttons = bits }, $"bits-{bits}").PressedButtons;
 }
