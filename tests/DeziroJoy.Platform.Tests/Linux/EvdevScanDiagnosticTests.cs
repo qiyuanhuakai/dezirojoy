@@ -111,6 +111,45 @@ public class EvdevScanDiagnosticTests
     }
 
     [Fact]
+    public void Unhandled_Axes_Are_Quoted_With_Code_Range_And_Value_For_An_Evtest_Comparison()
+    {
+        // The axis-level feedback the user needs when a connected pad has an axis that never
+        // lights up: raw code, declared range and resting value - exactly what evtest prints -
+        // even though the scan itself found the gamepad.
+        var diagnostic = Diagnostic(
+            EvdevScanOutcome.GamepadsFound,
+            gamepadCount: 1,
+            unhandledAxes:
+            [
+                new EvdevUnhandledAxis(0x09, 0, 255, 255, "/dev/input/event5"),
+                new EvdevUnhandledAxis(0x35, 0, 32767, 0, "/dev/input/event5"),
+            ]);
+
+        Assert.Contains("/dev/input/event5", diagnostic.Guidance);
+        Assert.Contains("0x09", diagnostic.Guidance);
+        Assert.Contains("0..255", diagnostic.Guidance);
+        Assert.Contains("当前 255", diagnostic.Guidance);
+        Assert.Contains("evtest", diagnostic.Guidance);
+    }
+
+    [Fact]
+    public void The_Unhandled_Axes_Section_Joins_The_Outcome_Guidance_Instead_Of_Replacing_It()
+    {
+        // A permission wall and an unmapped axis can coexist (one node denied, one opened):
+        // the guidance must keep both, not pick one.
+        var diagnostic = Diagnostic(
+            EvdevScanOutcome.AccessDenied,
+            firstDeniedPath: "/dev/input/event3",
+            errno: 13,
+            nodeCount: 2,
+            gamepadCount: 1,
+            unhandledAxes: [new EvdevUnhandledAxis(0x08, 0, 255, 0, "/dev/input/event4")]);
+
+        Assert.Contains("usermod -aG input", diagnostic.Guidance);
+        Assert.Contains("0x08", diagnostic.Guidance);
+    }
+
+    [Fact]
     public void The_Udev_Rules_The_Guidance_Quotes_Cover_Both_Devices()
     {
         // The guidance is only actionable if the rules it prints actually cover what the app
@@ -151,7 +190,8 @@ public class EvdevScanDiagnosticTests
         string? firstDeniedPath = null,
         int? errno = null,
         int nodeCount = 0,
-        int gamepadCount = 0)
+        int gamepadCount = 0,
+        IReadOnlyList<EvdevUnhandledAxis>? unhandledAxes = null)
         => new()
         {
             Outcome = outcome,
@@ -160,5 +200,6 @@ public class EvdevScanDiagnosticTests
             GamepadCount = gamepadCount,
             FirstDeniedPath = firstDeniedPath,
             Errno = errno,
+            UnhandledAxes = unhandledAxes ?? [],
         };
 }

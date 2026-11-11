@@ -4,11 +4,15 @@ namespace DeziroJoy.Platform.Linux.Evdev;
 
 /// <summary>
 /// Accumulates evdev events into a normalized <see cref="GamepadState"/>. Axis ranges come
-/// from EVIOCGABS at device open time so unusual pad calibrations normalize correctly. Button
-/// codes with no logical position are kept as raw codes so they stay mappable. The analog
-/// triggers run through a Schmitt trigger, so a trigger resting near half travel holds one
-/// pressed state instead of chattering; every tracker instance carries its own trigger
-/// state, keeping devices independent.
+/// from EVIOCGABS at device open time so unusual pad calibrations normalize correctly, and
+/// the same ioctl's current value seeds each axis's rest state, so the first snapshot already
+/// reflects the physical device instead of waiting for the first event. A trigger whose rest
+/// value sits near the axis maximum is an inverted axis (some wheels and pedals rest at
+/// max), and its travel is mirrored so it stays released at rest. Button codes with no
+/// logical position are kept as raw codes so they stay mappable. The analog triggers run
+/// through a Schmitt trigger, so a trigger resting near half travel holds one pressed state
+/// instead of chattering; every tracker instance carries its own trigger state, keeping
+/// devices independent.
 /// </summary>
 public sealed class EvdevGamepadStateTracker
 {
@@ -36,18 +40,38 @@ public sealed class EvdevGamepadStateTracker
     public EvdevGamepadStateTracker(IReadOnlyDictionary<ushort, EvdevAxisRange>? axisRanges = null)
     {
         _axisRanges = axisRanges ?? DefaultAxisRanges;
+        SeedAxisStates();
     }
 
     public static IReadOnlyDictionary<ushort, EvdevAxisRange> DefaultAxisRanges { get; } =
         new Dictionary<ushort, EvdevAxisRange>
         {
-            [EvdevCodes.AbsX] = new EvdevAxisRange(-32768, 32767),
-            [EvdevCodes.AbsY] = new EvdevAxisRange(-32768, 32767),
-            [EvdevCodes.AbsRx] = new EvdevAxisRange(-32768, 32767),
-            [EvdevCodes.AbsRy] = new EvdevAxisRange(-32768, 32767),
-            [EvdevCodes.AbsZ] = new EvdevAxisRange(0, 255),
-            [EvdevCodes.AbsRz] = new EvdevAxisRange(0, 255),
+            [EvdevCodes.AbsX] = new EvdevAxisRange(-32768, 32767, Rest: 0),
+            [EvdevCodes.AbsY] = new EvdevAxisRange(-32768, 32767, Rest: 0),
+            [EvdevCodes.AbsRx] = new EvdevAxisRange(-32768, 32767, Rest: 0),
+            [EvdevCodes.AbsRy] = new EvdevAxisRange(-32768, 32767, Rest: 0),
+            [EvdevCodes.AbsZ] = new EvdevAxisRange(0, 255, Rest: 0),
+            [EvdevCodes.AbsRz] = new EvdevAxisRange(0, 255, Rest: 0),
+            [EvdevCodes.AbsGas] = new EvdevAxisRange(0, 255, Rest: 0),
+            [EvdevCodes.AbsBrake] = new EvdevAxisRange(0, 255, Rest: 0),
         };
+
+    /// <summary>
+    /// Every ABS code this tracker maps onto a logical control - the single source of truth
+    /// shared with the provider, which uses it to tell an unrecognized axis (one that stays
+    /// dark no matter what the user does) from one that is simply not reported.
+    /// </summary>
+    internal static bool IsHandledAbsCode(ushort code) => code
+        is EvdevCodes.AbsX
+        or EvdevCodes.AbsY
+        or EvdevCodes.AbsZ
+        or EvdevCodes.AbsRx
+        or EvdevCodes.AbsRy
+        or EvdevCodes.AbsRz
+        or EvdevCodes.AbsGas
+        or EvdevCodes.AbsBrake
+        or EvdevCodes.AbsHat0X
+        or EvdevCodes.AbsHat0Y;
 
     public void Apply(in EvdevEvent evdevEvent)
     {
@@ -148,6 +172,79 @@ public sealed class EvdevGamepadStateTracker
             case EvdevCodes.AbsRz:
                 SetTrigger(value, EvdevCodes.AbsRz, GamepadButton.RightTrigger, ref _rightTriggerPressed);
                 break;
+
+            // Alternate trigger codes: the kernel's HID simulation mapping gives pads and
+            // wheels ABS_GAS/ABS_BRAKE instead of ABS_Z/ABS_RZ. Gas accelerates (right
+            // trigger), brake stops (left trigger), the side each pedal sits on. A device
+            // that reports both codes of a pair (ABS_Z with ABS_BRAKE, ABS_RZ with
+            // ABS_GAS) shares one pressed-state slot between them: each code keeps the
+            // orientation its own rest value implies, and whichever axis reported last
+            // sets the slot.
+            case EvdevCodes.AbsGas:
+                SetTrigger(value, EvdevCodes.AbsGas, GamepadButton.RightTrigger, ref _rightTriggerPressed);
+                break;
+            case EvdevCodes.AbsBrake:
+                SetTrigger(value, EvdevCodes.AbsBrake, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Initializes every axis from the rest value the device reported at open time, so the
+    /// first snapshot matches the physical device: a stick held off-center starts off-center,
+    /// a trigger at rest starts released, and an axis the device never sends events for is
+    /// still correct instead of stuck at the neutral default.
+    /// </summary>
+    private void SeedAxisStates()
+    {
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsX, out var x))
+        {
+            _leftStickX = Normalize(x.Rest, EvdevCodes.AbsX);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsY, out var y))
+        {
+            _leftStickY = NormalizeStickY(y.Rest, EvdevCodes.AbsY);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsRx, out var rx))
+        {
+            _rightStickX = Normalize(rx.Rest, EvdevCodes.AbsRx);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsRy, out var ry))
+        {
+            _rightStickY = NormalizeStickY(ry.Rest, EvdevCodes.AbsRy);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsZ, out var z))
+        {
+            SetTrigger(z.Rest, EvdevCodes.AbsZ, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsBrake, out var brake))
+        {
+            SetTrigger(brake.Rest, EvdevCodes.AbsBrake, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsRz, out var rz))
+        {
+            SetTrigger(rz.Rest, EvdevCodes.AbsRz, GamepadButton.RightTrigger, ref _rightTriggerPressed);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsGas, out var gas))
+        {
+            SetTrigger(gas.Rest, EvdevCodes.AbsGas, GamepadButton.RightTrigger, ref _rightTriggerPressed);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsHat0X, out var hatX))
+        {
+            SetDpad(hatX.Rest < 0, hatX.Rest > 0, GamepadButton.DPadLeft, GamepadButton.DPadRight);
+        }
+
+        if (_axisRanges.TryGetValue(EvdevCodes.AbsHat0Y, out var hatY))
+        {
+            SetDpad(hatY.Rest < 0, hatY.Rest > 0, GamepadButton.DPadUp, GamepadButton.DPadDown);
         }
     }
 
@@ -167,12 +264,25 @@ public sealed class EvdevGamepadStateTracker
     /// EndHold pairs at up to 500 Hz, because the mapping engine is edge-driven. The
     /// per-instance <paramref name="pressed"/> state keeps each device's triggers
     /// independent. LB/RB arrive as digital keys and never pass through here.
+    /// <para>
+    /// Travel direction follows the rest end: a trigger whose seeded rest value sits near
+    /// the axis maximum is an inverted axis (it rests at max and is pressed toward min), so
+    /// its travel is mirrored. Without that, a rest=max axis reads as permanently held -
+    /// the "扳机常亮" report - while a rest=min axis is unaffected either way.
+    /// </para>
     /// </summary>
     private void SetTrigger(int value, ushort axisCode, GamepadButton button, ref bool pressed)
     {
         var range = RangeFor(axisCode);
         var span = range.Max - range.Min;
-        var travel = span <= 0 ? 0f : (value - range.Min) / (float)span;
+
+        // The rest value is seeded calibration, never the live event, so the orientation is
+        // fixed per device; evaluating it from the live value would flip mid-press. The
+        // operands are widened before the subtraction: a rest value outside the declared
+        // range (pathological firmware) would otherwise wrap the int subtraction and read
+        // as the opposite orientation.
+        var inverted = (long)range.Max - range.Rest < (long)range.Rest - range.Min;
+        var travel = span <= 0 ? 0f : (inverted ? range.Max - value : value - range.Min) / (float)span;
 
         if (travel >= TriggerPressPoint)
         {
@@ -209,6 +319,16 @@ public sealed class EvdevGamepadStateTracker
         return Math.Clamp((t * 2f) - 1f, -1f, 1f);
     }
 
+    /// <summary>
+    /// The declared range of one axis. A device whose EVIOCGABS answered has its real
+    /// calibration here; anything else falls back to the per-axis semantic default, so a
+    /// 0..255 trigger that failed its ioctl still presses at 140/255 instead of being read
+    /// on the stick's -32768..32767 scale, where its rest value would sit at half travel.
+    /// </summary>
     private EvdevAxisRange RangeFor(ushort axisCode)
-        => _axisRanges.TryGetValue(axisCode, out var range) ? range : new EvdevAxisRange(-32768, 32767);
+        => _axisRanges.TryGetValue(axisCode, out var range)
+            ? range
+            : DefaultAxisRanges.TryGetValue(axisCode, out var fallback)
+                ? fallback
+                : new EvdevAxisRange(-32768, 32767);
 }
