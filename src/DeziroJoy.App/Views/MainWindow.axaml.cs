@@ -203,8 +203,11 @@ public partial class MainWindow : Window
             var length = BinaryPrimitives.ReadInt32LittleEndian(entry.Slice(8, 4));
             var offset = BinaryPrimitives.ReadInt32LittleEndian(entry.Slice(12, 4));
 
+            // length > 0 is already established, so icon.Length - length cannot
+            // overflow and offset > icon.Length - length is the wrap-safe form of
+            // offset + length > icon.Length.
             if (width <= 0 || height <= 0 || length <= 0 || offset < 0
-                || offset + length > icon.Length)
+                || offset > icon.Length - length)
             {
                 continue;
             }
