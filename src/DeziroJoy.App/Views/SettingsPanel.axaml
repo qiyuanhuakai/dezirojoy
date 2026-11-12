@@ -69,10 +69,12 @@
 
                     <!--
                         The update surface. The running version comes from the assembly, the
-                        check and its Chinese outcome wording live in the UpdateSettingsViewModel,
-                        and the release page is opened by the code-behind when the view model
-                        asks for it - the same "view model raises, view answers" pattern the
-                        profile import/export dialogs use.
+                        whole check/download/install/restart flow lives in the
+                        UpdateSettingsViewModel over the update orchestrator, and the two
+                        platform actions a view model deliberately does not perform - opening
+                        the release page and exiting the process for a restart - are raised as
+                        events the code-behind answers, the same "view model raises, view
+                        answers" pattern the profile import/export dialogs use.
                     -->
                     <Border Classes="card">
                         <StackPanel>
@@ -85,19 +87,43 @@
                             <WrapPanel Margin="0,12,0,0">
                                 <Button x:Name="CheckUpdateButton" Classes="ghost" Margin="0,0,8,8"
                                         Content="检查更新" Command="{Binding Update.CheckForUpdateCommand}"
-                                        IsEnabled="{Binding Update.IsChecking, Converter={StaticResource Not}}" />
+                                        IsEnabled="{Binding Update.IsBusy, Converter={StaticResource Not}}" />
+                                <Button x:Name="DownloadUpdateButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="下载更新" IsVisible="{Binding Update.CanDownload}"
+                                        Command="{Binding Update.DownloadUpdateCommand}" />
+                                <Button x:Name="CancelUpdateButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="取消" IsVisible="{Binding Update.CanCancelDownload}"
+                                        Command="{Binding Update.CancelUpdateCommand}" />
+                                <Button x:Name="InstallUpdateButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="立即安装并重启" IsVisible="{Binding Update.CanInstall}"
+                                        IsEnabled="{Binding Update.IsBusy, Converter={StaticResource Not}}"
+                                        Command="{Binding Update.InstallUpdateCommand}" />
                                 <Button x:Name="OpenReleasePageButton" Classes="ghost" Margin="0,0,8,8"
                                         Content="前往下载" IsVisible="{Binding Update.HasUpdate}"
                                         Command="{Binding Update.OpenReleasePageCommand}" />
                             </WrapPanel>
+                            <ProgressBar x:Name="UpdateDownloadProgressBar" Margin="0,10,0,0"
+                                         IsVisible="{Binding Update.IsDownloading}"
+                                         Minimum="0" Maximum="1"
+                                         Value="{Binding Update.DownloadProgress}" />
+                            <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       IsVisible="{Binding Update.CanInstall}"
+                                       Text="安装会先停止守护进程与托盘，完成后自动重启应用；更新包已经 SHA256 校验，未经代码签名。" />
                             <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
                                        IsVisible="{Binding Update.HasResult}"
                                        Foreground="{Binding Update.IsResultError, Converter={StaticResource TransferMessageBrush}}"
                                        Text="{Binding Update.ResultText}" />
+                            <TextBlock x:Name="UpdateInstallGuidanceText" Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       IsVisible="{Binding Update.HasInstallGuidance}"
+                                       Text="{Binding Update.InstallGuidance}" />
                             <CheckBox x:Name="AutoCheckUpdatesBox" Content="启动时自动检查" Margin="0,12,0,0"
                                       IsChecked="{Binding Update.AutoCheckEnabled, Mode=TwoWay}" />
                             <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="开启后每次启动应用时自动检查一次新版本；不会自动下载或安装更新。" />
+                                       Text="开启后每次启动应用时自动检查一次新版本；仅检查，不会自动下载或安装更新。" />
+                            <CheckBox x:Name="AutoDownloadUpdatesBox" Content="发现新版本后自动下载" Margin="0,12,0,0"
+                                      IsChecked="{Binding Update.AutoDownloadEnabled, Mode=TwoWay}" />
+                            <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="开启后检查到新版本会自动下载并校验；安装更新仍需一次点击，不会自动安装或重启。" />
                         </StackPanel>
                     </Border>
 
