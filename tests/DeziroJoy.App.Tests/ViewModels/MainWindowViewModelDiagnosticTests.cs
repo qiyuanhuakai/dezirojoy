@@ -164,4 +164,105 @@ public class MainWindowViewModelDiagnosticTests
         Assert.Contains("已断开连接", vm.StatusMessage);
         Assert.DoesNotContain("usermod", vm.StatusMessage);
     }
+
+    // With a pad connected the status line must also carry the unhandled-axis diagnostic: an
+    // axis no mapping reaches is indistinguishable from a broken stick or trigger, and it used
+    // to be invisible the moment a pad showed up. The hint rides the same suffix pattern the
+    // sink error uses - appended, quoted once, and never costing the line a throwing probe.
+    [Fact]
+    public void A_Connected_Pad_Quotes_Its_Unhandled_Axes()
+    {
+        var vm = CreateViewWithPad(static () => new LinuxRuntimeHints(
+            null,
+            null,
+            "未处理的轴（原始码/量程/当前值，供 evtest 对照）：/dev/input/event3 code 0x02 (2) 量程 0..255 当前 128"));
+
+        Assert.Contains("Generic X-Box pad", vm.StatusMessage);
+        Assert.Contains("未处理的轴", vm.StatusMessage);
+        Assert.Contains("code 0x02", vm.StatusMessage);
+        Assert.EndsWith("量程 0..255 当前 128", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void A_Pad_With_No_Unhandled_Axes_Leaves_The_Status_Line_Unchanged()
+    {
+        var vm = CreateViewWithPad(static () => new LinuxRuntimeHints(null, null));
+
+        // Byte-for-byte the plain device line: no axis suffix when nothing is unmapped, and no
+        // sink error is set here either.
+        var expected = $"{vm.ActiveController!.Descriptor.Name} · " +
+            $"{MappingDescriptions.Layout(vm.ActiveController.Descriptor.Layout)} · 映射未启动";
+
+        Assert.Equal(expected, vm.StatusMessage);
+    }
+
+    [Fact]
+    public void The_Unhandled_Axis_Hint_Coexists_With_The_Sink_Error_Without_Duplication()
+    {
+        var vm = CreateViewWithPad(
+            static () => new LinuxRuntimeHints(
+                null,
+                null,
+                "未处理的轴（原始码/量程/当前值，供 evtest 对照）：/dev/input/event3 code 0x02 (2) 量程 0..255 当前 128"),
+            sinkError: "无法打开 /dev/uinput（errno 13）：请确认 uinput 模块已加载。");
+
+        Assert.Contains("Generic X-Box pad", vm.StatusMessage);
+        Assert.Contains("注入不可用", vm.StatusMessage);
+        Assert.Contains("/dev/uinput", vm.StatusMessage);
+        Assert.Contains("未处理的轴", vm.StatusMessage);
+        // Each suffix is quoted exactly once - neither swallows nor doubles the other.
+        Assert.Equal(1, vm.StatusMessage.Split("注入不可用").Length - 1);
+        Assert.Equal(1, vm.StatusMessage.Split("未处理的轴").Length - 1);
+    }
+
+    [Fact]
+    public void A_Probe_That_Throws_Keeps_The_Device_Line_And_The_Sink_Error()
+    {
+        var vm = CreateViewWithPad(
+            static () => throw new IOException("probe failed"),
+            sinkError: "ioctl 0x40045564 失败 (errno 22)。");
+
+        Assert.Contains("Generic X-Box pad", vm.StatusMessage);
+        Assert.Contains("注入不可用", vm.StatusMessage);
+        Assert.Contains("ioctl 0x40045564", vm.StatusMessage);
+        Assert.DoesNotContain("未处理的轴", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void A_Probe_That_Throws_Leaves_A_Clean_Pad_Line_Untouched()
+    {
+        var vm = CreateViewWithPad(static () => throw new IOException("probe failed"));
+
+        var expected = $"{vm.ActiveController!.Descriptor.Name} · " +
+            $"{MappingDescriptions.Layout(vm.ActiveController.Descriptor.Layout)} · 映射未启动";
+
+        Assert.Equal(expected, vm.StatusMessage);
+    }
+
+    [Fact]
+    public void The_No_Gamepad_Line_Does_Not_Gain_An_Unhandled_Axis_Hint()
+    {
+        // The axis half belongs to the pad-connected line; the "connect a gamepad" line is
+        // unchanged, so a probe that somehow carries an axis hint does not leak into it.
+        var vm = CreateView(static () => new LinuxRuntimeHints(
+            null,
+            null,
+            "未处理的轴（原始码/量程/当前值，供 evtest 对照）：/dev/input/event3 code 0x02 (2) 量程 0..255 当前 128"));
+
+        Assert.Equal("未检测到手柄，请连接手柄", vm.StatusMessage);
+    }
+
+    private static MainWindowViewModel CreateViewWithPad(
+        Func<LinuxRuntimeHints> runtimeHints,
+        string? sinkError = null)
+    {
+        var store = new InMemoryProfileStore();
+        var provider = new FakeGamepadProvider();
+        provider.Add("/dev/input/event3", "Generic X-Box pad");
+        var host = new EngineHost(provider, new RecordingOutputSink(), store);
+
+        var vm = new MainWindowViewModel(host, store, runtimeHints: runtimeHints, sinkError: sinkError);
+        vm.SyncControllers();
+        return vm;
+    }
 }

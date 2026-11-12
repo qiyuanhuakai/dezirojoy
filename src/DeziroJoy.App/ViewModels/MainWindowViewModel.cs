@@ -2078,8 +2078,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 : $"{device} · 映射未启动";
 
         // With a pad connected the injection reason matters most: the device line alone
-        // reads as a healthy session while every injected event goes nowhere.
-        StatusMessage = status + InjectionUnavailableSuffix();
+        // reads as a healthy session while every injected event goes nowhere. The unmapped-axis
+        // diagnostic rides the same line for the same reason - an axis no mapping reaches
+        // otherwise passes for a broken stick.
+        StatusMessage = status + InjectionUnavailableSuffix() + UnhandledAxisSuffix();
     }
 
     /// <summary>
@@ -2092,6 +2094,30 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private string InjectionUnavailableSuffix()
         => _sinkError is { Length: > 0 } ? $" · 注入不可用：{_sinkError}" : string.Empty;
+
+    /// <summary>
+    /// The unmapped-axis half of the pad diagnosis, appended beside the sink error with a pad
+    /// connected. An ABS axis the tracker does not map can never light up, which is otherwise
+    /// indistinguishable from a broken stick or trigger, so the probe's one-line diagnostic -
+    /// raw code, range and rest value for an <c>evtest</c> comparison - rides the same status
+    /// line. Empty, leaving the line byte-for-byte unchanged, when nothing is unmapped. The
+    /// probe is diagnostics and never a reason to break the line, so a failed scan is swallowed
+    /// exactly as <see cref="NoControllerText"/> swallows it; the sink error is concatenated
+    /// separately, so a throwing probe cannot cost the user that half either.
+    /// </summary>
+    private string UnhandledAxisSuffix()
+    {
+        try
+        {
+            return _runtimeHints().UnhandledAxisGuidance is { Length: > 0 } hint
+                ? $" · {hint}"
+                : string.Empty;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
 
     /// <summary>
     /// The "no gamepad" line, plus whatever the platform's one-shot probe can say about why.
