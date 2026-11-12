@@ -317,22 +317,223 @@ jobs:
             exit 1
           fi
 
+      # rpmbuild from the Ubuntu image (universe) builds the package; cpio and
+      # rpm2cpio are what the payload assertion below unpacks it with
+      # (rpm2cpio is its own package on Debian/Ubuntu, not part of rpm). The
+      # script stages the payload and drives rpmbuild itself and resolves the
+      # repository files from its own location, so the step passes the same
+      # four arguments as the .deb step: version, RID, publish directory,
+      # output directory. The RPM Version field forbids '-' (it separates
+      # version from release), so the script rewrites '-' to '~' internally
+      # and keeps the original semver only in the asset name:
+      # DeziroJoy-<ver>-<arch>.rpm.
+      - name: Build the .rpm (rpmbuild)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          case '${{ matrix.rid }}' in
+            linux-x64)   arch=x86_64 ;;
+            linux-arm64) arch=aarch64 ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          sudo apt-get update
+          sudo apt-get install -y rpm cpio rpm2cpio
+          tools/Packaging/linux/rpm/build-rpm.sh "$version" '${{ matrix.rid }}' "publish/${{ matrix.rid }}" .
+          test -s "DeziroJoy-${version}-${arch}.rpm" || { echo "no rpm produced"; exit 1; }
+
+      # rpm -qp queries the built package without installing it - the Ubuntu
+      # runner cannot install a .rpm at all, which is why this contract is
+      # asserted statically, the same way the .deb leg's metadata and payload
+      # are. The assertions mirror that step one for one: name, version,
+      # architecture, a non-empty Requires carrying ICU (the .NET runtime
+      # dlopens it instead of linking it, so rpmbuild's find-requires cannot
+      # see it and the spec pins the soname range explicitly), no scriptlets,
+      # and a payload that is the complete publish output plus the icon, the
+      # fix helper, the desktop entry and the hicolor theme - and nothing
+      # under /etc. The version comparison runs against the '~' form the
+      # build produces: RPM forbids '-' in Version, and '~' sorts below every
+      # other character, which reproduces semver prerelease ordering
+      # (0.0.1~beta.5~preview < 0.0.1) for free.
+      - name: Validate the .rpm metadata and payload
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          case '${{ matrix.rid }}' in
+            linux-x64)   arch=x86_64 ;;
+            linux-arm64) arch=aarch64 ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          rpm_file="DeziroJoy-${version}-${arch}.rpm"
+          # The '~' sanitisation build-rpm.sh applies to Version.
+          rpm_version="${version//-/\~}"
+
+          [ "$(rpm -qp --qf '%{NAME}' "$rpm_file")" = dezirojoy ] || { echo "wrong package name"; exit 1; }
+          [ "$(rpm -qp --qf '%{VERSION}' "$rpm_file")" = "$rpm_version" ] || { echo "wrong version, expected $rpm_version"; exit 1; }
+          [ "$(rpm -qp --qf '%{ARCH}' "$rpm_file")" = "$arch" ] || { echo "wrong architecture"; exit 1; }
+          rpm -qp --requires "$rpm_file" | grep -q . || { echo "no Requires line"; exit 1; }
+          # The one dependency find-requires cannot generate. Without this
+          # assertion a spec edit could drop it and the package would install
+          # cleanly, then FailFast at startup on a minimal system.
+          rpm -qp --requires "$rpm_file" | grep -Eq 'libicu(uc|i18n)\.so' \
+            || { echo "Requires must include an ICU soname"; exit 1; }
+          # No scriptlets: install and removal stay side-effect free, exactly
+          # like the .deb's missing maintainer scripts.
+          if [ -n "$(rpm -qp --scripts "$rpm_file")" ]; then
+            echo "package must not ship scriptlets"
+            rpm -qp --scripts "$rpm_file"
+            exit 1
+          fi
+
+          # rpm2cpio | cpio -t lists the payload without installing the
+          # package; a leading ./ is normalised away so the names below are
+          # the paths as installed.
+          contents="$(rpm2cpio "$rpm_file" | cpio -t | sed 's|^\./||')"
+          for required in \
+            "opt/dezirojoy/DeziroJoy" \
+            "opt/dezirojoy/dezirojoy.ico" \
+            "opt/dezirojoy/fix-device-access.sh" \
+            "usr/share/applications/dezirojoy.desktop"
+          do
+            echo "$contents" | grep -qx "$required" || { echo "missing from package: $required"; exit 1; }
+          done
+          for size in 16 24 32 48 64 128 256; do
+            icon="usr/share/icons/hicolor/${size}x${size}/apps/dezirojoy.png"
+            echo "$contents" | grep -qx "$icon" || { echo "missing from package: $icon"; exit 1; }
+          done
+          # The payload must stay the complete publish output, not a trimmed
+          # subset: +1 for the icon the build adds, +1 for the fix helper.
+          # cpio -t prints bare names, so the pattern carries no ls -l-style
+          # leading space the way the .deb's dpkg-deb --contents one does.
+          count="$(echo "$contents" | grep -c 'opt/dezirojoy/')"
+          expected="$(find "publish/${{ matrix.rid }}" -type f | wc -l)"
+          [ "$count" -ge $((expected + 2)) ] || { echo "only $count payload entries for $expected publish files"; exit 1; }
+          # Nothing under /etc: no systemd units, no cron jobs, no udev rules.
+          # Autostart and the elevated daemon stay opt-in features of the app.
+          if echo "$contents" | grep -Eq '^etc(/|$)'; then
+            echo "package must not ship anything under /etc"
+            exit 1
+          fi
+
+      # appimagetool is downloaded by the script itself (the continuous build,
+      # invoked with --appimage-extract-and-run because the runner has no FUSE
+      # to mount the type-2 tool), so the only dependency to install here is
+      # desktop-file-validate: appimagetool refuses to start without it. The
+      # script takes the same four arguments as the .deb and .rpm steps and
+      # packs the publish output into DeziroJoy-<ver>-<arch>.AppImage. The tool
+      # only packs the AppDir and never executes the payload, so the aarch64
+      # leg cross-builds on the x64 runner exactly like the .deb and .rpm legs.
+      - name: Build the AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          case '${{ matrix.rid }}' in
+            linux-x64)   arch=x86_64 ;;
+            linux-arm64) arch=aarch64 ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils
+          tools/Packaging/linux/appimage/build-appimage.sh "$version" '${{ matrix.rid }}' "publish/${{ matrix.rid }}" .
+          test -s "DeziroJoy-${version}-${arch}.AppImage" || { echo "no AppImage produced"; exit 1; }
+
+      # --appimage-extract unpacks the image without FUSE, and the extracted
+      # tree is asserted statically: AppRun, the desktop entry, the root icon
+      # appimagetool links as .DirIcon, and an ELF binary of the right
+      # architecture. There is deliberately no hicolor tree inside the image -
+      # the icon travels as the root PNG and nothing inside a squashfs
+      # consumes /usr/share/icons - so the seven theme frames are asserted on
+      # the .deb and .rpm legs only. On linux-x64 the extracted AppRun then
+      # actually runs the daemon: a binary whose native dependencies fail to
+      # resolve exits immediately, a healthy one is still running when timeout
+      # kills it, which is exit code 124 - the same smoke the .deb install
+      # step performs, run from the extracted tree instead of an install
+      # location. linux-arm64 is cross-compiled and stays static-only, the
+      # convention every leg above uses for a binary that cannot execute on
+      # this runner.
+      - name: Validate the AppImage payload
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          case '${{ matrix.rid }}' in
+            linux-x64)   arch=x86_64;  want=x86-64 ;;
+            linux-arm64) arch=aarch64; want=aarch64 ;;
+            *) echo "unknown rid ${{ matrix.rid }}"; exit 1 ;;
+          esac
+          image="DeziroJoy-${version}-${arch}.AppImage"
+          test -s "$image" || { echo "artifact missing: $image"; exit 1; }
+          chmod +x "$image"
+
+          # The type-2 runtime extracts into the current directory, so run it
+          # from a scratch one and keep the tree out of the workspace.
+          extract="$(mktemp -d)"
+          (cd "$extract" && "$GITHUB_WORKSPACE/$image" --appimage-extract) > extract.log 2>&1
+          sed -n '1,10p' extract.log
+          root="$extract/squashfs-root"
+          test -d "$root" || { echo "no squashfs-root extracted"; exit 1; }
+
+          test -x "$root/AppRun" || { echo "AppRun missing from the image"; exit 1; }
+          test -f "$root/dezirojoy.desktop" || { echo "desktop entry missing from the image"; exit 1; }
+          test -f "$root/dezirojoy.png" || { echo "icon missing from the image"; exit 1; }
+          for required in \
+            "opt/dezirojoy/DeziroJoy" \
+            "opt/dezirojoy/dezirojoy.ico" \
+            "opt/dezirojoy/fix-device-access.sh"
+          do
+            test -f "$root/$required" || { echo "missing from image: $required"; exit 1; }
+          done
+          # The payload must stay the complete publish output, not a trimmed
+          # subset: +1 for the icon the build adds, +1 for the fix helper.
+          count="$(find "$root/opt/dezirojoy" -type f | wc -l)"
+          expected="$(find "publish/${{ matrix.rid }}" -type f | wc -l)"
+          [ "$count" -ge $((expected + 2)) ] || { echo "only $count payload files for $expected publish files"; exit 1; }
+
+          got=$(file -b "$root/opt/dezirojoy/DeziroJoy")
+          echo "file: $got"
+          echo "$got" | grep -q "ELF" || { echo "not an ELF binary"; exit 1; }
+          echo "$got" | grep -q "$want" || { echo "wrong architecture, wanted $want"; exit 1; }
+          if [ '${{ matrix.rid }}' != "linux-x64" ]; then
+            echo "cross-compiled for $want, run check needs that architecture - skipped"
+            exit 0
+          fi
+          timeout 10 "$root/AppRun" --daemon > daemon.log 2>&1 && code=0 || code=$?
+          echo "daemon exit code: $code"
+          sed -n '1,20p' daemon.log
+          if [ "$code" -ne 124 ]; then
+            echo "daemon did not stay running (expected 124 from timeout)"
+            exit 1
+          fi
+
       - name: Checksum
         shell: bash
         run: |
           set -euo pipefail
           version='${{ steps.version.outputs.version }}'
           rid='${{ matrix.rid }}'
+          # Every asset gets its own sidecar checksum, so each leg enumerates
+          # its list: the Windows legs keep their single setup.exe, while each
+          # Linux leg now ships three formats - .deb, .rpm and AppImage.
           case "$rid" in
             win-x64|win-arm64)
-              artifact="DeziroJoy-${version}-${rid}-setup.exe" ;;
-            linux-x64)   artifact="DeziroJoy_${version}_amd64.deb" ;;
-            linux-arm64) artifact="DeziroJoy_${version}_arm64.deb" ;;
+              artifacts="DeziroJoy-${version}-${rid}-setup.exe" ;;
+            linux-x64)
+              artifacts="DeziroJoy_${version}_amd64.deb DeziroJoy-${version}-x86_64.rpm DeziroJoy-${version}-x86_64.AppImage" ;;
+            linux-arm64)
+              artifacts="DeziroJoy_${version}_arm64.deb DeziroJoy-${version}-aarch64.rpm DeziroJoy-${version}-aarch64.AppImage" ;;
             *) echo "unknown rid $rid"; exit 1 ;;
           esac
-          test -s "$artifact" || { echo "artifact missing: $artifact"; exit 1; }
-          sha256sum "$artifact" > "${artifact}.sha256"
-          ls -la "$artifact" "${artifact}.sha256"
+          for artifact in $artifacts; do
+            test -s "$artifact" || { echo "artifact missing: $artifact"; exit 1; }
+            sha256sum "$artifact" > "${artifact}.sha256"
+            ls -la "$artifact" "${artifact}.sha256"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -342,6 +543,10 @@ jobs:
             DeziroJoy-*-setup.exe.sha256
             DeziroJoy_*.deb
             DeziroJoy_*.deb.sha256
+            DeziroJoy-*.rpm
+            DeziroJoy-*.rpm.sha256
+            DeziroJoy-*.AppImage
+            DeziroJoy-*.AppImage.sha256
           if-no-files-found: error
 
   release:
@@ -519,8 +724,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          # GitHub marks the newest release without the flag as Latest, so
+          # --prerelease goes on only when the version carries a prerelease
+          # suffix: 0.0.1-beta.5-preview ships as a prerelease, a plain 0.0.1
+          # ships without it and is offered as the Latest release. The tag
+          # keeps its leading v; the check runs on the version it wraps.
+          version='${{ steps.version.outputs.tag }}'
+          flags=()
+          if [[ "${version#v}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "DeziroJoy ${{ steps.version.outputs.tag }}" \
             --notes-file body.md \
-            --prerelease \
-            artifacts/*/*.exe artifacts/*/*.deb artifacts/*/*.sha256
+            "${flags[@]}" \
+            artifacts/*/*.exe artifacts/*/*.deb artifacts/*/*.rpm artifacts/*/*.AppImage artifacts/*/*.sha256
