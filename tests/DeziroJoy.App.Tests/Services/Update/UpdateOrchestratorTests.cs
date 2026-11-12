@@ -60,10 +60,13 @@ public sealed class UpdateOrchestratorTests : IDisposable
         InstallKind? kind = null,
         IReadOnlyList<IUpdateInstaller>? installers = null,
         bool daemonStops = true,
-        bool trayExits = true)
+        bool trayExits = true,
+        HttpMessageHandler? handler = null,
+        Func<CancellationToken, Task<bool>>? stopDaemon = null,
+        Func<CancellationToken, Task<bool>>? askTrayExit = null)
     {
         var payload = Encoding.UTF8.GetBytes("the deb payload");
-        var handler = new StubHandler(url => url switch
+        handler ??= new StubHandler(url => url switch
         {
             PackageUrl => new StringContent(Encoding.UTF8.GetString(payload)),
             SidecarUrl => new StringContent($"{ChecksumFor(payload)}\n"),
@@ -75,16 +78,16 @@ public sealed class UpdateOrchestratorTests : IDisposable
             new UpdateDownloader(handler, TimeSpan.FromSeconds(10), () => _cache),
             installers ?? [_installer],
             detectInstall: () => new InstallKindInfo(kind ?? InstallKind.Deb, "linux-x64"),
-            stopDaemon: _ =>
+            stopDaemon: stopDaemon ?? (_ =>
             {
                 _log.Add("daemon");
                 return Task.FromResult(daemonStops);
-            },
-            askTrayExit: _ =>
+            }),
+            askTrayExit: askTrayExit ?? (_ =>
             {
                 _log.Add("tray");
                 return Task.FromResult(trayExits);
-            });
+            }));
     }
 
     [Fact]
@@ -330,6 +333,154 @@ public sealed class UpdateOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Second_Install_While_One_Is_Running_Is_Refused_Without_Touching_State()
+    {
+        // The stop sequence must run once: a double-clicked install button that stopped the
+        // daemon, the tray and the installer twice is exactly what a real installer cannot
+        // survive - and the refusal must not overwrite the phase of the install under way.
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var orchestrator = Orchestrator(installers: [new RecordingInstaller(() => _log.Add("install"), gate.Task)]);
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+        await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var first = orchestrator.InstallAsync(TestContext.Current.CancellationToken);
+        var second = await orchestrator.InstallAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(second);
+        Assert.Equal(UpdatePhase.Installing, orchestrator.Phase);
+        Assert.True(orchestrator.IsBusy);
+
+        gate.SetResult();
+        Assert.True(await first, orchestrator.ErrorMessage);
+
+        Assert.Equal(["daemon", "tray", "install"], _log);
+        Assert.Equal(UpdatePhase.Restarting, orchestrator.Phase);
+    }
+
+    [Fact]
+    public async Task A_Download_Started_Twice_Does_Not_Overwrite_The_First_One()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var orchestrator = Orchestrator(handler: new GatedHandler(gate.Task));
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+
+        var first = orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var second = await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(second);
+        Assert.Equal(UpdatePhase.Downloading, orchestrator.Phase);
+        Assert.True(orchestrator.IsBusy);
+
+        gate.SetResult();
+        Assert.True(await first, orchestrator.ErrorMessage);
+        Assert.Equal(UpdatePhase.ReadyToInstall, orchestrator.Phase);
+    }
+
+    [Fact]
+    public async Task A_Cancelled_Check_Leaves_The_Flow_Not_Busy()
+    {
+        var orchestrator = Orchestrator(
+            new FakeUpdateService(
+                Task.FromException<UpdateCheckResult>(new OperationCanceledException())));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            orchestrator.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(UpdatePhase.Failed, orchestrator.Phase);
+        Assert.False(orchestrator.IsBusy, "a cancelled check must not refuse every later one");
+        Assert.Contains("已取消", orchestrator.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task A_Cancelled_Download_Leaves_The_Flow_Not_Busy()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var orchestrator = Orchestrator(handler: new CancellingHandler(cancellation.Token));
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+
+        var download = orchestrator.DownloadAsync(cancellationToken: cancellation.Token);
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download);
+
+        Assert.Equal(UpdatePhase.Failed, orchestrator.Phase);
+        Assert.False(orchestrator.IsBusy);
+        Assert.Contains("已取消", orchestrator.ErrorMessage);
+        Assert.Empty(Directory.GetFiles(_cache));
+    }
+
+    [Fact]
+    public async Task A_Cancelled_Install_Leaves_The_Flow_Not_Busy()
+    {
+        var orchestrator = Orchestrator(
+            stopDaemon: _ => throw new OperationCanceledException());
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+        await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            orchestrator.InstallAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(UpdatePhase.Failed, orchestrator.Phase);
+        Assert.False(orchestrator.IsBusy);
+        Assert.Contains("已取消", orchestrator.ErrorMessage);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_Relaunch_Flag_Is_Set_Before_The_Restart_Is_Announced(bool relaunchHandled)
+    {
+        // The host cannot ask the installer afterwards, so the flag has to be readable at the
+        // moment the restart is announced - that is when it decides whether to relaunch.
+        _installer.Outcome = UpdateInstallResult.Ok(relaunchHandled);
+        var orchestrator = Orchestrator();
+        var seen = false;
+        orchestrator.RestartRequested += () => seen = orchestrator.RelaunchHandled;
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+        await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(await orchestrator.InstallAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(relaunchHandled, orchestrator.RelaunchHandled);
+        Assert.Equal(relaunchHandled, seen);
+    }
+
+    [Fact]
+    public async Task An_Injected_Dependency_Is_Not_Disposed_With_The_Orchestrator()
+    {
+        // A caller that shares one UpdateService between the existing check surface and the
+        // orchestrator must not have its HttpClient killed by disposing the orchestrator.
+        var service = new TrackingUpdateService(UpdateCheckResult.Available(Release()));
+        var payload = Encoding.UTF8.GetBytes("the deb payload");
+        var downloader = new UpdateDownloader(
+            new StubHandler(url => url switch
+            {
+                PackageUrl => new StringContent(Encoding.UTF8.GetString(payload)),
+                SidecarUrl => new StringContent($"{ChecksumFor(payload)}\n"),
+                _ => (HttpContent?)null,
+            }),
+            TimeSpan.FromSeconds(10),
+            () => _cache);
+
+        var orchestrator = new UpdateOrchestrator(
+            service,
+            downloader,
+            [_installer],
+            detectInstall: () => new InstallKindInfo(InstallKind.Deb, "linux-x64"));
+        orchestrator.Dispose();
+
+        Assert.False(service.Disposed);
+
+        // The injected downloader still works: a disposed one would throw instead.
+        var download = await downloader.DownloadAsync(
+            new ReleaseAsset { Name = PackageName, DownloadUrl = PackageUrl, Size = payload.Length },
+            new ReleaseAsset { Name = PackageName + ".sha256", DownloadUrl = SidecarUrl },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(download.Succeeded, download.ErrorMessage);
+    }
+
+    [Fact]
     public async Task The_Placeholder_Installer_Supports_Nothing_And_Says_Why()
     {
         var installer = new PendingPlatformUpdateInstaller();
@@ -376,7 +527,13 @@ public sealed class UpdateOrchestratorTests : IDisposable
     {
         private readonly Action? _onInstall;
 
-        public RecordingInstaller(Action? onInstall = null) => _onInstall = onInstall;
+        private readonly Task? _gate;
+
+        public RecordingInstaller(Action? onInstall = null, Task? gate = null)
+        {
+            _onInstall = onInstall;
+            _gate = gate;
+        }
 
         public bool Handled { get; private set; }
 
@@ -386,16 +543,78 @@ public sealed class UpdateOrchestratorTests : IDisposable
 
         public bool Supports(InstallKind kind) => true;
 
-        public Task<UpdateInstallResult> InstallAsync(
+        public async Task<UpdateInstallResult> InstallAsync(
             UpdateInstallRequest request,
             CancellationToken cancellationToken)
         {
             _onInstall?.Invoke();
+            if (_gate is { } gate)
+            {
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             Handled = true;
             LastRequest = request;
-            return Task.FromResult(Outcome);
+            return Outcome;
         }
     }
+
+    private sealed class TrackingUpdateService(UpdateCheckResult result) : IUpdateService, IDisposable
+    {
+        public bool Disposed { get; private set; }
+
+        public string CurrentVersionText => "0.0.1-beta.3-preview";
+
+        public Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(result);
+
+        public void Dispose() => Disposed = true;
+    }
+
+    /// <summary>
+    /// Serves the checksum sidecar at once and holds the package back until the gate opens, so
+    /// a download can be observed while it is still running.
+    /// </summary>
+    private sealed class GatedHandler(Task gate) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            if (url == SidecarUrl)
+            {
+                return Ok(new StringContent($"{ChecksumFor(Encoding.UTF8.GetBytes("the deb payload"))}\n"));
+            }
+
+            await gate.WaitAsync(cancellationToken);
+            return Ok(new StringContent("the deb payload"));
+        }
+    }
+
+    /// <summary>
+    /// Serves the checksum sidecar at once and then waits on the caller's token, so a
+    /// cancellation lands in the middle of a download exactly as a real network drop would.
+    /// </summary>
+    private sealed class CancellingHandler(CancellationToken token) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            if (url == SidecarUrl)
+            {
+                return Ok(new StringContent($"{ChecksumFor(Encoding.UTF8.GetBytes("the deb payload"))}\n"));
+            }
+
+            await Task.Delay(System.Threading.Timeout.Infinite, token);
+            throw new InvalidOperationException("the cancellation should have ended this first");
+        }
+    }
+
+    private static HttpResponseMessage Ok(HttpContent content)
+        => new(HttpStatusCode.OK) { Content = content };
 
     private sealed class SyncProgress(Action<double> report) : IProgress<double>
     {

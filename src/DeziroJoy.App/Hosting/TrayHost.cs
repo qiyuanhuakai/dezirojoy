@@ -658,7 +658,15 @@ internal static class TrayHost
             activation.ShowRequested += ShowAsync;
             activation.ExitRequested += () =>
             {
-                ExitTray(daemonAlreadyStopped: true);
+                if (!ExitTray(daemonAlreadyStopped: true))
+                {
+                    // The server turns a faulted handler into Accepted=false, so the peer
+                    // learns at once that the tray is not going away instead of waiting out
+                    // its whole vanish budget for the same answer.
+                    return Task.FromException(
+                        new InvalidOperationException("the tray could not retire"));
+                }
+
                 return Task.CompletedTask;
             };
             activation.BeginServing();

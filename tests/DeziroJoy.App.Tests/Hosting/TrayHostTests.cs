@@ -491,6 +491,30 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task An_Exit_Request_Is_Refused_When_The_Tray_Cannot_Retire()
+    {
+        // The daemon refuses the shutdown and survives the kill, so the tray does not retire:
+        // the peer must be told at once instead of being acked and then waiting out its whole
+        // vanish budget for the tray that never left.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        using var activation = GuiActivationServer.CreatePending(identity, GuiInstanceRole.Tray);
+        var fixture = BuildTray(
+            activation: activation,
+            daemonPipeAnswers: () => true,
+            daemonShutdown: _ => Task.FromResult(false),
+            daemonSurvivesKill: true);
+
+        var accepted = await GuiActivationClient.TryExitAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(accepted);
+        Assert.Empty(fixture.Shutdowns);
+        Assert.DoesNotContain("shutdown", fixture.Order);
+    }
+
+    [AvaloniaFact]
     public void The_Daemon_Supervisor_Kills_An_Owned_Child_Only_After_Graceful_Stop_Fails()
     {
         var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
@@ -797,12 +821,15 @@ public sealed class TrayHostTests : IDisposable
         Func<CancellationToken, Task<bool>>? daemonShutdown = null,
         Func<bool>? reacquireInstance = null,
         GuiActivationServer? activation = null,
-        Func<bool>? daemonPipeAnswers = null)
+        Func<bool>? daemonPipeAnswers = null,
+        bool daemonSurvivesKill = false)
     {
         var order = new List<string>();
         var launcher = new FakeLauncher
         {
-            Daemon = daemonLaunchesSucceed ? new FakeProcessHandle() : null,
+            Daemon = daemonLaunchesSucceed
+                ? new FakeProcessHandle { SurvivesKill = daemonSurvivesKill }
+                : null,
             Render = new FakeProcessHandle(),
             OnLaunch = info => order.Add(
                 info.Arguments.Contains("--gui", StringComparison.Ordinal) ? "spawn-render" : "spawn-daemon"),

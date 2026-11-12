@@ -46,10 +46,12 @@ public enum UpdatePhase
 /// rpm cannot replace a binary a running process has mapped (ETXTBSY), so the daemon and the
 /// tray must both be gone before the installer runs. On Windows the elevated daemon can only
 /// be stopped over its IPC channel - a medium-integrity process cannot terminate it - which
-/// is exactly what the default daemon seam does. The tray is asked to exit over the
-/// activation channel, because a tray left running holds the old binary and the instance
-/// lease: without the request, a relaunch on Linux would wake the old tray instead of the
-/// new copy.
+/// is exactly what the default daemon seam does, over an endpoint that never starts a daemon:
+/// a liveness probe that launched one would pop UAC for a daemon that was not even running,
+/// and after a successful shutdown would resurrect the daemon it just stopped. The tray is
+/// asked to exit over the activation channel, because a tray left running holds the old
+/// binary and the instance lease: without the request, a relaunch on Linux would wake the old
+/// tray instead of the new copy.
 /// </para>
 /// <para>
 /// The restart is deliberately not this class's job. The platform installers arrange it -
@@ -98,13 +100,14 @@ public sealed class UpdateOrchestrator : IDisposable
         Func<CancellationToken, Task<bool>>? stopDaemon = null,
         Func<CancellationToken, Task<bool>>? askTrayExit = null)
     {
-        _updateService = Track(updateService ?? new UpdateService());
-        _downloader = Track(downloader ?? new UpdateDownloader());
+        _updateService = updateService ?? Track(new UpdateService());
+        _downloader = downloader ?? Track(new UpdateDownloader());
         _installers = installers is null
             ? [new PendingPlatformUpdateInstaller()]
             : [.. installers];
         _detectInstall = detectInstall ?? InstallKindDetector.Detect;
-        _stopDaemon = stopDaemon ?? UpdateProcessCoordinator.StopDaemonAsync;
+        _stopDaemon = stopDaemon ?? (cancellationToken =>
+            UpdateProcessCoordinator.StopDaemonAsync(cancellationToken));
         _askTrayExit = askTrayExit ?? UpdateProcessCoordinator.AskTrayExitAsync;
     }
 
@@ -132,19 +135,35 @@ public sealed class UpdateOrchestrator : IDisposable
     /// <summary>True while a step that must not be re-entered is running.</summary>
     public bool IsBusy => Phase is UpdatePhase.Checking or UpdatePhase.Downloading or UpdatePhase.Installing;
 
-    /// <summary>Raised whenever the phase, the status text or the progress moved.</summary>
+    /// <summary>
+    /// Raised whenever the phase or the status text moved. Progress does not raise it - a
+    /// caller that wants it passes its own <see cref="IProgress{T}"/> to
+    /// <see cref="DownloadAsync"/> and reads <see cref="DownloadProgress"/>.
+    /// </summary>
     public event Action? StateChanged;
 
     /// <summary>
-    /// Raised once the new version is in place. The host shuts its GUI down; the installer
-    /// has already arranged the relaunch (or the host must, when it did not).
+    /// Raised once the new version is in place, with <see cref="RelaunchHandled"/> already
+    /// set: the host shuts its GUI down and, when the installer did not arrange the relaunch
+    /// itself, starts the successor.
     /// </summary>
     public event Action? RestartRequested;
 
     /// <summary>
+    /// Whether the installer that just ran arranged the relaunch itself. Set before
+    /// <see cref="RestartRequested"/> fires, so the handler knows whether it has to start the
+    /// successor: Windows relaunches from the setup program's conditional [Run] entry, the
+    /// Linux packages from a detached chain, an AppImage by starting the file it renamed into
+    /// place - and an installer that did none of that leaves the work to the host.
+    /// </summary>
+    public bool RelaunchHandled { get; private set; }
+
+    /// <summary>
     /// Queries the releases list. The result is the underlying
     /// <see cref="IUpdateService.CheckForUpdateAsync"/> result, so the caller keeps the
-    /// network, timeout and payload messages it already knows.
+    /// network, timeout and payload messages it already knows. A cancelled
+    /// <paramref name="cancellationToken"/> throws after the phase moved to
+    /// <see cref="UpdatePhase.Failed"/>.
     /// </summary>
     public Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
@@ -160,52 +179,65 @@ public sealed class UpdateOrchestrator : IDisposable
     {
         Enter(UpdatePhase.Checking, "正在检查更新…");
 
-        var result = await _updateService.CheckForUpdateAsync(cancellationToken).ConfigureAwait(false);
-
-        switch (result.Status)
+        try
         {
-            case UpdateCheckStatus.UpdateAvailable:
-                Latest = result.Latest;
-                _package = null;
-                DownloadProgress = 0d;
-                Enter(UpdatePhase.Available, $"发现新版本 {result.Latest?.TagName}。");
-                break;
+            var result = await _updateService.CheckForUpdateAsync(cancellationToken).ConfigureAwait(false);
 
-            case UpdateCheckStatus.UpToDate:
-                Latest = null;
-                _package = null;
-                Enter(UpdatePhase.UpToDate, "当前已是最新版本。");
-                break;
+            switch (result.Status)
+            {
+                case UpdateCheckStatus.UpdateAvailable:
+                    Latest = result.Latest;
+                    _package = null;
+                    DownloadProgress = 0d;
+                    Enter(UpdatePhase.Available, $"发现新版本 {result.Latest?.TagName}。");
+                    break;
 
-            default:
-                Enter(
-                    UpdatePhase.Failed,
-                    "检查更新失败。",
-                    result.ErrorMessage ?? "检查更新失败，请稍后再试。");
-                break;
+                case UpdateCheckStatus.UpToDate:
+                    Latest = null;
+                    _package = null;
+                    Enter(UpdatePhase.UpToDate, "当前已是最新版本。");
+                    break;
+
+                default:
+                    Enter(
+                        UpdatePhase.Failed,
+                        "检查更新失败。",
+                        result.ErrorMessage ?? "检查更新失败，请稍后再试。");
+                    break;
+            }
+
+            return result;
         }
-
-        return result;
+        catch (OperationCanceledException)
+        {
+            // A cancelled caller token is the one exception this flow propagates. The phase
+            // must not stay busy, or every later call would be refused forever.
+            Fail("已取消。", "更新已取消。");
+            throw;
+        }
     }
 
     /// <summary>
     /// Downloads the package this install form needs and verifies it against the release's
     /// SHA256 sidecar. A form with no package - Flatpak, a portable copy - never downloads
-    /// anything: the user is told what to do instead.
+    /// anything: the user is told what to do instead. A cancelled
+    /// <paramref name="cancellationToken"/> throws after the phase moved to
+    /// <see cref="UpdatePhase.Failed"/>.
     /// </summary>
     public async Task<bool> DownloadAsync(
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        if (Latest is null)
+        if (IsBusy)
         {
-            Fail("下载失败。", "尚未发现可用的新版本，请先检查更新。");
+            // Deliberately no state change: an operation is already in flight, and reporting
+            // this one as failed would overwrite the phase that is still running.
             return false;
         }
 
-        if (Phase is UpdatePhase.Downloading or UpdatePhase.Checking or UpdatePhase.Installing)
+        if (Latest is null)
         {
-            Fail("下载失败。", "正在处理更新，请稍候再试。");
+            Fail("下载失败。", "尚未发现可用的新版本，请先检查更新。");
             return false;
         }
 
@@ -228,32 +260,51 @@ public sealed class UpdateOrchestrator : IDisposable
 
         Enter(UpdatePhase.Downloading, $"正在下载 {selection.PackageName}…");
 
-        var result = await _downloader
-            .DownloadAsync(
-                selection.Asset,
-                selection.ChecksumAsset,
-                new ProgressForward(progress, value => DownloadProgress = value),
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!result.Succeeded || result.FilePath is null)
+        try
         {
-            Fail("下载失败。", result.ErrorMessage ?? "下载更新包失败，请稍后再试。");
-            return false;
-        }
+            var result = await _downloader
+                .DownloadAsync(
+                    selection.Asset,
+                    selection.ChecksumAsset,
+                    new ProgressForward(progress, value => DownloadProgress = value),
+                    cancellationToken)
+                .ConfigureAwait(false);
 
-        _package = new VerifiedPackage(selection, result.FilePath);
-        Enter(UpdatePhase.ReadyToInstall, $"更新包已下载并校验通过（{selection.PackageName}）。");
-        return true;
+            if (!result.Succeeded || result.FilePath is null)
+            {
+                Fail("下载失败。", result.ErrorMessage ?? "下载更新包失败，请稍后再试。");
+                return false;
+            }
+
+            _package = new VerifiedPackage(selection, result.FilePath);
+            Enter(UpdatePhase.ReadyToInstall, $"更新包已下载并校验通过（{selection.PackageName}）。");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // The downloader cleans up its partial file and rethrows on a cancelled caller
+            // token; the phase must not stay busy, or every later call would be refused.
+            Fail("已取消。", "更新已取消。");
+            throw;
+        }
     }
 
     /// <summary>
     /// Installs the verified package. Everything that must be stopped is stopped first, and
     /// nothing is stopped when the install cannot even be attempted: the capability gate runs
     /// before the daemon, so a machine without an installer keeps its daemon and its tray.
+    /// A cancelled <paramref name="cancellationToken"/> throws after the phase moved to
+    /// <see cref="UpdatePhase.Failed"/>.
     /// </summary>
     public async Task<bool> InstallAsync(CancellationToken cancellationToken = default)
     {
+        if (IsBusy)
+        {
+            // Same guard as the check: a second click must not run the stop sequence twice,
+            // and it must not overwrite the phase of the install already under way.
+            return false;
+        }
+
         var latest = Latest;
         if (_package is null || latest is null)
         {
@@ -269,44 +320,59 @@ public sealed class UpdateOrchestrator : IDisposable
             return false;
         }
 
-        Enter(UpdatePhase.Installing, "正在停止守护进程…");
-        if (!await _stopDaemon(cancellationToken).ConfigureAwait(false))
+        RelaunchHandled = false;
+
+        try
         {
-            Fail(
-                "安装失败。",
-                "无法停止守护进程，更新已取消；映射功能不受影响，请重试。");
-            return false;
-        }
+            Enter(UpdatePhase.Installing, "正在停止守护进程…");
+            if (!await _stopDaemon(cancellationToken).ConfigureAwait(false))
+            {
+                Fail(
+                    "安装失败。",
+                    "无法停止守护进程，更新已取消；映射功能不受影响，请重试。");
+                return false;
+            }
 
-        Enter(UpdatePhase.Installing, "正在请托盘退出…");
-        if (!await _askTrayExit(cancellationToken).ConfigureAwait(false))
+            Enter(UpdatePhase.Installing, "正在请托盘退出…");
+            if (!await _askTrayExit(cancellationToken).ConfigureAwait(false))
+            {
+                Fail(
+                    "安装失败。",
+                    "无法请托盘退出，更新已取消；守护进程已停止，请手动退出托盘后重启应用。");
+                return false;
+            }
+
+            Enter(UpdatePhase.Installing, "正在安装更新…");
+
+            var request = new UpdateInstallRequest(
+                install.Kind,
+                install.Rid,
+                latest.Version,
+                latest.TagName,
+                _package.Path,
+                _package.Selection.PackageName);
+
+            var outcome = await installer.InstallAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!outcome.Succeeded)
+            {
+                Fail("安装失败。", outcome.ErrorMessage ?? "安装更新失败，请稍后再试。");
+                return false;
+            }
+
+            // Read by the host when RestartRequested fires, so it knows whether it still has
+            // to start the successor itself.
+            RelaunchHandled = outcome.RelaunchHandled;
+            Enter(UpdatePhase.Restarting, "更新已安装，正在重启…");
+            RestartRequested?.Invoke();
+            return true;
+        }
+        catch (OperationCanceledException)
         {
-            Fail(
-                "安装失败。",
-                "无法请托盘退出，更新已取消；守护进程已停止，请手动退出托盘后重启应用。");
-            return false;
+            // Whatever was stopped before the cancel is described by the message: the install
+            // did not finish, and the phase must not stay busy.
+            Fail("已取消。", "安装已取消；如已停止守护进程或托盘，请重启应用。");
+            throw;
         }
-
-        Enter(UpdatePhase.Installing, "正在安装更新…");
-
-        var request = new UpdateInstallRequest(
-            install.Kind,
-            install.Rid,
-            latest.Version,
-            latest.TagName,
-            _package.Path,
-            _package.Selection.PackageName);
-
-        var outcome = await installer.InstallAsync(request, cancellationToken).ConfigureAwait(false);
-        if (!outcome.Succeeded)
-        {
-            Fail("安装失败。", outcome.ErrorMessage ?? "安装更新失败，请稍后再试。");
-            return false;
-        }
-
-        Enter(UpdatePhase.Restarting, "更新已安装，正在重启…");
-        RestartRequested?.Invoke();
-        return true;
     }
 
     /// <summary>
