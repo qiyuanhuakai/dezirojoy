@@ -297,12 +297,16 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Stops the fire-and-forget auto-download the startup check started and releases the
     /// cancel sources. Called as the window goes away, so no download is still running against
-    /// an orchestrator about to be disposed.
+    /// an orchestrator about to be disposed. Both sources are cancelled before they are
+    /// disposed: a download in flight must take its own cancellation path - the downloader
+    /// deletes its partial file on a cancelled token - rather than discover a disposed source
+    /// and throw past that cleanup.
     /// </summary>
     public void Dispose()
     {
         _lifetime.Cancel();
         _lifetime.Dispose();
+        _downloadCancel?.Cancel();
         _downloadCancel?.Dispose();
         GC.SuppressFinalize(this);
     }

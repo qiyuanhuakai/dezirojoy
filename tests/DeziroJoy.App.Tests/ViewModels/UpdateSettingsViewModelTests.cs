@@ -376,6 +376,28 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Teardown_Cancel_During_The_Download_Says_Nothing()
+    {
+        var vm = Card(null, Orchestrator(handler: new GatedHandler()));
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+
+        using var teardown = new CancellationTokenSource();
+        var download = vm.DownloadAsync(teardown.Token);
+
+        Assert.True(vm.IsDownloading);
+
+        // The window going away cancels the caller's token, not the card's own 取消 source:
+        // the downloader cleans up its partial file on that token, and the panel says nothing
+        // about the aborted download - exactly as a cancelled check always has.
+        teardown.Cancel();
+        Assert.False(await download);
+
+        Assert.False(vm.IsDownloading);
+        Assert.False(vm.HasResult);
+        Assert.Equal(string.Empty, vm.ResultText);
+    }
+
+    [Fact]
     public async Task A_Failed_Download_Is_Presented_In_Chinese_And_Stays_Retryable()
     {
         var vm = Card(null, Orchestrator(handler: new MissingSidecarHandler()));
@@ -506,6 +528,34 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
         // the old version from the old inode and says so, instead of exiting into nothing.
         Assert.Equal(0, restarted);
         Assert.Empty(launcher.Calls);
+        Assert.True(vm.IsResultError);
+        Assert.Contains("手动重新打开", vm.ResultText);
+    }
+
+    [Fact]
+    public async Task A_Successor_Chain_That_Cannot_Start_Keeps_The_App_Running_With_An_Honest_Message()
+    {
+        var image = Path.Combine(_directory, "DeziroJoy-0.0.2-x86_64.AppImage");
+        File.WriteAllText(image, "NEW IMAGE");
+        var launcher = new RecordingLauncher { Next = false };
+        var vm = Card(
+            null,
+            Orchestrator(
+                kind: InstallKind.AppImage,
+                installers: [new RecordingInstaller(relaunchHandled: false)]),
+            appImagePath: () => image,
+            launcher: launcher);
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        var restarted = 0;
+        vm.RestartRequested += (_, _) => restarted++;
+        await vm.InstallUpdateCommand.ExecuteAsync(null);
+
+        // The launch was attempted and refused: the image is in place, but exiting into an app
+        // that never starts would be worse - this process keeps running the old version.
+        Assert.Single(launcher.Calls);
+        Assert.Equal(0, restarted);
         Assert.True(vm.IsResultError);
         Assert.Contains("手动重新打开", vm.ResultText);
     }
@@ -649,10 +699,13 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
     {
         public List<ProcessStartInfo> Calls { get; } = [];
 
+        /// <summary>What the next Start answers; false models a chain that could not be started.</summary>
+        public bool Next { get; set; } = true;
+
         public bool Start(ProcessStartInfo startInfo)
         {
             Calls.Add(startInfo);
-            return true;
+            return Next;
         }
     }
 }
