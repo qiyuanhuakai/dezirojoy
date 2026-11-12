@@ -262,6 +262,30 @@ public sealed class UpdateDownloaderTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Cache_That_Cannot_Be_Written_To_Is_Reported_As_A_Download_Failure()
+    {
+        // The package's own path is taken by a directory, so the partial file cannot be
+        // created: that is a failure of the place the package was going, not of the package,
+        // and it must not escape as an exception.
+        var bytes = Encoding.UTF8.GetBytes("the deb payload");
+        _handler.Serve(
+            "https://example.invalid/DeziroJoy_0.0.1_amd64.deb",
+            new StringContent(Encoding.UTF8.GetString(bytes)));
+        _handler.Serve(
+            "https://example.invalid/DeziroJoy_0.0.1_amd64.deb.sha256",
+            new StringContent($"{ChecksumFor(bytes)}\n"));
+        Directory.CreateDirectory(Path.Combine(_cache, "DeziroJoy_0.0.1_amd64.deb.part"));
+
+        var result = await _downloader.DownloadAsync(
+            Package(),
+            Sidecar("DeziroJoy_0.0.1_amd64.deb.sha256", string.Empty),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("无法写入", result.ErrorMessage);
+    }
+
+    [Fact]
     public async Task A_Package_Is_Streamed_To_The_Cache_Under_Its_Own_Name()
     {
         var bytes = Encoding.UTF8.GetBytes("appimage bytes");

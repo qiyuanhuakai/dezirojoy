@@ -446,6 +446,25 @@ public sealed class UpdateOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task An_Unexpected_Failure_Is_Reported_Instead_Of_Wedging_The_Flow()
+    {
+        // An exception nobody classified must not reach the host with the phase stuck at
+        // Installing: it becomes a presentable failure, and the flow is usable again.
+        var orchestrator = Orchestrator(
+            stopDaemon: _ => throw new InvalidOperationException("the seam exploded"));
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+        await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var installed = await orchestrator.InstallAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(installed);
+        Assert.Equal(UpdatePhase.Failed, orchestrator.Phase);
+        Assert.False(orchestrator.IsBusy, "an unclassified failure must not lock the flow");
+        Assert.Contains("意外错误", orchestrator.ErrorMessage);
+        Assert.Contains("the seam exploded", orchestrator.ErrorMessage);
+    }
+
+    [Fact]
     public async Task An_Injected_Dependency_Is_Not_Disposed_With_The_Orchestrator()
     {
         // A caller that shares one UpdateService between the existing check surface and the

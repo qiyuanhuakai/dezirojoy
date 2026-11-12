@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using DeziroJoy.App.Ipc;
 
 namespace DeziroJoy.App.Services;
@@ -42,10 +43,16 @@ internal static class UpdateProcessCoordinator
     /// endpoint; tests pass a fake and assert what the stop did.
     /// </param>
     /// <param name="stopBudget">How long the daemon gets to release the pipe after the shutdown.</param>
+    /// <param name="requestTimeout">
+    /// How long one daemon request may take. The controller links this into the handshake, so a
+    /// daemon that takes the pipe but never answers Hello gives up on this budget - which is a
+    /// timeout of this service, never a cancellation of the caller.
+    /// </param>
     public static async Task<bool> StopDaemonAsync(
         CancellationToken cancellationToken,
         IDaemonEndpoint? endpoint = null,
-        TimeSpan? stopBudget = null)
+        TimeSpan? stopBudget = null,
+        TimeSpan? requestTimeout = null)
     {
         endpoint ??= new ProbeOnlyDaemonEndpoint();
         var budget = stopBudget ?? DaemonStopBudget;
@@ -56,12 +63,12 @@ internal static class UpdateProcessCoordinator
             return true;
         }
 
-        var acknowledged = await RequestShutdownAsync(endpoint, cancellationToken).ConfigureAwait(false);
+        // The shutdown's own result is deliberately not acted on: either way the goal state is
+        // the same - nothing resident - so that is what the bounded wait below checks. A daemon
+        // that refused the shutdown is still running when the budget expires, and that is the
+        // honest failure; one that died despite a lost ack is gone, and that is a success.
+        await RequestShutdownAsync(endpoint, requestTimeout, cancellationToken).ConfigureAwait(false);
 
-        // Either way the goal state is the same - nothing resident - so that is what the
-        // bounded wait checks. A daemon that refused the shutdown is still running when the
-        // budget expires, and that is the honest failure; one that died despite a lost ack is
-        // gone, and that is a success.
         var elapsed = Stopwatch.StartNew();
         while (true)
         {
@@ -85,18 +92,37 @@ internal static class UpdateProcessCoordinator
     /// is - so the exceptions of a connection that never happened are swallowed rather than
     /// reported as "could not stop the daemon".
     /// </summary>
+    /// <remarks>
+    /// The filter is the one <see cref="GuiActivationClient"/> uses for its exchange, and for
+    /// the same reason: a protocol failure and a timeout are facts about the peer, not about
+    /// the caller. The cancellation case is the subtle one - the controller links its own
+    /// request timeout into the handshake, so a daemon that takes the pipe and then goes quiet
+    /// raises <see cref="OperationCanceledException"/> with the caller's token perfectly
+    /// healthy. Letting that through would tell the host the user cancelled, and its message
+    /// would claim nothing was stopped while the daemon is in fact still running.
+    /// </remarks>
     private static async Task<bool> RequestShutdownAsync(
         IDaemonEndpoint endpoint,
+        TimeSpan? requestTimeout,
         CancellationToken cancellationToken)
     {
         try
         {
-            await using var controller = new DaemonController(endpoint);
+            await using var controller = new DaemonController(
+                endpoint,
+                requestTimeout: requestTimeout);
             await controller.ConnectAsync(cancellationToken).ConfigureAwait(false);
             return await controller.RequestShutdownAsync(cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // This service's own handshake budget expired, not the caller's patience: the
+            // vanish loop decides what the goal state is, exactly as for a refused shutdown.
+            return false;
+        }
         catch (Exception exception) when (exception
             is DaemonUnavailableException or DaemonHandshakeException or DaemonDisconnectedException
+            or FrameProtocolException or JsonException
             or IOException or TimeoutException or ObjectDisposedException)
         {
             return false;

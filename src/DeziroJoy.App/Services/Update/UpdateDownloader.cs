@@ -146,6 +146,13 @@ public sealed class UpdateDownloader : IDisposable
             DeleteQuietly(partialPath);
             return UpdateDownloadResult.Failed($"下载失败：更新包传输中断（{exception.Message}）。");
         }
+        catch (UnauthorizedAccessException exception)
+        {
+            // A read-only or permission-denied cache directory: the package is not the problem,
+            // the place it was going is.
+            DeleteQuietly(partialPath);
+            return UpdateDownloadResult.Failed($"下载失败：无法写入更新包（{exception.Message}）。");
+        }
         catch (OperationCanceledException)
         {
             // A cancelled download is the caller's business; the half-written file is not.

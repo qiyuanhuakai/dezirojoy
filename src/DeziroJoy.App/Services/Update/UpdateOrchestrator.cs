@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DeziroJoy.App.Services;
 
 /// <summary>Where the update flow stands. One value at a time, and every failure is final.</summary>
@@ -163,7 +165,9 @@ public sealed class UpdateOrchestrator : IDisposable
     /// <see cref="IUpdateService.CheckForUpdateAsync"/> result, so the caller keeps the
     /// network, timeout and payload messages it already knows. A cancelled
     /// <paramref name="cancellationToken"/> throws after the phase moved to
-    /// <see cref="UpdatePhase.Failed"/>.
+    /// <see cref="UpdatePhase.Failed"/>; every other failure - including one nothing
+    /// classified - comes back as a result with its reason, never as an exception that would
+    /// leave the phase wedged.
     /// </summary>
     public Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
@@ -215,6 +219,15 @@ public sealed class UpdateOrchestrator : IDisposable
             Fail("已取消。", "更新已取消。");
             throw;
         }
+        catch (Exception exception)
+        {
+            // Last resort: nothing here may reach the host as an unhandled exception with the
+            // phase wedged - an unexpected failure is a presentable one, with its reason, the
+            // way every other surface of this product reports failure.
+            Trace.WriteLine($"[DeziroJoy] update check failed unexpectedly: {exception}");
+            Fail("检查更新失败。", $"检查更新时发生意外错误：{exception.Message}");
+            return UpdateCheckResult.Failed(ErrorMessage!);
+        }
     }
 
     /// <summary>
@@ -222,7 +235,9 @@ public sealed class UpdateOrchestrator : IDisposable
     /// SHA256 sidecar. A form with no package - Flatpak, a portable copy - never downloads
     /// anything: the user is told what to do instead. A cancelled
     /// <paramref name="cancellationToken"/> throws after the phase moved to
-    /// <see cref="UpdatePhase.Failed"/>.
+    /// <see cref="UpdatePhase.Failed"/>; every other failure - including one nothing
+    /// classified - comes back as a reason on the phase, never as an exception that would
+    /// leave the phase wedged.
     /// </summary>
     public async Task<bool> DownloadAsync(
         IProgress<double>? progress = null,
@@ -287,6 +302,15 @@ public sealed class UpdateOrchestrator : IDisposable
             Fail("已取消。", "更新已取消。");
             throw;
         }
+        catch (Exception exception)
+        {
+            // Last resort - a failure the downloader did not classify (an unwritable cache
+            // directory, say) is still a presentable failure rather than an exception that
+            // would leave the host with a wedged phase.
+            Trace.WriteLine($"[DeziroJoy] update download failed unexpectedly: {exception}");
+            Fail("下载失败。", $"下载更新包时发生意外错误：{exception.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -294,7 +318,9 @@ public sealed class UpdateOrchestrator : IDisposable
     /// nothing is stopped when the install cannot even be attempted: the capability gate runs
     /// before the daemon, so a machine without an installer keeps its daemon and its tray.
     /// A cancelled <paramref name="cancellationToken"/> throws after the phase moved to
-    /// <see cref="UpdatePhase.Failed"/>.
+    /// <see cref="UpdatePhase.Failed"/>; every other failure - including one nothing
+    /// classified - comes back as a reason on the phase, never as an exception that would
+    /// leave the phase wedged at Installing.
     /// </summary>
     public async Task<bool> InstallAsync(CancellationToken cancellationToken = default)
     {
@@ -372,6 +398,14 @@ public sealed class UpdateOrchestrator : IDisposable
             // did not finish, and the phase must not stay busy.
             Fail("已取消。", "安装已取消；如已停止守护进程或托盘，请重启应用。");
             throw;
+        }
+        catch (Exception exception)
+        {
+            // Last resort - an installer that fails in a way it did not describe must not
+            // leave the host with an unhandled exception and the phase wedged at Installing.
+            Trace.WriteLine($"[DeziroJoy] update install failed unexpectedly: {exception}");
+            Fail("安装失败。", $"安装更新时发生意外错误：{exception.Message}");
+            return false;
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using Xunit;
@@ -117,6 +118,84 @@ public sealed class UpdateProcessCoordinatorTests
     }
 
     [Fact]
+    public async Task A_Daemon_That_Takes_The_Pipe_And_Goes_Quiet_Is_Not_A_Cancellation()
+    {
+        // The controller links its own request timeout into the handshake, so a daemon that
+        // accepts the connection and then says nothing raises OperationCanceledException with
+        // the caller's token perfectly healthy. Letting that through would tell the host the
+        // user cancelled - and its message would claim nothing was stopped while the daemon is
+        // still running. The honest answer is the vanish loop's: still there, so a failure.
+        var endpoint = new FakeDaemonEndpoint { IsAnswering = true, AnswerHello = false };
+
+        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
+            Cancellation,
+            endpoint,
+            TimeSpan.FromMilliseconds(300),
+            TimeSpan.FromMilliseconds(200));
+
+        Assert.False(stopped, endpoint.Diagnostics);
+        Assert.Equal(0, endpoint.LaunchRequests);
+    }
+
+    [Fact]
+    public async Task A_Cancelled_Stop_Still_Propagates_When_The_Handshake_Hangs()
+    {
+        // The filter above must not swallow the caller's own cancellation just because the
+        // daemon is also misbehaving: the two are told apart by the token, as everywhere else.
+        var endpoint = new FakeDaemonEndpoint { IsAnswering = true, AnswerHello = false };
+        using var cancellation = new CancellationTokenSource();
+
+        var stop = UpdateProcessCoordinator.StopDaemonAsync(
+            cancellation.Token,
+            endpoint,
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromSeconds(30));
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stop);
+    }
+
+    [Fact]
+    public async Task A_Frame_Protocol_Failure_Is_An_Honest_False_Not_An_Escape()
+    {
+        // FrameProtocolException derives from Exception, not IOException: outside the filter
+        // it would reach the host unhandled and leave the phase wedged at Installing.
+        var endpoint = new FakeDaemonEndpoint
+        {
+            IsAnswering = true,
+            HandshakeFailure = new FrameProtocolException("frame payload of 0 bytes"),
+        };
+
+        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
+            Cancellation,
+            endpoint,
+            TimeSpan.FromMilliseconds(300));
+
+        Assert.False(stopped, endpoint.Diagnostics);
+        Assert.Equal(0, endpoint.LaunchRequests);
+    }
+
+    [Fact]
+    public async Task A_Malformed_Payload_Is_An_Honest_False_Not_An_Escape()
+    {
+        // The other protocol exception the channel can raise: a payload that does not
+        // deserialize is a fact about the peer, not a crash of the update flow.
+        var endpoint = new FakeDaemonEndpoint
+        {
+            IsAnswering = true,
+            HandshakeFailure = new JsonException("the activation message deserialized to null"),
+        };
+
+        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
+            Cancellation,
+            endpoint,
+            TimeSpan.FromMilliseconds(300));
+
+        Assert.False(stopped, endpoint.Diagnostics);
+        Assert.Equal(0, endpoint.LaunchRequests);
+    }
+
+    [Fact]
     public async Task The_Production_Endpoint_Answers_The_Same_Way_Whatever_It_Is_Asked_About_Launching()
     {
         // A launch-capable endpoint answers the two differently: with a launch allowed it
@@ -177,6 +256,15 @@ public sealed class UpdateProcessCoordinatorTests
 
         /// <summary>Whether the handshake is accepted; a refusal also retires the daemon.</summary>
         public bool AcceptHandshake { get; init; } = true;
+
+        /// <summary>Whether the daemon answers the handshake at all.</summary>
+        public bool AnswerHello { get; init; } = true;
+
+        /// <summary>
+        /// What the channel raises instead of answering the handshake - a protocol failure the
+        /// coordinator has to classify rather than let escape.
+        /// </summary>
+        public Exception? HandshakeFailure { get; init; }
 
         /// <summary>How many times a launch would have been started.</summary>
         public int LaunchRequests { get; private set; }
@@ -247,6 +335,7 @@ public sealed class UpdateProcessCoordinatorTests
         private readonly Queue<IpcMessage> _incoming = [];
         private TaskCompletionSource<IpcMessage>? _waiting;
         private bool _closed;
+        private int _receives;
 
         public List<IpcMessage> Sent { get; } = [];
 
@@ -321,23 +410,47 @@ public sealed class UpdateProcessCoordinatorTests
             return Task.CompletedTask;
         }
 
-        public Task<IpcMessage> ReceiveAsync(CancellationToken cancellationToken)
+        public async Task<IpcMessage> ReceiveAsync(CancellationToken cancellationToken)
         {
+            if (_receives == 0)
+            {
+                // The first read of a connection is the handshake answer: this is where a
+                // daemon that took the pipe and then went quiet, or one that speaks a protocol
+                // this channel cannot read, shows itself.
+                _receives++;
+                if (endpoint.HandshakeFailure is { } failure)
+                {
+                    throw failure;
+                }
+
+                if (!endpoint.AnswerHello)
+                {
+                    // The controller's own request budget is what eventually gives up here, so
+                    // the token it hands in is not the caller's.
+                    await Task.Delay(System.Threading.Timeout.Infinite, cancellationToken);
+                }
+            }
+
+            IpcMessage? queued = null;
+            Task<IpcMessage>? pending = null;
             lock (_gate)
             {
                 if (_incoming.Count > 0)
                 {
-                    return Task.FromResult(_incoming.Dequeue());
+                    queued = _incoming.Dequeue();
                 }
-
-                if (_closed)
+                else if (_closed)
                 {
-                    return Task.FromException<IpcMessage>(new EndOfStreamException());
+                    throw new EndOfStreamException();
                 }
-
-                _waiting ??= new TaskCompletionSource<IpcMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-                return _waiting.Task.WaitAsync(cancellationToken);
+                else
+                {
+                    _waiting ??= new TaskCompletionSource<IpcMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    pending = _waiting.Task;
+                }
             }
+
+            return queued ?? await pending!.WaitAsync(cancellationToken);
         }
 
         private void Push(IpcMessage message)
