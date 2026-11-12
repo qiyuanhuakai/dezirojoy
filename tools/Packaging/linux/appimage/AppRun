@@ -4,7 +4,7 @@
 # The type-2 runtime execs this file with $APPDIR pointing at the mounted AppDir and
 # $APPIMAGE at the image file itself; the app reads both to recognize an AppImage
 # install. Neither variable exists when the AppDir is extracted by hand
-# (--appimage-extract, or the CI smoke test below), so the directory is resolved
+# (--appimage-extract, or a manual smoke test), so the directory is resolved
 # from $0 instead of trusted from the environment - the same line works in both
 # worlds.
 set -eu

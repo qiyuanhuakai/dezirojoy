@@ -142,9 +142,13 @@ artifact="DeziroJoy-${version}-${arch}.AppImage"
 
 # ARCH selects the image architecture (the tool otherwise guesses it from a bundled
 # .so and refuses on ambiguity); VERSION is stamped into the desktop entry as
-# X-AppImage-Version; -n skips the AppStream check, which needs appdata.xml the
-# project does not ship. The explicit destination is what pins the asset name.
-ARCH="$arch" VERSION="$version" \
+# X-AppImage-Version; TMPDIR pins the type-2 runtime's extraction directory - the
+# continuous runtime unpacks itself into $TMPDIR/appimage_extracted_<md5> and does
+# not remove it afterwards, so pointing it at the workdir routes that leftover into
+# the EXIT trap instead of stranding it in /tmp on every build; -n skips the
+# AppStream check, which needs appdata.xml the project does not ship. The explicit
+# destination is what pins the asset name.
+ARCH="$arch" VERSION="$version" TMPDIR="$work" \
   "$tool" --appimage-extract-and-run -n "$appdir" "$outdir/$artifact"
 
 if [ ! -s "$outdir/$artifact" ]; then
