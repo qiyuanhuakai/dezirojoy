@@ -69,15 +69,23 @@ public enum GuiInstanceRole
     Tray,
 }
 
+/// <summary>
+/// What a peer asks this GUI to do over the activation channel: show itself, answer a
+/// readiness probe, or exit. Exit exists for the update flow - an installer cannot replace a
+/// binary the tray is still running, and a relaunch would otherwise wake the old tray.
+/// </summary>
 public enum GuiActivationRequestKind
 {
     Show,
     Probe,
+    Exit,
 }
 
 /// <summary>
-/// GUI to GUI: show yourself, or probe whether the expected process role is ready. The added
-/// fields have defaults so a version-1 Show written by an older build retains its meaning.
+/// GUI to GUI: show yourself, answer a readiness probe, or exit. The added fields have
+/// defaults so a version-1 Show written by an older build retains its meaning, and an older
+/// peer that does not know <see cref="GuiActivationRequestKind.Exit"/> simply refuses it -
+/// which the caller turns into "close the tray by hand" instead of installing behind it.
 /// </summary>
 public sealed record GuiShowRequest(
     int Version,
@@ -191,9 +199,10 @@ internal interface IActivationPortal
 
 /// <summary>
 /// Serves the activation channel for the life of one GUI: every Show request is answered
-/// only after this GUI has restored its window, and a peer speaking another protocol
-/// version is refused instead of guessed at. Avalonia-free on purpose - it starts before
-/// the desktop lifetime does, and a channel failure must never be able to take the GUI down.
+/// only after this GUI has restored its window, an Exit request only after the exit path has
+/// run, and a peer speaking another protocol version is refused instead of guessed at.
+/// Avalonia-free on purpose - it starts before the desktop lifetime does, and a channel
+/// failure must never be able to take the GUI down.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -281,6 +290,14 @@ public sealed class GuiActivationServer : IDisposable
     /// ack is written only after it completes, bounded by <see cref="GuiActivationOptions.AckTimeout"/>.
     /// </summary>
     public event Func<Task>? ShowRequested;
+
+    /// <summary>
+    /// Raised when a peer asked this GUI to exit, which is how an updater clears a tray that
+    /// still runs the old binary. The handler runs the same exit path the tray menu uses -
+    /// stop the daemon, stop the render, retire - and the ack is written only after it
+    /// completes, so a peer that is told "accepted" can rely on the exit being under way.
+    /// </summary>
+    public event Func<Task>? ExitRequested;
 
     internal static GuiActivationServer StartActive(
         GuiInstanceIdentity identity,
@@ -514,6 +531,29 @@ public sealed class GuiActivationServer : IDisposable
         if (request.Kind == GuiActivationRequestKind.Probe)
         {
             return (true, null);
+        }
+
+        if (request.Kind == GuiActivationRequestKind.Exit)
+        {
+            var exitHandler = ExitRequested;
+            if (exitHandler is null)
+            {
+                return (false, "this GUI cannot be asked to exit");
+            }
+
+            try
+            {
+                await exitHandler().WaitAsync(_options.AckTimeout, cancellationToken).ConfigureAwait(false);
+                return (true, null);
+            }
+            catch (TimeoutException)
+            {
+                return (false, "the exit request timed out");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return (false, $"the exit request failed: {exception.Message}");
+            }
         }
 
         if (request.Kind != GuiActivationRequestKind.Show)
@@ -794,6 +834,23 @@ internal static class GuiActivationClient
             options,
             new GuiShowRequest(GuiActivationContract.ProtocolVersion, GuiActivationRequestKind.Probe, requiredRole),
             requiredRole,
+            cancellationToken);
+
+    /// <summary>
+    /// Asks the resident tray to exit. The answer is true only when a Tray-role peer accepted,
+    /// so a render process that happens to hold the lease never satisfies the request - and a
+    /// tray from an older build, which refuses the kind it does not know, is a plain false
+    /// that its caller reports as "close the tray by hand".
+    /// </summary>
+    public static Task<bool> TryExitAsync(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions options,
+        CancellationToken cancellationToken = default)
+        => TryExchangeAsync(
+            identity,
+            options,
+            new GuiShowRequest(GuiActivationContract.ProtocolVersion, GuiActivationRequestKind.Exit, GuiInstanceRole.Tray),
+            GuiInstanceRole.Tray,
             cancellationToken);
 
     private static async Task<bool> TryExchangeAsync(

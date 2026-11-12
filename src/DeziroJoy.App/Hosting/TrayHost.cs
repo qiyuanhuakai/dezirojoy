@@ -567,7 +567,8 @@ internal static class TrayHost
         Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>>? showPoll = null,
         Func<Task>? pollDelay = null,
         TimeSpan? pollBudget = null,
-        Func<bool>? reacquireInstance = null)
+        Func<bool>? reacquireInstance = null,
+        Func<bool>? isDaemonReachable = null)
     {
         themes.ApplyPersisted();
 
@@ -575,6 +576,7 @@ internal static class TrayHost
             => GuiActivationClient.TryProbeAsync(identity, GuiInstanceRole.Render, options, cancellationToken);
         pollDelay ??= static () => Task.Delay(ShowPollPause);
         var budget = pollBudget ?? ShowPollBudget;
+        isDaemonReachable ??= static () => DaemonSupervisor.IsDaemonReachable(IpcContract.PipeName);
         var handoverGate = new object();
         Task<bool>? handover = null;
 
@@ -617,27 +619,48 @@ internal static class TrayHost
             }
         }
 
+        // The menu exit and the update flow's Exit request share one path. The difference is
+        // the daemon: an updater has already stopped it over IPC - the only way an elevated
+        // daemon can be stopped at all - and a second refusal from a daemon that is already
+        // gone must not keep the tray, and with it the old binary, resident. When the mapping
+        // pipe still answers, the daemon is alive after all and the normal stop path runs, so
+        // the skip is verified rather than assumed.
+        bool ExitTray(bool daemonAlreadyStopped)
+        {
+            if (!daemonAlreadyStopped || isDaemonReachable())
+            {
+                if (!daemon.Stop())
+                {
+                    return false;
+                }
+            }
+
+            if (!render.Stop())
+            {
+                return false;
+            }
+
+            Retire(shutdown, lifetime);
+            return true;
+        }
+
         var tray = new TrayService(
             application,
             lifetime,
             themes,
             showMainWindow: async void () => await ShowAsync(),
-            exit: () =>
-            {
-                if (!daemon.Stop() || !render.Stop())
-                {
-                    return false;
-                }
-
-                Retire(shutdown, lifetime);
-                return true;
-            });
+            exit: () => ExitTray(daemonAlreadyStopped: false));
 
         tray.Install();
 
         if (activation is not null)
         {
             activation.ShowRequested += ShowAsync;
+            activation.ExitRequested += () =>
+            {
+                ExitTray(daemonAlreadyStopped: true);
+                return Task.CompletedTask;
+            };
             activation.BeginServing();
         }
 

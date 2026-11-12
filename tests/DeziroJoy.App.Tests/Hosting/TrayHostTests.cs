@@ -431,6 +431,66 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task An_Exit_Request_Retires_The_Tray_Without_Stopping_A_Daemon_That_Is_Already_Gone()
+    {
+        // The update flow stops the daemon first - over IPC, the only way an elevated daemon
+        // can be stopped at all - and only then asks the tray to exit. A second stop request
+        // to a daemon that is already gone cannot be acknowledged, so the tray must not treat
+        // that as a reason to stay resident with the old binary.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        using var activation = GuiActivationServer.CreatePending(identity, GuiInstanceRole.Tray);
+        var fixture = BuildTray(activation: activation, daemonPipeAnswers: () => false);
+
+        var accepted = await GuiActivationClient.TryExitAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(accepted, "the tray must accept an Exit request");
+        Assert.Single(fixture.Shutdowns);
+        Assert.DoesNotContain("stop-daemon", fixture.Order);
+        Assert.Contains("shutdown", fixture.Order);
+    }
+
+    [AvaloniaFact]
+    public async Task An_Exit_Request_Still_Stops_A_Daemon_Whose_Pipe_Answers()
+    {
+        // The skip above is verified, not assumed: when the mapping pipe still answers, the
+        // daemon is alive after all and the exit runs the same stop path the menu uses.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        using var activation = GuiActivationServer.CreatePending(identity, GuiInstanceRole.Tray);
+        var fixture = BuildTray(activation: activation, daemonPipeAnswers: () => true);
+
+        var accepted = await GuiActivationClient.TryExitAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(accepted, $"the exit was refused: {fixture.Order}");
+        Assert.Contains("stop-daemon", fixture.Order);
+        Assert.Single(fixture.Shutdowns);
+    }
+
+    [AvaloniaFact]
+    public async Task A_Render_Peer_Is_Never_The_Peer_An_Exit_Request_Reaches()
+    {
+        // The updater runs in the render process: an Exit request must name the tray role, so
+        // a window that happens to hold the lease is not asked to close itself.
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        using var activation = GuiActivationServer.CreatePending(identity, GuiInstanceRole.Render);
+        var fixture = BuildTray(activation: activation, daemonPipeAnswers: () => false);
+
+        var accepted = await GuiActivationClient.TryExitAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(accepted);
+        Assert.Empty(fixture.Shutdowns);
+        Assert.DoesNotContain("shutdown", fixture.Order);
+    }
+
+    [AvaloniaFact]
     public void The_Daemon_Supervisor_Kills_An_Owned_Child_Only_After_Graceful_Stop_Fails()
     {
         var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
@@ -735,7 +795,9 @@ public sealed class TrayHostTests : IDisposable
         Func<Task>? pollDelay = null,
         TimeSpan? pollBudget = null,
         Func<CancellationToken, Task<bool>>? daemonShutdown = null,
-        Func<bool>? reacquireInstance = null)
+        Func<bool>? reacquireInstance = null,
+        GuiActivationServer? activation = null,
+        Func<bool>? daemonPipeAnswers = null)
     {
         var order = new List<string>();
         var launcher = new FakeLauncher
@@ -802,7 +864,9 @@ public sealed class TrayHostTests : IDisposable
             {
                 order.Add("reacquire");
                 return reacquireInstance?.Invoke() ?? true;
-            });
+            },
+            activation: activation,
+            isDaemonReachable: daemonPipeAnswers);
 
         var fixture = new TrayFixture(
             tray,
