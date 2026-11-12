@@ -445,20 +445,24 @@ jobs:
           tools/Packaging/linux/appimage/build-appimage.sh "$version" '${{ matrix.rid }}' "publish/${{ matrix.rid }}" .
           test -s "DeziroJoy-${version}-${arch}.AppImage" || { echo "no AppImage produced"; exit 1; }
 
-      # --appimage-extract unpacks the image without FUSE, and the extracted
-      # tree is asserted statically: AppRun, the desktop entry, the root icon
-      # appimagetool links as .DirIcon, and an ELF binary of the right
-      # architecture. There is deliberately no hicolor tree inside the image -
-      # the icon travels as the root PNG and nothing inside a squashfs
-      # consumes /usr/share/icons - so the seven theme frames are asserted on
-      # the .deb and .rpm legs only. On linux-x64 the extracted AppRun then
-      # actually runs the daemon: a binary whose native dependencies fail to
-      # resolve exits immediately, a healthy one is still running when timeout
-      # kills it, which is exit code 124 - the same smoke the .deb install
-      # step performs, run from the extracted tree instead of an install
-      # location. linux-arm64 is cross-compiled and stays static-only, the
-      # convention every leg above uses for a binary that cannot execute on
-      # this runner.
+      # The image is unpacked without FUSE and the extracted tree is asserted
+      # statically: AppRun, the desktop entry, the root icon appimagetool links
+      # as .DirIcon, and an ELF binary of the right architecture. Unpacking is
+      # per-architecture: linux-x64 asks its own type-2 runtime with
+      # --appimage-extract, while linux-arm64 reads the squashfs payload out
+      # with unsquashfs - the aarch64 runtime embedded in that image cannot
+      # execute on this x64 runner (exit 126, "cannot execute binary file"),
+      # which is the failure this split removes. There is deliberately no
+      # hicolor tree inside the image - the icon travels as the root PNG and
+      # nothing inside a squashfs consumes /usr/share/icons - so the seven
+      # theme frames are asserted on the .deb and .rpm legs only. On linux-x64
+      # the extracted AppRun then actually runs the daemon: a binary whose
+      # native dependencies fail to resolve exits immediately, a healthy one is
+      # still running when timeout kills it, which is exit code 124 - the same
+      # smoke the .deb install step performs, run from the extracted tree
+      # instead of an install location. linux-arm64 is cross-compiled and stays
+      # static-only, the convention every leg above uses for a binary that
+      # cannot execute on this runner.
       - name: Validate the AppImage payload
         if: runner.os == 'Linux'
         shell: bash
@@ -477,9 +481,33 @@ jobs:
           # The type-2 runtime extracts into the current directory, so run it
           # from a scratch one and keep the tree out of the workspace.
           extract="$(mktemp -d)"
-          (cd "$extract" && "$GITHUB_WORKSPACE/$image" --appimage-extract) > extract.log 2>&1
-          sed -n '1,10p' extract.log
           root="$extract/squashfs-root"
+          if [ "$arch" = "x86_64" ]; then
+            # x64: the embedded runtime is native to this runner, so it
+            # unpacks itself with --appimage-extract.
+            (cd "$extract" && "$GITHUB_WORKSPACE/$image" --appimage-extract) > extract.log 2>&1
+          else
+            # arm64: the embedded runtime is aarch64 and cannot execute here,
+            # so read the squashfs payload out of the image directly. The
+            # superblock sits at an unaligned offset behind the runtime ELF,
+            # which plain unsquashfs cannot find: locate the squashfs magic
+            # ("hsqs") and pass the byte offset with -o. Every candidate is
+            # tried in order - the magic is a 4-byte string, and a spurious hit
+            # inside the runtime must not fail the step.
+            command -v unsquashfs >/dev/null 2>&1 || sudo apt-get install -y squashfs-tools
+            offsets="$(grep -abo hsqs "$image" | cut -d: -f1 || true)"
+            offset=""
+            for candidate in $offsets; do
+              rm -rf "$root"
+              if unsquashfs -o "$candidate" -d "$root" "$image" > extract.log 2>&1; then
+                offset="$candidate"
+                break
+              fi
+            done
+            test -n "$offset" || { echo "no squashfs payload found in $image"; sed -n '1,5p' extract.log 2>/dev/null || true; exit 1; }
+            echo "extracted squashfs payload at offset $offset"
+          fi
+          sed -n '1,10p' extract.log
           test -d "$root" || { echo "no squashfs-root extracted"; exit 1; }
 
           test -x "$root/AppRun" || { echo "AppRun missing from the image"; exit 1; }
