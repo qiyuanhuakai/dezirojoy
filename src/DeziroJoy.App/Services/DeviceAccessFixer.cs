@@ -190,7 +190,7 @@ public sealed class DeviceAccessFixer : IDeviceAccessFixer
             $"一键修复不可用：{reason}。请手动执行：{LinuxDeviceAccess.DeviceAccessGuidance}");
 
     private static string DescribeMissingHelper(string helper)
-        => $"找不到随包修复脚本 {helper}（只有通过 deb 安装才会随包提供一键修复）";
+        => $"找不到随包修复脚本 {helper}（deb/rpm 与 AppImage 安装均随包提供，请确认安装完整）";
 
     /// <summary>
     /// Why the elevated path did not run. A process that never started is pkexec itself being

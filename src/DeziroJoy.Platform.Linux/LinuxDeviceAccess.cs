@@ -33,11 +33,35 @@ public static class LinuxDeviceAccess
     public const string LingerCommand = "loginctl enable-linger $USER";
 
     /// <summary>
-    /// Where the packaged one-click fix helper lives. The installers ship the helper but never
-    /// run it: the app invokes it through pkexec only when the user asks for the fix, so the
-    /// opt-in principle (安装器不注册规则) survives the one-click path.
+    /// The file name of the packaged one-click fix helper, shipped beside the application binary
+    /// by every Linux format (.deb, .rpm and the AppImage's mounted AppDir).
     /// </summary>
-    public const string FixHelperPath = "/opt/dezirojoy/fix-device-access.sh";
+    private const string FixHelperFileName = "fix-device-access.sh";
+
+    /// <summary>
+    /// The absolute location the .deb and .rpm install the helper to. Kept as the fallback for a
+    /// copy whose <see cref="AppContext.BaseDirectory"/> is not its install directory; the helper
+    /// beside the running binary is always preferred when it exists.
+    /// </summary>
+    private const string DebFixHelperPath = "/opt/dezirojoy/fix-device-access.sh";
+
+    /// <summary>
+    /// Where the packaged one-click fix helper lives for THIS install form. The installers ship it
+    /// beside the application binary - <c>/opt/dezirojoy</c> for the .deb and .rpm, the mounted
+    /// AppDir's <c>opt/dezirojoy</c> for an AppImage - so it is resolved relative to the running
+    /// binary first, which is the payload directory on every packaged format; the absolute deb
+    /// path is the fallback. The installers ship the helper but never run it: the app invokes it
+    /// through pkexec only when the user asks for the fix, so the opt-in principle (安装器不注册规则)
+    /// survives the one-click path.
+    /// </summary>
+    public static string FixHelperPath
+    {
+        get
+        {
+            var beside = Path.Combine(AppContext.BaseDirectory, FixHelperFileName);
+            return File.Exists(beside) ? beside : DebFixHelperPath;
+        }
+    }
 
     /// <summary>
     /// What the one-click fix changes on the machine, stated before the user takes it: the
