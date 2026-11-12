@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, without the leading v (e.g. 0.0.1-beta.4-preview)'
+        description: 'Version to release, without the leading v (e.g. 0.0.1-beta.5-preview)'
         required: true
 
 permissions:
@@ -375,69 +375,68 @@ jobs:
           cat > body.md <<'NOTES'
           ## DeziroJoy vVERSION (beta preview)
 
-          本批重心在 Linux 运行时与配置体验：设置页新增应用内更新选项（检查更新、
-          前往下载、默认关闭的启动时自动检查）；单击 / 双击 / 长按三种手势互不
-          吞没；Leader 键与精准键的全局配置置顶到「按键配置」页并带实时冲突提示；
-          Linux 手柄检测改为内核级 evdev 诊断，区分无节点 / 无权限 / 无手柄并给出
-          可直接照抄的权限指引，且可在应用内安装 systemd 用户单元常驻服务（无需
-          管理员权限）。正式安装包沿用 Windows per-user 安装器（setup.exe，简体
-          中文界面、英文回退）与 Linux .deb，安装与卸载都走系统标准途径。仍属
-          beta 预览版，欢迎按
+          本批重心在 Linux 运行时修复与设备访问体验：beta.4 之后发现 Linux 上
+          注入因 uinput ioctl 常量错误而静默失效，本批修复，映射与复杂快捷键
+          恢复正常；Linux 安装包装入 hicolor 主题图标，应用菜单 / 任务栏 /
+          自启动图标与窗口大帧就位；设置页新增「修复设备访问权限」一键修复
+          （udev 规则 + input 组），无 polkit 代理时降级为可复制命令；evdev
+          轴处理全面健壮化（GAS/BRAKE 扳机轴、反向扳机、静止值播种、未识别轴
+          诊断），常驻服务状态与未处理轴诊断上浮到日志与状态行；Windows Guide
+          键不可用明示为 XInput 平台限制。正式安装包沿用 Windows per-user
+          安装器（setup.exe，简体中文界面、英文回退）与 Linux .deb，安装与
+          卸载都走系统标准途径。仍属 beta 预览版，欢迎按
           [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
 
           ### 本版更新
 
-          - **应用内更新选项**：设置页新增「更新」区——显示当前版本；「检查更新」
-            向 GitHub releases 列表（最近 10 个）查询并按发布时间取最新（本仓库
-            每个 release 都是 prerelease，`latest` 接口不可用）。发现新版本时显示
-            版本号、发布日期与「前往下载」链接（经系统默认浏览器打开发布页），
-            已是最新则明示；网络不通、超时（10 秒）、HTTP 错误与解析失败都以中文
-            可读消息呈现，不抛异常。只检查、不自动下载或安装。「启动时自动检查」
-            开关默认关闭、opt-in，随设置持久化；开启后主窗口启动时执行一次即发
-            即忘检查，结果只落在该面板。版本比较按 semver prerelease 优先级
-            （alpha < beta < preview < 正式版，数字标识按值比较）
-          - **单击 / 双击 / 长按共存修复**：同一个按钮同时配置单击 / 双击 / 长按时，
-            只要长按带自己的动作，快速单击不触发任何手势；按过双击窗口但未达长按
-            阈值就松手，同样什么都不触发——三种手势总有一个是死的。现在阈值前
-            松手一律触发单击，单击、双击、长按各按自己的时序解析，任意组合互不
-            吞没（含组合键、特殊键与复杂快捷键长按动作）；未配置的手势不产生
-            任何输出
-          - **特殊键配置置顶 + 冲突检测**：Leader 键与精准键是设备级共享配置，却
-            埋在各预设的映射行里。现在「按键配置」页顶部（映射列表之上、不随
-            列表滚动）新增「全局特殊键」分区：每种键一行，配了就说清触发按钮与
-            方式，没配也占位并说明如何配置；行的「编辑」打开的仍是原来的映射
-            编辑器。冲突检测实时运行，按物理按钮分组，只报引擎真实会出的问题——
-            Leader 单击键上的双击手势（切换被推迟到双击窗口结束）、长按重复触发
-            （按住期间反复切换）、同按钮另一条映射随全局键一起触发、手势位精准键
-            不生效、复合「轻点再按住」时序下跨配对的同发提示等；每条规则的话术
-            都经真实引擎验证。提示出现在映射行、全局分区、编辑器顶部三处，话术
-            一致；编辑草稿、切换预设、共享扇出后都实时刷新；只提示，不自动改
-            配置
-          - **Linux 设备访问诊断与权限指引**：手柄检测不再静默失败。evdev 扫描
-            改为枚举 /dev/input 目录（突破 event0..31 上限），open() 的 EACCES
-            与 errno、节点路径进入诊断；状态区与 daemon 启动摘要同源区分无输入
-            子系统 / 无节点 / 无权限 / 无手柄，并给出可操作指引：`sudo usermod
-            -aG input $USER` 后重新登录，或在 /etc/udev/rules.d/99-dezirojoy.rules
-            照抄两行规则（input 组可读全部 event 节点、/dev/uinput 静态节点可写）。
-            识别放宽：第二摇杆（ABS_RX/ABS_RY）或显式手柄按键（面部键簇、十字键、
-            BTN_JOYSTICK、BTN_TRIGGER_HAPPY）即判为手柄——街机摇杆不再漏掉，
-            触摸板 / 数位板（ABS_X+ABS_Y 形状）不误报。/dev/uinput 打不开时异常
-            消息附同一段权限文案（errno + usermod + udev 规则），不再静默降级为
-            空输出
-          - **Linux 常驻服务**：应用内可安装 / 启用 / 停止 / 卸载 systemd 用户单元
-            常驻服务（~/.config/systemd/user/dezirojoy-daemon.service，
-            Restart=on-failure，随 default.target 启动，uinput 无头可用），全程
-            无需管理员——uinput 是内核级接口、不受 UIPI 约束，守护进程与 GUI
-            同用户运行；安装文案带 `loginctl enable-linger $USER` 指引（注销后
-            保活）。设置页常驻卡片可操作，并显示「已安装并正在运行 / 已安装但
-            未运行 / 未安装」；登录自启动走 XDG 条目
-            （~/.config/autostart/DeziroJoy.desktop），与单元启用是两个独立开关；
-            CLI 服务命令放行 Linux。提权卡片改为同用户设计说明：Linux 无需提权，
-            注入能力取决于设备访问权（Windows schtasks 路径与文案未动）
-          - **守护进程卡片 Linux 适配**：Linux 常驻卡片新增独立的启动 / 停止按钮
-            （经 systemctl start/stop，未安装时拒绝而非假装成功），操作后随既有
-            刷新实时更新；移除过时的「需要管理员权限」提示——systemd 用户单元
-            无需管理员（Windows 文案逐字不变）
+          - **Linux 注入修复（uinput ioctl 常量）**：beta.4 起 Linux 上输入
+            注入静默失效——UInputNative 的 UiSetEvBit/KeyBit/RelBit 用了
+            错误的 ioctl 常量，内核构造器第一个 ioctl 即 EINVAL，虚拟输入
+            设备创建失败后回退空输出，映射与复杂快捷键均无输出（Leader 切换
+            预设是引擎内部状态、不经注入，所以此前看着仍有效）。现按内核
+            uapi 头核对改回正确常量。注入不可用时原因常驻显示在状态行
+            （「注入不可用：…」），不再静默降级
+          - **Linux desktop / 任务栏图标**：.deb 此前只装 /opt 下的 .ico，
+            desktop entry 的 Icon= 指向该绝对路径，而自启动条目引用的主题名
+            没有对应载荷，应用菜单 / 任务栏 / 自启动图标全是空白，窗口图标
+            也只有 .ico 的 16px 首帧。现在安装 hicolor 主题图标七尺寸
+            （16/24/32/48/64/128/256，取自 .ico 内嵌 PNG 帧，构建期不依赖
+            图像工具，缺尺寸即构建失败），desktop entry 改用主题名
+            Icon=dezirojoy；窗口图标改用 .ico 的最大帧
+          - **Linux 设备访问一键修复**：设置页「后台服务」卡片（仅 Linux）
+            新增「修复设备访问权限」按钮。先探测真实权限缺口（evdev 有节点
+            被拒读或 /dev/uinput 不可写；无缺口直接告知、不提权、不跑任何
+            进程，只是没插手柄不算缺口）。有缺口时经 pkexec 授权运行随包
+            helper：安装 /etc/udev/rules.d/99-dezirojoy.rules 并
+            udevadm reload/trigger、把用户加入 input 组，文案明示修改内容
+            与需重新登录；helper 缺 udevadm/usermod 时非 0 退出，不宣称
+            修复成功。无 polkit 代理 / pkexec 不可用 / helper 缺失（非 deb
+            安装）时降级为可复制命令，按钮 tooltip 说明降级原因。安装器与
+            包体仍不注册任何规则，一键修复是用户显式动作
+          - **evdev 轴健壮化**：支持内核 HID 模拟映射的 ABS_GAS/ABS_BRAKE
+            扳机轴码（与 ABS_Z/ABS_RZ 同一迟滞带）；开设备时用 EVIOCGABS
+            当前值播种各轴静止状态，首帧快照即反映真实设备；静止值贴近轴
+            最大值的反向扳机自动镜像行程，不再被读成「扳机常亮」；量程缺失
+            时回退该轴语义默认量程（扳机 0..255）而非摇杆量程。未识别轴在
+            扫描诊断中列出原始码 / 声明量程 / 静止值，供与 evtest 输出对照
+          - **常驻服务状态清晰化**：刷新增查 is-enabled，卡片独立显示
+            「已启用（登录自动）」/「未启用（登录不会自动启动）」，与运行
+            状态彻底分开；查询失败与「未运行」分为两态并附 systemctl stderr
+            摘要；启动 / 刷新前自检 XDG_RUNTIME_DIR 与
+            DBUS_SESSION_BUS_ADDRESS，缺失直接提示而非静默报未运行；安装
+            流程 daemon-reload/enable/start 任一失败但单元文件已写时给出
+            中间态文案，附单元路径与终端续做命令。Windows schtasks 路径与
+            文案未动
+          - **轴诊断上浮**：未处理轴诊断（哪些轴没有任何映射能触达）现在有
+            手柄连接时也会出现：daemon 日志在设备备注中引用该段（systemd
+            journal 是 daemon 模式的界面），GUI 本地模式状态行在注入不可用
+            原因旁同样追加——死掉的按键不再与摇杆卡住 / 扳机故障难以区分
+          - **Windows Guide 键平台限制**：文档明示 Windows 上 XInput 通道
+            永不报告 Guide 按下（XInput wButtons 无 Guide 位，
+            Windows.Gaming.Input 亦无），可视化器 Guide 常灭、Guide 映射不
+            触发均为可解释状态而非缺陷；Linux evdev 经 BTN_MODE 正常识别。
+            Raw Input 解析 HID 报告中的 Guide 键位需第二条完整输入通道，
+            成本高，列入远期 backlog
 
           ### 下载
 
@@ -480,13 +479,19 @@ jobs:
             冲突检测会提示并请改到单击位置。
           - Linux 识别按 evdev 能力分类（第二摇杆或显式手柄按键），只有摇杆轴
             加踏板、不带显式手柄按键的赛车方向盘类设备可能不被识别为手柄。
+          - Windows 上 Guide 键不可用（平台限制）：XInput 的 wButtons 位图
+            没有 Guide 位，Windows 通道永不报告该键按下（可视化器 Guide 常灭、
+            Guide 映射不触发均为可解释状态）；Linux 上 evdev 经 BTN_MODE 正常
+            识别。
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1684 项，
-          1679 通过、0 失败、5 项 Windows 专属跳过；release.yml 已通过 actionlint；
-          本地另以 dpkg-deb 构建 linux-x64 安装包，校验 control 元数据与载荷完整性，
-          并从解包位置冒烟运行 daemon（完整安装 / 卸载循环与 Windows Inno 安装器
+          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1771 项，
+          1765 通过、0 失败、6 项跳过（Windows 专属 / 跨平台分支）；release.yml
+          已通过 actionlint；本地另以 dpkg-deb 构建 linux-x64 安装包，校验
+          control 元数据与载荷完整性（hicolor 七尺寸图标、fix-device-access.sh
+          0755、desktop entry Icon=dezirojoy），并从解包位置冒烟运行 daemon
+          （完整安装 / 卸载循环与 Windows Inno 安装器
           需对应平台运行器，由 Release workflow 验证）。
           Windows / Ubuntu 双平台 CI、四 RID 自包含安装包（Windows Inno per-user
           EXE / Linux dpkg-deb .deb）构建与安装验证由 Release workflow 执行；
