@@ -146,6 +146,60 @@ public sealed class SettingsPanelGuiTests : IDisposable
         Assert.Equal("劫持手柄按键", toggle.Content);
     }
 
+    [AvaloniaFact]
+    public void The_Auto_Download_Toggle_Is_Off_By_Default_And_Persists_Through_The_View_Model()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
+        var panel = PanelOf(window);
+        var toggle = panel.FindControl<CheckBox>("AutoDownloadUpdatesBox")!;
+
+        Assert.Equal("发现新版本后自动下载", toggle.Content);
+        Assert.False(viewModel.Update.AutoDownloadEnabled);
+        Assert.False(toggle.IsChecked);
+
+        toggle.IsChecked = true;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.Update.AutoDownloadEnabled);
+
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.True(reloaded.AutoDownloadUpdatesEnabled);
+    }
+
+    [AvaloniaFact]
+    public void The_Update_Card_Offers_Download_Install_And_Cancel_Only_When_They_Apply()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
+        var panel = PanelOf(window);
+
+        var download = panel.FindControl<Button>("DownloadUpdateButton")!;
+        var install = panel.FindControl<Button>("InstallUpdateButton")!;
+        var cancel = panel.FindControl<Button>("CancelUpdateButton")!;
+        var progress = panel.FindControl<ProgressBar>("UpdateDownloadProgressBar")!;
+        var guidance = panel.FindControl<TextBlock>("UpdateInstallGuidanceText")!;
+
+        // Nothing has been checked yet, so only the check itself is offered.
+        Assert.False(viewModel.Update.HasUpdate);
+        Assert.False(download.IsVisible);
+        Assert.False(install.IsVisible);
+        Assert.False(cancel.IsVisible);
+        Assert.False(progress.IsVisible);
+        Assert.False(guidance.IsVisible);
+
+        // A found release offers the release page; the install still waits for a verified
+        // package, which only the full flow in the view model tests can produce.
+        viewModel.Update.HasUpdate = true;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(panel.FindControl<Button>("OpenReleasePageButton")!.IsVisible);
+        Assert.False(install.IsVisible);
+    }
+
     private static void ConnectPad(FakeGamepadProvider provider)
     {
         provider.Add(DeviceId, "Xbox Wireless Controller");

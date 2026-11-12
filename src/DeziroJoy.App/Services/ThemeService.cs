@@ -10,9 +10,9 @@ namespace DeziroJoy.App.Services;
 /// <summary>
 /// Owns the persisted app preferences in <c>settings.json</c> beside the profile store
 /// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
-/// choice, gamepad UI ownership, the independent close/minimize tray policies and the
-/// startup release check. A missing or corrupt file falls back to the documented
-/// defaults rather than throwing.
+/// choice, gamepad UI ownership, the independent close/minimize tray policies, the
+/// startup release check and the startup auto-download. A missing or corrupt file
+/// falls back to the documented defaults rather than throwing.
 /// </summary>
 /// <remarks>
 /// The variant is applied from code rather than declared on the Application
@@ -74,6 +74,14 @@ public sealed class ThemeService
     /// one click away in the settings.
     /// </summary>
     public bool AutoCheckUpdatesEnabled => _settings.AutoCheckUpdatesEnabled;
+
+    /// <summary>
+    /// Whether a check that found a newer release downloads and verifies it right away.
+    /// Off by default, and it never installs anything: the install stays one explicit click
+    /// in the settings, because a silent install would close the user's window mid-work
+    /// (Windows Restart Manager) or pop a polkit prompt (Linux packages) for no gain.
+    /// </summary>
+    public bool AutoDownloadUpdatesEnabled => _settings.AutoDownloadUpdatesEnabled;
 
     /// <summary>
     /// Reads the persisted preferences. Any unreadable, malformed or unknown
@@ -176,6 +184,21 @@ public sealed class ThemeService
     }
 
     /// <summary>
+    /// Turns the auto-download of a found release on or off and persists it. The install
+    /// itself is never automatic: it stays one explicit click, whichever way this is set.
+    /// </summary>
+    public void SetAutoDownloadUpdates(bool enabled)
+    {
+        if (_settings.AutoDownloadUpdatesEnabled == enabled)
+        {
+            return;
+        }
+
+        _settings = _settings with { AutoDownloadUpdatesEnabled = enabled };
+        Save();
+    }
+
+    /// <summary>
     /// The retired leader button, read for the one-shot migration into the preset slots
     /// only. New saves never write it, so this is null on every settings file written
     /// after the retirement.
@@ -246,6 +269,12 @@ public sealed class ThemeService
         public bool MinimizeToTrayEnabled { get; init; } = true;
 
         public bool AutoCheckUpdatesEnabled { get; init; }
+
+        /// <summary>
+        /// Whether a found release downloads itself. Default off, the same opt-in stance the
+        /// startup check takes: a background transfer is something the user asks for.
+        /// </summary>
+        public bool AutoDownloadUpdatesEnabled { get; init; }
 
         /// <summary>
         /// The retired leader pair. Kept so an old settings.json still deserializes and can

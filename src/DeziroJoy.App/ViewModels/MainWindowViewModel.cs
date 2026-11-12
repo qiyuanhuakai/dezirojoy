@@ -209,9 +209,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    /// The update surface of the settings panel: running version, manual check and the
-    /// persisted startup auto-check. Shares the single <see cref="IUpdateService"/> for the
-    /// lifetime of the window.
+    /// The update surface of the settings panel: running version, manual check, the persisted
+    /// startup auto-check and auto-download toggles, the download progress and the one-click
+    /// install with its restart. Shares the single <see cref="IUpdateService"/> for the
+    /// lifetime of the window and drives its own update orchestrator, which this view model
+    /// disposes with the window because the card built it.
     /// </summary>
     public UpdateSettingsViewModel Update { get; }
 
@@ -219,8 +221,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// Runs the release check once at startup when the persisted toggle is on. The check is
     /// fire-and-forget: it must never delay the window, its outcome only ever lands in the
     /// settings panel, and a failure (offline, timeout, API refusal) stays there rather than
-    /// interrupting startup. The returned task is faulted rather than crashing the process,
-    /// and it is exposed through <see cref="StartupUpdateCheck"/> so tests can await it.
+    /// interrupting startup. When the auto-download toggle is on, a release the check finds
+    /// downloads itself the same way - still off the startup path, because the card owns that
+    /// step. The returned task is faulted rather than crashing the process, and it is exposed
+    /// through <see cref="StartupUpdateCheck"/> so tests can await it.
     /// </summary>
     private Task? RunStartupUpdateCheck()
     {
@@ -2515,6 +2519,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (_ownsUpdateService && _updateService is IDisposable disposable)
         {
             disposable.Dispose();
+        }
+
+        // The update card owns the orchestrator it built around the shared IUpdateService.
+        // Disposing the card first stops the fire-and-forget auto-download the startup check
+        // may have started; the service itself was passed in, so only the downloader the
+        // orchestrator created is released. An orchestrator the card did not build stays the
+        // caller's.
+        Update.Dispose();
+        if (Update.OwnsOrchestrator)
+        {
+            Update.Orchestrator.Dispose();
         }
 
         GC.SuppressFinalize(this);
