@@ -325,13 +325,27 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   文件而非硬编码英文；ISCC 目录 `Languages` 子目录下的 `ChineseSimplified.isl`
   真实存在且定义上述消息键。release.yml 在发布前另有 `.iss` 侧的静态检查，失败
   不进入编译
-- Linux：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
+- Linux `.deb`：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
   元数据与 payload（完整 `/opt/dezirojoy`、`dezirojoy.ico`、desktop 入口），
   断言依赖含版本化 `libicu` 备选项（应用未启用 InvariantGlobalization，缺 ICU
   的 .NET 会在启动时 FailFast，runner 自带 ICU 所以只能靠断言保证），并负向
   断言不含 `/etc` 下任何文件（无 systemd / cron / udev）与不附维护脚本；
   linux-x64 用 `apt-get install` 实际安装（同时验证依赖可解析）、从
   `/opt/dezirojoy` 运行 daemon smoke、卸载后验证路径与注册信息清理
+- Linux `.rpm`：`rpmbuild` 依 spec 构建（`build-rpm.sh` 暂存 payload 并驱动
+  rpmbuild），`rpm -qp` 静态校验 name / version（RPM 禁 `-`，`-` 规整为 `~`
+  以复现 semver 预发布序）/ arch / Requires（含 ICU soname——运行时 dlopen
+  故 find-requires 看不到，spec 显式钉住）/ 无 scriptlet / payload 完整
+  （hicolor 七尺寸、`fix-device-access.sh`、desktop 入口）且不含 `/etc`。
+  Ubuntu runner 无法安装 .rpm，与 arm64 deb 一样只做静态校验
+- Linux AppImage：`appimagetool`（continuous，`--appimage-extract-and-run`，
+  runner 无 FUSE）把 AppDir 打包成 `DeziroJoy-<ver>-<arch>.AppImage`；
+  `--appimage-extract` 解包后静态断言 AppRun、desktop 入口、根 PNG
+  （appimagetool 链为 `.DirIcon`）、ELF 架构与 payload 完整（镜像内无
+  hicolor 树，图标以根 PNG 承载，故七尺寸主题帧只在 .deb / .rpm 上断言）；
+  linux-x64 从解包位置运行 daemon smoke，arm64 交叉构建只做静态校验
+- 三种 Linux 格式的 `/opt/dezirojoy` 载荷逐字节一致，只是容器不同；都不含
+  `/etc`、不附 scriptlet / 维护脚本，登录自启动与常驻服务保持应用内 opt-in
 - win-arm64 的 setup.exe 是 ARM64 程序，无法在 x64 runner 上执行安装/卸载，
   该 RID 只做编译与 PE 架构校验；arm64 deb 同理只做静态校验
 
@@ -354,7 +368,20 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
 - [ ] Linux：启动后映射功能正常（依赖系统 X11 库、evdev/uinput，见「平台支持」）
 - [ ] Linux：`sudo dpkg -r dezirojoy` 后 `/opt/dezirojoy` 与应用菜单入口消失，
       `~/.config/DeziroJoy/profiles/` 配置仍在
-- [ ] 两个平台的安装器均未注册自启动、计划任务或 udev 规则（应用内 opt-in 不变）
+- [ ] Linux：`sudo dnf install ./DeziroJoy-<version>-x86_64.rpm` 成功，应用菜单
+      出现 DeziroJoy 且图标正常，`/opt/dezirojoy/DeziroJoy` 可执行；
+      `sudo dnf remove dezirojoy` 后 `/opt/dezirojoy` 与应用菜单入口消失
+- [ ] Linux：`chmod +x DeziroJoy-<version>-x86_64.AppImage` 后直接运行，无需
+      安装、不改动系统；映射功能正常
+- [ ] 各安装器（Windows setup / Linux deb / rpm / AppImage）均未注册自启动、
+      计划任务或 udev 规则（应用内 opt-in 不变）
+
+关于 Flatpak（本版不提供）：DeziroJoy 的注入依赖对 `/dev/uinput` 的写权限，而
+Flatpak 沙箱默认不授予该权限，且桌面门户（xdg-desktop-portal）目前没有暴露
+uinput 写入口——沙箱内注入功能在默认桌面上不可用。应用内的「一键修复设备访问
+权限」（pkexec + udev 规则）与 systemd 用户单元常驻模型在沙箱内同样不成立
+（无法写 `/etc`、无法管理用户单元）。待 libeis / 输入门户成熟后再评估接入；
+在此期间请使用 deb / rpm / AppImage。
 
 ## 已知限制（预期行为，非缺陷）
 

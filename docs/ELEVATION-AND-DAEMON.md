@@ -500,3 +500,43 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
 `uinput` 打不开时，`UInputOutputSink` 的异常消息与 `ProbeUnavailableReason()` 使用同一
 段文案（errno + usermod + udev 规则），`EngineComposition.SinkError` 把它带进 daemon 摘要
 ——不再出现"降级为空注入而界面上什么都没有"的形态。
+
+---
+
+## 6. Linux 包格式：deb / rpm / AppImage（与 Flatpak 延期）
+
+三种 Linux 格式打包**同一份自包含发布产物**：`/opt/dezirojoy` 载荷逐字节一致，
+只是容器不同。三者都随包带 `dezirojoy.ico`、`fix-device-access.sh`（5.2.1 的一键
+修复 helper，装入即待命、不自行注册任何规则）、desktop 入口与 hicolor 主题图标
+（AppImage 例外，见下），且都不写 `/etc`、不附 scriptlet / 维护脚本——登录自启动
+与常驻服务保持应用内 opt-in（与 5.1 的 daemon 模型一致）。
+
+| 格式 | 构建 | 安装 | 依赖声明 | 图标载荷 |
+|---|---|---|---|---|
+| `.deb` | `dpkg-deb`（`tools/Packaging/linux/build-deb.sh`） | `sudo apt install ./…deb`（解析依赖，勿用 `dpkg -i`） | Depends 带版本化 `libicu` 备选项 | hicolor 七尺寸 |
+| `.rpm` | `rpmbuild`（`tools/Packaging/linux/rpm/build-rpm.sh` + spec） | `sudo dnf install ./…rpm` | Requires 带 ICU soname 区间 | hicolor 七尺寸 |
+| AppImage | `appimagetool`（`tools/Packaging/linux/appimage/build-appimage.sh`） | `chmod +x` 后直接运行，无需安装 | 无（运行时解析） | 根 PNG（`.DirIcon`） |
+
+两点依赖细节，都是"runner 自带所以只能靠断言保证"的同一类缺口：
+
+- **ICU 必须显式声明**。应用未启用 InvariantGlobalization，.NET 运行时**启动时
+  dlopen** `libicuuc` / `libicui18n` 而非链接它们，因此 `dpkg` 的 shlibs 与
+  `rpmbuild` 的 find-requires 都看不到这一依赖。deb 用版本化 `libicuXX` 备选项、
+  rpm 用 soname 区间显式钉住；缺了它包能装上、却在最小系统上启动即 FailFast。
+- **rpm 的 Version 禁 `-`**。`-` 是版本 / release 分隔符，故 `0.0.1-beta.5-preview`
+  规整为 `0.0.1~beta.5~preview`（`~` 在 rpm 版本比较中低于任何字符，免费复现 semver
+  预发布序）；发布资产名保留原始 semver、去掉 release 段。
+
+AppImage 的图标只以根 PNG 承载（appimagetool 把它链为 `.DirIcon`），镜像内没有
+hicolor 树——squashfs 里没有任何东西消费 `/usr/share/icons`，桌面集成装的是
+`.DirIcon` 而非主题目录，故七尺寸主题帧只在 .deb / .rpm 上随包。AppImage 是
+type-2 运行时，CI runner 无 FUSE，因此 appimagetool 与其自身都以
+`--appimage-extract-and-run` / `--appimage-extract` 运行。
+
+**Flatpak 本版不提供，理由与 5.1 / 5.2 直接相关**：注入依赖对 `/dev/uinput` 的写
+权限（5.2），而 Flatpak 沙箱默认不授予该权限，且桌面门户（xdg-desktop-portal）目前
+没有暴露 uinput 写入口——沙箱内注入在默认桌面上不可用。5.2.1 的「一键修复」
+（pkexec 写 `/etc/udev/rules.d` + usermod）与 5.1 的 systemd 用户单元常驻模型在
+沙箱内同样不成立（无法写 `/etc`、无法管理用户单元）。待 libeis / 输入门户成熟后
+再评估接入；期间请用 deb / rpm / AppImage。安装与卸载的人工验收项见
+[`QA-CHECKLIST.md`](QA-CHECKLIST.md) 第 20 节。

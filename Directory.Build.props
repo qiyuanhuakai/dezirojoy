@@ -8,7 +8,7 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <Product>DeziroJoy</Product>
     <Company>DeziroJoy</Company>
-    <Version>0.0.1-beta.5-preview</Version>
+    <Version>0.0.1</Version>
     <NeutralLanguage>en</NeutralLanguage>
   </PropertyGroup>
 </Project>
