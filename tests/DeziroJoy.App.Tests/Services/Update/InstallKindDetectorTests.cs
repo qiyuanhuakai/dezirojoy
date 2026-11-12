@@ -6,7 +6,9 @@ namespace DeziroJoy.App.Tests.Services.Update;
 /// <summary>
 /// The install-form detection. Every probe is injected, so what is under test is the order
 /// the signals are read in - Flatpak before AppImage before the Windows uninstall key before
-/// the package databases - rather than the machine the tests happen to run on.
+/// the package databases - rather than the machine the tests happen to run on. The one
+/// exception is the <c>/opt/dezirojoy</c> branch: whether an injected path lands inside that
+/// directory is decided by the OS, so the tests that walk it are Linux-only.
 /// </summary>
 public sealed class InstallKindDetectorTests
 {
@@ -93,6 +95,11 @@ public sealed class InstallKindDetectorTests
     [Fact]
     public void A_Program_Under_Opt_With_A_Deb_Package_Is_A_Deb_Install()
     {
+        // The install directory is a POSIX path, and the detector compares it with the
+        // separator of the running OS: off Linux the path is rooted against the current
+        // drive, so this branch is unreachable rather than merely untested there.
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the /opt/dezirojoy + dpkg/rpm detection only exists on Linux");
+
         var info = Detect(processPath: "/opt/dezirojoy/DeziroJoy", installedPackage: LinuxPackageFormat.Deb);
 
         Assert.Equal(InstallKind.Deb, info.Kind);
@@ -101,6 +108,9 @@ public sealed class InstallKindDetectorTests
     [Fact]
     public void A_Program_Under_Opt_With_An_Rpm_Package_Is_An_Rpm_Install()
     {
+        // The /opt layout - and the reason it is Linux-only - is the same as the .deb above.
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the /opt/dezirojoy + dpkg/rpm detection only exists on Linux");
+
         // The two share the /opt layout, so the package database is the only thing that can
         // tell them apart: the same path must produce a different answer per database.
         var info = Detect(processPath: "/opt/dezirojoy/DeziroJoy", installedPackage: LinuxPackageFormat.Rpm);
