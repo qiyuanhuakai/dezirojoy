@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, without the leading v (e.g. 0.0.1-beta.5-preview)'
+        description: 'Version to release, without the leading v (e.g. 0.0.1)'
         required: true
 
 permissions:
@@ -187,8 +187,11 @@ jobs:
       # Inno Setup 6 ships on the windows-latest image. The script is driven entirely
       # by ISCC /D defines, so the step only passes the version, the RID and the two
       # absolute paths. The script itself resolves everything from its own location,
-      # so the call works from any working directory. For win-x64 it also runs the
-      # silent install / verify / uninstall cycle against a throwaway directory. A
+      # so the call works from any working directory. The script compiles the published
+      # setup.exe WITH /DDeziroJoyUpdateRun (carrying the in-app updater's relaunch
+      # entry) and, for win-x64, a SECOND define-free setup that the silent install /
+      # verify / uninstall cycle runs against in a throwaway directory - the loop must
+      # never relaunch the app, so it installs the build without the update-run entry. A
       # win-arm64 setup.exe is the same x86 bootstrap Inno Setup always emits - the
       # loader is architecture-neutral whatever the payload is (verified 0x014C on
       # both Windows RIDs in beta.1 run 42670117262), so it would execute on the x64
@@ -578,70 +581,58 @@ jobs:
         shell: bash
         run: |
           cat > body.md <<'NOTES'
-          ## DeziroJoy vVERSION (beta preview)
+          ## DeziroJoy vVERSION
 
-          本批重心在 Linux 运行时修复与设备访问体验：beta.4 之后发现 Linux 上
-          注入因 uinput ioctl 常量错误而静默失效，本批修复，映射与复杂快捷键
-          恢复正常；Linux 安装包装入 hicolor 主题图标，应用菜单 / 任务栏 /
-          自启动图标与窗口大帧就位；设置页新增「修复设备访问权限」一键修复
-          （udev 规则 + input 组），无 polkit 代理时降级为可复制命令；evdev
-          轴处理全面健壮化（GAS/BRAKE 扳机轴、反向扳机、静止值播种、未识别轴
-          诊断），常驻服务状态与未处理轴诊断上浮到日志与状态行；Windows Guide
-          键不可用明示为 XInput 平台限制。正式安装包沿用 Windows per-user
-          安装器（setup.exe，简体中文界面、英文回退）与 Linux .deb，安装与
-          卸载都走系统标准途径。仍属 beta 预览版，欢迎按
+          DeziroJoy 0.0.1 正式版：把游戏手柄映射为鼠标与键盘的跨平台工具。Windows 走
+          XInput + SendInput（提权常驻守护进程作为唯一注入权威），Linux 走 evdev +
+          uinput（systemd 用户单元常驻），读取与注入都在内核级，与显示服务器无关。
+          从 alpha 到本版，映射引擎、配置体验与常驻架构已趋稳定，本版起作为正式版本
+          提供安装包与内置自动更新。
+
+          本批新增两件事：**内置自动更新**——设置页检查更新、opt-in 自动下载、一次
+          点击安装、sha256 校验，并为每种包格式提供对应安装器；以及 **RPM / AppImage
+          两种 Linux 新包格式**（原有 .deb 与 Windows per-user 安装器不变）。安装与
+          卸载都走系统标准途径，安装器不注册自启动、计划任务或 udev 规则（登录自启动
+          与常驻服务请在应用内「设置」中按需开启），卸载也不会删除用户配置。欢迎按
           [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
 
           ### 本版更新
 
-          - **Linux 注入修复（uinput ioctl 常量）**：beta.4 起 Linux 上输入
-            注入静默失效——UInputNative 的 UiSetEvBit/KeyBit/RelBit 用了
-            错误的 ioctl 常量，内核构造器第一个 ioctl 即 EINVAL，虚拟输入
-            设备创建失败后回退空输出，映射与复杂快捷键均无输出（Leader 切换
-            预设是引擎内部状态、不经注入，所以此前看着仍有效）。现按内核
-            uapi 头核对改回正确常量。注入不可用时原因常驻显示在状态行
-            （「注入不可用：…」），不再静默降级
-          - **Linux desktop / 任务栏图标**：.deb 此前只装 /opt 下的 .ico，
-            desktop entry 的 Icon= 指向该绝对路径，而自启动条目引用的主题名
-            没有对应载荷，应用菜单 / 任务栏 / 自启动图标全是空白，窗口图标
-            也只有 .ico 的 16px 首帧。现在安装 hicolor 主题图标七尺寸
-            （16/24/32/48/64/128/256，取自 .ico 内嵌 PNG 帧，构建期不依赖
-            图像工具，缺尺寸即构建失败），desktop entry 改用主题名
-            Icon=dezirojoy；窗口图标改用 .ico 的最大帧
-          - **Linux 设备访问一键修复**：设置页「后台服务」卡片（仅 Linux）
-            新增「修复设备访问权限」按钮。先探测真实权限缺口（evdev 有节点
-            被拒读或 /dev/uinput 不可写；无缺口直接告知、不提权、不跑任何
-            进程，只是没插手柄不算缺口）。有缺口时经 pkexec 授权运行随包
-            helper：安装 /etc/udev/rules.d/99-dezirojoy.rules 并
-            udevadm reload/trigger、把用户加入 input 组，文案明示修改内容
-            与需重新登录；helper 缺 udevadm/usermod 时非 0 退出，不宣称
-            修复成功。无 polkit 代理 / pkexec 不可用 / helper 缺失（非 deb
-            安装）时降级为可复制命令，按钮 tooltip 说明降级原因。安装器与
-            包体仍不注册任何规则，一键修复是用户显式动作
-          - **evdev 轴健壮化**：支持内核 HID 模拟映射的 ABS_GAS/ABS_BRAKE
-            扳机轴码（与 ABS_Z/ABS_RZ 同一迟滞带）；开设备时用 EVIOCGABS
-            当前值播种各轴静止状态，首帧快照即反映真实设备；静止值贴近轴
-            最大值的反向扳机自动镜像行程，不再被读成「扳机常亮」；量程缺失
-            时回退该轴语义默认量程（扳机 0..255）而非摇杆量程。未识别轴在
-            扫描诊断中列出原始码 / 声明量程 / 静止值，供与 evtest 输出对照
-          - **常驻服务状态清晰化**：刷新增查 is-enabled，卡片独立显示
-            「已启用（登录自动）」/「未启用（登录不会自动启动）」，与运行
-            状态彻底分开；查询失败与「未运行」分为两态并附 systemctl stderr
-            摘要；启动 / 刷新前自检 XDG_RUNTIME_DIR 与
-            DBUS_SESSION_BUS_ADDRESS，缺失直接提示而非静默报未运行；安装
-            流程 daemon-reload/enable/start 任一失败但单元文件已写时给出
-            中间态文案，附单元路径与终端续做命令。Windows schtasks 路径与
-            文案未动
-          - **轴诊断上浮**：未处理轴诊断（哪些轴没有任何映射能触达）现在有
-            手柄连接时也会出现：daemon 日志在设备备注中引用该段（systemd
-            journal 是 daemon 模式的界面），GUI 本地模式状态行在注入不可用
-            原因旁同样追加——死掉的按键不再与摇杆卡住 / 扳机故障难以区分
-          - **Windows Guide 键平台限制**：文档明示 Windows 上 XInput 通道
-            永不报告 Guide 按下（XInput wButtons 无 Guide 位，
-            Windows.Gaming.Input 亦无），可视化器 Guide 常灭、Guide 映射不
-            触发均为可解释状态而非缺陷；Linux evdev 经 BTN_MODE 正常识别。
-            Raw Input 解析 HID 报告中的 Guide 键位需第二条完整输入通道，
-            成本高，列入远期 backlog
+          #### 系列至今的关键能力（alpha → 0.0.1）
+
+          - **手柄映射**：按键、摇杆、扳机、十字键映射到键盘按键、组合键、鼠标
+            移动 / 点击 / 滚轮；死区、响应曲线（线性 / 精准 / 激进 / 灵敏）、平滑、
+            最高速度（px/s，与 DPI、分辨率无关）与亚像素累积均可调，改动即时生效
+          - **复杂快捷键 DSL**：长按可运行一段脚本，如「持续按住 Alt；每 1 秒点按
+            Tab」（`hold Alt` + `every 1s tap Tab`）；实时行 / 列语法诊断与白话摘要，
+            非法脚本被拦截且不污染活动映射
+          - **预设管理**：每设备四个独立预设槽，整体级活动槽随切换持久化；Leader 键
+            在引擎内切换预设槽，与 GUI 切换同一条逻辑
+          - **Leader 精准键与全局特殊键**：Leader 键与精准键置顶到「按键配置」页并带
+            实时冲突检测，只报引擎真实会出的问题，只提示、不自动改配置
+          - **实时预览**：手柄可视化器实时反映按键与摇杆，灵敏度调整带实时预览点与
+            响应曲线
+          - **托盘常驻**：关闭窗口进托盘、映射继续；托盘菜单「显示主窗口 / 切换主题 /
+            退出」
+          - **跨平台注入**：Windows 上非提权进程受 UIPI 约束无法向提权目标注入，由
+            提权常驻守护进程经命名管道作为唯一注入权威；Linux 上 uinput 不受 UIPI
+            约束，守护进程以当前用户经 systemd 用户单元常驻，注入失败不再无声
+          - **设备访问权诊断与一键修复**（Linux）：evdev 扫描区分无节点 / 无权限 /
+            无手柄并给出可操作指引，「修复设备访问权限」一键安装 udev 规则并加入
+            input 组，无 polkit 代理时降级为可复制命令
+
+          #### 本批新增
+
+          - **内置自动更新**：设置页「更新」区显示当前版本并检查 GitHub releases；
+            发现新版本可 opt-in 自动下载（启动时自动检查默认关闭、随设置持久化），
+            下载经 sha256 校验后一次点击安装。每种包格式有对应安装器：Windows 以
+            /VERYSILENT 重启编译好的 setup（带条件 [Run] 重启项，安装完成后由 Setup
+            重启应用），Linux deb / rpm 调系统包管理器，AppImage 以租约文件重启。
+            握手超时、取消与协议异常都有明确中文反馈，不卡死、不伪装成功
+          - **RPM / AppImage 新包格式**：Linux 除 .deb 外新增 .rpm（Fedora / RHEL /
+            openSUSE，`dnf install`）与便携 AppImage（`chmod +x` 后直接运行）。三种
+            Linux 格式的 /opt/dezirojoy 载荷完全一致，只是容器不同；都随包带
+            fix-device-access.sh 与 hicolor 主题图标（AppImage 以根 PNG 作 .DirIcon）
 
           ### 下载
 
@@ -651,23 +642,42 @@ jobs:
           | `DeziroJoy-PACKAGEVERSION-win-arm64-setup.exe` | Windows | 同上，ARM64（如骁龙笔记本） |
           | `DeziroJoy_PACKAGEVERSION_amd64.deb` | Linux | 自包含 deb，`sudo apt install` 装到 `/opt/dezirojoy` 并注册应用菜单入口，Intel / AMD 64 位 |
           | `DeziroJoy_PACKAGEVERSION_arm64.deb` | Linux | 同上，ARM64（如树莓派） |
+          | `DeziroJoy-PACKAGEVERSION-x86_64.rpm` | Linux | 自包含 rpm，`sudo dnf install` 装到 `/opt/dezirojoy`，Fedora / RHEL / openSUSE 等，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-aarch64.rpm` | Linux | 同上，ARM64（如树莓派） |
+          | `DeziroJoy-PACKAGEVERSION-x86_64.AppImage` | Linux | 便携 AppImage，`chmod +x` 后直接运行，无需安装、不改动系统，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-aarch64.AppImage` | Linux | 同上，ARM64 |
           | `*.sha256` | — | SHA256 校验和 |
 
-          Windows 安装器为 per-user 模式，不需要管理员权限；两个平台的安装器都不注册
-          自启动、计划任务或 udev 规则（登录自启动与提权常驻服务请在应用内「设置」中
-          按需开启），卸载也不会删除用户配置。卸载方式：Windows 用「设置 → 应用」或
-          安装目录中的 `unins000.exe`，Linux 用 `sudo dpkg -r dezirojoy`。Linux 安装请用
-          `sudo apt install ./DeziroJoy_PACKAGEVERSION_amd64.deb`（arm64 替换文件名）
-          而非 `dpkg -i`：依赖（X11、fontconfig、ICU 等）会一并解析，`dpkg -i` 不会。
+          Windows 安装器为 per-user 模式，不需要管理员权限；所有平台的安装器都不注册
+          自启动、计划任务或 udev 规则（登录自启动与常驻服务请在应用内「设置」中按需
+          开启），卸载也不会删除用户配置。卸载方式：Windows 用「设置 → 应用」或安装
+          目录中的 `unins000.exe`，Linux deb 用 `sudo dpkg -r dezirojoy`，rpm 用
+          `sudo dnf remove dezirojoy`，AppImage 直接删除文件即可。
+
+          Linux 各格式安装方式：
+
+          - deb（Debian / Ubuntu）：`sudo apt install ./DeziroJoy_PACKAGEVERSION_amd64.deb`
+            （arm64 替换文件名）而非 `dpkg -i`：依赖（X11、fontconfig、ICU 等）会一并
+            解析，`dpkg -i` 不会。
+          - rpm（Fedora / RHEL / openSUSE）：`sudo dnf install ./DeziroJoy-PACKAGEVERSION-x86_64.rpm`
+            （aarch64 替换文件名）。
+          - AppImage（任意发行版）：`chmod +x DeziroJoy-PACKAGEVERSION-x86_64.AppImage`
+            后直接运行；三种 Linux 格式的 `/opt/dezirojoy` 载荷一致，只是容器不同。
+
+          **关于 Flatpak**：本版暂不提供 Flatpak 包。DeziroJoy 的注入依赖对
+          `/dev/uinput` 的写权限，而 Flatpak 沙箱默认不授予该权限，且当前桌面门户
+          （xdg-desktop-portal）没有暴露 uinput 写入口——沙箱内注入功能在默认桌面上
+          不可用。应用内的「一键修复设备访问权限」（pkexec + udev 规则）与 systemd
+          用户单元常驻模型在沙箱内同样不成立（无法写 /etc、无法管理用户单元）。待
+          libeis / 输入门户成熟后再评估接入；在此期间请使用 deb / rpm / AppImage。
 
           安装器未做代码签名。Windows 上首次运行未签名的 setup.exe 可能弹出
           SmartScreen「Windows 已保护你的电脑」提示，属预期行为：选择「更多信息 →
           仍要运行」即可继续安装。
 
-          Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，
-          桌面发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要
-          `evdev`；注入鼠标键盘需要 `/dev/uinput` 可写，若不可写应用会明确报告，
-          不会静默失效。
+          Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，桌面
+          发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要 `evdev`；注入
+          鼠标键盘需要 `/dev/uinput` 可写，若不可写应用会明确报告，不会静默失效。
 
           ### 已知限制
 
@@ -691,17 +701,15 @@ jobs:
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1771 项，
-          1765 通过、0 失败、6 项跳过（Windows 专属 / 跨平台分支）；release.yml
-          已通过 actionlint；本地另以 dpkg-deb 构建 linux-x64 安装包，校验
-          control 元数据与载荷完整性（hicolor 七尺寸图标、fix-device-access.sh
-          0755、desktop entry Icon=dezirojoy），并从解包位置冒烟运行 daemon
-          （完整安装 / 卸载循环与 Windows Inno 安装器
-          需对应平台运行器，由 Release workflow 验证）。
-          Windows / Ubuntu 双平台 CI、四 RID 自包含安装包（Windows Inno per-user
-          EXE / Linux dpkg-deb .deb）构建与安装验证由 Release workflow 执行；
-          本轮未进行 Windows 真机、物理手柄或人工 GUI 实测，不以自动化测试替代
-          人工验收。
+          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1914 项，
+          1908 通过、0 失败、6 项跳过（Windows 专属 / 跨平台分支）；release.yml 已通过
+          actionlint；本地另构建 linux-x64 三种包格式（deb / rpm / AppImage），校验
+          control / spec 元数据与载荷完整性（hicolor 七尺寸图标、fix-device-access.sh
+          0755、desktop entry），并从安装 / 解包位置冒烟运行 daemon（完整安装 / 卸载
+          循环与 Windows Inno 安装器需对应平台运行器，由 Release workflow 验证）。
+          Windows / Ubuntu 双平台 CI、四 RID、Windows Inno per-user EXE 与 Linux 三种
+          包格式的构建与安装验证由 Release workflow 执行；本轮未进行 Windows 真机、
+          物理手柄或人工 GUI 实测，不以自动化测试替代人工验收。
           人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
