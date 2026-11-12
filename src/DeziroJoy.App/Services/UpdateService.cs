@@ -261,8 +261,10 @@ public sealed class SemanticVersion : IEquatable<SemanticVersion>, IComparable, 
 /// Checks GitHub releases for a version newer than the running one. The releases LIST is
 /// queried, not <c>/releases/latest</c>: every release of this repository is a prerelease,
 /// and GitHub answers <c>/releases/latest</c> with 404 when the newest release is one. The
-/// newest entry is picked by <c>published_at</c>, so a tag renamed or re-published later
-/// cannot hide behind an older-but-first list position.
+/// newest entry is picked by semantic version - the highest semver wins, and
+/// <c>published_at</c> only breaks a tie - so re-publishing an old tag later cannot hide a
+/// newer release behind a fresher timestamp, and a stale timestamp cannot promote an older
+/// one.
 /// </summary>
 /// <remarks>
 /// No authentication is used, so the unauthenticated 60-requests-per-hour GitHub limit
@@ -392,13 +394,18 @@ public sealed class UpdateService : IUpdateService, IDisposable
 
             // Drafts are unpublished by definition, and a tag that is not a semantic version
             // cannot be compared at all - both are skipped so the newest USABLE release wins.
+            // The ordering is semver first and published_at only as a tie-break: an old tag
+            // re-published later must not hide the release that is actually newer.
             var latest = releases
                 .OfType<GitHubRelease>()
                 .Where(release => !release.Draft
                     && release.PublishedAt is not null
                     && release.TagName is { Length: > 0 } tag
                     && SemanticVersion.TryParse(tag, out _))
-                .OrderByDescending(release => release.PublishedAt)
+                .Select(release => (Release: release, Version: SemanticVersion.Parse(release.TagName!)))
+                .OrderByDescending(entry => entry.Version)
+                .ThenByDescending(entry => entry.Release.PublishedAt)
+                .Select(entry => entry.Release)
                 .FirstOrDefault();
 
             if (latest?.TagName is not { } latestTag
@@ -415,6 +422,7 @@ public sealed class UpdateService : IUpdateService, IDisposable
                 PageUrl = !string.IsNullOrWhiteSpace(latest.HtmlUrl)
                     ? latest.HtmlUrl
                     : $"https://github.com/{Owner}/{Repository}/releases/tag/{latestTag}",
+                Assets = ReleaseAssets(latest),
             };
 
             return latestVersion.CompareTo(current) > 0
@@ -429,6 +437,25 @@ public sealed class UpdateService : IUpdateService, IDisposable
         HttpStatusCode.Forbidden => "检查更新失败：GitHub 接口访问受限（HTTP 403），请稍后再试。",
         _ => $"检查更新失败：GitHub 返回 HTTP {(int)status}。",
     };
+
+    /// <summary>
+    /// Reduces a release's assets to the ones the update flow can use: an entry without a name
+    /// or a download URL is dropped rather than surfaced as a package that cannot be fetched.
+    /// </summary>
+    private static ReleaseAsset[] ReleaseAssets(GitHubRelease release)
+        => release.Assets is { } assets
+            ? assets
+                .OfType<GitHubAsset>()
+                .Where(asset => !string.IsNullOrWhiteSpace(asset.Name)
+                    && !string.IsNullOrWhiteSpace(asset.DownloadUrl))
+                .Select(asset => new ReleaseAsset
+                {
+                    Name = asset.Name!,
+                    DownloadUrl = asset.DownloadUrl!,
+                    Size = asset.Size,
+                })
+                .ToArray()
+            : [];
 
     private static string ReadCurrentVersion()
     {
@@ -473,5 +500,25 @@ public sealed class UpdateService : IUpdateService, IDisposable
 
         [JsonPropertyName("draft")]
         public bool Draft { get; init; }
+
+        /// <summary>
+        /// The files this release publishes. The list endpoint has always carried them; the
+        /// update flow is the first consumer.
+        /// </summary>
+        [JsonPropertyName("assets")]
+        public List<GitHubAsset?>? Assets { get; init; }
+    }
+
+    /// <summary>One published file: what to call it, where the bytes are, how big they are.</summary>
+    private sealed class GitHubAsset
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("browser_download_url")]
+        public string? DownloadUrl { get; init; }
+
+        [JsonPropertyName("size")]
+        public long Size { get; init; }
     }
 }

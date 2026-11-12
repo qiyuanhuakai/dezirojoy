@@ -28,6 +28,12 @@ public sealed record ReleaseInfo
 
     /// <summary>The release page to send the user to for the download.</summary>
     public required string PageUrl { get; init; }
+
+    /// <summary>
+    /// The files this release publishes, or an empty list when the API carried none. The
+    /// update flow picks its package from here by runtime identifier and install form.
+    /// </summary>
+    public IReadOnlyList<ReleaseAsset> Assets { get; init; } = [];
 }
 
 /// <summary>
