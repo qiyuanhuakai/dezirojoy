@@ -1,0 +1,19 @@
+#!/bin/sh
+# AppRun for the DeziroJoy AppImage.
+#
+# The type-2 runtime execs this file with $APPDIR pointing at the mounted AppDir and
+# $APPIMAGE at the image file itself; the app reads both to recognize an AppImage
+# install. Neither variable exists when the AppDir is extracted by hand
+# (--appimage-extract, or a manual smoke test), so the directory is resolved
+# from $0 instead of trusted from the environment - the same line works in both
+# worlds.
+set -eu
+
+here="$(dirname "$(readlink -f "$0")")"
+
+# The payload layout is the one the .deb and .rpm ship: the complete self-contained
+# publish output under opt/dezirojoy. cd keeps the process - and the daemon it spawns
+# with WorkingDirectory=AppContext.BaseDirectory - anchored inside the install rather
+# than in whatever directory the image was launched from.
+cd "$here"
+exec "$here/opt/dezirojoy/DeziroJoy" "$@"
