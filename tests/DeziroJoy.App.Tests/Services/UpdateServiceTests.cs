@@ -284,7 +284,15 @@ public sealed class UpdateServiceTests
     [Fact]
     public void The_Current_Version_Comes_From_The_Assembly_By_Default()
     {
-        Assert.StartsWith("0.0.1", new UpdateService().CurrentVersionText);
+        // Read the same source UpdateService reads, so the assertion tracks the build version
+        // instead of a hardcoded prefix that breaks on every release bump.
+        var informational = System.Reflection.CustomAttributeExtensions
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
+                typeof(UpdateService).Assembly)?.InformationalVersion;
+        var expected = informational?.Split('+', 2)[0];
+
+        Assert.False(string.IsNullOrWhiteSpace(expected));
+        Assert.Equal(expected, new UpdateService().CurrentVersionText);
     }
 
     private sealed class StubHandler : HttpMessageHandler
