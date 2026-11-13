@@ -2,6 +2,8 @@ using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
+using KeyDownCommand = DeziroJoy.Core.Engine.KeyDownCommand;
+using KeyUpCommand = DeziroJoy.Core.Engine.KeyUpCommand;
 using MappingEngine = DeziroJoy.Core.Engine.MappingEngine;
 using Xunit;
 
@@ -2106,7 +2108,7 @@ public class MappingEditorViewModelTests
     {
         var editor = new MappingEditorViewModel();
 
-        Assert.Equal(["精准键", "Leader 键"], editor.SpecialKindOptions.Select(option => option.Label));
+        Assert.Equal(["精准键", "Leader 键", "Layer 键"], editor.SpecialKindOptions.Select(option => option.Label));
         Assert.Equal(["按下切换", "按住切换"], editor.SpecialSwitchModeOptions.Select(option => option.Label));
         Assert.Equal([1, 2, 3, 4], editor.SpecialSlotOptions);
     }
@@ -2159,6 +2161,256 @@ public class MappingEditorViewModelTests
         Assert.Equal(MappingTargetKind.SpecialKey, reloaded.ActiveTargetKind);
         Assert.Equal(SpecialKeyKind.Precision, reloaded.ActiveSpecialKind);
         Assert.Equal(PrecisionMode.Toggle, reloaded.ActiveSpecialPrecisionMode);
+    }
+
+    // ---- The Leader temporary layer ------------------------------------------
+
+    [Fact]
+    public void The_Layer_Options_Name_The_Base_Layer_And_The_Temporary_Ones()
+    {
+        var editor = new MappingEditorViewModel();
+
+        Assert.Equal([0, 1, 2, 3, 4], editor.LayerOptions.Select(option => option.Value));
+        Assert.Equal(
+            ["基础层", "第 1 层", "第 2 层", "第 3 层", "第 4 层"],
+            editor.LayerOptions.Select(option => option.Label));
+
+        // A layer key enters a layer, never the base layer, so the base row is not offered.
+        Assert.Equal([1, 2, 3, 4], editor.LayerIdOptions.Select(option => option.Value));
+        Assert.Equal(
+            ["第 1 层", "第 2 层", "第 3 层", "第 4 层"],
+            editor.LayerIdOptions.Select(option => option.Label));
+
+        Assert.Equal(0, editor.SelectedLayer);
+        Assert.Equal("基础层", editor.LayerDescription);
+        Assert.Equal("所属层：基础层", editor.LayerSummary);
+    }
+
+    [Fact]
+    public void A_Layer_Leader_Round_Trips_Through_The_Editor()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Layer;
+        editor.ActiveSpecialLayerId = 3;
+
+        var target = Assert.IsType<SpecialKeyTarget>(editor.BuildEntry().Target);
+
+        Assert.Equal(SpecialKeyKind.Layer, target.Kind);
+        Assert.Equal(3, target.LayerId);
+        Assert.Equal(LeaderSwitchMode.Hold, target.SwitchMode);
+
+        // The leader itself sits on the base layer: a temporary layer is entered from there.
+        Assert.Equal(0, editor.BuildEntry().Layer);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(editor.BuildEntry());
+
+        Assert.Equal(MappingTargetKind.SpecialKey, reloaded.ActiveTargetKind);
+        Assert.Equal(SpecialKeyKind.Layer, reloaded.ActiveSpecialKind);
+        Assert.Equal(3, reloaded.ActiveSpecialLayerId);
+        Assert.Equal(0, reloaded.SelectedLayer);
+    }
+
+    [Fact]
+    public void A_Layer_Leader_Is_Pinned_To_Hold_And_The_Picker_Says_So()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialSwitchMode = LeaderSwitchMode.Press;
+        editor.ActiveSpecialKind = SpecialKeyKind.Layer;
+
+        // The row stays to name the mode, disabled rather than offering a choice the engine
+        // would refuse, and the layer row beside it says why.
+        Assert.True(editor.ShowSpecialSwitchControls);
+        Assert.False(editor.SpecialSwitchModeEditable);
+        Assert.True(editor.ShowSpecialLayerControls);
+        Assert.Equal(LeaderSwitchMode.Hold, editor.ActiveSpecialSwitchMode);
+        Assert.Contains("只能按住切换", editor.SpecialLayerHint);
+
+        // A leader key keeps its choice of mode, and a precision key has none at all.
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+
+        Assert.True(editor.ShowSpecialSwitchControls);
+        Assert.True(editor.SpecialSwitchModeEditable);
+        Assert.False(editor.ShowSpecialLayerControls);
+
+        editor.ActiveSpecialKind = SpecialKeyKind.Precision;
+
+        Assert.False(editor.ShowSpecialSwitchControls);
+        Assert.False(editor.ShowSpecialLayerControls);
+    }
+
+    [Fact]
+    public void A_Layer_Leader_Always_Sits_On_The_Base_Layer()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.SelectedLayer = 2;
+
+        // Choosing the layer-leader sub-kind moves the mapping onto the base layer: a
+        // temporary layer is entered from there, and the engine refuses the other shape.
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Layer;
+
+        Assert.True(editor.LayerLeaderRequiresBaseLayer);
+        Assert.Equal(0, editor.SelectedLayer);
+        Assert.Contains("必须放在基础层", editor.LayerHint);
+
+        // Asking for a higher layer while the leader is the target is refused the same way.
+        editor.SelectedLayer = 3;
+
+        Assert.Equal(0, editor.SelectedLayer);
+        Assert.Equal(0, editor.BuildEntry().Layer);
+    }
+
+    [Fact]
+    public void BuildEntry_Carries_The_Layer_And_LoadFrom_Restores_It()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.A };
+        editor.SelectedLayer = 2;
+
+        var entry = editor.BuildEntry();
+
+        Assert.Equal(2, entry.Layer);
+
+        var reloaded = new MappingEditorViewModel();
+        reloaded.LoadFrom(entry);
+
+        Assert.Equal(2, reloaded.SelectedLayer);
+        Assert.Equal("第 2 层", reloaded.LayerDescription);
+        Assert.Equal(2, reloaded.BuildEntry().Layer);
+    }
+
+    [Fact]
+    public void Reset_Returns_The_Layer_To_The_Base_Layer()
+    {
+        var editor = new MappingEditorViewModel();
+        editor.SelectedLayer = 3;
+
+        editor.Reset();
+
+        Assert.Equal(0, editor.SelectedLayer);
+        Assert.Equal(0, editor.BuildEntry().Layer);
+        Assert.Equal("基础层", editor.LayerDescription);
+    }
+
+    [Fact]
+    public void A_Temporary_Layer_Survives_The_Store_And_Editor_Chain()
+    {
+        // The whole flow a user drives: a Hold layer leader naming layer 2, a few mappings
+        // placed on layer 2, saved, reloaded and committed through the editor the way
+        // MainWindowViewModel does. The engine is the judge at the end: it builds the
+        // round-tripped profile and runs the layer while the leader is held.
+        var directory = Path.Combine(Path.GetTempPath(), "dezirojoy-layer-chain", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            var profile = new GamepadProfile
+            {
+                Name = "层",
+                DeviceId = "layer-chain",
+                Layout = GamepadLayout.Xbox,
+                Mappings =
+                [
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.Back),
+                        Target = new SpecialKeyTarget(
+                            SpecialKeyKind.Layer, PrecisionMode.Toggle, LeaderSwitchMode.Hold, 1, 2, LayerId: 2),
+                    },
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.A),
+                        Target = new KeyPressTarget(GamepadKey.Space),
+                        Layer = 2,
+                    },
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.B),
+                        Target = new KeyPressTarget(GamepadKey.Enter),
+                    },
+                    new MappingEntry
+                    {
+                        Source = new ButtonBinding(GamepadButton.B),
+                        Target = new KeyPressTarget(GamepadKey.Space),
+                        Layer = 2,
+                    },
+                ],
+            };
+
+            new FileProfileStore(directory).Save(profile);
+
+            var stored = new FileProfileStore(directory).Load("layer-chain");
+
+            Assert.NotNull(stored);
+            Assert.Equal([0], LayersOf(stored.Mappings, GamepadButton.Back));
+            Assert.Equal([2], LayersOf(stored.Mappings, GamepadButton.A));
+            Assert.Equal([0, 2], LayersOf(stored.Mappings, GamepadButton.B));
+
+            var committed = stored.Mappings
+                .Select(entry =>
+                {
+                    var editor = new MappingEditorViewModel();
+                    editor.LoadFrom(entry);
+
+                    // The way MainWindowViewModel commits an edit: the built entry, with the
+                    // edited mapping's own id put back.
+                    return editor.BuildEntry() with { Id = entry.Id };
+                })
+                .ToList();
+
+            Assert.Equal([0], LayersOf(committed, GamepadButton.Back));
+            Assert.Equal([2], LayersOf(committed, GamepadButton.A));
+            Assert.Equal([0, 2], LayersOf(committed, GamepadButton.B));
+
+            new FileProfileStore(directory).Save(stored with { Mappings = committed });
+
+            var reloaded = new FileProfileStore(directory).Load("layer-chain");
+
+            Assert.NotNull(reloaded);
+            Assert.Equal([0, 2], LayersOf(reloaded.Mappings, GamepadButton.B));
+
+            // The engine builds the round-tripped profile: the layer is named, the leader
+            // sits on the base layer and holds, and the layer's own mappings run while it is
+            // held - B taps Space, overriding the Enter the base layer carries.
+            var engine = new MappingEngine(reloaded);
+
+            Assert.Equal(
+                [new KeyDownCommand(GamepadKey.Space, KeyModifiers.None)],
+                engine.Tick(Held(GamepadButton.Back, GamepadButton.B), 1f / 64f));
+            Assert.Equal(2, engine.ActiveLayerId);
+
+            // Releasing the leader hands the button back to the base mapping and leaves the
+            // layer behind.
+            Assert.Equal(
+                [
+                    new KeyUpCommand(GamepadKey.Space, KeyModifiers.None),
+                    new KeyDownCommand(GamepadKey.Enter, KeyModifiers.None),
+                ],
+                engine.Tick(Held(GamepadButton.B), 1f / 64f));
+            Assert.Equal(0, engine.ActiveLayerId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+
+        static int[] LayersOf(IReadOnlyList<MappingEntry> mappings, GamepadButton button)
+            => [.. mappings
+                .Where(mapping => mapping.Source is ButtonBinding binding && binding.Button == button)
+                .Select(mapping => mapping.Layer)];
+
+        static GamepadState Held(params GamepadButton[] buttons)
+        {
+            var mask = GamepadButtonMask.None;
+            foreach (var button in buttons)
+            {
+                mask |= button.ToMask();
+            }
+
+            return GamepadState.Create(mask, 0f, 0f, 0f, 0f);
+        }
     }
 
     [Fact]

@@ -120,6 +120,17 @@ public class MappingDescriptionsTests
     }
 
     [Fact]
+    public void The_Curve_Strength_Description_No_Longer_Promises_Exaggeration_Beyond_Full()
+    {
+        // Strength is clamped to [0,1], so the copy must not claim a value above 1 doubles
+        // the curve - that path no longer exists and reading it would mislead the user.
+        var text = MappingDescriptions.MouseCurveStrength();
+
+        Assert.DoesNotContain("加倍", text);
+        Assert.DoesNotContain("大于 1", text);
+    }
+
+    [Fact]
     public void The_Precision_Description_Says_It_Is_A_Multiplier_While_The_Button_Is_Held()
     {
         var text = MappingDescriptions.MousePrecisionScale();
@@ -304,5 +315,77 @@ public class MappingDescriptionsTests
         Assert.Equal(
             "精准键",
             MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Toggle)));
+    }
+
+    [Fact]
+    public void A_Layer_Key_Target_Names_The_Layer_It_Enters()
+    {
+        // A layer leader's row must say which temporary layer it enters, because the layer
+        // number is the whole configuration: the same button means something different on
+        // every layer, and "临时层键" alone would not tell the user what they just bound.
+        Assert.Equal(
+            "临时层 2 键",
+            MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Layer, LayerId: 2)));
+        Assert.DoesNotContain("SpecialKeyTarget", MappingDescriptions.Target(
+            new SpecialKeyTarget(SpecialKeyKind.Layer, LayerId: 2)));
+    }
+
+    [Fact]
+    public void A_Layer_Key_Target_Without_A_Layer_Still_Names_The_Kind()
+    {
+        // Layers run from 1 upward by contract, but a row must stay readable even for a
+        // hand-edited profile that names 0: the kind alone, never "临时层 0 键".
+        Assert.Equal("临时层键", MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Layer)));
+    }
+
+    [Theory]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.C, "复制")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.V, "粘贴")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.X, "剪切")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.Z, "撤销")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.Y, "重做")]
+    [InlineData(KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.Z, "重做")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.S, "保存")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.A, "全选")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.F, "查找")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.P, "打印")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.N, "新建")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.O, "打开")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.W, "关闭")]
+    [InlineData(KeyModifiers.Alt, GamepadKey.F4, "关闭窗口")]
+    [InlineData(KeyModifiers.Alt, GamepadKey.Tab, "切换窗口")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.Tab, "切换标签页")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.B, "加粗")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.I, "斜体")]
+    [InlineData(KeyModifiers.Ctrl, GamepadKey.U, "下划线")]
+    public void A_Common_Combo_Reads_As_The_Action_Name_Not_The_Key_Combo(
+        KeyModifiers modifiers, GamepadKey key, string expected)
+    {
+        // The layer hint overlay names what a button DOES, not which keys it presses:
+        // "复制" answers the question a player has mid-fight, "Ctrl + C" does not.
+        Assert.Equal(expected, MappingDescriptions.ActionName(new KeyComboTarget(modifiers, key)));
+    }
+
+    [Fact]
+    public void An_Unknown_Combo_Falls_Back_To_The_Key_Combo()
+    {
+        // No application gives Ctrl+Q a universal meaning, so the hint must not invent one:
+        // the raw combo is the honest answer.
+        Assert.Equal("Ctrl + Q", MappingDescriptions.ActionName(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.Q)));
+    }
+
+    [Fact]
+    public void A_Single_Key_Target_Reads_As_The_Key_Itself()
+    {
+        Assert.Equal("F5", MappingDescriptions.ActionName(new KeyPressTarget(GamepadKey.F5)));
+        Assert.Equal("←", MappingDescriptions.ActionName(new KeyPressTarget(GamepadKey.ArrowLeft)));
+    }
+
+    [Fact]
+    public void A_Mouse_Or_Wheel_Target_Names_The_Device_Part_It_Drives()
+    {
+        Assert.Equal("鼠标左键", MappingDescriptions.ActionName(new MouseButtonTarget(MouseButton.Left)));
+        Assert.Equal("鼠标移动", MappingDescriptions.ActionName(new MouseMoveTarget(new MouseStickSettings())));
+        Assert.Equal("滚轮滚动", MappingDescriptions.ActionName(new WheelScrollTarget(new ScrollStickSettings())));
     }
 }

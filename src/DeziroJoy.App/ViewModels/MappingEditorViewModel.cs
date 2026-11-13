@@ -17,16 +17,22 @@ namespace DeziroJoy.App.ViewModels;
 /// </summary>
 public sealed record GestureActionOption(string Label, MappingTarget? Target);
 
-/// <summary>A special-key sub-kind as the picker shows it: 精准键 or Leader 键.</summary>
+/// <summary>A special-key sub-kind as the picker shows it: 精准键, Leader 键 or Layer 键.</summary>
 public sealed record SpecialKeyKindOption(SpecialKeyKind Value, string Label);
 
 /// <summary>A leader switch mode as the picker shows it: 按下切换 or 按住切换.</summary>
 public sealed record LeaderSwitchModeOption(LeaderSwitchMode Value, string Label);
 
 /// <summary>
-/// One place where a global special key - a 精准键 or a Leader 键 - collides with another
-/// setting on the same physical button. The two global keys are device-level configuration,
-/// shared across every preset of the device, so a collision on their trigger button is a
+/// One layer as the layer pickers show it: 基础层, which every mapping already runs, or one
+/// of the temporary layers above it, which only run while a Layer 键 names them.
+/// </summary>
+public sealed record MappingLayerOption(int Value, string Label);
+
+/// <summary>
+/// One place where a global special key - a 精准键, a Leader 键 or a Layer 键 - collides
+/// with another setting on the same physical button. The two device-level keys are shared
+/// across every preset of the device, so a collision on their trigger button is a
 /// configuration defect rather than a per-preset quirk: the mapping row, the 全局特殊键
 /// area and the editor all read the same verdict and say the same thing about it.
 /// </summary>
@@ -73,12 +79,13 @@ public enum SpecialKeyTrigger
 }
 
 /// <summary>
-/// The conflict rules between the two global special keys and everything else configured on
-/// their trigger buttons. Every rule is stated the way the engine actually behaves - the
-/// gesture machine in <c>ButtonGestureState</c> decides which press resolves to what, and a
-/// precision key engages from the raw button rather than from the mapping loop - so a hint
-/// never warns about a pairing that works and never stays silent about one that does not.
-/// The analysis only reports: fixing a collision stays the user's edit to make.
+/// The conflict rules between the global special keys - a 精准键, a Leader 键 or a Layer 键 -
+/// and everything else configured on their trigger buttons. Every rule is stated the way the
+/// engine actually behaves - the gesture machine in <c>ButtonGestureState</c> decides which
+/// press resolves to what, and a precision key engages from the raw button rather than from
+/// the mapping loop - so a hint never warns about a pairing that works and never stays
+/// silent about one that does not. The analysis only reports: fixing a collision stays the
+/// user's edit to make.
 /// </summary>
 /// <remarks>
 /// The engine lets the three gestures coexist: no long-press action consumes the press, so a
@@ -91,6 +98,19 @@ public enum SpecialKeyTrigger
 /// </remarks>
 public static class SpecialKeyConflicts
 {
+    /// <summary>
+    /// What one special-key kind is called, the way its own picker names it. The Core record
+    /// has no description of its own and its raw <c>ToString</c> would read as debug output in
+    /// a mapping row, a hint or the editor's header, so every surface names a kind through
+    /// here and the three never drift apart.
+    /// </summary>
+    public static string KindLabel(SpecialKeyKind kind) => kind switch
+    {
+        SpecialKeyKind.Leader => "Leader 键",
+        SpecialKeyKind.Layer => "Layer 键",
+        _ => "精准键",
+    };
+
     /// <summary>
     /// Every collision in one mapping list. Mappings are grouped by physical button - the
     /// button plus the raw code that tells one extra button from another - because a gesture
@@ -188,7 +208,9 @@ public static class SpecialKeyConflicts
                     && TriggerOf(entry) is { } trigger
                     && (own.Kind == SpecialKeyKind.Leader || trigger == SpecialKeyTrigger.Click))
                 {
-                    var keyName = MappingDescriptions.SpecialKey(own);
+                    // The editor's own naming, so a layer key reads as the Layer 键 its
+                    // picker offers rather than as another kind's label.
+                    var keyName = KindLabel(own.Kind);
 
                     foreach (var other in entries)
                     {
@@ -227,7 +249,9 @@ public static class SpecialKeyConflicts
 
                 // The engine registers a precision key from the mapping's own target alone:
                 // one sitting on a gesture action never joins the button set the slowing
-                // reads, so it engages nothing at all.
+                // reads, so it engages nothing at all. A layer key is read the same way -
+                // the engine resolves a layer leader from the mapping's own target only, so
+                // one sitting on a gesture action enters no layer at all.
                 if (gesture is { } gestureKeys)
                 {
                     if (gestureKeys.DoubleClickAction is SpecialKeyTarget { Kind: SpecialKeyKind.Precision })
@@ -250,6 +274,28 @@ public static class SpecialKeyConflicts
                             entry.Id,
                             entry.Id,
                             $"「精准键」设在{label}的长按上不会生效：精准减速只识别设在单击上的精准键，请把它改到单击位置。"));
+                    }
+
+                    if (gestureKeys.DoubleClickAction is SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Layer,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「Layer 键」设在{label}的双击上不会生效：层切换只识别设在单击上的 Layer 键，请把它改到单击位置。"));
+                    }
+
+                    if (gestureKeys.LongPressAction is SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
+                    {
+                        conflicts.Add(new SpecialKeyConflict(
+                            SpecialKeyKind.Layer,
+                            button,
+                            code,
+                            entry.Id,
+                            entry.Id,
+                            $"「Layer 键」设在{label}的长按上不会生效：层切换只识别设在单击上的 Layer 键，请把它改到单击位置。"));
                     }
                 }
             }
@@ -677,6 +723,7 @@ public partial class MappingEditorViewModel : ObservableObject
     [
         new(SpecialKeyKind.Precision, "精准键"),
         new(SpecialKeyKind.Leader, "Leader 键"),
+        new(SpecialKeyKind.Layer, "Layer 键"),
     ];
 
     /// <summary>
@@ -703,6 +750,101 @@ public partial class MappingEditorViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     private IReadOnlyList<int> _specialSlotOptions = [1, 2, 3, 4];
+
+    /// <summary>
+    /// The layers a mapping can sit on: 基础层 first, then the temporary layers above it.
+    /// Starts at the base layer plus <see cref="TemporaryLayerCount"/> of them and is replaced
+    /// by the window view model when a device runs more, so a layer the user added is offered
+    /// here too.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LayerIdOptions))]
+    private IReadOnlyList<MappingLayerOption> _layerOptions = BuildLayerOptions(TemporaryLayerCount);
+
+    /// <summary>How many temporary layers the editor offers alongside the base layer.</summary>
+    public const int TemporaryLayerCount = 4;
+
+    private static MappingLayerOption[] BuildLayerOptions(int temporaryLayers)
+    {
+        var options = new MappingLayerOption[temporaryLayers + 1];
+        for (var layer = 0; layer <= temporaryLayers; layer++)
+        {
+            options[layer] = new MappingLayerOption(layer, LayerLabel(layer));
+        }
+
+        return options;
+    }
+
+    /// <summary>What a layer is called, the way every layer picker names it.</summary>
+    public static string LayerLabel(int layer) => layer <= 0 ? "基础层" : $"第 {layer} 层";
+
+    /// <summary>
+    /// The layers a Layer 键 can enter. 0 is the base layer every mapping already runs, so a
+    /// layer key names 1 or above and the base row is not offered here.
+    /// </summary>
+    public IReadOnlyList<MappingLayerOption> LayerIdOptions =>
+        LayerOptions.Where(option => option.Value >= 1).ToArray();
+
+    /// <summary>
+    /// Which layer the mapping being edited belongs to: 0 for the base layer, which always
+    /// runs, or a temporary layer that only runs while a Layer 键 names it. The tag travels
+    /// with the entry on commit and is restored on reload, so a mapping placed on a layer
+    /// stays there through an edit instead of collapsing back onto the base layer.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedLayerOption))]
+    [NotifyPropertyChangedFor(nameof(LayerDescription))]
+    private int _selectedLayer;
+
+    partial void OnSelectedLayerChanged(int value) => EnforceLayerLeaderPlacement();
+
+    /// <summary>The selected layer picker row, kept in step with <see cref="SelectedLayer"/>.</summary>
+    public MappingLayerOption? SelectedLayerOption
+    {
+        get => LayerOptions.FirstOrDefault(option => option.Value == SelectedLayer);
+        set
+        {
+            if (value is not null)
+            {
+                SelectedLayer = value.Value;
+            }
+        }
+    }
+
+    /// <summary>What layer the mapping being edited is on, for the header readout.</summary>
+    public string LayerDescription => LayerLabel(SelectedLayer);
+
+    /// <summary>
+    /// The layer as the header names it, beside the source and the target: a mapping placed
+    /// on a temporary layer must never read as an ordinary one.
+    /// </summary>
+    public string LayerSummary => $"所属层：{LayerDescription}";
+
+    /// <summary>
+    /// True while the mapping's own target is a Layer 键. Such a leader has to sit on the
+    /// base layer: a temporary layer is entered from the base layer only, and the engine
+    /// refuses a profile that names one from inside another - a refusal that would fail the
+    /// whole profile rather than the one mapping. The editor snaps the layer back to 基础层
+    /// instead, and <see cref="LayerHint"/> says why.
+    /// </summary>
+    public bool LayerLeaderRequiresBaseLayer => ClickSlot.TargetKind == MappingTargetKind.SpecialKey
+        && ClickSlot.SpecialKind == SpecialKeyKind.Layer;
+
+    /// <summary>
+    /// What the layer picker means for the mapping being edited: the inheritance rule for an
+    /// ordinary mapping, or why a Layer 键 has to sit on the base layer.
+    /// </summary>
+    public string LayerHint => LayerLeaderRequiresBaseLayer
+        ? "「Layer 键」本身必须放在基础层：临时层只能从基础层进入，引擎会拒绝从其他层切换层的配置，因此该映射的所属层固定为基础层。"
+        : "基础层的映射始终生效；更高的层是临时层，只有按住对应层的「Layer 键」期间才生效，并覆盖同按钮的基础层映射，未覆盖的继承基础层。";
+
+    private void EnforceLayerLeaderPlacement()
+    {
+        if (LayerLeaderRequiresBaseLayer && SelectedLayer != 0)
+        {
+            SelectedLayer = 0;
+        }
+    }
 
     /// <summary>The active slot's special-key sub-kind.</summary>
     public SpecialKeyKind ActiveSpecialKind
@@ -737,6 +879,30 @@ public partial class MappingEditorViewModel : ObservableObject
     {
         get => ActiveSlot.SpecialSlotB;
         set => ActiveSlot.SpecialSlotB = value;
+    }
+
+    /// <summary>The temporary layer the active slot's Layer 键 enters.</summary>
+    public int ActiveSpecialLayerId
+    {
+        get => ActiveSlot.SpecialLayerId;
+        set => ActiveSlot.SpecialLayerId = value;
+    }
+
+    /// <summary>
+    /// The selected layer picker row for the active slot, kept in step with
+    /// <see cref="ActiveSpecialLayerId"/>. A layer id the picker does not offer reads as
+    /// unlisted, the same shape a hand-edited profile naming one has.
+    /// </summary>
+    public MappingLayerOption? ActiveSpecialLayerIdOption
+    {
+        get => LayerIdOptions.FirstOrDefault(option => option.Value == ActiveSpecialLayerId);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveSpecialLayerId = value.Value;
+            }
+        }
     }
 
     /// <summary>The selected sub-kind picker row, kept in step with <see cref="ActiveSpecialKind"/>.</summary>
@@ -781,6 +947,36 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>True when the special-key editor offers the leader-only controls.</summary>
     public bool ShowSpecialLeaderControls => ActiveTargetKind == MappingTargetKind.SpecialKey
         && ActiveSpecialKind == SpecialKeyKind.Leader;
+
+    /// <summary>
+    /// True when the special-key editor offers the switch-mode control: a leader key and a
+    /// layer key both switch, so the row follows the two of them.
+    /// </summary>
+    public bool ShowSpecialSwitchControls => ActiveTargetKind == MappingTargetKind.SpecialKey
+        && ActiveSpecialKind is SpecialKeyKind.Leader or SpecialKeyKind.Layer;
+
+    /// <summary>
+    /// False while the sub-kind is Layer: a temporary layer lives exactly as long as its
+    /// leader is held and the engine rejects a layer key that switches on a press edge, so
+    /// the mode is pinned to 按住切换 and the picker is disabled rather than offering a
+    /// choice that could never run. See <see cref="SpecialLayerHint"/>.
+    /// </summary>
+    public bool SpecialSwitchModeEditable => ActiveTargetKind != MappingTargetKind.SpecialKey
+        || ActiveSpecialKind != SpecialKeyKind.Layer;
+
+    /// <summary>True when the special-key editor offers the layer controls.</summary>
+    public bool ShowSpecialLayerControls => ActiveTargetKind == MappingTargetKind.SpecialKey
+        && ActiveSpecialKind == SpecialKeyKind.Layer;
+
+    /// <summary>
+    /// What a Layer 键 does, in Chinese: it enters the layer it names for as long as it is
+    /// held, the layer overrides the base mappings that listen on the same input and inherits
+    /// the rest, and the switch mode is pinned to 按住 because the engine rejects anything
+    /// else.
+    /// </summary>
+    public string SpecialLayerHint => ShowSpecialLayerControls
+        ? "「Layer 键」只能按住切换：临时层只在按住期间存在，松开即回到基础层；按住期间层内映射覆盖同按钮的基础层映射，未覆盖的继承基础层。"
+        : string.Empty;
 
     /// <summary>True when the special-key editor offers the precision controls.</summary>
     public bool ShowSpecialPrecisionControls => ActiveTargetKind == MappingTargetKind.SpecialKey
@@ -957,7 +1153,7 @@ public partial class MappingEditorViewModel : ObservableObject
     /// the editor's header.
     /// </summary>
     private static string SpecialKeyDescription(SpecialKeyTarget target)
-        => target.Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
+        => SpecialKeyConflicts.KindLabel(target.Kind);
 
     /// <summary>
     /// The selected row of the categorized key list for the active slot. A category header is
@@ -1756,6 +1952,11 @@ public partial class MappingEditorViewModel : ObservableObject
     {
         Source = BuildSource(),
         Target = BuildTarget(),
+
+        // The layer tag travels with the entry. Dropping it would move a mapping the user
+        // placed on a temporary layer back onto the base layer on the next edit, and the
+        // layer would quietly stop running.
+        Layer = SelectedLayer,
     };
 
     public void LoadFrom(MappingEntry entry)
@@ -1836,6 +2037,10 @@ public partial class MappingEditorViewModel : ObservableObject
         // the compact surface rather than wherever the previous edit left the list.
         KeyPickerExpanded = false;
 
+        // The layer the mapping sits on is part of the entry: a mapping placed on a temporary
+        // layer has to come back on that layer, or the edit would move it to the base layer.
+        SelectedLayer = entry.Layer;
+
         // A load lands the whole draft at once, so the conflict hints are re-measured once
         // here rather than left to whatever the individual setters happened to raise.
         RefreshSpecialKeyConflicts();
@@ -1854,6 +2059,7 @@ public partial class MappingEditorViewModel : ObservableObject
         SelectedStick = GamepadStick.Right;
         SelectedDirection = InputDirection.Up;
         SelectedGestureKind = GestureKind.Click;
+        SelectedLayer = 0;
         KeyPickerExpanded = false;
 
         // The drafts go back to pristine first; the gesture flags and actions follow, so a
@@ -2192,10 +2398,16 @@ public partial class MappingEditorViewModel : ObservableObject
                 OnPropertyChanged(nameof(ScrollSettings));
                 break;
             case nameof(GestureSlotEditor.SpecialKind):
+                // A layer leader is the one special key that has to sit on the base layer,
+                // so choosing the kind re-measures where the mapping itself may live.
+                EnforceLayerLeaderPlacement();
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
             case nameof(GestureSlotEditor.SpecialPrecisionMode):
             case nameof(GestureSlotEditor.SpecialSwitchMode):
             case nameof(GestureSlotEditor.SpecialSlotA):
             case nameof(GestureSlotEditor.SpecialSlotB):
+            case nameof(GestureSlotEditor.SpecialLayerId):
                 OnPropertyChanged(nameof(TargetDescription));
                 break;
             case nameof(GestureSlotEditor.IsNone):
@@ -2269,9 +2481,17 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveSpecialSwitchModeOption));
         OnPropertyChanged(nameof(ActiveSpecialSlotA));
         OnPropertyChanged(nameof(ActiveSpecialSlotB));
+        OnPropertyChanged(nameof(ActiveSpecialLayerId));
+        OnPropertyChanged(nameof(ActiveSpecialLayerIdOption));
         OnPropertyChanged(nameof(ShowSpecialLeaderControls));
+        OnPropertyChanged(nameof(ShowSpecialSwitchControls));
+        OnPropertyChanged(nameof(SpecialSwitchModeEditable));
+        OnPropertyChanged(nameof(ShowSpecialLayerControls));
+        OnPropertyChanged(nameof(SpecialLayerHint));
         OnPropertyChanged(nameof(ShowSpecialPrecisionControls));
         OnPropertyChanged(nameof(SpecialKeySlotConflict));
+        OnPropertyChanged(nameof(LayerLeaderRequiresBaseLayer));
+        OnPropertyChanged(nameof(LayerHint));
         OnPropertyChanged(nameof(ActiveIsNone));
         OnPropertyChanged(nameof(ActiveRepeatsClick));
         OnPropertyChanged(nameof(ActiveGestureEnabled));

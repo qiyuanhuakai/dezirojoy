@@ -6,6 +6,7 @@ using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views;
 using DeziroJoy.Core.Platform;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
@@ -14,6 +15,14 @@ namespace DeziroJoy.App;
 
 public partial class App : Application
 {
+    /// <summary>
+    /// The layer hint overlay, held for the life of the process: it is created hidden and
+    /// shows and hides itself with the temporary layer the view model reads from the daemon.
+    /// A window no reference reaches can be collected before it is ever shown, so the render
+    /// process keeps the one it built.
+    /// </summary>
+    private static LayerHintOverlay? _layerHint;
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -93,6 +102,13 @@ public partial class App : Application
         }
 
         RenderProcess.InstallWindow(desktop, viewModel, host, themes, daemon: DesktopLauncher.Daemon);
+
+        // The layer hint floats above every window on screen - the target application
+        // included - so it is a window of its own rather than a child of the main window: a
+        // topmost, never-activated, click-through card at the screen edge. It owns no state;
+        // it shows and hides with the temporary layer the daemon's snapshots report, which
+        // is also what keeps the target application's keyboard focus untouched.
+        _layerHint = new LayerHintOverlay(viewModel.LayerHint, viewModel.Visualizer);
     }
 }
 

@@ -170,6 +170,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Appearance = new AppearanceViewModel();
         DaemonSettings = new DaemonSettingsViewModel();
         Update = new UpdateSettingsViewModel(_updateService, _settings);
+        LayerHint = new LayerHintViewModel();
 
         // Fixed for the lifetime of the process: elevation is decided at launch.
         IsElevationSupported = _elevationService.IsSupported;
@@ -281,6 +282,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public AppearanceViewModel Appearance { get; }
 
     public DaemonSettingsViewModel DaemonSettings { get; }
+
+    /// <summary>
+    /// What the layer hint overlay shows while a temporary layer is active: the layer's own
+    /// mappings as readable action names. Rebuilt from every daemon snapshot (and every
+    /// profile change) against the active layer the snapshot reports, so the overlay follows
+    /// the layer the device is really running and hides the moment it is released.
+    /// </summary>
+    public LayerHintViewModel LayerHint { get; }
 
     public bool IsDaemonMode => _daemonRequired;
 
@@ -2269,7 +2278,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         ReloadSensitivityPanels();
         RefreshMappings();
+        RefreshLayerHint();
     }
+
+    /// <summary>
+    /// Rebuilds the layer hint from the profile in view and the daemon's latest snapshot.
+    /// Runs on every profile change as well as every snapshot, so a mapping committed while
+    /// a layer leader is held is named correctly the moment it lands.
+    /// </summary>
+    private void RefreshLayerHint() => LayerHint.Update(ActiveProfile, DaemonSnapshot);
 
     partial void OnDaemonSnapshotChanged(StateSnapshot? value)
     {
@@ -2323,6 +2340,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Visualizer.SetConnected(snapshot.HasController);
         RefreshStatus(wasConnected && !snapshot.HasController);
+
+        // The layer hint follows the layer the snapshot reports, resolved against the profile
+        // it carries: the two arrive together, so the hint is rebuilt once per snapshot.
+        RefreshLayerHint();
     }
 
     private void AdoptDaemonProfile(StateSnapshot snapshot)
@@ -2403,6 +2424,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsEngineRunning = false;
         IsMappingEnabled = false;
         MappingOwner = MappingOwner.None;
+
+        // No snapshot means no active layer, so the hint empties and the overlay hides.
+        RefreshLayerHint();
         SetTransferError("守护进程连接已断开；映射状态未知，未启用本地注入回退。");
         RefreshStatus();
     }

@@ -1,0 +1,70 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+        xmlns:controls="clr-namespace:DeziroJoy.App.Views.Controls"
+        x:Class="DeziroJoy.App.Views.LayerHintOverlay"
+        x:DataType="vm:LayerHintViewModel"
+        Title="DeziroJoy 临时层提示"
+        ShowActivated="False"
+        Topmost="True"
+        Focusable="False"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowDecorations="None"
+        SizeToContent="WidthAndHeight"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent">
+
+    <!--
+        The overlay floats over every window on screen - the target application above all -
+        so it is built to be looked at and nothing else. The whole surface is hit-test
+        invisible, which makes it click-through: a press that lands on the hint reaches the
+        application underneath, and ShowActivated=False keeps that application's keyboard
+        focus when the hint appears. Every colour rides a theme token, so the hint follows
+        the light/dark variant the user picked.
+    -->
+    <Grid x:Name="HintSurface" IsHitTestVisible="False" Margin="20">
+        <Border Background="{DynamicResource OverlayBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                CornerRadius="{DynamicResource CornerRadiusXl}" Padding="16,12">
+            <Grid ColumnDefinitions="Auto,Auto">
+
+                <!-- The pad diagram, scaled down. It is the same live model the mapping tab
+                     shows, so the leader being held lights up on it: the hint names the
+                     layer and shows the physical key that entered it in one glance. -->
+                <Viewbox Grid.Column="0" Stretch="Uniform" MaxWidth="300" MaxHeight="176">
+                    <controls:GamepadVisualizer x:Name="LayerHintPad" />
+                </Viewbox>
+
+                <StackPanel Grid.Column="1" Margin="14,0,2,0" MinWidth="150" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding LayerTitle}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource OverlayTextBrush}" Margin="0,0,0,6" />
+                    <ItemsControl ItemsSource="{Binding Rows}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:LayerHintRow">
+                                <StackPanel Orientation="Horizontal" Margin="0,3">
+                                    <!-- A keycap badge, the way the pad itself labels its
+                                         buttons, so the eye reads key then action. -->
+                                    <Border Width="30" Height="22" CornerRadius="{DynamicResource CornerRadiusSm}"
+                                            Background="{DynamicResource SubtleBrush}">
+                                        <TextBlock Text="{Binding Key}" FontSize="11"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Margin="8,0,0,0" Text="{Binding Action}" FontSize="13"
+                                               Foreground="{DynamicResource OverlayTextBrush}"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

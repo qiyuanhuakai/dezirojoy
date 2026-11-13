@@ -6,15 +6,17 @@ using Xunit;
 namespace DeziroJoy.App.Tests.ViewModels;
 
 /// <summary>
-/// The conflict rules between the two global special keys and everything else on their
+/// The conflict rules between the global special keys and everything else on their
 /// trigger buttons. Every expectation here is a statement about how the engine actually
 /// behaves: a leader key switches from the mapping loop, so a gesture on the same mapping
 /// delays the switch (the double-click window) or repeats it (click auto-repeat, or a long
 /// press with a repeat interval that falls back to the click), while a precision key engages
 /// from the raw button and ignores gestures entirely - but only from the click position, the
-/// one the engine registers it from. The engine swallows nothing: no long-press action
-/// consumes the press, so a sibling's quick press always fires beside the global key. The
-/// hints only report; none of them rewrites the configuration.
+/// one the engine registers it from. A layer key is read the same way: the engine resolves it
+/// from the mapping's own target alone, so one sitting on a gesture action enters no layer.
+/// The engine swallows nothing: no long-press action consumes the press, so a sibling's quick
+/// press always fires beside the global key. The hints only report; none of them rewrites the
+/// configuration.
 /// </summary>
 public class SpecialKeyConflictsTests
 {
@@ -55,6 +57,9 @@ public class SpecialKeyConflictsTests
 
     private static SpecialKeyTarget Precision(PrecisionMode mode = PrecisionMode.Hold)
         => new(SpecialKeyKind.Precision, mode);
+
+    private static SpecialKeyTarget Layer(int layerId = 2, LeaderSwitchMode switchMode = LeaderSwitchMode.Hold)
+        => new(SpecialKeyKind.Layer, PrecisionMode.Toggle, switchMode, 1, 2, layerId);
 
     private static string Message(IReadOnlyList<SpecialKeyConflict> conflicts)
         => Assert.Single(conflicts).Message;
@@ -723,6 +728,70 @@ public class SpecialKeyConflictsTests
         Assert.Equal("精准键", conflict.GlobalKeyLabel);
         Assert.Contains("左摇杆按下", conflict.Message);
         Assert.Contains("精准键", conflict.Message);
+    }
+
+    [Fact]
+    public void A_Layer_Key_On_A_Gesture_Position_Never_Engages()
+    {
+        // The engine resolves a layer leader from the mapping's own target alone, exactly as
+        // it registers a precision key: one sitting on a gesture action enters no layer.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: Layer())),
+        };
+
+        var message = Message(SpecialKeyConflicts.Analyze(mappings));
+
+        Assert.Contains("Layer 键", message);
+        Assert.Contains("不会生效", message);
+        Assert.Contains("双击", message);
+    }
+
+    [Fact]
+    public void A_Layer_Key_On_The_Long_Press_Never_Engages()
+    {
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
+                    longPressAction: Layer())),
+        };
+
+        var message = Message(SpecialKeyConflicts.Analyze(mappings));
+
+        Assert.Contains("Layer 键", message);
+        Assert.Contains("不会生效", message);
+        Assert.Contains("长按", message);
+    }
+
+    [Fact]
+    public void A_Bare_Layer_Key_On_Its_Own_Button_Is_No_Conflict()
+    {
+        var mappings = new[] { Button(GamepadButton.Back, Layer()) };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void Another_Mapping_On_The_Layer_Button_Fires_Beside_It()
+    {
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Layer()),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)),
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（单击：Enter）：每次按下触发「Layer 键」的同时也会触发Enter。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
     }
 
     [Fact]

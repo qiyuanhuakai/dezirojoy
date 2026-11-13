@@ -71,14 +71,92 @@ public static class MappingDescriptions
 
     /// <summary>
     /// What a special key does, named the way its own picker names it: a leader key flips
-    /// between the two preset slots it carries, a precision key slows the stick while it is
-    /// engaged. The Core record has no description of its own and its raw <c>ToString</c>
-    /// would read as debug output in a mapping row, so the row - like the editor's header -
-    /// says the kind alone. The slot pair and the switch mode live in the editor's own
-    /// pickers, not in the summary the two share.
+    /// between the two preset slots it carries, a layer key enters the temporary layer it
+    /// names, a precision key slows the stick while it is engaged. The Core record has no
+    /// description of its own and its raw <c>ToString</c> would read as debug output in a
+    /// mapping row, so the row - like the editor's header - says the kind alone. The slot
+    /// pair and the switch mode live in the editor's own pickers, not in the summary the
+    /// two share; the layer number is the one field a layer key's summary keeps, because it
+    /// is the whole configuration - the same button does something different on every layer.
     /// </summary>
-    public static string SpecialKey(SpecialKeyTarget target)
-        => target.Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
+    public static string SpecialKey(SpecialKeyTarget target) => target.Kind switch
+    {
+        SpecialKeyKind.Leader => "Leader 键",
+        SpecialKeyKind.Layer => target.LayerId > 0 ? $"临时层 {target.LayerId} 键" : "临时层键",
+        _ => "精准键",
+    };
+
+    /// <summary>
+    /// What a mapping does as a readable action name, for the layer hint overlay: 复制 rather
+    /// than Ctrl + C, 关闭窗口 rather than Alt + F4. A player holding a layer leader asks what
+    /// a button DOES, not which keys it presses, so the well-known combos are named by the
+    /// the action every application gives them and anything without a universal meaning falls
+    /// back to the plain combo. Everything that is not a key combo reads exactly as
+    /// <see cref="Target"/> reads it - the combo is the only target whose raw form is a wall
+    /// of modifier names rather than a behaviour.
+    /// </summary>
+    public static string ActionName(MappingTarget target) => target switch
+    {
+        KeyComboTarget combo => ComboActionName(combo),
+        NoneTarget => "无功能",
+        _ => Target(target),
+    };
+
+    /// <summary>
+    /// The semantic name of a well-known combo, or the plain key combo when the pair has no
+    /// universal meaning. The match is exact - same modifiers, same key - so Ctrl+Shift+Z
+    /// and Ctrl+Z each find their own row and a near miss (Ctrl+Alt+C) invents nothing.
+    /// </summary>
+    private static string ComboActionName(KeyComboTarget combo)
+    {
+        foreach (var (modifiers, key, name) in ComboActionNames)
+        {
+            if (modifiers == combo.Modifiers && key == combo.Key)
+            {
+                return name;
+            }
+        }
+
+        return Target(combo);
+    }
+
+    /// <summary>
+    /// The combos every application agrees on, as the action each one performs. Only pairs
+    /// with one near-universal meaning belong here: a name an application gives its own
+    /// chord (Ctrl+D bookmarks in a browser, deletes a line in an editor) would read as a
+    /// promise the mapping cannot keep, so those fall back to the raw combo instead.
+    /// </summary>
+    private static readonly (KeyModifiers Modifiers, GamepadKey Key, string Name)[] ComboActionNames =
+    [
+        (KeyModifiers.Ctrl, GamepadKey.C, "复制"),
+        (KeyModifiers.Ctrl, GamepadKey.V, "粘贴"),
+        (KeyModifiers.Ctrl, GamepadKey.X, "剪切"),
+        (KeyModifiers.Ctrl, GamepadKey.Z, "撤销"),
+        (KeyModifiers.Ctrl, GamepadKey.Y, "重做"),
+        (KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.Z, "重做"),
+        (KeyModifiers.Ctrl, GamepadKey.S, "保存"),
+        (KeyModifiers.Ctrl, GamepadKey.A, "全选"),
+        (KeyModifiers.Ctrl, GamepadKey.F, "查找"),
+        (KeyModifiers.Ctrl, GamepadKey.P, "打印"),
+        (KeyModifiers.Ctrl, GamepadKey.N, "新建"),
+        (KeyModifiers.Ctrl, GamepadKey.O, "打开"),
+        (KeyModifiers.Ctrl, GamepadKey.W, "关闭"),
+        (KeyModifiers.Ctrl, GamepadKey.T, "新建标签页"),
+        (KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.T, "恢复标签页"),
+        (KeyModifiers.Ctrl, GamepadKey.B, "加粗"),
+        (KeyModifiers.Ctrl, GamepadKey.I, "斜体"),
+        (KeyModifiers.Ctrl, GamepadKey.U, "下划线"),
+        (KeyModifiers.Ctrl, GamepadKey.Home, "跳到开头"),
+        (KeyModifiers.Ctrl, GamepadKey.End, "跳到末尾"),
+        (KeyModifiers.Alt, GamepadKey.Tab, "切换窗口"),
+        (KeyModifiers.Alt, GamepadKey.F4, "关闭窗口"),
+        (KeyModifiers.Ctrl, GamepadKey.Tab, "切换标签页"),
+        (KeyModifiers.Ctrl | KeyModifiers.Shift, GamepadKey.Escape, "任务管理器"),
+        (KeyModifiers.Win, GamepadKey.D, "显示桌面"),
+        (KeyModifiers.Win, GamepadKey.E, "打开资源管理器"),
+        (KeyModifiers.Win, GamepadKey.L, "锁定计算机"),
+        (KeyModifiers.Shift, GamepadKey.Delete, "永久删除"),
+    ];
 
     /// <summary>
     /// How a leader key engages, worded exactly as the editor's switch-mode picker words it,
@@ -226,7 +304,7 @@ public static class MappingDescriptions
     };
 
     public static string MouseCurveStrength()
-        => "曲线与线性的混合比例：0 = 纯线性（等同「线性」曲线），1 = 完整曲线，大于 1 = 曲线效果加倍、更极端。";
+        => "曲线与线性的混合比例：0 = 纯线性（等同「线性」曲线），1 = 完整曲线；取值范围为 0 到 1，数值越大越接近完整曲线。";
 
     public static string MouseResponseTime()
         => "指数平滑时间常数（秒）：速度按 1−e^(−Δt/τ) 逼近目标，τ 越大越平稳但越滞后；0 = 立即响应（原始摇杆）。与帧率无关。";

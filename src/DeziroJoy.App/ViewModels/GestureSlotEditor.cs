@@ -40,6 +40,12 @@ public partial class GestureSlotEditor : ObservableObject
     /// </summary>
     public const string ExampleScript = "hold Alt\nevery 1s tap Tab";
 
+    /// <summary>
+    /// The layer a fresh Layer 键 draft enters. Layer 0 is the base layer every mapping
+    /// already runs, so a layer key names 1 or above.
+    /// </summary>
+    public const int FirstLayerId = 1;
+
     [ObservableProperty]
     private MappingTargetKind _targetKind = MappingTargetKind.KeyPress;
 
@@ -94,6 +100,14 @@ public partial class GestureSlotEditor : ObservableObject
 
     [ObservableProperty]
     private int _specialSlotB = 2;
+
+    /// <summary>
+    /// Which temporary layer a <see cref="SpecialKeyKind.Layer"/> target enters. 0 - the
+    /// default of the Core record - is the base layer, which a layer key must not name, so a
+    /// draft starts on the first layer instead. It is meaningless for the other kinds.
+    /// </summary>
+    [ObservableProperty]
+    private int _specialLayerId = FirstLayerId;
 
     /// <summary>
     /// Which of the three states the slot is in. Editing any target field gives the slot a
@@ -163,7 +177,12 @@ public partial class GestureSlotEditor : ObservableObject
                 SpecialPrecisionMode,
                 SpecialSwitchMode,
                 SpecialSlotA,
-                SpecialSlotB),
+                SpecialSlotB,
+
+                // The layer id is a layer key's own: the other kinds keep the Core default,
+                // so a precision or a leader key still builds exactly the target a profile
+                // written with the defaults carries.
+                LayerId: SpecialKind == SpecialKeyKind.Layer ? SpecialLayerId : 0),
             MappingTargetKind.ComplexShortcut => new ComplexShortcutTarget { Script = Script },
             _ => new KeyPressTarget(SelectedKey),
         };
@@ -228,11 +247,16 @@ public partial class GestureSlotEditor : ObservableObject
             case SpecialKeyTarget special:
                 Function = GestureSlotFunction.Target;
                 TargetKind = MappingTargetKind.SpecialKey;
-                SpecialKind = special.Kind;
                 SpecialPrecisionMode = special.PrecisionMode;
                 SpecialSwitchMode = special.SwitchMode;
                 SpecialSlotA = special.SlotA;
                 SpecialSlotB = special.SlotB;
+                SpecialLayerId = special.LayerId;
+
+                // The kind lands last on purpose: a layer leader is Hold-only, so choosing
+                // the kind repairs a Press-mode layer key a hand-edited profile may carry,
+                // and a switch mode written above must not put it back.
+                SpecialKind = special.Kind;
                 break;
             case ComplexShortcutTarget complex:
                 Function = GestureSlotFunction.Target;
@@ -261,6 +285,7 @@ public partial class GestureSlotEditor : ObservableObject
         SpecialSwitchMode = LeaderSwitchMode.Press;
         SpecialSlotA = 1;
         SpecialSlotB = 2;
+        SpecialLayerId = FirstLayerId;
     }
 
     partial void OnTargetKindChanged(MappingTargetKind value)
@@ -294,7 +319,18 @@ public partial class GestureSlotEditor : ObservableObject
 
     partial void OnScrollSettingsChanged(ScrollStickSettings value) => ClaimFunction();
 
-    partial void OnSpecialKindChanged(SpecialKeyKind value) => ClaimFunction();
+    partial void OnSpecialKindChanged(SpecialKeyKind value)
+    {
+        ClaimFunction();
+
+        // A temporary layer lives exactly as long as its leader is held, and the engine
+        // rejects a layer key that switches on a press edge, so the kind pins the switch
+        // mode to 按住 instead of leaving a draft that could never run.
+        if (value == SpecialKeyKind.Layer)
+        {
+            SpecialSwitchMode = LeaderSwitchMode.Hold;
+        }
+    }
 
     partial void OnSpecialPrecisionModeChanged(PrecisionMode value) => ClaimFunction();
 
@@ -303,6 +339,8 @@ public partial class GestureSlotEditor : ObservableObject
     partial void OnSpecialSlotAChanged(int value) => ClaimFunction();
 
     partial void OnSpecialSlotBChanged(int value) => ClaimFunction();
+
+    partial void OnSpecialLayerIdChanged(int value) => ClaimFunction();
 
     /// <summary>
     /// Editing any field is a choice of target, so a slot that was re-firing the click takes
