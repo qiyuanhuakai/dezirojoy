@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
 
 namespace DeziroJoy.App.Ipc;
 
@@ -239,6 +240,14 @@ public sealed record StateSnapshot(
 
     /// <summary>Real devices currently owned by the daemon, in stable provider order.</summary>
     public IReadOnlyList<ConnectedDeviceSnapshot> Devices { get; init; } = [];
+
+    /// <summary>
+    /// The temporary layer each connected device is running, with the mappings that layer puts
+    /// in effect - one entry per device, in the same order as <see cref="Devices"/>. A device
+    /// running its base mappings alone reports layer 0. The mapping ids resolve against the
+    /// profile body this snapshot already carries.
+    /// </summary>
+    public IReadOnlyList<ActiveLayerSnapshot> Layers { get; init; } = [];
 }
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>

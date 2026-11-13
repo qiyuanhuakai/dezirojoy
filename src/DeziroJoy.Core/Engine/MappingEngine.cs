@@ -37,6 +37,14 @@ namespace DeziroJoy.Core.Engine;
 /// constructor rewrites that shape into this one, so an old profile behaves exactly as
 /// it did - one code path runs the program.
 /// </para>
+/// <para>
+/// Mappings carry a <see cref="MappingEntry.Layer"/>. Layer 0 is the base layer and always
+/// runs; a mapping on a higher layer only runs while a leader key names that layer as a
+/// <see cref="SpecialKeyKind.Layer"/> target. The layer inherits every base mapping it does
+/// not override, so a second layer that only rebinds a few buttons leaves everything else -
+/// a drag, a held key, a stick's mouse move - running exactly as it was. See
+/// <see cref="ActivateLayer"/> for the switch rules.
+/// </para>
 /// </remarks>
 public sealed class MappingEngine
 {
@@ -47,14 +55,43 @@ public sealed class MappingEngine
     /// </summary>
     internal const float StickDigitalThreshold = 0.5f;
 
+    /// <summary>
+    /// The largest timestep displacement is integrated for, on every tick. A tick that covers
+    /// more real time than this moves the pointer one bounded step, never the whole gap: a
+    /// 10 s stall must not teleport the pointer 10 s worth of stick deflection. Sub-pixel
+    /// residuals are kept, so nothing that did fit inside the bound is lost.
+    /// </summary>
+    internal const float MaxIntegrationSeconds = 0.25f;
+
+    /// <summary>
+    /// A tick longer than this is a sampling gap, not jitter: the process was suspended, the
+    /// machine slept, or the loop thread was starved past any point where catching up means
+    /// anything. Such a tick clears every accumulated cycle and re-adopts the freshly polled
+    /// snapshot as the edge baseline (see <see cref="RecoverFromSamplingGap"/>), so the tick
+    /// that follows starts from the input the user is actually holding instead of replaying
+    /// whatever the gap covered. Below it a tick is ordinary jitter and is integrated whole,
+    /// which is what keeps periodic catch-up from losing a unit.
+    /// </summary>
+    internal const float SamplingGapSeconds = 3f;
+
     /// <summary>Identifies one gesture action's smoothing processor: a mapping plus a gesture.</summary>
     private readonly record struct GestureProcessorKey(Guid MappingId, GestureKind Kind);
 
     /// <summary>One precision special-key mapping: where it listens and how it engages.</summary>
     private readonly record struct SpecialPrecisionKey(Guid MappingId, InputBinding Source, PrecisionMode Mode);
 
+    /// <summary>
+    /// The two timesteps one tick runs on. <see cref="Action"/> drives gesture and program
+    /// timing and keeps the whole tick while the tick is ordinary jitter, so a periodic tap
+    /// never loses a unit; <see cref="Integration"/> drives displacement and is bounded, so a
+    /// long tick can never teleport the pointer. A sampling gap collapses both onto the bound.
+    /// </summary>
+    private readonly record struct TickSteps(float Action, float Integration);
+
     private readonly GamepadProfile _profile;
     private readonly List<MappingEntry> _mappings = [];
+    private readonly List<MappingEntry> _baseMappings = [];
+    private readonly Dictionary<int, List<MappingEntry>> _layers = [];
     private readonly Dictionary<Guid, MouseStickProcessor> _mouseProcessors = [];
     private readonly Dictionary<GestureProcessorKey, MouseStickProcessor> _gestureMouseProcessors = [];
     private readonly Dictionary<Guid, ScrollStickProcessor> _scrollProcessors = [];
@@ -67,6 +104,8 @@ public sealed class MappingEngine
     private readonly Dictionary<Guid, bool> _specialKeyWasActive = [];
     private readonly Dictionary<Guid, bool> _leaderLatches = [];
     private readonly Dictionary<Guid, ComplexShortcutRuntime> _complexRuntimes = [];
+    private List<MappingEntry> _effectiveMappings = [];
+    private int _activeLayerId;
     private GamepadButtonMask _previousButtons;
 
     public MappingEngine(GamepadProfile profile)
@@ -112,6 +151,9 @@ public sealed class MappingEngine
             }
         }
 
+        PartitionLayers();
+        ValidateLayerReferences();
+        RebuildEffective();
         SeedLeaderLatches();
     }
 
@@ -153,7 +195,9 @@ public sealed class MappingEngine
     {
         try
         {
-            return ComplexShortcutRuntime.Compile(complex.Script);
+            // The program is its own owner: it holds keys a mapping never held, so the
+            // dispatcher refcounts it apart from the mapping that started it.
+            return ComplexShortcutRuntime.Compile(complex.Script, new OutputOwner(Guid.NewGuid()));
         }
         catch (ComplexShortcutParseException ex)
         {
@@ -170,37 +214,124 @@ public sealed class MappingEngine
 
         var commands = new List<InputCommand>();
         var pressed = current.PressedButtons;
+        var steps = StepsFor(deltaSeconds, current);
         UpdatePrecisionState(current);
 
-        foreach (var mapping in _mappings)
+        // Layer leaders resolve before every other mapping: a frame that presses the leader
+        // and another button together must run the layer's version of that button, never the
+        // base one, and the layer's own state has to be settled before the loop below reads
+        // the mappings it puts in effect.
+        foreach (var mapping in _effectiveMappings)
         {
-            switch (mapping.Source)
+            if (mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
             {
-                case ButtonBinding button when button.Button == GamepadButton.Extra:
-                    UpdateExtraButton(mapping, button, current, deltaSeconds, commands);
-                    break;
+                UpdateMapping(mapping, current, pressed, steps, commands);
+            }
+        }
 
-                case ButtonBinding button:
-                    var mask = button.Button.ToMask();
-                    UpdateButton(
-                        mapping,
-                        button,
-                        (pressed & mask) != 0,
-                        (_previousButtons & mask) != 0,
-                        current,
-                        deltaSeconds,
-                        commands);
-                    break;
-
-                case StickBinding stick:
-                    UpdateStick(mapping, stick, current, deltaSeconds, commands);
-                    break;
+        foreach (var mapping in _effectiveMappings)
+        {
+            if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
+            {
+                UpdateMapping(mapping, current, pressed, steps, commands);
             }
         }
 
         _previousButtons = pressed;
         RefreshPreviousExtraButtons(current);
         return commands;
+    }
+
+    private void UpdateMapping(
+        MappingEntry mapping,
+        IGamepadState current,
+        GamepadButtonMask pressed,
+        TickSteps steps,
+        List<InputCommand> commands)
+    {
+        switch (mapping.Source)
+        {
+            case ButtonBinding button when button.Button == GamepadButton.Extra:
+                UpdateExtraButton(mapping, button, current, steps, commands);
+                break;
+
+            case ButtonBinding button:
+                var mask = button.Button.ToMask();
+                UpdateButton(
+                    mapping,
+                    button,
+                    (pressed & mask) != 0,
+                    (_previousButtons & mask) != 0,
+                    current,
+                    steps,
+                    commands);
+                break;
+
+            case StickBinding stick:
+                UpdateStick(mapping, stick, current, steps, commands);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The timesteps this tick runs on, after the sampling-gap check. A gap clears every
+    /// accumulated cycle and re-adopts the freshly polled snapshot as the edge baseline, so
+    /// nothing the gap covered is replayed.
+    /// </summary>
+    private TickSteps StepsFor(float deltaSeconds, IGamepadState current)
+    {
+        var requested = Sanitize(deltaSeconds);
+
+        if (requested > SamplingGapSeconds)
+        {
+            RecoverFromSamplingGap(current);
+            return new TickSteps(MaxIntegrationSeconds, MaxIntegrationSeconds);
+        }
+
+        return new TickSteps(requested, Math.Min(requested, MaxIntegrationSeconds));
+    }
+
+    private static float Sanitize(float deltaSeconds)
+        => float.IsNaN(deltaSeconds) || deltaSeconds < 0f ? 0f : deltaSeconds;
+
+    /// <summary>
+    /// Recovery from a sampling gap. Every accumulated cycle - gesture machines, smoothing
+    /// processors, running programs - is cleared and the freshly polled snapshot becomes the
+    /// edge baseline, exactly as <see cref="AdoptBaseline"/> does for a profile reload: a
+    /// button the user never re-pressed must not fabricate a press edge, and a stick left
+    /// deflected moves one bounded step instead of the whole gap. Precision latches are user
+    /// state rather than accumulated time, so they survive.
+    /// </summary>
+    private void RecoverFromSamplingGap(IGamepadState current)
+    {
+        foreach (var state in _gestures.Values)
+        {
+            state.Reset();
+        }
+
+        foreach (var processor in _gestureMouseProcessors.Values)
+        {
+            processor.Reset();
+        }
+
+        foreach (var processor in _mouseProcessors.Values)
+        {
+            processor.Reset();
+        }
+
+        foreach (var processor in _scrollProcessors.Values)
+        {
+            processor.Reset();
+        }
+
+        foreach (var runtime in _complexRuntimes.Values)
+        {
+            // Silent by design: the host pairs the same clearing with
+            // CommandDispatcher.ReleaseAll, which lifts whatever the program held.
+            runtime.Reset();
+        }
+
+        AdoptBaseline(current);
     }
 
     private void RefreshPreviousExtraButtons(IGamepadState current)
@@ -213,16 +344,29 @@ public sealed class MappingEngine
     }
 
     /// <summary>Clears edge detection, gesture and smoothing state (profile switch, engine pause).</summary>
+    /// <remarks>
+    /// The processors themselves are registered once, when the engine is built, and are only
+    /// ever reset here: a mapping or a gesture action whose continuous target moves the mouse
+    /// must keep ramping through the same processor after a pause or a profile reload, exactly
+    /// as the mapping's own stick processor does. The active layer goes back to the base
+    /// layer; the host pairs this with <see cref="Platform.CommandDispatcher.ReleaseAll"/>,
+    /// which lifts everything the layer's mappings held.
+    /// </remarks>
     public void Reset()
     {
         _previousButtons = GamepadButtonMask.None;
         _previousExtraButtons.Clear();
         _gestures.Clear();
-        _gestureMouseProcessors.Clear();
+        foreach (var processor in _gestureMouseProcessors.Values)
+        {
+            processor.Reset();
+        }
+
         _precisionLatches.Clear();
         _engagedPrecisionKeys.Clear();
         _specialKeyWasActive.Clear();
         SeedLeaderLatches();
+        DeactivateLayer();
         foreach (var runtime in _complexRuntimes.Values)
         {
             // Silent by design: the host pairs Reset with CommandDispatcher.ReleaseAll,
@@ -260,6 +404,16 @@ public sealed class MappingEngine
         RefreshPreviousExtraButtons(state);
     }
 
+    /// <summary>The temporary layer currently in effect, or 0 for the base layer alone.</summary>
+    public int ActiveLayerId => _activeLayerId;
+
+    /// <summary>
+    /// The mappings in effect right now: every base mapping, with the active layer's own
+    /// mappings overriding the ones that listen on the same physical input. Exposed so the
+    /// daemon's snapshot can report what a device is really running.
+    /// </summary>
+    public IReadOnlyList<MappingEntry> EffectiveMappings => _effectiveMappings;
+
     /// <summary>
     /// Builds the smoothing processor a gesture action needs when it names a continuous target.
     /// A gesture action is only ever tapped, so this exists purely so a mouse-moving gesture
@@ -282,6 +436,388 @@ public sealed class MappingEngine
         {
             _gestureMouseProcessors[new GestureProcessorKey(mappingId, kind)] = new MouseStickProcessor(mouse.Settings);
             CollectTogglePrecisionButton(mouse.Settings);
+        }
+    }
+
+    /// <summary>
+    /// Splits the profile's mappings into the base layer and the temporary layers above it.
+    /// The base layer always runs; a layer above it only runs while a leader key names it.
+    /// </summary>
+    private void PartitionLayers()
+    {
+        foreach (var mapping in _mappings)
+        {
+            if (mapping.Layer == 0)
+            {
+                _baseMappings.Add(mapping);
+                continue;
+            }
+
+            if (!_layers.TryGetValue(mapping.Layer, out var layer))
+            {
+                layer = [];
+                _layers[mapping.Layer] = layer;
+            }
+
+            layer.Add(mapping);
+        }
+    }
+
+    /// <summary>
+    /// The physical input a mapping listens on, with the gesture left out: a layer entry
+    /// overrides the base mapping on the same button or the same stick direction, whatever
+    /// gesture either of them carries.
+    /// </summary>
+    private static InputBinding SourceKeyOf(InputBinding source) => source switch
+    {
+        ButtonBinding button => new ButtonBinding(button.Button, button.Code) { Direction = button.Direction },
+        StickBinding stick => new StickBinding(stick.Stick) { Direction = stick.Direction },
+        _ => source,
+    };
+
+    /// <summary>
+    /// Rejects profiles whose temporary layers could never behave. A layer is entered through
+    /// a leader key naming it, so an overlay whose layer no leader names would silently never
+    /// fire; a layer target on an overlay mapping is refused because one temporary layer is
+    /// active at a time and only the base layer can name one; and a layer target is only
+    /// meaningful on a mapping's own target, because a gesture action is a tap and a tap
+    /// would activate a layer nothing ever releases.
+    /// </summary>
+    private void ValidateLayerReferences()
+    {
+        var named = new HashSet<int>();
+        var leaderSources = new Dictionary<int, HashSet<InputBinding>>();
+
+        foreach (var mapping in _mappings)
+        {
+            if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Layer } layer)
+            {
+                continue;
+            }
+
+            if (mapping.Layer != 0)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} names layer {layer.LayerId} from layer {mapping.Layer}. " +
+                    "A temporary layer is named from the base layer only: one layer is active at a time.",
+                    nameof(mapping));
+            }
+
+            if (layer.LayerId < 1)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} names layer {layer.LayerId}. Layers run from 1 upward; " +
+                    "layer 0 is the base layer every mapping already runs.",
+                    nameof(mapping));
+            }
+
+            if (layer.SwitchMode != LeaderSwitchMode.Hold)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} names layer {layer.LayerId} in {layer.SwitchMode} mode. " +
+                    "A temporary layer lives exactly as long as its leader is held: set " +
+                    "LeaderSwitchMode.Hold.",
+                    nameof(mapping));
+            }
+
+            named.Add(layer.LayerId);
+
+            if (!leaderSources.TryGetValue(layer.LayerId, out var sources))
+            {
+                sources = [];
+                leaderSources[layer.LayerId] = sources;
+            }
+
+            sources.Add(SourceKeyOf(mapping.Source));
+        }
+
+        foreach (var (layerId, _) in _layers)
+        {
+            if (!named.Contains(layerId))
+            {
+                throw new ArgumentException(
+                    $"Layer {layerId} carries mappings but no leader key names it. A temporary " +
+                    "layer is entered through a leader key whose target names the layer.",
+                    nameof(_profile));
+            }
+        }
+
+        // A layer entry listening on the same input as its own leader would take the leader
+        // out of effect the moment the layer activates, and nothing would ever leave it.
+        foreach (var (layerId, overlay) in _layers)
+        {
+            if (!leaderSources.TryGetValue(layerId, out var sources))
+            {
+                continue;
+            }
+
+            foreach (var mapping in overlay)
+            {
+                if (sources.Contains(SourceKeyOf(mapping.Source)))
+                {
+                    throw new ArgumentException(
+                        $"Mapping {mapping.Id} listens on {Describe(mapping.Source)} in layer {layerId}, " +
+                        "the same input that layer's leader key listens on. Activating the layer would " +
+                        "take the leader out of effect, and nothing would ever leave the layer again.",
+                        nameof(mapping));
+                }
+            }
+        }
+    }
+
+    /// <summary>A short human-readable name for one physical input, for rejection messages.</summary>
+    private static string Describe(InputBinding source) => source switch
+    {
+        ButtonBinding { Button: GamepadButton.Extra, Code: var code } => $"extra button {code}",
+        ButtonBinding button => button.Button.ToString(),
+        StickBinding stick => $"{stick.Stick} {stick.Direction}",
+        _ => source.GetType().Name,
+    };
+
+    /// <summary>
+    /// Recomputes the mappings in effect: every base mapping, with the active layer's own
+    /// mappings overriding the ones that listen on the same physical input. A layer entry that
+    /// repeats its base mapping exactly is skipped, so an identical continuous action - a drag,
+    /// a held key, a stick's mouse move - keeps running through the base mapping's own state
+    /// instead of being cancelled and re-pressed on every switch.
+    /// </summary>
+    private void RebuildEffective()
+    {
+        var effective = new List<MappingEntry>(_baseMappings);
+
+        if (_activeLayerId != 0 && _layers.TryGetValue(_activeLayerId, out var overlay))
+        {
+            foreach (var mapping in overlay)
+            {
+                var index = effective.FindIndex(candidate =>
+                    SourceKeyOf(candidate.Source) == SourceKeyOf(mapping.Source));
+
+                if (index < 0)
+                {
+                    effective.Add(mapping);
+                    continue;
+                }
+
+                var replaced = effective[index];
+                if (replaced.Source == mapping.Source
+                    && replaced.Target == mapping.Target
+                    && replaced.Enabled == mapping.Enabled)
+                {
+                    continue;
+                }
+
+                effective[index] = mapping;
+            }
+        }
+
+        _effectiveMappings = effective;
+    }
+
+    /// <summary>
+    /// Enters a temporary layer while its leader is held. The layer inherits every base
+    /// mapping it does not override, so the switch only touches what the layer actually
+    /// changes: see <see cref="SwitchLayer"/>.
+    /// </summary>
+    private void ActivateLayer(int layerId, IGamepadState current, List<InputCommand> commands)
+    {
+        if (_activeLayerId == layerId)
+        {
+            return;
+        }
+
+        SwitchLayer(layerId, current, commands);
+    }
+
+    /// <summary>
+    /// Leaves the active temporary layer, handing every source it took over back to the base
+    /// layer: see <see cref="SwitchLayer"/>.
+    /// </summary>
+    private void DeactivateLayer(IGamepadState current, List<InputCommand> commands)
+    {
+        if (_activeLayerId == 0)
+        {
+            return;
+        }
+
+        SwitchLayer(0, current, commands);
+    }
+
+    /// <summary>Drops the active layer without emitting anything (profile switch, engine pause).</summary>
+    private void DeactivateLayer()
+    {
+        if (_activeLayerId == 0)
+        {
+            return;
+        }
+
+        _activeLayerId = 0;
+        RebuildEffective();
+    }
+
+    /// <summary>
+    /// Moves to another layer and re-derives the activation of every source whose effective
+    /// mapping moved with it: the activation the old mapping owned is cancelled, and the new
+    /// mapping adopts one if the user is still holding the source. A source whose effective
+    /// mapping did not change is not touched at all, and neither is one the new layer added
+    /// that nothing is holding. The result is deterministic whatever order the two layers
+    /// list their mappings in.
+    /// </summary>
+    private void SwitchLayer(int layerId, IGamepadState current, List<InputCommand> commands)
+    {
+        var before = EffectiveBySource();
+        _activeLayerId = layerId;
+        RebuildEffective();
+        var after = EffectiveBySource();
+
+        foreach (var (source, previous) in before)
+        {
+            var next = after.GetValueOrDefault(source);
+
+            // Unchanged: the layer left this source alone, so its activation carries on.
+            if (next is not null && SameActivation(previous, next))
+            {
+                continue;
+            }
+
+            // The old mapping's activation is cancelled either way - the release edge that
+            // would have ended it is not coming, because the mapping is no longer in effect -
+            // and the new one adopts an activation if the user is still holding the source.
+            CancelHold(previous, current, commands);
+
+            if (next is not null)
+            {
+                AdoptHold(next, current, commands);
+            }
+        }
+
+        // A source only the new layer listens on: nothing owned it before, so it simply
+        // adopts an activation if the user is holding it.
+        foreach (var (source, next) in after)
+        {
+            if (!before.ContainsKey(source))
+            {
+                AdoptHold(next, current, commands);
+            }
+        }
+    }
+
+    /// <summary>The mappings in effect, keyed by the physical input each one listens on.</summary>
+    private Dictionary<InputBinding, MappingEntry> EffectiveBySource()
+    {
+        var bySource = new Dictionary<InputBinding, MappingEntry>();
+        foreach (var mapping in _effectiveMappings)
+        {
+            bySource[SourceKeyOf(mapping.Source)] = mapping;
+        }
+
+        return bySource;
+    }
+
+    /// <summary>
+    /// Whether a layer entry activates exactly what the base mapping it displaces already
+    /// does, in which case <see cref="RebuildEffective"/> keeps the base entry and nothing
+    /// about the activation changes.
+    /// </summary>
+    private static bool SameActivation(MappingEntry baseMapping, MappingEntry layerMapping)
+        => baseMapping.Source == layerMapping.Source
+            && baseMapping.Target == layerMapping.Target
+            && baseMapping.Enabled == layerMapping.Enabled;
+
+    /// <summary>
+    /// Begins the activation a mapping now owns because the layer put it in effect: the user
+    /// is already holding the source, so the hold starts on this tick rather than waiting for
+    /// a press edge that will never come. A mapping whose source is not held is left alone -
+    /// it fires on its next real press edge.
+    /// </summary>
+    private void AdoptHold(MappingEntry mapping, IGamepadState current, List<InputCommand> commands)
+    {
+        if (!SourceActive(mapping.Source, current))
+        {
+            return;
+        }
+
+        var state = GestureStateFor(mapping.Id);
+        if (state.IsActive)
+        {
+            return;
+        }
+
+        // The press that produced this hold is not this machine's to resolve: it parks in
+        // Holding, so the release edge ends the activation exactly as a resolved single
+        // would and no gesture timing is re-run.
+        state.AdoptHold();
+
+        // The source counts as already pressed from here on, so the mapping loop below sees
+        // no press edge for it and the activation is not begun a second time.
+        MarkSourcePressed(mapping.Source);
+        BeginHold(mapping.Target, mapping.Id, current, commands);
+    }
+
+    /// <summary>
+    /// Records a source as already pressed in this tick's edge baseline, so a later pass over
+    /// the same tick sees no press edge for input the user pressed before the layer moved.
+    /// </summary>
+    private void MarkSourcePressed(InputBinding source)
+    {
+        switch (source)
+        {
+            case ButtonBinding { Button: GamepadButton.Extra, Code: var code }:
+                _previousExtraButtons.Add(code);
+                break;
+            case ButtonBinding button:
+                _previousButtons |= button.Button.ToMask();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Ends the activation a mapping owned before the layer took it away. A running complex
+    /// shortcut stops with it, so no program outlives the mapping that started it - a long
+    /// press is a tap, so its program can be running while the mapping holds nothing of its
+    /// own.
+    /// </summary>
+    private void CancelHold(MappingEntry mapping, IGamepadState current, List<InputCommand> commands)
+    {
+        var state = GestureStateFor(mapping.Id);
+        var program = _complexRuntimes.TryGetValue(mapping.Id, out var complex) && complex!.IsRunning
+            ? complex
+            : null;
+        var wasActive = state.IsActive;
+
+        if (!wasActive && program is null)
+        {
+            return;
+        }
+
+        state.Reset();
+
+        if (program is not null)
+        {
+            program.Stop(commands);
+        }
+
+        if (wasActive)
+        {
+            EndHold(mapping.Target, mapping.Id, current, commands);
+        }
+    }
+
+    /// <summary>Whether a mapping's physical source is active in this tick's snapshot.</summary>
+    private static bool SourceActive(InputBinding source, IGamepadState current)
+    {
+        switch (source)
+        {
+            case ButtonBinding button:
+                return button.Button == GamepadButton.Extra
+                    ? current.ExtraButtons.Contains(button.Code)
+                    : current.PressedButtons.Has(button.Button);
+            case StickBinding { Direction: { } direction } stick:
+                return StickDirectionActive(current, stick.Stick, direction);
+            case StickBinding stick:
+                var (x, y) = StickAxes(current, stick.Stick);
+                return x != 0f || y != 0f;
+            default:
+                return false;
         }
     }
 
@@ -361,9 +897,9 @@ public sealed class MappingEngine
         _ => false,
     };
 
-    private static bool StickDirectionActive(IGamepadState current, GamepadStick stick, InputDirection direction)
+    private static bool StickDirectionActive(IGamepadState state, GamepadStick stick, InputDirection direction)
     {
-        var (x, y) = StickAxes(current, stick);
+        var (x, y) = StickAxes(state, stick);
         return IsDirectionActive(x, y, direction);
     }
 
@@ -582,14 +1118,14 @@ public sealed class MappingEngine
         MappingEntry mapping,
         ButtonBinding button,
         IGamepadState current,
-        float deltaSeconds,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var code = button.Code;
         var pressed = current.ExtraButtons.Contains(code);
         var wasPressed = _previousExtraButtons.Contains(code);
 
-        UpdateButton(mapping, button, pressed, wasPressed, current, deltaSeconds, commands);
+        UpdateButton(mapping, button, pressed, wasPressed, current, steps, commands);
     }
 
     /// <summary>
@@ -603,11 +1139,11 @@ public sealed class MappingEngine
         bool isPressed,
         bool wasPressed,
         IGamepadState current,
-        float deltaSeconds,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var gesture = GestureStateFor(mapping.Id);
-        var step = gesture.Update(button.Gesture, isPressed, wasPressed, deltaSeconds);
+        var step = gesture.Update(button.Gesture, isPressed, wasPressed, steps.Action);
 
         // The long press runs a complex program: the gesture machine reports it exactly
         // once, and that tick starts the program instead of tapping the action. The click
@@ -632,13 +1168,13 @@ public sealed class MappingEngine
             switch (step.Action)
             {
                 case GestureAction.BeginHold:
-                    BeginHold(mapping.Target, mapping.Id, commands);
+                    BeginHold(mapping.Target, mapping.Id, current, commands);
                     break;
                 case GestureAction.EndHold:
-                    EndHold(mapping.Target, commands);
+                    EndHold(mapping.Target, mapping.Id, current, commands);
                     break;
                 case GestureAction.Tap:
-                    Tap(mapping, button, step.Kind, current, deltaSeconds, commands);
+                    Tap(mapping, button, step.Kind, current, steps, commands);
                     break;
             }
 
@@ -648,21 +1184,29 @@ public sealed class MappingEngine
             // button being down is also what keeps the catch-up drain working on a held tick.
             // Each repeat phase drains its own interval, so one long tick emits every repeat it
             // covers instead of one: the state machine has already emitted the first, and this
-            // fills in the rest. The phases never share a tick - click auto-repeat and the
-            // long-press are mutually exclusive - so a ClickRepeating tick must never emit the
-            // long-press a hand-edited profile may have left configured alongside the repeat.
+            // fills in the rest - up to the per-tick catch-up budget, whose remainder stays on
+            // the repeat clock for the next tick rather than firing as one burst. The phases
+            // never share a tick - click auto-repeat and the long-press are mutually exclusive -
+            // so a ClickRepeating tick must never emit the long-press a hand-edited profile may
+            // have left configured alongside the repeat.
             if (button.Gesture is { } configured && isPressed)
             {
+                var clickRepeats = 0;
                 while (gesture.Phase == GesturePhase.ClickRepeating
+                       && clickRepeats < ButtonGestureState.MaxCatchUpUnits
                        && gesture.TryDequeueClickRepeat(configured))
                 {
-                    Tap(mapping, button, GestureKind.Click, current, deltaSeconds, commands);
+                    clickRepeats++;
+                    Tap(mapping, button, GestureKind.Click, current, steps, commands);
                 }
 
+                var longRepeats = 0;
                 while (gesture.Phase == GesturePhase.LongPressActive
+                       && longRepeats < ButtonGestureState.MaxCatchUpUnits
                        && gesture.TryDequeueRepeat(configured))
                 {
-                    Tap(mapping, button, GestureKind.LongPress, current, deltaSeconds, commands);
+                    longRepeats++;
+                    Tap(mapping, button, GestureKind.LongPress, current, steps, commands);
                 }
             }
 
@@ -672,7 +1216,7 @@ public sealed class MappingEngine
             {
                 if (gesture.Phase == GesturePhase.LongPressActive)
                 {
-                    complex.Tick(deltaSeconds, commands);
+                    complex.Tick(steps.Action, commands);
                 }
                 else
                 {
@@ -681,7 +1225,7 @@ public sealed class MappingEngine
             }
         }
 
-        UpdateContinuous(mapping, button, gesture, current, deltaSeconds, commands);
+        UpdateContinuous(mapping, button, gesture, current, steps, commands);
     }
 
     /// <summary>
@@ -707,7 +1251,7 @@ public sealed class MappingEngine
         ButtonBinding button,
         ButtonGestureState gesture,
         IGamepadState current,
-        float deltaSeconds,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var (axisX, axisY) = gesture.IsActive && button.Direction is { } direction
@@ -718,7 +1262,7 @@ public sealed class MappingEngine
         {
             case MouseMoveTarget mouse when _mouseProcessors.TryGetValue(mapping.Id, out var mouseProcessor):
                 var precisionActive = PrecisionActive(current, mouse.Settings);
-                var (dx, dy) = mouseProcessor.Update(axisX, axisY, precisionActive, deltaSeconds);
+                var (dx, dy) = mouseProcessor.Update(axisX, axisY, precisionActive, steps.Integration);
                 if (dx != 0 || dy != 0)
                 {
                     commands.Add(new MouseMoveCommand(dx, dy));
@@ -727,7 +1271,7 @@ public sealed class MappingEngine
                 break;
 
             case WheelScrollTarget when _scrollProcessors.TryGetValue(mapping.Id, out var scrollProcessor):
-                var (horizontal, vertical) = scrollProcessor.Update(axisX, axisY, deltaSeconds);
+                var (horizontal, vertical) = scrollProcessor.Update(axisX, axisY, steps.Integration);
                 if (horizontal != 0 || vertical != 0)
                 {
                     commands.Add(new WheelCommand(horizontal, vertical));
@@ -741,7 +1285,7 @@ public sealed class MappingEngine
         MappingEntry mapping,
         StickBinding stick,
         IGamepadState current,
-        float deltaSeconds,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var (x, y) = StickAxes(current, stick.Stick);
@@ -750,7 +1294,7 @@ public sealed class MappingEngine
             && _mouseProcessors.TryGetValue(mapping.Id, out var mouseProcessor))
         {
             var precisionActive = PrecisionActive(current, mouseTarget.Settings);
-            var (dx, dy) = mouseProcessor.Update(x, y, precisionActive, deltaSeconds);
+            var (dx, dy) = mouseProcessor.Update(x, y, precisionActive, steps.Integration);
             if (dx != 0 || dy != 0)
             {
                 commands.Add(new MouseMoveCommand(dx, dy));
@@ -759,7 +1303,7 @@ public sealed class MappingEngine
         else if (mapping.Target is WheelScrollTarget
                  && _scrollProcessors.TryGetValue(mapping.Id, out var scrollProcessor))
         {
-            var (horizontal, vertical) = scrollProcessor.Update(x, y, deltaSeconds);
+            var (horizontal, vertical) = scrollProcessor.Update(x, y, steps.Integration);
             if (horizontal != 0 || vertical != 0)
             {
                 commands.Add(new WheelCommand(horizontal, vertical));
@@ -767,7 +1311,7 @@ public sealed class MappingEngine
         }
         else if (stick.Direction is { } direction)
         {
-            UpdateStickDirection(mapping, x, y, direction, commands);
+            UpdateStickDirection(mapping, x, y, direction, current, steps, commands);
         }
     }
 
@@ -782,6 +1326,8 @@ public sealed class MappingEngine
         float x,
         float y,
         InputDirection direction,
+        IGamepadState current,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var active = IsDirectionActive(x, y, direction);
@@ -794,11 +1340,11 @@ public sealed class MappingEngine
 
         if (active)
         {
-            BeginHold(mapping.Target, mapping.Id, commands);
+            BeginHold(mapping.Target, mapping.Id, current, commands);
         }
         else
         {
-            EndHold(mapping.Target, commands);
+            EndHold(mapping.Target, mapping.Id, current, commands);
         }
 
         state.IsActive = active;
@@ -845,7 +1391,7 @@ public sealed class MappingEngine
         ButtonBinding button,
         GestureKind kind,
         IGamepadState current,
-        float deltaSeconds,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var target = TargetFor(mapping, button.Gesture, kind);
@@ -853,14 +1399,14 @@ public sealed class MappingEngine
         switch (target)
         {
             case MouseMoveTarget mouse:
-                TapMouseMove(mapping.Id, mouse, button, kind, current, deltaSeconds, commands);
+                TapMouseMove(mapping.Id, mouse, button, kind, current, steps, commands);
                 break;
             case WheelScrollTarget wheel:
                 TapWheel(wheel, button, commands);
                 break;
             default:
-                BeginHold(target, mapping.Id, commands);
-                EndHold(target, commands);
+                BeginHold(target, mapping.Id, current, commands);
+                EndHold(target, mapping.Id, current, commands);
                 break;
         }
     }
@@ -871,7 +1417,7 @@ public sealed class MappingEngine
         ButtonBinding button,
         GestureKind kind,
         IGamepadState current,
-        float deltaSeconds,
+        TickSteps steps,
         List<InputCommand> commands)
     {
         var processor = MouseProcessorFor(mappingId, kind);
@@ -884,7 +1430,7 @@ public sealed class MappingEngine
         // the compiler happy.
         var (axisX, axisY) = DirectionAxis(button.Direction ?? InputDirection.Up);
         var precisionActive = PrecisionActive(current, mouse.Settings);
-        var (dx, dy) = processor.Update(axisX, axisY, precisionActive, deltaSeconds);
+        var (dx, dy) = processor.Update(axisX, axisY, precisionActive, steps.Integration);
 
         // A tap is a single nudge: leave the processor at rest so no drift trails it.
         processor.Reset();
@@ -931,21 +1477,25 @@ public sealed class MappingEngine
     /// Begins a hold-style activation. A combo is a tap by nature, so it fires both edges at
     /// once and has nothing to end. A leader key in Hold mode switches to its alternate slot
     /// for the duration of the hold; one in Press mode toggles between its two slots on the
-    /// press edge. Precision keys emit nothing here - their engagement is tracked separately.
+    /// press edge. A layer key enters its temporary layer for the duration of the hold.
+    /// Precision keys emit nothing here - their engagement is tracked separately.
     /// </summary>
-    private void BeginHold(MappingTarget target, Guid mappingId, List<InputCommand> commands)
+    private void BeginHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {
         switch (target)
         {
             case KeyPressTarget key:
-                commands.Add(new KeyDownCommand(key.Key, KeyModifiers.None));
+                commands.Add(new KeyDownCommand(key.Key, KeyModifiers.None, new OutputOwner(mappingId)));
                 break;
             case KeyComboTarget combo:
-                commands.Add(new KeyDownCommand(combo.Key, combo.Modifiers));
-                commands.Add(new KeyUpCommand(combo.Key, combo.Modifiers));
+                commands.Add(new KeyDownCommand(combo.Key, combo.Modifiers, new OutputOwner(mappingId)));
+                commands.Add(new KeyUpCommand(combo.Key, combo.Modifiers, new OutputOwner(mappingId)));
                 break;
             case MouseButtonTarget mouseButton:
-                commands.Add(new MouseDownCommand(mouseButton.Button));
+                commands.Add(new MouseDownCommand(mouseButton.Button, new OutputOwner(mappingId)));
+                break;
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Layer } layer:
+                ActivateLayer(layer.LayerId, current, commands);
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold } leader:
                 commands.Add(new SwitchPresetCommand(leader.SlotB));
@@ -960,17 +1510,21 @@ public sealed class MappingEngine
 
     /// <summary>
     /// Ends a hold-style activation. A leader key in Hold mode returns to its primary slot
-    /// once the key is released.
+    /// once the key is released; a layer key leaves its temporary layer, releasing everything
+    /// the layer's mappings put in effect.
     /// </summary>
-    private static void EndHold(MappingTarget target, List<InputCommand> commands)
+    private void EndHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {
         switch (target)
         {
             case KeyPressTarget key:
-                commands.Add(new KeyUpCommand(key.Key, KeyModifiers.None));
+                commands.Add(new KeyUpCommand(key.Key, KeyModifiers.None, new OutputOwner(mappingId)));
                 break;
             case MouseButtonTarget mouseButton:
-                commands.Add(new MouseUpCommand(mouseButton.Button));
+                commands.Add(new MouseUpCommand(mouseButton.Button, new OutputOwner(mappingId)));
+                break;
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Layer }:
+                DeactivateLayer(current, commands);
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold } leader:
                 commands.Add(new SwitchPresetCommand(leader.SlotA));

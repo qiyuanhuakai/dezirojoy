@@ -1029,6 +1029,362 @@ public class EngineHostTests
         }
     }
 
+    [Fact]
+    public void Two_Pads_Outputting_One_Key_Do_Not_Steal_It_From_Each_Other()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(SharedCtrlProfile("xinput:0"));
+        store.Save(ComboProfile("xinput:1"));
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.Add("xinput:1", "DualShock 4");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+        provider.SetState("xinput:1", GamepadState.Neutral);
+
+        host.TickOnce(Tick);
+        Assert.Equal(["down:LeftCtrl"], sink.Calls);
+
+        // Pad B taps a Ctrl+C combo while pad A still holds Ctrl: the combo's end used to
+        // send Ctrl Up, dropping the modifier the other pad was holding.
+        provider.SetState("xinput:1", GamepadState.Create(GamepadButtonMask.X, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        provider.SetState("xinput:1", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        Assert.Equal(["down:LeftCtrl", "down:C", "up:C"], sink.Calls);
+
+        // Pad A releasing its bumper is what finally lifts Ctrl.
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        Assert.Equal(["down:LeftCtrl", "down:C", "up:C", "up:LeftCtrl"], sink.Calls);
+    }
+
+    private static GamepadProfile SharedCtrlProfile(string deviceId) => new()
+    {
+        Name = "shared-ctrl",
+        DeviceId = deviceId,
+        Layout = GamepadLayout.Xbox,
+        Mappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.LeftBumper),
+                Target = new KeyPressTarget(GamepadKey.LeftCtrl),
+            },
+        ],
+    };
+
+    private static GamepadProfile ComboProfile(string deviceId) => new()
+    {
+        Name = "combo",
+        DeviceId = deviceId,
+        Layout = GamepadLayout.Xbox,
+        Mappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.X),
+                Target = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C),
+            },
+        ],
+    };
+
+    [Fact]
+    public void A_Disconnect_Releases_Only_That_Devices_Holds()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(SharedCtrlProfile("xinput:0"));
+        store.Save(new GamepadProfile
+        {
+            Name = "space",
+            DeviceId = "xinput:1",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.LeftBumper),
+                    Target = new KeyPressTarget(GamepadKey.Space),
+                },
+            ],
+        });
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.Add("xinput:1", "DualShock 4");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+        provider.SetState("xinput:1", GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Equal(["down:LeftCtrl", "down:Space"], sink.Calls);
+
+        // Pad A goes away: its hold is lifted, and pad B's is not - the two devices share one
+        // session-wide ownership table, so a revoked owner never lifts a key it does not own.
+        provider.Remove("xinput:0");
+        for (var i = 0; i < EngineHost.DeviceAbsenceGraceTicks + 1; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Equal(["down:LeftCtrl", "down:Space", "up:LeftCtrl"], sink.Calls);
+    }
+
+    [Fact]
+    public void A_Gesture_Mouse_Move_Survives_A_Pause_And_A_Gui_Takeover()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(GestureMouseProfile());
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        DoubleClick(provider, host);
+        Assert.Contains("move:10,0", sink.Calls);
+
+        // The processors a gesture action ramps through are registered when the engine is
+        // built, so a pause (or a GUI takeover) must not unregister them: the gesture's mouse
+        // move behaves identically on every cycle.
+        host.SetMappingEnabled(false);
+        host.SetMappingEnabled(true);
+        sink.Calls.Clear();
+
+        DoubleClick(provider, host);
+        Assert.Equal(["move:10,0"], sink.Calls);
+
+        host.SetInjectionSuspended(true);
+        host.SetInjectionSuspended(false);
+        sink.Calls.Clear();
+
+        DoubleClick(provider, host);
+        Assert.Equal(["move:10,0"], sink.Calls);
+    }
+
+    private static GamepadProfile GestureMouseProfile() => new()
+    {
+        Name = "gesture-mouse",
+        DeviceId = "xinput:0",
+        Layout = GamepadLayout.Xbox,
+        Mappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.B)
+                {
+                    Direction = InputDirection.Right,
+                    Gesture = new ButtonGesture
+                    {
+                        DoubleClickWindow = 0.25f,
+                        DoubleClickAction = new MouseMoveTarget(new MouseStickSettings
+                        {
+                            DeadZone = 0f,
+                            MaxSpeed = 640f,
+                            Curve = ResponseCurve.Linear,
+                            CurveStrength = 0f,
+                            ResponseTime = 0f,
+                            InvertY = false,
+                        }),
+                    },
+                },
+                Target = new NoneTarget(),
+            },
+        ],
+    };
+
+    /// <summary>One double-click driven through the provider, at the host's own tick rate.</summary>
+    private static void DoubleClick(FakeProvider provider, EngineHost host)
+    {
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+    }
+
+    [Fact]
+    public void A_Temporary_Layer_Keeps_A_Drag_Continuous_And_Leaves_No_Residue()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LayerProfile());
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        // RT starts a drag on the base layer.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightTrigger, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(["mdown:Left"], sink.Calls);
+
+        // Hold the leader to run other commands while the window is being dragged: the left
+        // mouse button must not come up, and the layer's own X mapping runs beside the drag.
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(GamepadButtonMask.RightTrigger | GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(
+                GamepadButtonMask.RightTrigger | GamepadButtonMask.RightBumper | GamepadButtonMask.X,
+                0,
+                0,
+                0,
+                0));
+        host.TickOnce(Tick);
+        Assert.Equal(["mdown:Left", "down:LeftAlt"], sink.Calls);
+
+        // Releasing the leader lifts the layer's hold and nothing else: the drag is still in
+        // progress, so no Ctrl/Alt/mouse residue is left behind.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightTrigger, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(["mdown:Left", "down:LeftAlt", "up:LeftAlt"], sink.Calls);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightTrigger, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(["mdown:Left", "down:LeftAlt", "up:LeftAlt"], sink.Calls);
+
+        // Only releasing RT ends the drag.
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal(["mdown:Left", "down:LeftAlt", "up:LeftAlt", "mup:Left"], sink.Calls);
+    }
+
+    [Fact]
+    public void A_Disconnect_Or_An_Abnormal_Exit_Releases_What_The_Layer_Held()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LayerProfile());
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        // The layer is active and holds LeftAlt.
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(GamepadButtonMask.RightBumper | GamepadButtonMask.X, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(["down:LeftAlt"], sink.Calls);
+
+        // The pad goes away: the layer's hold is lifted, so no modifier is left stuck down.
+        provider.Remove("xinput:0");
+        for (var i = 0; i < EngineHost.DeviceAbsenceGraceTicks + 1; i++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Equal(["down:LeftAlt", "up:LeftAlt"], sink.Calls);
+    }
+
+    [Fact]
+    public void Stopping_The_Host_Releases_What_The_Layer_Held()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LayerProfile());
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.StartManual();
+        host.TickOnce(Tick);
+
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(GamepadButtonMask.RightBumper | GamepadButtonMask.X, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(["down:LeftAlt"], sink.Calls);
+
+        // An abnormal exit - the process is going away - is the ReleaseAll safety net.
+        host.Stop();
+
+        Assert.Equal(["down:LeftAlt", "up:LeftAlt"], sink.Calls);
+        Assert.False(host.IsRunning);
+    }
+
+    private static (GamepadProfile Profile, Guid DragId, Guid BaseXId, Guid LayerXId) LayerProfileWithIds()
+    {
+        var dragId = Guid.NewGuid();
+        var baseXId = Guid.NewGuid();
+        var layerXId = Guid.NewGuid();
+
+        var profile = new GamepadProfile
+        {
+            Name = "layer",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Id = dragId,
+                    Source = new ButtonBinding(GamepadButton.RightTrigger),
+                    Target = new MouseButtonTarget(MouseButton.Left),
+                },
+                new MappingEntry
+                {
+                    Id = baseXId,
+                    Source = new ButtonBinding(GamepadButton.X),
+                    Target = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C),
+                },
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.RightBumper),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: 2),
+                },
+                new MappingEntry
+                {
+                    Id = layerXId,
+                    Source = new ButtonBinding(GamepadButton.X),
+                    Target = new KeyPressTarget(GamepadKey.LeftAlt),
+                    Layer = 2,
+                },
+            ],
+        };
+
+        return (profile, dragId, baseXId, layerXId);
+    }
+
+    private static GamepadProfile LayerProfile() => LayerProfileWithIds().Profile;
+
+    [Fact]
+    public void The_Host_Reports_The_Active_Layer_And_Its_Effective_Mappings()
+    {
+        var (profile, dragId, baseXId, layerXId) = LayerProfileWithIds();
+        var store = new InMemoryProfileStore();
+        store.Save(profile);
+
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        var layer = Assert.Single(host.ActiveLayers);
+        Assert.Equal("xinput:0", layer.DeviceId);
+        Assert.Equal(0, layer.LayerId);
+        Assert.Contains(layer.Mappings, m => m.MappingId == baseXId && m.Layer == 0);
+        Assert.DoesNotContain(layer.Mappings, m => m.MappingId == layerXId);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+
+        layer = Assert.Single(host.ActiveLayers);
+        Assert.Equal(2, layer.LayerId);
+
+        // The layer's own X mapping is in effect, the base one is not, and the drag mapping
+        // the layer never overrode is still the base layer's own.
+        Assert.Contains(layer.Mappings, m => m.MappingId == layerXId && m.Layer == 2);
+        Assert.DoesNotContain(layer.Mappings, m => m.MappingId == baseXId);
+        Assert.Contains(layer.Mappings, m => m.MappingId == dragId && m.Layer == 0);
+    }
+
     private sealed class BlockingProvider : IGamepadProvider
     {
         private readonly ManualResetEventSlim _release = new(false);

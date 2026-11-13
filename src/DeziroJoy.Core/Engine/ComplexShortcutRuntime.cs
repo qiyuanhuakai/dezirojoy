@@ -24,7 +24,9 @@ namespace DeziroJoy.Core.Engine;
 /// still run in order. A tick covering several intervals fires every tap it covers and the
 /// remainder carries on - the same "never lose a unit" rule the gesture machine's
 /// auto-repeat applies, with the same one-microsecond tolerance so a run of 0.1s ticks
-/// cannot drift a tap out of existence.
+/// cannot drift a tap out of existence - up to the per-tick catch-up budget
+/// <see cref="ButtonGestureState.MaxCatchUpUnits"/>, so a tick that covers far more time than
+/// the interval emits a bounded burst instead of one tap per interval it happened to cover.
 /// </para>
 /// <para>
 /// A timer only exists from the moment its every step runs: within the tick that registers
@@ -43,17 +45,23 @@ public sealed class ComplexShortcutRuntime
     private double _waitRemaining;
     private bool _running;
 
-    private ComplexShortcutRuntime(IReadOnlyList<ComplexShortcutStep> steps)
+    private ComplexShortcutRuntime(IReadOnlyList<ComplexShortcutStep> steps, OutputOwner owner)
     {
         _steps = steps;
+        Owner = owner;
     }
 
     /// <summary>
-    /// Compiles a script into a stopped runtime.
+    /// Compiles a script into a stopped runtime. <paramref name="owner"/> names who the
+    /// program's held keys belong to - one macro instance, refcounted apart from the mapping
+    /// that started it - and defaults to the anonymous owner for a directly driven runtime.
     /// </summary>
     /// <exception cref="ComplexShortcutParseException">The script is malformed; the message is Chinese and carries line and column.</exception>
-    public static ComplexShortcutRuntime Compile(string script)
-        => new(ComplexShortcutDsl.Parse(script));
+    public static ComplexShortcutRuntime Compile(string script, OutputOwner owner = default)
+        => new(ComplexShortcutDsl.Parse(script), owner.IsNone ? new OutputOwner(Guid.NewGuid()) : owner);
+
+    /// <summary>Who the keys this program holds belong to.</summary>
+    public OutputOwner Owner { get; }
 
     /// <summary>True between <see cref="Start"/> and <see cref="Stop"/>.</summary>
     public bool IsRunning => _running;
@@ -121,7 +129,7 @@ public sealed class ComplexShortcutRuntime
         // Release in reverse press order, the way the dispatcher unwinds a combo.
         for (var i = _heldKeys.Count - 1; i >= 0; i--)
         {
-            commands.Add(new KeyUpCommand(_heldKeys[i], KeyModifiers.None));
+            commands.Add(new KeyUpCommand(_heldKeys[i], KeyModifiers.None, Owner));
         }
 
         ClearState();
@@ -176,7 +184,7 @@ public sealed class ComplexShortcutRuntime
 
             if (_steps[_position] is ComplexShortcutEveryStep every)
             {
-                registered.Add((new EveryTimer(every.Interval, every.Key), remaining));
+                registered.Add((new EveryTimer(every.Interval, every.Key, Owner), remaining));
                 _position++;
                 continue;
             }
@@ -193,8 +201,8 @@ public sealed class ComplexShortcutRuntime
         switch (step)
         {
             case ComplexShortcutTapStep tap:
-                commands.Add(new KeyDownCommand(tap.Key, KeyModifiers.None));
-                commands.Add(new KeyUpCommand(tap.Key, KeyModifiers.None));
+                commands.Add(new KeyDownCommand(tap.Key, KeyModifiers.None, Owner));
+                commands.Add(new KeyUpCommand(tap.Key, KeyModifiers.None, Owner));
                 break;
 
             case ComplexShortcutHoldStep hold:
@@ -202,7 +210,7 @@ public sealed class ComplexShortcutRuntime
                 if (!_heldKeys.Contains(hold.Key))
                 {
                     _heldKeys.Add(hold.Key);
-                    commands.Add(new KeyDownCommand(hold.Key, KeyModifiers.None));
+                    commands.Add(new KeyDownCommand(hold.Key, KeyModifiers.None, Owner));
                 }
 
                 break;
@@ -212,7 +220,7 @@ public sealed class ComplexShortcutRuntime
                 // user may be holding for real, so it emits nothing.
                 if (_heldKeys.Remove(release.Key))
                 {
-                    commands.Add(new KeyUpCommand(release.Key, KeyModifiers.None));
+                    commands.Add(new KeyUpCommand(release.Key, KeyModifiers.None, Owner));
                 }
 
                 break;
@@ -221,25 +229,32 @@ public sealed class ComplexShortcutRuntime
 
     /// <summary>
     /// Fires every tap of one timer the credited time covers, draining the timer's own
-    /// interval so one large tick emits every tap it covers instead of one.
+    /// interval so one large tick emits every tap it covers instead of one - up to the
+    /// per-tick catch-up budget, whose remainder stays on the timer for the next tick rather
+    /// than firing as one burst. See <see cref="ButtonGestureState.MaxCatchUpUnits"/>.
     /// </summary>
     private static void Drain(EveryTimer timer, double deltaSeconds, List<InputCommand> commands)
     {
         timer.Elapsed += deltaSeconds;
 
-        while (timer.Elapsed >= timer.Interval - ButtonGestureState.TimingTolerance)
+        var taps = 0;
+        while (taps < ButtonGestureState.MaxCatchUpUnits
+               && timer.Elapsed >= timer.Interval - ButtonGestureState.TimingTolerance)
         {
             timer.Elapsed = Math.Max(timer.Elapsed - timer.Interval, 0d);
-            commands.Add(new KeyDownCommand(timer.Key, KeyModifiers.None));
-            commands.Add(new KeyUpCommand(timer.Key, KeyModifiers.None));
+            taps++;
+            commands.Add(new KeyDownCommand(timer.Key, KeyModifiers.None, timer.Owner));
+            commands.Add(new KeyUpCommand(timer.Key, KeyModifiers.None, timer.Owner));
         }
     }
 
-    private sealed class EveryTimer(double interval, GamepadKey key)
+    private sealed class EveryTimer(double interval, GamepadKey key, OutputOwner owner)
     {
         public double Interval { get; } = interval;
 
         public GamepadKey Key { get; } = key;
+
+        public OutputOwner Owner { get; } = owner;
 
         public double Elapsed { get; set; }
     }

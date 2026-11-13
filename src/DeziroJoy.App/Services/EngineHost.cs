@@ -34,6 +34,13 @@ public sealed class EngineHost : IDisposable
     private readonly Dictionary<string, int> _absenceTicks = [];
 
     /// <summary>
+    /// The session-wide record of which outputs are held and which mapping or macro instance
+    /// holds each one. Every device's dispatcher shares it, so two pads outputting one key
+    /// never lift it from one another and a disconnect revokes only what its own device held.
+    /// </summary>
+    private readonly OutputOwnership _ownership = new();
+
+    /// <summary>
     /// Each connected device's most recent polled snapshot. A profile reload rebuilds the
     /// device's engine, and without this the fresh engine would see every still-held button
     /// as a new press edge - re-firing a key the reload just released, or toggling a leader
@@ -600,11 +607,27 @@ public sealed class EngineHost : IDisposable
             // or the primary anchor when this device lacks the active slot), so the runtime is
             // tagged with the slot it truly runs and is not force-fit to the app-wide scalar.
             var profile = _presets.EnsureDefaults(descriptor, ActivePresetSlot);
-            var runtime = new ControllerRuntime(descriptor, profile, _sink);
+            var runtime = new ControllerRuntime(descriptor, profile, _sink, _ownership);
             _runtimes[descriptor.DeviceId] = runtime;
             _presenceVersion++;
 
             return runtime;
+        }
+    }
+
+    /// <summary>
+    /// The temporary layer every connected device is running, with the mappings each layer puts
+    /// in effect. This is what the daemon's snapshot reports, so the GUI can read the active
+    /// layer without deriving it from the profile body.
+    /// </summary>
+    public IReadOnlyList<ActiveLayerSnapshot> ActiveLayers
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _runtimes.Values.Select(runtime => runtime.LayerSnapshot).ToList();
+            }
         }
     }
 

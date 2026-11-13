@@ -130,6 +130,17 @@ public sealed class ButtonGestureState
     /// </summary>
     internal const double TimingTolerance = 1e-6;
 
+    /// <summary>
+    /// How many periodic activations one tick may emit for one source. A tick that covers far
+    /// more time than the repeat interval - a stalled loop, a resumed machine - drains its
+    /// budget and leaves the rest of the interval on the repeat clock for the next tick, so a
+    /// long tick produces a bounded burst instead of one activation per interval it happened
+    /// to cover. The bound sits far above anything a normal tick produces and far below what
+    /// a gap would, which is what keeps the two apart.
+    /// Shared with the complex-shortcut runtime, whose periodic taps face the same rule.
+    /// </summary>
+    internal const int MaxCatchUpUnits = 16;
+
     private static bool Reached(double elapsed, float threshold) => elapsed >= threshold - TimingTolerance;
 
     /// <summary>Current phase of the cycle.</summary>
@@ -160,6 +171,21 @@ public sealed class ButtonGestureState
         Elapsed = 0d;
         RepeatElapsed = 0d;
         IsActive = false;
+    }
+
+    /// <summary>
+    /// Adopts an activation the caller began outside the press and release edges - a layer
+    /// switch re-deriving a hold for a button the user is already holding. The machine parks
+    /// in <see cref="GesturePhase.Holding"/>, so the release edge ends the activation exactly
+    /// as a resolved single would, and every clock restarts: the press that produced this hold
+    /// is not this machine's to resolve.
+    /// </summary>
+    public void AdoptHold()
+    {
+        Phase = GesturePhase.Holding;
+        Elapsed = 0d;
+        RepeatElapsed = 0d;
+        IsActive = true;
     }
 
     /// <summary>
@@ -345,7 +371,8 @@ public sealed class ButtonGestureState
     /// Consumes one due auto-repeat interval, if any. The engine drains this after
     /// <see cref="Update"/> so a tick covering several intervals emits every repeat it covers
     /// instead of silently dropping them - the same "never lose a unit" rule the stick
-    /// processors apply to sub-pixel residuals. The host's timestep bounds this in practice.
+    /// processors apply to sub-pixel residuals - up to the per-tick
+    /// <see cref="MaxCatchUpUnits"/> budget, whose remainder stays on the repeat clock.
     /// </summary>
     public bool TryDequeueRepeat(ButtonGesture gesture)
     {
@@ -361,7 +388,8 @@ public sealed class ButtonGestureState
     /// <summary>
     /// Consumes one due click auto-repeat interval, if any. Mirrors <see cref="TryDequeueRepeat"/>
     /// for the click: the same one-microsecond tolerance and the same "drain every covered
-    /// interval, never lose a unit" rule. It shares the <see cref="RepeatElapsed"/> clock with
+    /// interval, never lose a unit" rule, under the same per-tick
+    /// <see cref="MaxCatchUpUnits"/> budget. It shares the <see cref="RepeatElapsed"/> clock with
     /// the long-press repeat, which is safe because click auto-repeat and the long-press are
     /// mutually exclusive (see <see cref="ButtonGesture.HasEffectiveLongPress"/>) and never run
     /// at once.

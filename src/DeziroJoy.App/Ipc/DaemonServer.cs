@@ -46,6 +46,15 @@ public sealed partial class DaemonServer
     /// <summary>The one persisted, app-wide preset slot every connected device follows.</summary>
     private int _activePresetSlot = 1;
 
+    /// <summary>
+    /// Where a snapshot's <see cref="StateSnapshot.Layers"/> comes from: the wiring that owns
+    /// both the engine host and this server points this at the host's
+    /// <see cref="Services.EngineHost.ActiveLayers"/>. Left unset - a host that predates the
+    /// temporary layer - snapshots report no layer, which is exactly what a device running its
+    /// base mappings alone reports.
+    /// </summary>
+    public Func<IReadOnlyList<ActiveLayerSnapshot>>? LayerStateSource { get; set; }
+
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
 
@@ -914,6 +923,7 @@ public sealed partial class DaemonServer
         {
             ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
             Devices = _host.ConnectedDevices,
+            Layers = LayerStateSource?.Invoke() ?? [],
         };
     }
 }

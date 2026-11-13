@@ -97,6 +97,10 @@ public static class DaemonHost
             composition.ProfileStore,
             stateStore);
 
+        // Surface each device's active temporary layer in the snapshot so the GUI reads what
+        // the engine is really running instead of deriving it from the profile body.
+        daemon.LayerStateSource = () => composition.Host.ActiveLayers;
+
         composition.Host.PresetSwitchRequested += (_, slot) =>
             daemon.RequestPresetSlotSwitch(slot);
 
