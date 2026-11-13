@@ -4,6 +4,11 @@ namespace DeziroJoy.Core.Mapping;
 /// Output key vocabulary. Platform layers translate these to Windows virtual keys
 /// or Linux key codes. Deliberately small and stable so profiles stay portable.
 /// </summary>
+/// <remarks>
+/// The members below the punctuation group are media, browser and system keys. They are
+/// appended rather than interleaved on purpose: profiles carry the numeric value, so a key
+/// inserted in the middle would silently re-point every mapping after it.
+/// </remarks>
 public enum GamepadKey
 {
     A,
@@ -106,4 +111,27 @@ public enum GamepadKey
     BracketRight,
     Backslash,
     Grave,
+
+    // ---- 媒体键: volume and playback ------------------------------------------
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    MediaPlayPause,
+    MediaStop,
+    MediaPrevTrack,
+    MediaNextTrack,
+
+    // ---- 系统与浏览器功能键 ---------------------------------------------------
+    BrowserBack,
+    BrowserForward,
+    BrowserRefresh,
+    BrowserStop,
+    BrowserHome,
+    BrowserSearch,
+    BrowserFavorites,
+    LaunchMail,
+    LaunchApp1,
+    LaunchApp2,
+    Sleep,
+    PrintScreen,
 }

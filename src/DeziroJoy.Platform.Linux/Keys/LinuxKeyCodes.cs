@@ -109,6 +109,30 @@ public static class LinuxKeyCodes
         GamepadKey.BracketRight => 27,
         GamepadKey.Backslash => 43,
         GamepadKey.Grave => 41,
+
+        // 媒体键: the KEY_VOLUME* / KEY_PLAY* family from input-event-codes.h.
+        GamepadKey.VolumeUp => 115,
+        GamepadKey.VolumeDown => 114,
+        GamepadKey.VolumeMute => 113,
+        GamepadKey.MediaPlayPause => 164,
+        GamepadKey.MediaStop => 166,
+        GamepadKey.MediaPrevTrack => 165,
+        GamepadKey.MediaNextTrack => 163,
+
+        // 系统与浏览器功能键: KEY_BACK / KEY_FORWARD / KEY_REFRESH / KEY_HOMEPAGE and
+        // friends. KEY_SYSRQ is the kernel's print-screen key.
+        GamepadKey.BrowserBack => 158,
+        GamepadKey.BrowserForward => 159,
+        GamepadKey.BrowserRefresh => 173,
+        GamepadKey.BrowserStop => 128,
+        GamepadKey.BrowserHome => 172,
+        GamepadKey.BrowserSearch => 217,
+        GamepadKey.BrowserFavorites => 364,
+        GamepadKey.LaunchMail => 155,
+        GamepadKey.LaunchApp1 => 148,
+        GamepadKey.LaunchApp2 => 149,
+        GamepadKey.Sleep => 142,
+        GamepadKey.PrintScreen => 99,
         _ => Unmapped,
     };
 }

@@ -256,25 +256,29 @@ public class MappingModelTests
     }
 
     [Fact]
-    public void Deserialize_Rejects_Unknown_Target_Discriminator()
+    public void Deserialize_Keeps_An_Unknown_Target_Discriminator_As_An_Unknown_Target()
     {
         const string json = """
         {
-          "schemaVersion": 1,
-          "name": "broken",
-          "layout": "Generic",
-          "mappings": [
+          "SchemaVersion": 2,
+          "Name": "from-a-newer-build",
+          "Layout": "Generic",
+          "Mappings": [
             {
-              "id": "00000000-0000-0000-0000-000000000001",
-              "source": { "$type": "button", "button": "A" },
-              "target": { "$type": "nope" },
-              "enabled": true
+              "Id": "00000000-0000-0000-0000-000000000001",
+              "Source": { "$type": "button", "Button": "A" },
+              "Target": { "$type": "nope" },
+              "Enabled": true
             }
           ]
         }
         """;
 
-        Assert.Throws<JsonException>(() => ProfileSerializer.Deserialize(json));
+        var back = ProfileSerializer.Deserialize(json);
+        var target = Assert.IsType<UnknownTarget>(back.Mappings[0].Target);
+
+        Assert.Equal("nope", target.Discriminator);
+        Assert.Contains("nope", target.RawJson);
     }
 
     [Theory]

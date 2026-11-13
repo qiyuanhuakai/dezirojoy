@@ -11,9 +11,9 @@ namespace DeziroJoy.Core.Engine;
 /// <remarks>
 /// <para>
 /// Every source x target combination is honored: button -&gt; key / combo / mouse button /
-/// mouse move / wheel / special key, and stick -&gt; mouse move / wheel / key / combo /
-/// mouse button / special key. A combination that cannot work is rejected when the engine is
-/// built rather than silently dropped at runtime.
+/// text / mouse move / wheel / special key, and stick -&gt; mouse move / wheel / key /
+/// combo / mouse button / text / special key. A combination that cannot work is rejected
+/// when the engine is built rather than silently dropped at runtime.
 /// </para>
 /// <para>
 /// Buttons may carry a <see cref="ButtonGesture"/> (双击 / 长按). The latency rule: a button
@@ -25,17 +25,19 @@ namespace DeziroJoy.Core.Engine;
 /// <c>deltaSeconds</c>.
 /// </para>
 /// <para>
-/// A <see cref="ComplexShortcutTarget"/> is the long press's own action
-/// (<see cref="ButtonGesture.LongPressAction"/>): the long press starts the program -
-/// advanced first by the tick's post-threshold overflow, not the whole press tick - every
-/// held tick then advances it by <c>deltaSeconds</c>, and the release tick stops it and
-/// releases the keys it held. The click target and the double-click action are independent
-/// of it, so a quick press still fires the click and a second press still fires the
-/// double-click; the only thing a program cannot coexist with is whatever would stop the
-/// long press from firing it (no threshold, click auto-repeat, a repeat interval). v1
-/// bound the program to the mapping's own target with a bare long press instead; the
-/// constructor rewrites that shape into this one, so an old profile behaves exactly as
-/// it did - one code path runs the program.
+/// A <see cref="ComplexShortcutTarget"/> is an action of its own - the click's, the
+/// double-click's or the long press's, whichever position carries it - and its trigger names
+/// that position, so a program never has to describe how it is started. Its execution
+/// strategy says how it ends: 按住期间 lives exactly as long as the press, 执行一次 runs to
+/// its last step and releases what it held, 再按切换 is stopped by the next trigger. A second
+/// trigger while it runs answers its repeat policy: restart, ignore or queue one more run.
+/// The click target and the double-click action stay independent of the long press's program,
+/// so a quick press still fires the click and a second press still fires the double-click;
+/// the only thing a program cannot coexist with is whatever would stop its own gesture from
+/// firing it (no threshold, click auto-repeat, a repeat interval). v1 bound the program to
+/// the mapping's own target with a bare long press instead; the constructor rewrites that
+/// shape into this one, so an old profile behaves exactly as it did - one code path runs the
+/// program.
 /// </para>
 /// <para>
 /// Mappings carry a <see cref="MappingEntry.Layer"/>. Layer 0 is the base layer and always
@@ -74,8 +76,17 @@ public sealed class MappingEngine
     /// </summary>
     internal const float SamplingGapSeconds = 3f;
 
-    /// <summary>Identifies one gesture action's smoothing processor: a mapping plus a gesture.</summary>
+    /// <summary>
+    /// Identifies one gesture action's smoothing processor: a mapping plus a gesture.
+    /// </summary>
     private readonly record struct GestureProcessorKey(Guid MappingId, GestureKind Kind);
+
+    /// <summary>
+    /// Identifies one complex-shortcut program: a mapping plus the gesture position the
+    /// program rides in. A mapping may carry up to three - one per position - so the click,
+    /// the double-click and the long press can each run their own program.
+    /// </summary>
+    private readonly record struct ProgramSlot(Guid MappingId, GestureKind Kind);
 
     /// <summary>One precision special-key mapping: where it listens and how it engages.</summary>
     private readonly record struct SpecialPrecisionKey(Guid MappingId, InputBinding Source, PrecisionMode Mode);
@@ -103,7 +114,9 @@ public sealed class MappingEngine
     private readonly HashSet<Guid> _engagedPrecisionKeys = [];
     private readonly Dictionary<Guid, bool> _specialKeyWasActive = [];
     private readonly Dictionary<Guid, bool> _leaderLatches = [];
-    private readonly Dictionary<Guid, ComplexShortcutRuntime> _complexRuntimes = [];
+    private readonly Dictionary<Guid, List<ProgramSlot>> _programSlots = [];
+    private readonly Dictionary<ProgramSlot, ComplexShortcutRuntime> _programs = [];
+    private readonly HashSet<ProgramSlot> _queuedRestarts = [];
     private List<MappingEntry> _effectiveMappings = [];
     private int _activeLayerId;
     private GamepadButtonMask _previousButtons;
@@ -128,6 +141,7 @@ public sealed class MappingEngine
 
             ValidateMapping(normalized);
             RegisterGestureProcessors(normalized);
+            RegisterPrograms(normalized);
 
             switch (normalized.Target)
             {
@@ -141,13 +155,6 @@ public sealed class MappingEngine
                 case SpecialKeyTarget special:
                     RegisterSpecialKey(normalized, special);
                     break;
-            }
-
-            // A complex shortcut is the long press's own action, so its program is compiled
-            // from the gesture rather than from the mapping's target.
-            if (normalized.Source is ButtonBinding { Gesture.LongPressAction: ComplexShortcutTarget complex })
-            {
-                _complexRuntimes[normalized.Id] = CompileComplexShortcut(normalized, complex);
             }
         }
 
@@ -175,6 +182,13 @@ public sealed class MappingEngine
             return mapping;
         }
 
+        // A program whose trigger is not the long press is not the v1 shape: it says for
+        // itself which position it runs from, so rewriting it would contradict it.
+        if (complex.Trigger != ActionTrigger.LongPress)
+        {
+            return mapping;
+        }
+
         return mapping with
         {
             Target = new NoneTarget(),
@@ -186,24 +200,64 @@ public sealed class MappingEngine
     }
 
     /// <summary>
+    /// Compiles every program a mapping carries, keyed by the gesture position it rides in:
+    /// the mapping's own target, the double-click action or the long-press action. The
+    /// position is the program's trigger, so a mapping can run one program per position and
+    /// the three never contend for the same press.
+    /// </summary>
+    private void RegisterPrograms(MappingEntry mapping)
+    {
+        if (mapping.Source is not ButtonBinding button)
+        {
+            // A stick has no gestures, so only its own target could carry a program - and
+            // ValidateMapping refuses that before this runs.
+            RegisterProgram(mapping.Id, GestureKind.Click, mapping.Target as ComplexShortcutTarget);
+            return;
+        }
+
+        RegisterProgram(mapping.Id, GestureKind.Click, mapping.Target as ComplexShortcutTarget);
+        RegisterProgram(mapping.Id, GestureKind.DoubleClick, button.Gesture?.DoubleClickAction as ComplexShortcutTarget);
+        RegisterProgram(mapping.Id, GestureKind.LongPress, button.Gesture?.LongPressAction as ComplexShortcutTarget);
+    }
+
+    private void RegisterProgram(Guid mappingId, GestureKind kind, ComplexShortcutTarget? program)
+    {
+        if (program is null)
+        {
+            return;
+        }
+
+        var slot = new ProgramSlot(mappingId, kind);
+        _programs[slot] = CompileComplexShortcut(mappingId, program);
+
+        if (!_programSlots.TryGetValue(mappingId, out var slots))
+        {
+            slots = [];
+            _programSlots[mappingId] = slots;
+        }
+
+        slots.Add(slot);
+    }
+
+    /// <summary>
     /// Compiles a complex shortcut's script when the engine is built, so a hand-edited
-    /// profile fails here rather than on the first long press. The parse error keeps its
+    /// profile fails here rather than on the first trigger. The parse error keeps its
     /// Chinese reason and line/column, wrapped in the ArgumentException every other
     /// rejected mapping throws.
     /// </summary>
-    private static ComplexShortcutRuntime CompileComplexShortcut(MappingEntry mapping, ComplexShortcutTarget complex)
+    private static ComplexShortcutRuntime CompileComplexShortcut(Guid mappingId, ComplexShortcutTarget program)
     {
         try
         {
             // The program is its own owner: it holds keys a mapping never held, so the
             // dispatcher refcounts it apart from the mapping that started it.
-            return ComplexShortcutRuntime.Compile(complex.Script, new OutputOwner(Guid.NewGuid()));
+            return ComplexShortcutRuntime.Compile(program, new OutputOwner(Guid.NewGuid()));
         }
         catch (ComplexShortcutParseException ex)
         {
             throw new ArgumentException(
-                $"Mapping {mapping.Id} carries a complex shortcut script that does not parse: {ex.Message}",
-                nameof(mapping),
+                $"Mapping {mappingId} carries a complex shortcut script that does not parse: {ex.Message}",
+                nameof(mappingId),
                 ex);
         }
     }
@@ -324,7 +378,7 @@ public sealed class MappingEngine
             processor.Reset();
         }
 
-        foreach (var runtime in _complexRuntimes.Values)
+        foreach (var runtime in _programs.Values)
         {
             // Silent by design: the host pairs the same clearing with
             // CommandDispatcher.ReleaseAll, which lifts whatever the program held.
@@ -367,7 +421,8 @@ public sealed class MappingEngine
         _specialKeyWasActive.Clear();
         SeedLeaderLatches();
         DeactivateLayer();
-        foreach (var runtime in _complexRuntimes.Values)
+        _queuedRestarts.Clear();
+        foreach (var runtime in _programs.Values)
         {
             // Silent by design: the host pairs Reset with CommandDispatcher.ReleaseAll,
             // which lifts the keys a running complex shortcut held.
@@ -779,22 +834,15 @@ public sealed class MappingEngine
     private void CancelHold(MappingEntry mapping, IGamepadState current, List<InputCommand> commands)
     {
         var state = GestureStateFor(mapping.Id);
-        var program = _complexRuntimes.TryGetValue(mapping.Id, out var complex) && complex!.IsRunning
-            ? complex
-            : null;
+        var ranProgram = StopProgramsOf(mapping.Id, commands);
         var wasActive = state.IsActive;
 
-        if (!wasActive && program is null)
+        if (!wasActive && !ranProgram)
         {
             return;
         }
 
         state.Reset();
-
-        if (program is not null)
-        {
-            program.Stop(commands);
-        }
 
         if (wasActive)
         {
@@ -1008,6 +1056,7 @@ public sealed class MappingEngine
             case KeyPressTarget:
             case KeyComboTarget:
             case MouseButtonTarget:
+            case TextTarget:
             case SpecialKeyTarget:
                 if (mapping.Source is StickBinding { Direction: null } stick)
                 {
@@ -1030,8 +1079,9 @@ public sealed class MappingEngine
     /// v1 bound a complex shortcut to a button's bare 长按 and nothing else. That shape is
     /// normalized into the gesture's long-press action by <see cref="NormalizeComplexShortcut"/>
     /// before validation, so a target that still carries a program is one the normalizer
-    /// could not rewrite - a stick source, no long press, click auto-repeat, or a long-press
-    /// action of its own - and none of those can run it.
+    /// could not rewrite - a stick source, a program whose trigger names another position,
+    /// no long press, click auto-repeat, or a long-press action of its own - and none of
+    /// those can run it from where it sits.
     /// </summary>
     private static void ValidateComplexShortcutSource(MappingEntry mapping)
     {
@@ -1043,9 +1093,34 @@ public sealed class MappingEngine
                 nameof(mapping));
         }
 
+        var program = (ComplexShortcutTarget)mapping.Target;
         var gesture = button.Gesture;
-        if (gesture is not { LongPressThreshold: > 0f })
+
+        // The v1 shape: a long-press program sitting on the mapping's own target. The
+        // normalizer rewrites the one form v1 accepted - a bare long press - so whatever
+        // reaches here is a form it could not, and each refusal names why.
+        if (program.Trigger == ActionTrigger.LongPress)
         {
+            if (gesture is not { LongPressThreshold: > 0f })
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} binds a complex shortcut to button {button.Button} " +
+                    "without a long press. A complex shortcut starts on 长按: set " +
+                    "ButtonGesture.LongPressThreshold.",
+                    nameof(mapping));
+            }
+
+            if (gesture.HasClickRepeat || gesture.LongPressAction is not null)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} pairs a complex shortcut with click auto-repeat / " +
+                    $"an extra gesture action on button {button.Button}. The long press already " +
+                    "owns the program: leave the gesture as a bare long-press threshold.",
+                    nameof(mapping));
+            }
+
+            // A bare long press is exactly the shape the normalizer rewrites, so this is
+            // unreachable; it is refused rather than left to run nothing.
             throw new ArgumentException(
                 $"Mapping {mapping.Id} binds a complex shortcut to button {button.Button} " +
                 "without a long press. A complex shortcut starts on 长按: set " +
@@ -1053,27 +1128,116 @@ public sealed class MappingEngine
                 nameof(mapping));
         }
 
-        if (gesture.HasClickRepeat || gesture.LongPressAction is not null)
+        if (program.Trigger is ActionTrigger.DoubleClick)
+        {
+            // The mapping's own target is the click position: only the click - a press edge
+            // or the release edge that ends it - can start a program sitting there.
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} binds a complex shortcut to button {button.Button} with its " +
+                $"trigger set to {TriggerName(program.Trigger)}. A long-press program only ever runs " +
+                "from the long press: leave the trigger at 长按 and set " +
+                "ButtonGesture.LongPressThreshold, or set the trigger to 单击/松开 to run it " +
+                "from this button's own click.",
+                nameof(mapping));
+        }
+
+        if (gesture is { HasClickRepeat: true })
         {
             throw new ArgumentException(
-                $"Mapping {mapping.Id} pairs a complex shortcut with click auto-repeat / " +
-                $"an extra gesture action on button {button.Button}. The long press already " +
-                "owns the program: leave the gesture as a bare long-press threshold.",
+                $"Mapping {mapping.Id} pairs a complex shortcut with click auto-repeat on " +
+                $"button {button.Button}. The repeat makes the click re-fire the program's " +
+                "own target on every interval: leave ClickRepeatInterval at 0.",
+                nameof(mapping));
+        }
+
+        if (gesture is { LongPressAction: not null })
+        {
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} pairs a complex shortcut with another gesture action " +
+                $"on button {button.Button}. The long press already owns the program: leave " +
+                "the gesture's long-press action empty, or move the program onto it.",
+                nameof(mapping));
+        }
+
+        if (program.Trigger == ActionTrigger.Release && program.Execution != ActionExecution.Once)
+        {
+            // Nothing is held once the button is up, so "while held" has no hold to key off
+            // and "toggle" has no second press to toggle on.
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} runs a complex shortcut on 松开 with execution " +
+                $"{ExecutionName(program.Execution)}. A release-triggered program runs to its " +
+                "end: set ActionExecution.Once.",
+                nameof(mapping));
+        }
+
+        ValidateExecutionAndRepeat(mapping, program);
+    }
+
+    /// <summary>
+    /// A queued repeat cannot pair with a held run: the queue fires when the current run
+    /// ends, and a held run ends on the release - which is also what stops the program, so
+    /// the queued run would start and stop in the same breath. The pairing is refused
+    /// rather than silently dropped.
+    /// </summary>
+    private static void ValidateExecutionAndRepeat(MappingEntry mapping, ComplexShortcutTarget program)
+    {
+        if (program.Execution == ActionExecution.WhileHeld && program.Repeat == ActionRepeat.Queue)
+        {
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} queues a repeat for a program that runs " +
+                "按住期间执行. A queued run starts when the current one ends - the release that " +
+                "also stops a held program: set the execution to 执行一次 or 再按切换, or the " +
+                "repeat to 重新开始 / 忽略.",
                 nameof(mapping));
         }
     }
 
     /// <summary>
-    /// A complex shortcut is the long press's own action, so the click target and the
-    /// double-click action stay independent of it. What it cannot coexist with is anything
-    /// that would stop the long press from firing it - no threshold, click auto-repeat
-    /// (which makes the long press inert) or a long-press repeat (which would restart the
-    /// program) - and it cannot be the double-click's action, because a program only ever
-    /// runs from the long press.
+    /// A complex shortcut is the long press's or the double-click's own action, so the click
+    /// target stays independent of it. What it cannot coexist with is anything that would
+    /// stop its own gesture from firing it - no threshold, click auto-repeat (which makes
+    /// the long press inert) or a long-press repeat (which would restart the program) -
+    /// and it cannot be triggered from the position it does not sit in, because a program
+    /// only ever runs from the gesture that carries it.
     /// </summary>
     private static void ValidateComplexShortcutAction(MappingEntry mapping, ButtonGesture gesture)
     {
-        if (gesture.LongPressAction is ComplexShortcutTarget)
+        ValidateProgramAt(mapping, gesture.LongPressAction, GestureKind.LongPress, gesture);
+        ValidateProgramAt(mapping, gesture.DoubleClickAction, GestureKind.DoubleClick, gesture);
+    }
+
+    private static void ValidateProgramAt(
+        MappingEntry mapping,
+        MappingTarget? action,
+        GestureKind position,
+        ButtonGesture gesture)
+    {
+        if (action is not ComplexShortcutTarget program)
+        {
+            return;
+        }
+
+        var button = ((ButtonBinding)mapping.Source).Button;
+
+        if (TriggerKind(program.Trigger) != position)
+        {
+            var rides = position switch
+            {
+                GestureKind.LongPress => "the long press",
+                GestureKind.DoubleClick => "the double-click",
+                _ => "the click",
+            };
+
+            throw new ArgumentException(
+                $"Mapping {mapping.Id} binds a complex shortcut to {rides} on button {button}, " +
+                $"but its trigger is {TriggerName(program.Trigger)}. A complex shortcut is a " +
+                "long-press program: only the position that carries it can start it. Set the " +
+                $"trigger to {TriggerName(TriggerFor(position))} or move the program to the " +
+                "position its trigger names.",
+                nameof(mapping));
+        }
+
+        if (position == GestureKind.LongPress)
         {
             if (!gesture.HasLongPress)
             {
@@ -1100,15 +1264,73 @@ public sealed class MappingEngine
                     nameof(mapping));
             }
         }
-
-        if (gesture.DoubleClickAction is ComplexShortcutTarget)
+        else
         {
-            throw new ArgumentException(
-                $"Mapping {mapping.Id} binds a complex shortcut to the double-click. " +
-                "A complex shortcut is a long-press program: only the long press can run one.",
-                nameof(mapping));
+            if (!gesture.HasDoubleClick)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} binds a complex shortcut to the double-click " +
+                    $"without a double-click window. A double-click program starts on 双击: " +
+                    "set ButtonGesture.DoubleClickWindow.",
+                    nameof(mapping));
+            }
+
+            if (gesture.HasClickRepeat)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} pairs a complex shortcut with click auto-repeat. " +
+                    "The repeat makes the double-click inert, so the program could never start.",
+                    nameof(mapping));
+            }
+
+            // A double-click holds nothing, so there is no hold to run a program for.
+            if (program.Execution == ActionExecution.WhileHeld)
+            {
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} runs a complex shortcut on 双击 with execution " +
+                    "按住期间执行. A double-click holds nothing: set ActionExecution.Once " +
+                    "or ActionExecution.Toggle.",
+                    nameof(mapping));
+            }
         }
+
+        ValidateExecutionAndRepeat(mapping, program);
     }
+
+    /// <summary>
+    /// The gesture position each trigger reads. A program's trigger names the position it
+    /// rides in: the long press, the double-click, or the mapping's own click - which the
+    /// release variant also reads, one edge later.
+    /// </summary>
+    private static GestureKind TriggerKind(ActionTrigger trigger) => trigger switch
+    {
+        ActionTrigger.DoubleClick => GestureKind.DoubleClick,
+        ActionTrigger.LongPress => GestureKind.LongPress,
+        _ => GestureKind.Click,
+    };
+
+    /// <summary>The trigger a gesture position carries, for a refusal that names both.</summary>
+    private static ActionTrigger TriggerFor(GestureKind kind) => kind switch
+    {
+        GestureKind.DoubleClick => ActionTrigger.DoubleClick,
+        GestureKind.LongPress => ActionTrigger.LongPress,
+        _ => ActionTrigger.Press,
+    };
+
+    private static string TriggerName(ActionTrigger trigger) => trigger switch
+    {
+        ActionTrigger.Press => "单击",
+        ActionTrigger.DoubleClick => "双击",
+        ActionTrigger.Release => "松开",
+        _ => "长按",
+    };
+
+    private static string ExecutionName(ActionExecution execution) => execution switch
+    {
+        ActionExecution.Once => "执行一次",
+        ActionExecution.Toggle => "再按切换",
+        _ => "按住期间执行",
+    };
 
     /// <summary>
     /// Edge detection for a raw-code button. The code is compared by value, so two different
@@ -1145,25 +1367,12 @@ public sealed class MappingEngine
         var gesture = GestureStateFor(mapping.Id);
         var step = gesture.Update(button.Gesture, isPressed, wasPressed, steps.Action);
 
-        // The long press runs a complex program: the gesture machine reports it exactly
-        // once, and that tick starts the program instead of tapping the action. The click
-        // and the double-click resolve through the paths below - a program is the long
-        // press's own action, so it no longer owns the press the way v1's bare long press
-        // did.
-        var programStarted = _complexRuntimes.TryGetValue(mapping.Id, out var complex)
-            && step.Action == GestureAction.Tap
-            && step.Kind == GestureKind.LongPress;
+        // A program whose trigger resolved on this tick consumes the edge: the mapping's
+        // own target must not fire it as well, the way a long-press program never let the
+        // click fire on the same press.
+        var triggered = UpdatePrograms(mapping, gesture, step, isPressed, steps, commands);
 
-        if (programStarted)
-        {
-            if (!complex!.IsRunning)
-            {
-                complex.Start();
-            }
-
-            complex.Tick(gesture.RepeatElapsed, commands);
-        }
-        else
+        if (!triggered)
         {
             switch (step.Action)
             {
@@ -1209,23 +1418,177 @@ public sealed class MappingEngine
                     Tap(mapping, button, GestureKind.LongPress, current, steps, commands);
                 }
             }
-
-            // Every held tick advances the running program; the tick that ends the long press
-            // stops it and hands its held keys back, so no periodic tap can outlive the press.
-            if (complex is not null && complex.IsRunning)
-            {
-                if (gesture.Phase == GesturePhase.LongPressActive)
-                {
-                    complex.Tick(steps.Action, commands);
-                }
-                else
-                {
-                    complex.Stop(commands);
-                }
-            }
         }
 
         UpdateContinuous(mapping, button, gesture, current, steps, commands);
+    }
+
+    /// <summary>
+    /// Every program one mapping carries, for one tick. A program whose trigger resolved is
+    /// started (or re-triggered under its repeat policy) and advanced by the time left in
+    /// this tick after the gesture resolved; the others are advanced, and one whose execution
+    /// strategy ended is stopped with its held keys released. Returns true when a trigger
+    /// consumed this tick's edge, so the mapping's own target does not fire it too.
+    /// </summary>
+    private bool UpdatePrograms(
+        MappingEntry mapping,
+        ButtonGestureState gesture,
+        GestureStep step,
+        bool isPressed,
+        TickSteps steps,
+        List<InputCommand> commands)
+    {
+        if (!_programSlots.TryGetValue(mapping.Id, out var slots))
+        {
+            return false;
+        }
+
+        var consumed = false;
+
+        foreach (var slot in slots)
+        {
+            var program = _programs[slot];
+
+            if (Triggered(slot, program, step))
+            {
+                consumed = true;
+                ApplyTrigger(program, slot, commands);
+
+                if (program.IsRunning)
+                {
+                    // The tick that starts a program advances it by the time past the
+                    // threshold inside this tick - the rest of the tick was spent waiting
+                    // for the gesture to resolve - and by the whole tick for a trigger that
+                    // resolved on an edge.
+                    var overflow = slot.Kind == GestureKind.LongPress ? gesture.RepeatElapsed : steps.Action;
+                    program.Tick(overflow, commands);
+                }
+
+                continue;
+            }
+
+            AdvanceProgram(program, slot, isPressed, steps, commands);
+        }
+
+        return consumed;
+    }
+
+    /// <summary>
+    /// Whether the gesture step that just resolved is the one this program's trigger reads.
+    /// A release trigger reads the end of the click's activation - the tap that fired on the
+    /// release, or the hold the user let go - while every other trigger reads its start.
+    /// </summary>
+    private static bool Triggered(ProgramSlot slot, ComplexShortcutRuntime program, GestureStep step)
+    {
+        if (step.Action == GestureAction.None || step.Kind != slot.Kind)
+        {
+            return false;
+        }
+
+        return program.Trigger == ActionTrigger.Release
+            ? step.Action is GestureAction.EndHold or GestureAction.Tap
+            : step.Action is GestureAction.Tap or GestureAction.BeginHold;
+    }
+
+    /// <summary>
+    /// What a trigger does. A stopped program starts; a running one answers its execution
+    /// strategy - a toggle stops - and otherwise its repeat policy: restart from the first
+    /// step, ignore the press, or queue exactly one more run for when this one ends.
+    /// </summary>
+    private void ApplyTrigger(ComplexShortcutRuntime program, ProgramSlot slot, List<InputCommand> commands)
+    {
+        // A toggle is stopped by the same trigger that starts it, so its repeat policy has
+        // nothing to answer.
+        if (program.Execution == ActionExecution.Toggle)
+        {
+            if (program.IsRunning)
+            {
+                _queuedRestarts.Remove(slot);
+                program.Stop(commands);
+            }
+            else
+            {
+                program.Start();
+            }
+
+            return;
+        }
+
+        if (!program.IsRunning)
+        {
+            _queuedRestarts.Remove(slot);
+            program.Start();
+            return;
+        }
+
+        switch (program.Repeat)
+        {
+            case ActionRepeat.Restart:
+                program.Stop(commands);
+                program.Start();
+                break;
+            case ActionRepeat.Queue:
+                // At most one waiting run: a program queued twice is still one more run.
+                _queuedRestarts.Add(slot);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Advances one program, or ends it. A program that runs 按住期间 lives exactly as long
+    /// as the press that started it, so the release tick stops it and hands its held keys
+    /// back; one that runs 执行一次 or 再按切换 is only ever stopped by its own completion or
+    /// by the next trigger. A queued restart fires the moment the run it waited for ends.
+    /// </summary>
+    private void AdvanceProgram(
+        ComplexShortcutRuntime program,
+        ProgramSlot slot,
+        bool isPressed,
+        TickSteps steps,
+        List<InputCommand> commands)
+    {
+        if (!program.IsRunning)
+        {
+            if (_queuedRestarts.Remove(slot))
+            {
+                program.Start();
+                program.Tick(steps.Action, commands);
+            }
+
+            return;
+        }
+
+        if (program.Execution == ActionExecution.WhileHeld && !isPressed)
+        {
+            program.Stop(commands);
+            return;
+        }
+
+        program.Tick(steps.Action, commands);
+    }
+
+    /// <summary>Stops every program one mapping carries, releasing what each held.</summary>
+    private bool StopProgramsOf(Guid mappingId, List<InputCommand> commands)
+    {
+        if (!_programSlots.TryGetValue(mappingId, out var slots))
+        {
+            return false;
+        }
+
+        var stopped = false;
+        foreach (var slot in slots)
+        {
+            var program = _programs[slot];
+            _queuedRestarts.Remove(slot);
+
+            if (program.IsRunning)
+            {
+                program.Stop(commands);
+                stopped = true;
+            }
+        }
+
+        return stopped;
     }
 
     /// <summary>
@@ -1493,6 +1856,11 @@ public sealed class MappingEngine
                 break;
             case MouseButtonTarget mouseButton:
                 commands.Add(new MouseDownCommand(mouseButton.Button, new OutputOwner(mappingId)));
+                break;
+            case TextTarget text:
+                // Text is a tap by nature: it goes out on the press edge and a release has
+                // nothing to end, so BeginHold carries the whole activation.
+                commands.Add(new TextCommand(text.Text));
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Layer } layer:
                 ActivateLayer(layer.LayerId, current, commands);

@@ -110,6 +110,31 @@ public static class WindowsVirtualKeys
         GamepadKey.BracketRight => 0xDD,
         GamepadKey.Backslash => 0xDC,
         GamepadKey.Grave => 0xC0,
+
+        // 媒体键: the VK_MEDIA_* / VK_VOLUME_* family. These are not extended keys, so
+        // they go through the plain keyboard event path with their scancode filled in.
+        GamepadKey.VolumeUp => 0xAF,
+        GamepadKey.VolumeDown => 0xAE,
+        GamepadKey.VolumeMute => 0xAD,
+        GamepadKey.MediaPlayPause => 0xB3,
+        GamepadKey.MediaStop => 0xB2,
+        GamepadKey.MediaPrevTrack => 0xB1,
+        GamepadKey.MediaNextTrack => 0xB0,
+
+        // 系统与浏览器功能键: the VK_BROWSER_* / VK_LAUNCH_* family plus sleep and the
+        // print-screen snapshot key.
+        GamepadKey.BrowserBack => 0xA6,
+        GamepadKey.BrowserForward => 0xA7,
+        GamepadKey.BrowserRefresh => 0xA8,
+        GamepadKey.BrowserStop => 0xA9,
+        GamepadKey.BrowserSearch => 0xAA,
+        GamepadKey.BrowserFavorites => 0xAB,
+        GamepadKey.BrowserHome => 0xAC,
+        GamepadKey.LaunchMail => 0xB4,
+        GamepadKey.LaunchApp1 => 0xB6,
+        GamepadKey.LaunchApp2 => 0xB7,
+        GamepadKey.Sleep => 0x5F,
+        GamepadKey.PrintScreen => 0x2C,
         _ => Unmapped,
     };
 

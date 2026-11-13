@@ -22,6 +22,13 @@ namespace DeziroJoy.Platform.Windows.Output;
 /// </remarks>
 public sealed class SendInputOutputSink : IOutputSink
 {
+    /// <summary>
+    /// KEYEVENTF_UNICODE. Declared here rather than beside the other event flags because
+    /// text injection is this sink's alone: it is the one flag whose wScan is a UTF-16
+    /// code unit instead of a scancode, so a key press never needs it.
+    /// </summary>
+    private const uint KeyEventFUnicode = 0x0004;
+
     private readonly Lock _failureSync = new();
 
     private int _lastErrorCode;
@@ -90,6 +97,30 @@ public sealed class SendInputOutputSink : IOutputSink
     public void KeyDown(GamepadKey key) => SendKey(key, keyUp: false);
 
     public void KeyUp(GamepadKey key) => SendKey(key, keyUp: true);
+
+    /// <summary>
+    /// Types the string one UTF-16 code unit at a time with KEYEVENTF_UNICODE, so a
+    /// character the local layout cannot name - a Greek letter, an emoji's surrogate pair -
+    /// still reaches the foreground window. A surrogate pair travels as its two code units,
+    /// exactly as a real keyboard's WM_CHAR stream delivers it. Each unit is its own
+    /// injection so a blocked one is reported rather than silently dropping the tail.
+    /// </summary>
+    public void SendText(string text)
+    {
+        foreach (var unit in text)
+        {
+            var input = new INPUT
+            {
+                Type = SendInputNative.InputKeyboard,
+
+                // WVk stays 0: the event names no virtual key, only the character wScan
+                // carries, so nothing here can collide with a mapped key's press.
+                Keyboard = new KEYBDINPUT { WVk = 0, WScan = unit, DwFlags = KeyEventFUnicode },
+            };
+
+            Send(input, InjectionAction.Text, unit, 0);
+        }
+    }
 
     public void MouseMove(int dx, int dy)
     {
@@ -294,6 +325,7 @@ public enum InjectionAction : byte
 {
     KeyDown,
     KeyUp,
+    Text,
     MouseMove,
     MouseWheel,
     MouseButtonDown,
@@ -304,8 +336,8 @@ public enum InjectionAction : byte
 /// One recorded injection. A value type so the always-on log can keep a preallocated ring buffer
 /// of structs with no per-event heap allocation. <see cref="Primary"/> and <see cref="Secondary"/>
 /// carry the action's operands: the <see cref="DeziroJoy.Core.Mapping.GamepadKey"/> or
-/// <see cref="DeziroJoy.Core.Mapping.MouseButton"/> for keys/buttons, dx/dy for a move, and
-/// vertical/horizontal notches for the wheel.
+/// <see cref="DeziroJoy.Core.Mapping.MouseButton"/> for keys/buttons, dx/dy for a move,
+/// vertical/horizontal notches for the wheel, and the UTF-16 code unit for one unit of text.
 /// </summary>
 public readonly record struct InjectionRecord(
     long Timestamp,

@@ -66,6 +66,15 @@ public sealed record KeyUpCommand(GamepadKey Key, KeyModifiers Modifiers, Output
     public override int GetHashCode() => HashCode.Combine(Key, Modifiers);
 }
 
+/// <summary>
+/// Types a short Unicode string in one go. The engine emits it for a
+/// <see cref="Mapping.TextTarget"/> on the press edge; the dispatcher hands it straight to
+/// the sink, which sends it through its own text path - Windows KEYEVENTF_UNICODE, Linux
+/// through the virtual keyboard - rather than as a sequence of key events the local layout
+/// may not be able to name.
+/// </summary>
+public sealed record TextCommand(string Text) : InputCommand;
+
 public sealed record MouseDownCommand(MouseButton Button, OutputOwner Owner = default) : InputCommand
 {
     public bool Equals(MouseDownCommand? other) => other is not null && Button == other.Button;

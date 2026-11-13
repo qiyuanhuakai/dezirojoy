@@ -135,6 +135,23 @@ public sealed class UInputOutputSink : IOutputSink
 
     public void KeyUp(GamepadKey key) => EmitKey(LinuxKeyCodes.ToEvdevCode(key), 0);
 
+    /// <summary>
+    /// Types the string as key events on the virtual keyboard. uinput has no Unicode event
+    /// of its own - the kernel device only speaks key codes - so a character is typed the
+    /// way a physical keyboard types it: the key its US layout names, with Shift when the
+    /// shifted symbol is the one asked for. A character no key code names (a non-ASCII
+    /// letter, an emoji's surrogate half) is skipped rather than sent as garbage; that is
+    /// the IME follow-up, and a silent skip is the honest boundary of a text path built
+    /// from key codes.
+    /// </summary>
+    public void SendText(string text)
+    {
+        foreach (var (key, value) in EvdevTextKeys.StrokesFor(text))
+        {
+            EmitKey(LinuxKeyCodes.ToEvdevCode(key), value);
+        }
+    }
+
     public void MouseMove(int dx, int dy)
     {
         if (dx != 0)
@@ -251,5 +268,116 @@ internal static class EvdevMouseButtons
         };
 
         return code != 0;
+    }
+}
+
+/// <summary>
+/// The printable US-ASCII range as key strokes, the only characters a virtual keyboard
+/// built from key codes can name: each one is the key its layout carries plus whether
+/// Shift is needed to reach the character. Everything outside it - a non-ASCII letter, an
+/// emoji - has no key code at all and is skipped by <see cref="UInputOutputSink.SendText"/>.
+/// </summary>
+internal static class EvdevTextKeys
+{
+    /// <summary>
+    /// The ordered key events one string types, Shift included: down before the character,
+    /// Shift released before the next character starts, and nothing at all for a character
+    /// the table cannot name. Pure so the text path is testable without a uinput node.
+    /// </summary>
+    public static List<(GamepadKey Key, int Value)> StrokesFor(string text)
+    {
+        var strokes = new List<(GamepadKey, int)>();
+
+        foreach (var character in text)
+        {
+            if (!TryGetStroke(character, out var stroke))
+            {
+                continue;
+            }
+
+            if (stroke.Shift)
+            {
+                strokes.Add((GamepadKey.LeftShift, 1));
+            }
+
+            strokes.Add((stroke.Key, 1));
+            strokes.Add((stroke.Key, 0));
+
+            if (stroke.Shift)
+            {
+                strokes.Add((GamepadKey.LeftShift, 0));
+            }
+        }
+
+        return strokes;
+    }
+
+    public static bool TryGetStroke(char character, out (GamepadKey Key, bool Shift) stroke)
+        => TextKeys.TryGetValue(character, out stroke);
+
+    private static readonly (char Character, GamepadKey Key, bool Shift)[] Punctuation =
+    [
+        ('`', GamepadKey.Grave, false),
+        ('~', GamepadKey.Grave, true),
+        ('-', GamepadKey.Minus, false),
+        ('_', GamepadKey.Minus, true),
+        ('=', GamepadKey.Equal, false),
+        ('+', GamepadKey.Equal, true),
+        ('[', GamepadKey.BracketLeft, false),
+        ('{', GamepadKey.BracketLeft, true),
+        (']', GamepadKey.BracketRight, false),
+        ('}', GamepadKey.BracketRight, true),
+        ('\\', GamepadKey.Backslash, false),
+        ('|', GamepadKey.Backslash, true),
+        (';', GamepadKey.Semicolon, false),
+        (':', GamepadKey.Semicolon, true),
+        ('\'', GamepadKey.Apostrophe, false),
+        ('"', GamepadKey.Apostrophe, true),
+        (',', GamepadKey.Comma, false),
+        ('<', GamepadKey.Comma, true),
+        ('.', GamepadKey.Period, false),
+        ('>', GamepadKey.Period, true),
+        ('/', GamepadKey.Slash, false),
+        ('?', GamepadKey.Slash, true),
+        ('!', GamepadKey.D1, true),
+        ('@', GamepadKey.D2, true),
+        ('#', GamepadKey.D3, true),
+        ('$', GamepadKey.D4, true),
+        ('%', GamepadKey.D5, true),
+        ('^', GamepadKey.D6, true),
+        ('&', GamepadKey.D7, true),
+        ('*', GamepadKey.D8, true),
+        ('(', GamepadKey.D9, true),
+        (')', GamepadKey.D0, true),
+    ];
+
+    private static readonly Dictionary<char, (GamepadKey Key, bool Shift)> TextKeys = Build();
+
+    private static Dictionary<char, (GamepadKey, bool)> Build()
+    {
+        var keys = new Dictionary<char, (GamepadKey, bool)>
+        {
+            [' '] = (GamepadKey.Space, false),
+            ['\t'] = (GamepadKey.Tab, false),
+            ['\n'] = (GamepadKey.Enter, false),
+        };
+
+        for (var letter = 'a'; letter <= 'z'; letter++)
+        {
+            keys[letter] = ((GamepadKey)((int)GamepadKey.A + (letter - 'a')), false);
+            keys[char.ToUpperInvariant(letter)] = ((GamepadKey)((int)GamepadKey.A + (letter - 'a')), true);
+        }
+
+        for (var digit = '0'; digit <= '9'; digit++)
+        {
+            keys[digit] = (GamepadKey.D0 + (digit - '0'), false);
+        }
+
+        foreach (var (character, key, shift) in Punctuation)
+        {
+            keys[character] = (key, shift);
+        }
+
+        return keys;
     }
 }

@@ -45,4 +45,36 @@ public class WindowsVirtualKeysTests
     [InlineData(GamepadKey.A, false)]
     public void Extended_Key_Flag_Matches_Windows_Requirements(GamepadKey key, bool expected)
         => Assert.Equal(expected, WindowsVirtualKeys.IsExtendedKey(key));
+
+    [Theory]
+    [InlineData(GamepadKey.VolumeUp, 0xAF)]
+    [InlineData(GamepadKey.VolumeDown, 0xAE)]
+    [InlineData(GamepadKey.VolumeMute, 0xAD)]
+    [InlineData(GamepadKey.MediaPlayPause, 0xB3)]
+    [InlineData(GamepadKey.MediaStop, 0xB2)]
+    [InlineData(GamepadKey.MediaPrevTrack, 0xB1)]
+    [InlineData(GamepadKey.MediaNextTrack, 0xB0)]
+    [InlineData(GamepadKey.BrowserBack, 0xA6)]
+    [InlineData(GamepadKey.BrowserForward, 0xA7)]
+    [InlineData(GamepadKey.BrowserRefresh, 0xA8)]
+    [InlineData(GamepadKey.BrowserStop, 0xA9)]
+    [InlineData(GamepadKey.BrowserSearch, 0xAA)]
+    [InlineData(GamepadKey.BrowserFavorites, 0xAB)]
+    [InlineData(GamepadKey.BrowserHome, 0xAC)]
+    [InlineData(GamepadKey.LaunchMail, 0xB4)]
+    [InlineData(GamepadKey.LaunchApp1, 0xB6)]
+    [InlineData(GamepadKey.LaunchApp2, 0xB7)]
+    [InlineData(GamepadKey.Sleep, 0x5F)]
+    [InlineData(GamepadKey.PrintScreen, 0x2C)]
+    public void Media_And_System_Keys_Use_Their_Windows_Codes(GamepadKey key, ushort expected)
+        => Assert.Equal(expected, WindowsVirtualKeys.ToVirtualKey(key));
+
+    [Theory]
+    [InlineData(GamepadKey.VolumeUp)]
+    [InlineData(GamepadKey.MediaPlayPause)]
+    [InlineData(GamepadKey.BrowserHome)]
+    [InlineData(GamepadKey.LaunchMail)]
+    [InlineData(GamepadKey.Sleep)]
+    public void Media_And_System_Keys_Are_Not_Extended_Keys(GamepadKey key)
+        => Assert.False(WindowsVirtualKeys.IsExtendedKey(key));
 }

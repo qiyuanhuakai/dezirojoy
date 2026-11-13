@@ -69,6 +69,11 @@ public sealed class CommandDispatcher
             case WheelCommand wheel:
                 Sink.ScrollWheel(wheel.HorizontalNotches, wheel.VerticalNotches);
                 break;
+            case TextCommand text:
+                // Text is not a held output: nothing to refcount, nothing to release, so
+                // the dispatcher hands it straight through and forgets about it.
+                Sink.SendText(text.Text);
+                break;
             case MouseDownCommand mouseDown:
                 Remember(mouseDown.Owner);
                 _ownership.PressMouseButton(Sink, mouseDown.Button, mouseDown.Owner);

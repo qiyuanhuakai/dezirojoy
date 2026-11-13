@@ -15,6 +15,8 @@ public class CommandDispatcherTests
 
         public void KeyUp(GamepadKey key) => Calls.Add($"up:{key}");
 
+        public void SendText(string text) => Calls.Add($"text:{text}");
+
         public void MouseMove(int dx, int dy) => Calls.Add($"move:{dx},{dy}");
 
         public void ScrollWheel(int horizontalNotches, int verticalNotches)
@@ -83,6 +85,31 @@ public class CommandDispatcherTests
 
         Assert.Equal(["down:Enter", "up:Enter"], sink.Calls);
         Assert.False(dispatcher.HasHeldInput);
+    }
+
+    [Fact]
+    public void A_Text_Command_Reaches_The_Sink_Verbatim_And_Holds_Nothing()
+    {
+        var (dispatcher, sink) = CreateDispatcher();
+
+        dispatcher.Dispatch(new TextCommand("hello 世界"));
+
+        // Text is one action, not a hold: it goes out whole, and nothing is left down for a
+        // later release to lift.
+        Assert.Equal(["text:hello 世界"], sink.Calls);
+        Assert.False(dispatcher.HasHeldInput);
+    }
+
+    [Fact]
+    public void Text_Types_Through_A_Key_Hold_Without_Lifting_It()
+    {
+        var (dispatcher, sink) = CreateDispatcher();
+
+        dispatcher.Dispatch(new KeyDownCommand(GamepadKey.LeftCtrl, KeyModifiers.None));
+        dispatcher.Dispatch(new TextCommand("x"));
+        dispatcher.Dispatch(new KeyUpCommand(GamepadKey.LeftCtrl, KeyModifiers.None));
+
+        Assert.Equal(["down:LeftCtrl", "text:x", "up:LeftCtrl"], sink.Calls);
     }
 
     [Fact]
