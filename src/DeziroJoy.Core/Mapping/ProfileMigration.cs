@@ -56,10 +56,34 @@ public static class ProfileMigration
 
         mappings.AddRange(extracted);
 
+        // v1 profiles could store curve strength > 1, which extrapolated the response
+        // curve and could reverse direction or leave [0,1]. The legal range is now [0,1],
+        // so normalize it on every stick target while the profile is upgraded.
+        for (var i = 0; i < mappings.Count; i++)
+        {
+            mappings[i] = mappings[i] with
+            {
+                Target = mappings[i].Target switch
+                {
+                    MouseMoveTarget mouse => mouse with
+                    {
+                        Settings = mouse.Settings with { CurveStrength = ClampStrength(mouse.Settings.CurveStrength) },
+                    },
+                    WheelScrollTarget wheel => wheel with
+                    {
+                        Settings = wheel.Settings with { CurveStrength = ClampStrength(wheel.Settings.CurveStrength) },
+                    },
+                    var other => other,
+                },
+            };
+        }
+
         return profile with
         {
             SchemaVersion = GamepadProfile.CurrentSchemaVersion,
             Mappings = mappings,
         };
     }
+
+    private static float ClampStrength(float strength) => Math.Clamp(strength, 0f, 1f);
 }

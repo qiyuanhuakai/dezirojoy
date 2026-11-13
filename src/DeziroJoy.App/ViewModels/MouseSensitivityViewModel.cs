@@ -155,6 +155,14 @@ public partial class MouseSensitivityViewModel : ObservableObject
 
     partial void OnCurveStrengthChanged(float value)
     {
+        if (value is < 0f or > 1f)
+        {
+            // Snap back into the legal [0,1] range; re-assigning re-enters this hook in
+            // range, so the processor and graph rebuild once with the clamped value.
+            CurveStrength = Math.Clamp(value, 0f, 1f);
+            return;
+        }
+
         ApplySettings();
         RebuildCurvePoints();
     }

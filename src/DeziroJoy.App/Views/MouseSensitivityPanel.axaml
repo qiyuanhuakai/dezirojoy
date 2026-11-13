@@ -81,7 +81,7 @@
                         <ColumnDefinition Width="90" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="曲线强度" VerticalAlignment="Center" Margin="0" />
-                    <Slider Grid.Column="1" x:Name="CurveStrengthSlider" Minimum="0" Maximum="2" TickFrequency="0.1"
+                    <Slider Grid.Column="1" x:Name="CurveStrengthSlider" Minimum="0" Maximum="1" TickFrequency="0.1"
                             Value="{Binding CurveStrength, Mode=TwoWay}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="2" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
                                Text="{Binding CurveStrength, StringFormat='{}{0:F2}'}" />

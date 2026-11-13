@@ -15,7 +15,7 @@ public sealed record ScrollStickSettings
     /// <summary>Response curve preset applied to the deadzone-filtered magnitude.</summary>
     public ResponseCurve Curve { get; init; } = ResponseCurve.Precise;
 
-    /// <summary>Blend between linear (0) and the full curve (1); above 1 exaggerates.</summary>
+    /// <summary>Blend between linear (0) and the full curve (1); the legal range is [0,1].</summary>
     public float CurveStrength { get; init; } = 1f;
 
     /// <summary>Exponential smoothing time constant in seconds for the scroll rate.</summary>

@@ -23,7 +23,7 @@ public class MouseSensitivityViewModelTests
             MaxSpeed = 2400f,
             DeadZone = 0.25f,
             Curve = ResponseCurve.Aggressive,
-            CurveStrength = 1.5f,
+            CurveStrength = 0.6f,
             ResponseTime = 0.12f,
             PrecisionScale = 0.5f,
             InvertY = false,
@@ -34,7 +34,7 @@ public class MouseSensitivityViewModelTests
         Assert.Equal(2400f, settings.MaxSpeed);
         Assert.Equal(0.25f, settings.DeadZone);
         Assert.Equal(ResponseCurve.Aggressive, settings.Curve);
-        Assert.Equal(1.5f, settings.CurveStrength);
+        Assert.Equal(0.6f, settings.CurveStrength);
         Assert.Equal(0.12f, settings.ResponseTime);
         Assert.Equal(0.5f, settings.PrecisionScale);
         Assert.False(settings.InvertY);
@@ -186,6 +186,41 @@ public class MouseSensitivityViewModelTests
         vm.Curve = ResponseCurve.Aggressive;
 
         Assert.NotEqual(linearY, vm.ResponseCurvePoints[8].Y);
+    }
+
+    [Fact]
+    public void CurveStrength_Above_One_Is_Clamped_To_The_Full_Curve()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        vm.CurveStrength = 1.5f;
+
+        Assert.Equal(1f, vm.CurveStrength);
+        Assert.Equal(1f, vm.BuildSettings().CurveStrength);
+    }
+
+    [Fact]
+    public void CurveStrength_Below_Zero_Is_Clamped_To_Linear()
+    {
+        var vm = new MouseSensitivityViewModel();
+
+        vm.CurveStrength = -0.5f;
+
+        Assert.Equal(0f, vm.CurveStrength);
+        Assert.Equal(0f, vm.BuildSettings().CurveStrength);
+    }
+
+    [Fact]
+    public void LoadFrom_Clamps_An_Imported_Strength_Above_One()
+    {
+        // An old profile could legally store strength > 1; loading it into the panel must
+        // normalize it back into [0,1] rather than echo the extrapolating value back out.
+        var vm = new MouseSensitivityViewModel();
+
+        vm.LoadFrom(new MouseStickSettings { CurveStrength = 1.75f });
+
+        Assert.Equal(1f, vm.CurveStrength);
+        Assert.Equal(1f, vm.BuildSettings().CurveStrength);
     }
 
     [Fact]

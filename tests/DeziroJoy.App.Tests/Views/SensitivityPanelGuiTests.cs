@@ -152,23 +152,43 @@ public sealed class SensitivityPanelGuiTests
     }
 
     [AvaloniaFact]
+    public void MouseCurveStrengthSlider_Updates_And_Round_Trips()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var slider = MouseSensitivityPanelOf(window).FindControl<Slider>("CurveStrengthSlider")!;
+
+        Assert.Equal(0d, slider.Minimum);
+        Assert.Equal(1d, slider.Maximum);
+        Assert.Equal(1d, slider.Value);
+
+        slider.Value = 0.6;
+
+        Assert.Equal(0.6f, viewModel.MouseSensitivity.CurveStrength);
+        Assert.Equal(0.6f, viewModel.MouseSensitivity.BuildSettings().CurveStrength);
+
+        var loaded = new MouseSensitivityViewModel();
+        loaded.LoadFrom(viewModel.MouseSensitivity.BuildSettings());
+        Assert.Equal(0.6f, loaded.CurveStrength);
+    }
+
+    [AvaloniaFact]
     public void ScrollCurveStrengthSlider_Updates_And_Round_Trips()
     {
         var (window, viewModel, _, _) = BuildWindow();
         var slider = ScrollSensitivityPanelOf(window).FindControl<Slider>("ScrollCurveStrengthSlider")!;
 
         Assert.Equal(0d, slider.Minimum);
-        Assert.Equal(2d, slider.Maximum);
+        Assert.Equal(1d, slider.Maximum);
         Assert.Equal(1d, slider.Value);
 
-        slider.Value = 1.75;
+        slider.Value = 0.6;
 
-        Assert.Equal(1.75f, viewModel.ScrollSensitivity.CurveStrength);
-        Assert.Equal(1.75f, viewModel.ScrollSensitivity.BuildSettings().CurveStrength);
+        Assert.Equal(0.6f, viewModel.ScrollSensitivity.CurveStrength);
+        Assert.Equal(0.6f, viewModel.ScrollSensitivity.BuildSettings().CurveStrength);
 
         var loaded = new ScrollSensitivityViewModel();
         loaded.LoadFrom(viewModel.ScrollSensitivity.BuildSettings());
-        Assert.Equal(1.75f, loaded.CurveStrength);
+        Assert.Equal(0.6f, loaded.CurveStrength);
     }
 
     [AvaloniaFact]
@@ -202,13 +222,13 @@ public sealed class SensitivityPanelGuiTests
 
         // Each apply reloads both panels from the profile, so the scroll edit is made after
         // the mouse apply - the order a user works in, one panel at a time.
-        ScrollSensitivityPanelOf(window).FindControl<Slider>("ScrollCurveStrengthSlider")!.Value = 1.75;
+        ScrollSensitivityPanelOf(window).FindControl<Slider>("ScrollCurveStrengthSlider")!.Value = 0.6;
         viewModel.ApplyScrollSensitivityCommand.Execute(null);
 
         var wheel = Assert.IsType<WheelScrollTarget>(
             viewModel.ActiveProfile!.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Left }).Target);
-        Assert.Equal(1.75f, wheel.Settings.CurveStrength);
-        Assert.Equal(1.75f, viewModel.ScrollSensitivity.CurveStrength);
+        Assert.Equal(0.6f, wheel.Settings.CurveStrength);
+        Assert.Equal(0.6f, viewModel.ScrollSensitivity.CurveStrength);
 
         // The mouse values survive the scroll apply: the reload reads them back from the profile.
         Assert.Equal(1.25f, viewModel.MouseSensitivity.ScaleX);

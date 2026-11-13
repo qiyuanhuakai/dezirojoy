@@ -181,4 +181,39 @@ public class ScrollSensitivityViewModelTests
         Assert.NotEqual(0, normal.WheelOffset);
         Assert.Equal(-normal.WheelOffset, inverted.WheelOffset, 6);
     }
+
+    [Fact]
+    public void CurveStrength_Above_One_Is_Clamped_To_The_Full_Curve()
+    {
+        var vm = new ScrollSensitivityViewModel();
+
+        vm.CurveStrength = 1.5f;
+
+        Assert.Equal(1f, vm.CurveStrength);
+        Assert.Equal(1f, vm.BuildSettings().CurveStrength);
+    }
+
+    [Fact]
+    public void CurveStrength_Below_Zero_Is_Clamped_To_Linear()
+    {
+        var vm = new ScrollSensitivityViewModel();
+
+        vm.CurveStrength = -0.5f;
+
+        Assert.Equal(0f, vm.CurveStrength);
+        Assert.Equal(0f, vm.BuildSettings().CurveStrength);
+    }
+
+    [Fact]
+    public void LoadFrom_Clamps_An_Imported_Strength_Above_One()
+    {
+        // An old profile could legally store strength > 1; loading it into the panel must
+        // normalize it back into [0,1] rather than echo the extrapolating value back out.
+        var vm = new ScrollSensitivityViewModel();
+
+        vm.LoadFrom(new ScrollStickSettings { CurveStrength = 1.75f });
+
+        Assert.Equal(1f, vm.CurveStrength);
+        Assert.Equal(1f, vm.BuildSettings().CurveStrength);
+    }
 }

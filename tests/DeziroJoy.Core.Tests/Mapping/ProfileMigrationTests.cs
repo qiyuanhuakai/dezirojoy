@@ -51,6 +51,29 @@ public class ProfileMigrationTests
 
     private static GamepadProfile LoadV1() => ProfileSerializer.Deserialize(V1Json);
 
+    private const string V1StrengthJson = """
+    {
+      "SchemaVersion": 1,
+      "Name": "legacy-strength",
+      "Mappings": [
+        {
+          "Id": "00000000-0000-0000-0000-000000000001",
+          "Source": { "$type": "stick", "Stick": "Right" },
+          "Target": { "$type": "mouseMove", "Settings": { "CurveStrength": 1.75 } },
+          "Enabled": true
+        },
+        {
+          "Id": "00000000-0000-0000-0000-000000000002",
+          "Source": { "$type": "stick", "Stick": "Left" },
+          "Target": { "$type": "wheel", "Settings": { "CurveStrength": 2.5 } },
+          "Enabled": true
+        }
+      ]
+    }
+    """;
+
+    private static GamepadProfile LoadV1Strength() => ProfileSerializer.Deserialize(V1StrengthJson);
+
     [Fact]
     public void V1_Profile_Migrates_To_V2_With_Deduped_SpecialKey_Entries()
     {
@@ -140,5 +163,22 @@ public class ProfileMigrationTests
         Assert.Equal(SpecialKeyKind.Precision, target.Kind);
         Assert.Equal(PrecisionMode.Hold, target.PrecisionMode);
         Assert.Equal(GamepadButton.LeftStick, Assert.IsType<ButtonBinding>(special.Source).Button);
+    }
+
+    [Fact]
+    public void Migration_Clamps_CurveStrength_Back_Into_Unit_Range()
+    {
+        // v1 profiles could legally store strength > 1, which extrapolated the curve and
+        // reversed direction or left [0,1]. Migration now normalizes it onto the legal
+        // [0,1] range for every stick target it carries.
+        var migrated = ProfileMigration.Migrate(LoadV1Strength());
+
+        var mouse = Assert.IsType<MouseMoveTarget>(
+            migrated.Mappings.Single(m => m.Target is MouseMoveTarget).Target);
+        Assert.Equal(1f, mouse.Settings.CurveStrength);
+
+        var wheel = Assert.IsType<WheelScrollTarget>(
+            migrated.Mappings.Single(m => m.Target is WheelScrollTarget).Target);
+        Assert.Equal(1f, wheel.Settings.CurveStrength);
     }
 }
