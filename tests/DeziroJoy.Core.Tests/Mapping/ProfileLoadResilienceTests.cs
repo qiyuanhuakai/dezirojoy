@@ -99,7 +99,7 @@ public class ProfileLoadResilienceTests
                     Source = new StickBinding(GamepadStick.Left),
                     Target = new WheelScrollTarget(new ScrollStickSettings { MaxTicksPerSecond = 15f, EnableHorizontal = false }),
                 },
-                new MappingEntry { Source = new ButtonBinding(GamepadButton.Y), Target = new SpecialKeyTarget(SpecialKeyKind.Layer, LayerId: 2) },
+                new MappingEntry { Source = new ButtonBinding(GamepadButton.Y), Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold) },
                 new MappingEntry
                 {
                     Source = new ButtonBinding(GamepadButton.LeftBumper)

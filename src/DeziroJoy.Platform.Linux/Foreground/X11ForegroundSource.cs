@@ -8,15 +8,18 @@ namespace DeziroJoy.Platform.Linux.Foreground;
 /// <para>
 /// What it can answer: under an X11 session with an EWMH window manager, the active toplevel
 /// window comes off the root window's <c>_NET_ACTIVE_WINDOW</c>, its process off
-/// <c>_NET_WM_PID</c> plus <c>/proc</c>, and its fullscreen state off <c>_NET_WM_STATE</c>.
+/// <c>_NET_WM_PID</c> plus <c>/proc</c>, and its fullscreen state off <c>_NET_WM_STATE</c>. The
+/// same session answers the picker's question as well: <c>_NET_CLIENT_LIST</c> names the
+/// managed toplevels, and each carries its own <c>_NET_WM_PID</c> and <c>_NET_WM_NAME</c>.
 /// </para>
 /// <para>
 /// What it cannot: under Wayland there is no global foreground-window query at all - the
 /// protocol deliberately keeps one client from asking what another client has focused. An
 /// XWayland client shows up, a native Wayland client does not, and a session with no X server
 /// at all answers nothing. In every one of those cases this source returns
-/// <see cref="ForegroundContext.Empty"/>, no rule matches, and the desktop default profile runs.
-/// That is the documented reason no rule may depend on fullscreen being detectable: the
+/// <see cref="ForegroundContext.Empty"/> - and enumerates no windows either, since the client
+/// list is the same EWMH property family - no rule matches, and the desktop default profile
+/// runs. That is the documented reason no rule may depend on fullscreen being detectable: the
 /// condition is auxiliary and the user turns it off per rule where the platform cannot answer.
 /// </para>
 /// </summary>
@@ -29,6 +32,10 @@ public sealed class X11ForegroundSource : IForegroundSource, IDisposable
     private const string WindowStateProperty = "_NET_WM_STATE";
 
     private const string FullscreenState = "_NET_WM_STATE_FULLSCREEN";
+
+    private const string ClientListProperty = "_NET_CLIENT_LIST";
+
+    private const string WindowNameProperty = "_NET_WM_NAME";
 
     private nint _connection;
 
@@ -184,6 +191,78 @@ public sealed class X11ForegroundSource : IForegroundSource, IDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The windows the window manager reports as open, or an empty list where it reports none.
+    /// <c>_NET_CLIENT_LIST</c> is the EWMH list of managed toplevels, and it fails the same way
+    /// the foreground query does: a manager without EWMH support has no such property, and that
+    /// reads as "nothing to enumerate" - the picker then has nothing to offer, exactly as under
+    /// Wayland. A window whose process cannot be named is skipped rather than listed without
+    /// one, because the picker exists to fill a rule with a program name.
+    /// </summary>
+    public IReadOnlyList<ForegroundWindow> ListWindows()
+    {
+        var connection = EnsureConnection();
+
+        if (connection == 0)
+        {
+            return [];
+        }
+
+        var root = RootWindow(connection);
+
+        if (root == 0)
+        {
+            return [];
+        }
+
+        var windows = new List<ForegroundWindow>();
+
+        foreach (var window in ClientList(connection, root))
+        {
+            var processName = ProcessName(ProcessId(connection, window));
+
+            if (!string.IsNullOrEmpty(processName))
+            {
+                windows.Add(new ForegroundWindow(processName, WindowTitle(connection, window)));
+            }
+        }
+
+        return windows;
+    }
+
+    /// <summary>The managed toplevel windows the window manager names, in its own order.</summary>
+    private static List<nint> ClientList(nint connection, nint root)
+    {
+        var atom = XcbNative.Intern(connection, ClientListProperty);
+
+        if (atom == XcbNative.AtomNone)
+        {
+            return [];
+        }
+
+        return [.. XcbNative.ReadWords(connection, root, atom).Select(word => (nint)word)];
+    }
+
+    /// <summary>
+    /// The window's title as the window manager reports it, or null where it reports none. Read
+    /// from <c>_NET_WM_NAME</c>, the EWMH UTF-8 title; the older <c>WM_NAME</c> is deliberately
+    /// not consulted - it is compound text in the locale encoding, and a title is for display
+    /// only, so a window without one simply lists by its process name.
+    /// </summary>
+    private static string? WindowTitle(nint connection, nint window)
+    {
+        var atom = XcbNative.Intern(connection, WindowNameProperty);
+
+        if (atom == XcbNative.AtomNone)
+        {
+            return null;
+        }
+
+        var title = XcbNative.ReadString(connection, window, atom);
+
+        return string.IsNullOrWhiteSpace(title) ? null : title;
     }
 
     public void Dispose()

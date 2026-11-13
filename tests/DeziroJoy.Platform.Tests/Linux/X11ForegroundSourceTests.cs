@@ -59,6 +59,69 @@ public sealed class X11ForegroundSourceTests
     }
 
     [Fact]
+    public void An_Unreachable_Display_Enumerates_No_Windows()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the XCB query only exists on Linux");
+
+        var original = Environment.GetEnvironmentVariable("DISPLAY");
+
+        try
+        {
+            // Nothing is listening on this display, which is exactly the Wayland and headless
+            // case: the connect fails and the enumeration has nothing to answer with.
+            Environment.SetEnvironmentVariable("DISPLAY", ":99");
+
+            using var source = new X11ForegroundSource();
+
+            Assert.Empty(source.ListWindows());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DISPLAY", original);
+        }
+    }
+
+    [Fact]
+    public void Enumerating_Windows_Never_Throws_And_Never_Names_An_Empty_Process()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the XCB query only exists on Linux");
+
+        using var source = new X11ForegroundSource();
+
+        // Whatever this session answers - a real X11 desktop, or nothing at all - every window
+        // that comes back has to carry a program name, which is the one thing the picker fills
+        // a rule from.
+        Assert.All(source.ListWindows(), window => Assert.False(string.IsNullOrWhiteSpace(window.ProcessName)));
+    }
+
+    [Fact]
+    public void A_Disposed_Source_Enumerates_No_Windows()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the XCB query only exists on Linux");
+
+        using var source = new X11ForegroundSource();
+        source.Dispose();
+
+        // Disposing drops the connection, and a source with no connection has nothing to
+        // enumerate: the picker then offers nothing rather than reconnecting behind the
+        // watcher's back.
+        Assert.Empty(source.ListWindows());
+        Assert.Null(source.Read().ProcessName);
+    }
+
+    [Fact]
+    public void A_Chunked_String_Read_Advances_By_Words_Not_By_Units()
+    {
+        // The request's long_offset counts 32-bit words whatever the property's format, so a
+        // chunked read advances by words: an 8-bit title of 1024 bytes is 256 words, and
+        // advancing by units instead would re-read the same bytes and never reach the end.
+        Assert.Equal(256u, XcbNative.WordsConsumed(1024, 8));
+        Assert.Equal(1024u, XcbNative.WordsConsumed(1024, 32));
+        Assert.Equal(512u, XcbNative.WordsConsumed(1024, 16));
+        Assert.Equal(1u, XcbNative.WordsConsumed(1, 8));
+    }
+
+    [Fact]
     public void The_Property_Reply_Layout_Is_Pinned_To_The_Xcb_Abi()
     {
         // xcb_get_property_reply_t from xproto.h: response_type, format, sequence, length, type,

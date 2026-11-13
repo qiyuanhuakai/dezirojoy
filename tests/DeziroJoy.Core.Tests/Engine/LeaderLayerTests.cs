@@ -6,10 +6,11 @@ using Xunit;
 namespace DeziroJoy.Core.Tests.Engine;
 
 /// <summary>
-/// The Leader temporary layer. A layer key (<see cref="SpecialKeyKind.Layer"/>) enters a
-/// temporary layer - the mappings that carry the matching <see cref="MappingEntry.Layer"/> -
-/// for as long as it is held, without touching the preset switch: no engine is rebuilt, no
-/// output is released wholesale.
+/// The temporary layer a leader key switches. A leader whose
+/// <see cref="SpecialKeyTarget.Action"/> is <see cref="LeaderAction.Layer"/> switches the
+/// one temporary layer - the mappings that carry <see cref="MappingEntry.Layer"/> 1 -
+/// instead of any preset slot: 按住 enters it for as long as the key is held, 按一下 toggles
+/// it on each new press edge. No engine is rebuilt and no output is released wholesale.
 /// <para>
 /// The layer inherits every base mapping it does not override, so a drag, a held key or a
 /// stick's mouse move keeps running exactly as it was; it overrides only the buttons it
@@ -23,7 +24,8 @@ public class LeaderLayerTests
 {
     private const float Tick = 1f / 64f;
 
-    private const int LayerId = 2;
+    /// <summary>The one temporary layer: <see cref="MappingEntry.Layer"/> 1.</summary>
+    private const int Layer = 1;
 
     private static GamepadProfile Profile(params MappingEntry[] mappings) => new()
     {
@@ -35,14 +37,17 @@ public class LeaderLayerTests
         => new() { Source = new ButtonBinding(button), Target = target };
 
     private static MappingEntry OnLayer(GamepadButton button, MappingTarget target)
-        => new() { Source = new ButtonBinding(button), Target = target, Layer = LayerId };
+        => new() { Source = new ButtonBinding(button), Target = target, Layer = Layer };
 
-    /// <summary>The leader key that enters the temporary layer while it is held.</summary>
-    private static MappingEntry LayerLeader(GamepadButton button, int layer = LayerId)
+    /// <summary>The leader key that switches the temporary layer while it is held.</summary>
+    private static MappingEntry LayerLeader(GamepadButton button, LeaderSwitchMode mode = LeaderSwitchMode.Hold)
         => new()
         {
             Source = new ButtonBinding(button),
-            Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: layer),
+            Target = new SpecialKeyTarget(
+                SpecialKeyKind.Leader,
+                SwitchMode: mode,
+                Action: LeaderAction.Layer),
         };
 
     private static GamepadState Held(params GamepadButton[] buttons)
@@ -254,18 +259,19 @@ public class LeaderLayerTests
     }
 
     [Fact]
-    public void A_Stick_Leader_Activates_The_Layer_While_Deflected()
+    public void A_Stick_Leader_Switches_The_Layer_While_Deflected()
     {
         var engine = new MappingEngine(Profile(
             Base(GamepadButton.X, new KeyPressTarget(GamepadKey.C)),
             new MappingEntry
             {
                 Source = new StickBinding(GamepadStick.Left) { Direction = InputDirection.Up },
-                Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: 2),
+                Target = new SpecialKeyTarget(
+                    SpecialKeyKind.Leader,
+                    SwitchMode: LeaderSwitchMode.Hold,
+                    Action: LeaderAction.Layer),
             },
             OnLayer(GamepadButton.X, new KeyPressTarget(GamepadKey.V))));
-
-        var pushed = GamepadState.Create(GamepadButtonMask.None, 0, 1, 0, 0);
 
         // The stick pushed up enters the layer; X is held, so the layer's X is adopted.
         Assert.Equal(
@@ -339,34 +345,93 @@ public class LeaderLayerTests
     }
 
     [Fact]
-    public void Two_Layers_Are_Active_One_At_A_Time()
+    public void Two_Leaders_Share_The_One_Temporary_Layer()
     {
+        // There is only one temporary layer now, so two leaders name the same overlay: the
+        // layer stays while either of them holds it, and only the last release leaves it.
         var engine = new MappingEngine(Profile(
             Base(GamepadButton.X, new KeyPressTarget(GamepadKey.C)),
-            LayerLeader(GamepadButton.RightBumper, layer: 2),
-            LayerLeader(GamepadButton.LeftBumper, layer: 3),
-            OnLayer(GamepadButton.X, new KeyPressTarget(GamepadKey.V)),
-            new MappingEntry
-            {
-                Source = new ButtonBinding(GamepadButton.X),
-                Target = new KeyPressTarget(GamepadKey.B),
-                Layer = 3,
-            }));
+            LayerLeader(GamepadButton.RightBumper),
+            LayerLeader(GamepadButton.LeftBumper),
+            OnLayer(GamepadButton.X, new KeyPressTarget(GamepadKey.V))));
 
         Assert.Empty(engine.Tick(Held(GamepadButton.RightBumper), Tick));
         Assert.Equal(
             new KeyDownCommand(GamepadKey.V, KeyModifiers.None),
             Assert.Single(engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.X), Tick)));
 
-        // A second leader takes over while the first is still held: the first layer's hold is
-        // cancelled before the second layer adopts its own, so no output outlives the layer
-        // that asked for it and the base mapping is not re-adopted on the way through.
+        // The second leader joins the first: the layer is already active, so nothing the
+        // layer put in effect moves.
+        Assert.Empty(engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.LeftBumper, GamepadButton.X), Tick));
+
+        // Releasing one of them leaves the layer to the other.
+        Assert.Empty(engine.Tick(Held(GamepadButton.LeftBumper, GamepadButton.X), Tick));
+
+        // The last release hands X back to the base mapping.
         Assert.Equal(
             [
                 new KeyUpCommand(GamepadKey.V, KeyModifiers.None),
-                new KeyDownCommand(GamepadKey.B, KeyModifiers.None),
+                new KeyDownCommand(GamepadKey.C, KeyModifiers.None),
             ],
-            engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.LeftBumper, GamepadButton.X), Tick));
+            engine.Tick(Held(GamepadButton.X), Tick));
+    }
+
+    [Fact]
+    public void A_Layer_Leader_In_Press_Mode_Toggles_The_Layer()
+    {
+        var engine = new MappingEngine(Profile(
+            Base(GamepadButton.X, new KeyPressTarget(GamepadKey.C)),
+            LayerLeader(GamepadButton.Back, LeaderSwitchMode.Press),
+            OnLayer(GamepadButton.X, new KeyPressTarget(GamepadKey.V))));
+
+        // One press enters the layer; the release leaves it on, the way a preset leader
+        // leaves the slot it switched to.
+        Assert.Empty(engine.Tick(Held(GamepadButton.Back), Tick));
+        Assert.Equal(Layer, engine.ActiveLayerId);
+
+        Assert.Equal(
+            new KeyDownCommand(GamepadKey.V, KeyModifiers.None),
+            Assert.Single(engine.Tick(Held(GamepadButton.Back, GamepadButton.X), Tick)));
+
+        // Releasing the leader changes nothing: the layer is toggled on, not held.
+        Assert.Empty(engine.Tick(Held(GamepadButton.X), Tick));
+
+        // The next press edge leaves the layer again and hands X back.
+        Assert.Equal(
+            [
+                new KeyUpCommand(GamepadKey.V, KeyModifiers.None),
+                new KeyDownCommand(GamepadKey.C, KeyModifiers.None),
+            ],
+            engine.Tick(Held(GamepadButton.Back, GamepadButton.X), Tick));
+        Assert.Equal(0, engine.ActiveLayerId);
+
+        Assert.Equal(
+            new KeyUpCommand(GamepadKey.C, KeyModifiers.None),
+            Assert.Single(engine.Tick(Released, Tick)));
+    }
+
+    [Fact]
+    public void A_Deprecated_Layer_Key_Still_Switches_The_Temporary_Layer()
+    {
+        // A profile written before the layer key was merged into the leader carries
+        // SpecialKeyKind.Layer. Migration rewrites it on load; the engine normalizes the
+        // same shape, so one that skipped migration behaves exactly as it did.
+        var engine = new MappingEngine(Profile(
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.RightBumper),
+                Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold),
+            },
+            OnLayer(GamepadButton.X, new KeyPressTarget(GamepadKey.V))));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.RightBumper), Tick));
+        Assert.Equal(
+            new KeyDownCommand(GamepadKey.V, KeyModifiers.None),
+            Assert.Single(engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.X), Tick)));
+
+        Assert.Equal(
+            new KeyUpCommand(GamepadKey.V, KeyModifiers.None),
+            Assert.Single(engine.Tick(Released, Tick)));
     }
 
     [Fact]
@@ -380,10 +445,10 @@ public class LeaderLayerTests
 
         engine.Tick(Held(GamepadButton.RightBumper), Tick);
 
-        Assert.Equal(LayerId, engine.ActiveLayerId);
+        Assert.Equal(Layer, engine.ActiveLayerId);
         var effective = engine.EffectiveMappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.X });
         Assert.Equal(GamepadKey.V, Assert.IsType<KeyComboTarget>(effective.Target).Key);
-        Assert.Equal(LayerId, effective.Layer);
+        Assert.Equal(Layer, effective.Layer);
 
         // RT was never overridden, so it is still the base layer's own mapping.
         var drag = engine.EffectiveMappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.RightTrigger });
@@ -396,7 +461,7 @@ public class LeaderLayerTests
         var engine = DragEngine();
 
         engine.Tick(Held(GamepadButton.RightBumper), Tick);
-        Assert.Equal(LayerId, engine.ActiveLayerId);
+        Assert.Equal(Layer, engine.ActiveLayerId);
 
         // A pause or a profile switch clears the layer; the host pairs this with ReleaseAll,
         // which lifts whatever the layer's mappings held.
@@ -406,19 +471,6 @@ public class LeaderLayerTests
         Assert.Equal(
             new MouseDownCommand(MouseButton.Left),
             Assert.Single(engine.Tick(Held(GamepadButton.RightTrigger), Tick)));
-    }
-
-    [Fact]
-    public void A_Layer_Key_In_Press_Mode_Is_Rejected()
-    {
-        var exception = Assert.Throws<ArgumentException>(() => new MappingEngine(Profile(
-            new MappingEntry
-            {
-                Source = new ButtonBinding(GamepadButton.RightBumper),
-                Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Press, LayerId: 2),
-            })));
-
-        Assert.Contains("LeaderSwitchMode.Hold", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -438,8 +490,11 @@ public class LeaderLayerTests
             new MappingEntry
             {
                 Source = new ButtonBinding(GamepadButton.LeftBumper),
-                Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: 3),
-                Layer = 2,
+                Target = new SpecialKeyTarget(
+                    SpecialKeyKind.Leader,
+                    SwitchMode: LeaderSwitchMode.Hold,
+                    Action: LeaderAction.Layer),
+                Layer = Layer,
             })));
 
         Assert.Contains("named from the base layer only", exception.Message, StringComparison.Ordinal);

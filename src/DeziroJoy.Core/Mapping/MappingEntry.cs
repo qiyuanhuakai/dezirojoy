@@ -15,12 +15,15 @@ public sealed record MappingEntry
     public bool Enabled { get; init; } = true;
 
     /// <summary>
-    /// Which layer this mapping belongs to. 0 - the default - is the base layer, which always
-    /// runs. A mapping on a higher layer only runs while a leader key names that layer as a
-    /// <see cref="SpecialKeyKind.Layer"/> target, and it overrides the base mapping that
-    /// listens on the same physical input; everything the layer does not override is
-    /// inherited, so a second layer that rebinds a few buttons leaves the rest of the profile
-    /// running exactly as it was.
+    /// Which layer this mapping belongs to. 0 - the default - is the base layer, which
+    /// always runs. 1 is the one temporary layer: it only runs while a leader key whose
+    /// <see cref="SpecialKeyTarget.Action"/> is <see cref="LeaderAction.Layer"/> has it in
+    /// effect, and it overrides the base mapping that listens on the same physical input;
+    /// everything the layer does not override is inherited, so a temporary layer that
+    /// rebinds a few buttons leaves the rest of the profile running exactly as it was. A
+    /// value above 1 only reaches a profile written before the single-layer model;
+    /// <see cref="ProfileMigration"/> folds it into 1 and the engine reads any non-zero
+    /// value as the temporary layer.
     /// </summary>
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int Layer { get; init; }
@@ -29,7 +32,7 @@ public sealed record MappingEntry
 /// <summary>A complete saved mapping set, optionally bound to one device.</summary>
 public sealed record GamepadProfile
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
@@ -54,8 +57,8 @@ public sealed record GamepadProfile
 public sealed record EffectiveMappingSnapshot(Guid MappingId, int Layer);
 
 /// <summary>
-/// The temporary layer one device is running - 0 for the base layer alone - and every mapping
-/// that layer puts in effect, in engine order.
+/// The temporary layer one device is running - 0 for the base layer alone, 1 for the one
+/// temporary layer - and every mapping that layer puts in effect, in engine order.
 /// </summary>
 public sealed record ActiveLayerSnapshot(
     string DeviceId,

@@ -199,6 +199,37 @@ public class MappingModelTests
     }
 
     [Fact]
+    public void A_Layer_Leader_Roundtrips_As_A_Leader_With_The_Layer_Action()
+    {
+        // The layer key is a leader key now: there is no layer id to name, only the action
+        // that says the leader switches the temporary layer instead of a preset slot.
+        var profile = new GamepadProfile
+        {
+            Name = "layer-leader",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.RightBumper),
+                    Target = new SpecialKeyTarget(
+                        SpecialKeyKind.Leader,
+                        SwitchMode: LeaderSwitchMode.Hold,
+                        Action: LeaderAction.Layer),
+                },
+            ],
+        };
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.Contains("\"Action\": \"Layer\"", json);
+        Assert.DoesNotContain("LayerId", json, StringComparison.Ordinal);
+
+        var back = ProfileSerializer.Deserialize(json);
+
+        Assert.Equal(LeaderAction.Layer, Assert.IsType<SpecialKeyTarget>(back.Mappings[0].Target).Action);
+    }
+
+    [Fact]
     public void Serialized_Json_Uses_Readable_Enums_And_Type_Discriminators()
     {
         var json = ProfileSerializer.Serialize(BuildFullProfile());

@@ -1,11 +1,14 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace DeziroJoy.Platform.Linux.Foreground;
 
 /// <summary>
 /// XCB interop for the foreground query: connect, read the EWMH <c>_NET_ACTIVE_WINDOW</c> off
-/// the root window, then read that window's <c>_NET_WM_PID</c> and <c>_NET_WM_STATE</c>. XCB
-/// rather than Xlib deliberately: Xlib's default handler exits the process on a fatal I/O
+/// the root window, then read that window's <c>_NET_WM_PID</c> and <c>_NET_WM_STATE</c>. The
+/// picker reads the same way over the whole desktop: <c>_NET_CLIENT_LIST</c> for the windows
+/// that are open, and each one's <c>_NET_WM_PID</c> and <c>_NET_WM_NAME</c> beside them.
+/// XCB rather than Xlib deliberately: Xlib's default handler exits the process on a fatal I/O
 /// error, and a GUI that polls the foreground must not die because the X server went away.
 /// XCB reports the failure as a return code instead, which is all a best-effort read needs.
 /// <para>
@@ -120,12 +123,18 @@ internal static partial class XcbNative
                 }
 
                 var bytesAfter = (uint)Marshal.ReadInt32(reply, ReplyBytesAfterOffset);
-                if (bytesAfter == 0)
+
+                // A reply that carries nothing yet leaves bytes over would re-read itself
+                // forever; the server never sends one, and stopping costs the rest of the
+                // property rather than the thread that is walking it.
+                var advance = WordsConsumed(units, format);
+
+                if (bytesAfter == 0 || advance == 0)
                 {
                     break;
                 }
 
-                offset += (uint)units;
+                offset += advance;
             }
             finally
             {
@@ -135,6 +144,77 @@ internal static partial class XcbNative
 
         return words;
     }
+
+    /// <summary>
+    /// One string property, read in chunks exactly as <see cref="ReadWords"/> reads words - a
+    /// window title can outrun one round trip. The value is format units of the property's own
+    /// width, and 8 is the only width a string has: anything else reads as an absent property
+    /// rather than as misparsed bytes, and a property the server refuses returns the empty
+    /// string rather than throwing.
+    /// </summary>
+    public static string ReadString(nint connection, nint window, uint property)
+    {
+        var bytes = new List<byte>();
+        uint offset = 0;
+
+        while (true)
+        {
+            var cookie = GetProperty(connection, 0, window, (nint)property, 0, offset, WordsPerRead);
+            var reply = GetPropertyReply(connection, cookie, 0);
+
+            if (reply == 0)
+            {
+                break;
+            }
+
+            try
+            {
+                var units = Marshal.ReadInt32(reply, ReplyValueLenOffset);
+                var format = Marshal.ReadByte(reply, ReplyFormatOffset);
+
+                if (format != 8)
+                {
+                    break;
+                }
+
+                for (var i = 0; i < units; i++)
+                {
+                    bytes.Add(Marshal.ReadByte(reply, ReplyValueOffset + i));
+                }
+
+                var bytesAfter = (uint)Marshal.ReadInt32(reply, ReplyBytesAfterOffset);
+
+                // The same stop ReadWords makes: a reply that carries nothing and leaves bytes
+                // over would re-read itself forever, and stopping costs the rest of the title
+                // rather than the thread that is reading it.
+                var advance = WordsConsumed(units, format);
+
+                if (bytesAfter == 0 || advance == 0)
+                {
+                    break;
+                }
+
+                offset += advance;
+            }
+            finally
+            {
+                Free(reply);
+            }
+        }
+
+        // X strings are NUL-terminated without counting the terminator, so nothing is normally
+        // left over; trimming keeps a reply that carries one from ending the title in nothing.
+        return Encoding.UTF8.GetString(CollectionsMarshal.AsSpan(bytes)).TrimEnd('\0');
+    }
+
+    /// <summary>
+    /// How many 32-bit words a reply of <paramref name="units"/> format units consumed. The
+    /// request's long_offset counts words whatever the format - the one place a chunked read
+    /// gets it wrong - so a property of 1024 bytes is 256 words, and advancing by units instead
+    /// would re-read the same bytes and never reach the end.
+    /// </summary>
+    public static uint WordsConsumed(int units, byte format)
+        => (uint)((units * (format / 8) + 3) / 4);
 
     /// <summary>The atom a reply names, or <see cref="AtomNone"/> when there is no reply.</summary>
     public static uint AtomOf(nint reply)

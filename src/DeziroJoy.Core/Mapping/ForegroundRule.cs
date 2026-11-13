@@ -29,6 +29,18 @@ public sealed record ForegroundContext(string? ProcessName, bool? IsFullscreen)
 }
 
 /// <summary>
+/// One window that is open right now, as the picker names it: the process behind it and the
+/// title it carries. The title is what the user reads to tell two windows of the same program
+/// apart; matching stays by process name alone, which is the one part every platform can
+/// answer - so a window with no title still lists, labelled by its process.
+/// </summary>
+public sealed record ForegroundWindow(string ProcessName, string? Title)
+{
+    /// <summary>What the picker shows: the process, and its title where there is one.</summary>
+    public string Display => string.IsNullOrWhiteSpace(Title) ? ProcessName : $"{ProcessName} — {Title}";
+}
+
+/// <summary>
 /// One rule of the foreground table: while this program is in front, run that profile - or
 /// pause mapping so the program gets the pad itself. Matching is by process name; several
 /// rules may name the same program and <see cref="Priority"/> decides which one applies.

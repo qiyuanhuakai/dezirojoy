@@ -274,6 +274,17 @@ public sealed class ForegroundRuleTests
     }
 
     [Fact]
+    public void A_Window_Names_Its_Process_And_Shows_Its_Title_For_Display()
+    {
+        // The picker lists programs; the title is what tells two windows of the same program
+        // apart. A window with no title still lists - labelled by its process alone - because
+        // the process name is the part a rule actually matches on.
+        Assert.Equal("chrome", new ForegroundWindow("chrome", null).Display);
+        Assert.Equal("explorer", new ForegroundWindow("explorer", "   ").Display);
+        Assert.Equal("chrome — 新标签页", new ForegroundWindow("chrome", "新标签页").Display);
+    }
+
+    [Fact]
     public void A_Hand_Edited_Slot_Below_One_Is_Clamped_Rather_Than_Refused()
     {
         // The table is hand-editable JSON, and the host's switch path refuses a slot below 1

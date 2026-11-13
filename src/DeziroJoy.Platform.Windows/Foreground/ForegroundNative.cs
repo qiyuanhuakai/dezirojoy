@@ -9,16 +9,19 @@ namespace DeziroJoy.Platform.Windows.Foreground;
 /// <summary>
 /// The foreground window, its process and whether it is fullscreen - the Win32 interop half of
 /// <see cref="WindowsForegroundSource"/>. Only documented user32 exports are used:
-/// <c>GetForegroundWindow</c>, <c>GetWindowThreadProcessId</c>, and the window-rect /
-/// monitor-info pair the fullscreen check compares. Nothing here attaches threads, steals focus
-/// or changes any window - it reads, which is why it is safe to run from the GUI's own timer
-/// while a game has the foreground.
+/// <c>GetForegroundWindow</c>, <c>GetWindowThreadProcessId</c>, <c>EnumWindows</c> plus the
+/// window-rect / monitor-info pair the fullscreen check compares. Nothing here attaches
+/// threads, steals focus or changes any window - it reads, which is why it is safe to run from
+/// the GUI's own timer while a game has the foreground.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal static class ForegroundNative
 {
     /// <summary>MONITOR_DEFAULTTONEAREST: a window with no monitor of its own still resolves to one.</summary>
     private const uint MonitorDefaultToNearest = 2;
+
+    /// <summary>EnumWindows's own callback: one window handle per call, false stops the walk.</summary>
+    public delegate bool EnumWindowsProc(nint hwnd, nint lParam);
 
     [DllImport("user32.dll")]
     public static extern nint GetForegroundWindow();
@@ -36,6 +39,17 @@ internal static class ForegroundNative
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetMonitorInfo(nint monitor, nint info);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumWindows(EnumWindowsProc callback, nint lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(nint hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(nint hwnd, [Out] char[] title, int maxCount);
 
     /// <summary>
     /// The window's rectangle and the rectangle of the monitor it is on, either of which is null
@@ -107,6 +121,54 @@ internal static class ForegroundNative
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Every visible top-level window that is open right now, with the process behind it and the
+    /// title it carries - the same two reads the foreground query makes, walked over the whole
+    /// desktop. Invisible and tool windows are left out: they are not the windows a user thinks
+    /// of as open, and listing them would bury the programs the picker is for. A window whose
+    /// process cannot be resolved - closing mid-walk, or an elevated one this token may not
+    /// query - is skipped rather than offered without a name, because the picker exists to name
+    /// a program.
+    /// </summary>
+    public static List<ForegroundWindow> EnumerateWindows()
+    {
+        var windows = new List<ForegroundWindow>();
+
+        EnumWindows(
+            (hwnd, _) =>
+            {
+                if (hwnd == nint.Zero || !IsWindowVisible(hwnd))
+                {
+                    return true;
+                }
+
+                var processName = ProcessName(hwnd);
+
+                if (!string.IsNullOrEmpty(processName))
+                {
+                    windows.Add(new ForegroundWindow(processName, WindowTitle(hwnd)));
+                }
+
+                return true;
+            },
+            nint.Zero);
+
+        return windows;
+    }
+
+    /// <summary>
+    /// The window's title, or null when it has none. Titles are capped by the platform well
+    /// inside this buffer, and an empty one reads as null so the picker labels the window by its
+    /// process rather than by nothing.
+    /// </summary>
+    private static string? WindowTitle(nint hwnd)
+    {
+        var title = new char[512];
+        var length = GetWindowText(hwnd, title, title.Length);
+
+        return length > 0 ? new string(title, 0, length) : null;
     }
 }
 

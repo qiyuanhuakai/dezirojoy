@@ -41,11 +41,12 @@ namespace DeziroJoy.Core.Engine;
 /// </para>
 /// <para>
 /// Mappings carry a <see cref="MappingEntry.Layer"/>. Layer 0 is the base layer and always
-/// runs; a mapping on a higher layer only runs while a leader key names that layer as a
-/// <see cref="SpecialKeyKind.Layer"/> target. The layer inherits every base mapping it does
-/// not override, so a second layer that only rebinds a few buttons leaves everything else -
-/// a drag, a held key, a stick's mouse move - running exactly as it was. See
-/// <see cref="ActivateLayer"/> for the switch rules.
+/// runs; layer 1 is the one temporary layer, which only runs while a leader key whose
+/// <see cref="SpecialKeyTarget.Action"/> is <see cref="LeaderAction.Layer"/> has it in
+/// effect. The layer inherits every base mapping it does not override, so a temporary layer
+/// that only rebinds a few buttons leaves everything else - a drag, a held key, a stick's
+/// mouse move - running exactly as it was. See <see cref="ActivateLayer"/> for the switch
+/// rules.
 /// </para>
 /// </remarks>
 public sealed class MappingEngine
@@ -102,7 +103,7 @@ public sealed class MappingEngine
     private readonly GamepadProfile _profile;
     private readonly List<MappingEntry> _mappings = [];
     private readonly List<MappingEntry> _baseMappings = [];
-    private readonly Dictionary<int, List<MappingEntry>> _layers = [];
+    private readonly List<MappingEntry> _layerMappings = [];
     private readonly Dictionary<Guid, MouseStickProcessor> _mouseProcessors = [];
     private readonly Dictionary<GestureProcessorKey, MouseStickProcessor> _gestureMouseProcessors = [];
     private readonly Dictionary<Guid, ScrollStickProcessor> _scrollProcessors = [];
@@ -119,6 +120,13 @@ public sealed class MappingEngine
     private readonly HashSet<ProgramSlot> _queuedRestarts = [];
     private List<MappingEntry> _effectiveMappings = [];
     private int _activeLayerId;
+
+    /// <summary>
+    /// The leader keys currently holding the temporary layer in effect. The layer stays
+    /// while any of them holds it, so releasing one of several leaders leaves it to the
+    /// others instead of dropping it under a key that is still down.
+    /// </summary>
+    private readonly HashSet<Guid> _layerHolders = [];
     private GamepadButtonMask _previousButtons;
 
     public MappingEngine(GamepadProfile profile)
@@ -127,7 +135,8 @@ public sealed class MappingEngine
         _profile = profile;
 
         // The engine runs its own normalized copy of the profile's mappings: v1 complex
-        // shortcuts are rewritten into the gesture's long-press action here, so every
+        // shortcuts are rewritten into the gesture's long-press action here, and the
+        // deprecated layer key is rewritten into the leader that replaced it, so every
         // later pass - Tick, SeedLeaderLatches - sees exactly one shape.
         foreach (var mapping in _profile.Mappings)
         {
@@ -137,6 +146,7 @@ public sealed class MappingEngine
             }
 
             var normalized = NormalizeComplexShortcut(mapping);
+            normalized = NormalizeLayerLeader(normalized);
             _mappings.Add(normalized);
 
             ValidateMapping(normalized);
@@ -196,6 +206,31 @@ public sealed class MappingEngine
             {
                 Gesture = gesture with { LongPressAction = complex },
             },
+        };
+    }
+
+    /// <summary>
+    /// Rewrites the deprecated <see cref="SpecialKeyKind.Layer"/> target into the leader
+    /// that replaced it: a leader whose action switches the one temporary layer. Profiles
+    /// written before the merge are migrated on load; this is the safety net for one that
+    /// was not, so the engine has exactly one layer-leader shape to run.
+    /// </summary>
+    private static MappingEntry NormalizeLayerLeader(MappingEntry mapping)
+    {
+        if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Layer } layer)
+        {
+            return mapping;
+        }
+
+        return mapping with
+        {
+            Target = new SpecialKeyTarget(
+                SpecialKeyKind.Leader,
+                layer.PrecisionMode,
+                layer.SwitchMode,
+                layer.SlotA,
+                layer.SlotB,
+                LeaderAction.Layer),
         };
     }
 
@@ -277,7 +312,7 @@ public sealed class MappingEngine
         // the mappings it puts in effect.
         foreach (var mapping in _effectiveMappings)
         {
-            if (mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
+            if (mapping.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer })
             {
                 UpdateMapping(mapping, current, pressed, steps, commands);
             }
@@ -285,7 +320,7 @@ public sealed class MappingEngine
 
         foreach (var mapping in _effectiveMappings)
         {
-            if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
+            if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer })
             {
                 UpdateMapping(mapping, current, pressed, steps, commands);
             }
@@ -459,11 +494,14 @@ public sealed class MappingEngine
         RefreshPreviousExtraButtons(state);
     }
 
-    /// <summary>The temporary layer currently in effect, or 0 for the base layer alone.</summary>
+    /// <summary>
+    /// The temporary layer currently in effect: 1 while a leader key has it in effect, 0 for
+    /// the base layer alone.
+    /// </summary>
     public int ActiveLayerId => _activeLayerId;
 
     /// <summary>
-    /// The mappings in effect right now: every base mapping, with the active layer's own
+    /// The mappings in effect right now: every base mapping, with the temporary layer's own
     /// mappings overriding the ones that listen on the same physical input. Exposed so the
     /// daemon's snapshot can report what a device is really running.
     /// </summary>
@@ -495,8 +533,11 @@ public sealed class MappingEngine
     }
 
     /// <summary>
-    /// Splits the profile's mappings into the base layer and the temporary layers above it.
-    /// The base layer always runs; a layer above it only runs while a leader key names it.
+    /// Splits the profile's mappings into the base layer and the one temporary layer above
+    /// it. The base layer always runs; the temporary layer only runs while a leader key
+    /// switches it in. A layer value above 1 is what a profile written before the
+    /// single-layer model carries - migration folds it into 1 - so any non-zero value is
+    /// read as the temporary layer.
     /// </summary>
     private void PartitionLayers()
     {
@@ -508,13 +549,7 @@ public sealed class MappingEngine
                 continue;
             }
 
-            if (!_layers.TryGetValue(mapping.Layer, out var layer))
-            {
-                layer = [];
-                _layers[mapping.Layer] = layer;
-            }
-
-            layer.Add(mapping);
+            _layerMappings.Add(mapping);
         }
     }
 
@@ -531,21 +566,20 @@ public sealed class MappingEngine
     };
 
     /// <summary>
-    /// Rejects profiles whose temporary layers could never behave. A layer is entered through
-    /// a leader key naming it, so an overlay whose layer no leader names would silently never
-    /// fire; a layer target on an overlay mapping is refused because one temporary layer is
-    /// active at a time and only the base layer can name one; and a layer target is only
-    /// meaningful on a mapping's own target, because a gesture action is a tap and a tap
-    /// would activate a layer nothing ever releases.
+    /// Rejects profiles whose temporary layer could never behave. The layer is entered
+    /// through a leader key that switches it, so an overlay no leader names would silently
+    /// never fire; a leader that switches the layer is refused on a layer mapping, because
+    /// that mapping is not in effect until the layer is already active; and a layer mapping
+    /// is refused on the same input as its leader, because activating the layer would take
+    /// the leader out of effect and nothing would ever leave it again.
     /// </summary>
     private void ValidateLayerReferences()
     {
-        var named = new HashSet<int>();
-        var leaderSources = new Dictionary<int, HashSet<InputBinding>>();
+        var leaderSources = new HashSet<InputBinding>();
 
         foreach (var mapping in _mappings)
         {
-            if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Layer } layer)
+            if (mapping.Target is not SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer })
             {
                 continue;
             }
@@ -553,69 +587,34 @@ public sealed class MappingEngine
             if (mapping.Layer != 0)
             {
                 throw new ArgumentException(
-                    $"Mapping {mapping.Id} names layer {layer.LayerId} from layer {mapping.Layer}. " +
-                    "A temporary layer is named from the base layer only: one layer is active at a time.",
+                    $"Mapping {mapping.Id} switches the temporary layer from layer {mapping.Layer}. " +
+                    "The temporary layer is named from the base layer only: a leader that sits " +
+                    "inside the layer is not in effect until the layer is already active.",
                     nameof(mapping));
             }
 
-            if (layer.LayerId < 1)
-            {
-                throw new ArgumentException(
-                    $"Mapping {mapping.Id} names layer {layer.LayerId}. Layers run from 1 upward; " +
-                    "layer 0 is the base layer every mapping already runs.",
-                    nameof(mapping));
-            }
-
-            if (layer.SwitchMode != LeaderSwitchMode.Hold)
-            {
-                throw new ArgumentException(
-                    $"Mapping {mapping.Id} names layer {layer.LayerId} in {layer.SwitchMode} mode. " +
-                    "A temporary layer lives exactly as long as its leader is held: set " +
-                    "LeaderSwitchMode.Hold.",
-                    nameof(mapping));
-            }
-
-            named.Add(layer.LayerId);
-
-            if (!leaderSources.TryGetValue(layer.LayerId, out var sources))
-            {
-                sources = [];
-                leaderSources[layer.LayerId] = sources;
-            }
-
-            sources.Add(SourceKeyOf(mapping.Source));
+            leaderSources.Add(SourceKeyOf(mapping.Source));
         }
 
-        foreach (var (layerId, _) in _layers)
+        if (_layerMappings.Count > 0 && leaderSources.Count == 0)
         {
-            if (!named.Contains(layerId))
-            {
-                throw new ArgumentException(
-                    $"Layer {layerId} carries mappings but no leader key names it. A temporary " +
-                    "layer is entered through a leader key whose target names the layer.",
-                    nameof(_profile));
-            }
+            throw new ArgumentException(
+                "The temporary layer carries mappings but no leader key names it. The layer " +
+                "is entered through a leader key whose action switches the temporary layer.",
+                nameof(_profile));
         }
 
         // A layer entry listening on the same input as its own leader would take the leader
         // out of effect the moment the layer activates, and nothing would ever leave it.
-        foreach (var (layerId, overlay) in _layers)
+        foreach (var mapping in _layerMappings)
         {
-            if (!leaderSources.TryGetValue(layerId, out var sources))
+            if (leaderSources.Contains(SourceKeyOf(mapping.Source)))
             {
-                continue;
-            }
-
-            foreach (var mapping in overlay)
-            {
-                if (sources.Contains(SourceKeyOf(mapping.Source)))
-                {
-                    throw new ArgumentException(
-                        $"Mapping {mapping.Id} listens on {Describe(mapping.Source)} in layer {layerId}, " +
-                        "the same input that layer's leader key listens on. Activating the layer would " +
-                        "take the leader out of effect, and nothing would ever leave the layer again.",
-                        nameof(mapping));
-                }
+                throw new ArgumentException(
+                    $"Mapping {mapping.Id} listens on {Describe(mapping.Source)} in the temporary " +
+                    "layer, the same input that layer's leader key listens on. Activating the layer " +
+                    "would take the leader out of effect, and nothing would ever leave the layer again.",
+                    nameof(mapping));
             }
         }
     }
@@ -630,7 +629,7 @@ public sealed class MappingEngine
     };
 
     /// <summary>
-    /// Recomputes the mappings in effect: every base mapping, with the active layer's own
+    /// Recomputes the mappings in effect: every base mapping, with the temporary layer's own
     /// mappings overriding the ones that listen on the same physical input. A layer entry that
     /// repeats its base mapping exactly is skipped, so an identical continuous action - a drag,
     /// a held key, a stick's mouse move - keeps running through the base mapping's own state
@@ -640,9 +639,9 @@ public sealed class MappingEngine
     {
         var effective = new List<MappingEntry>(_baseMappings);
 
-        if (_activeLayerId != 0 && _layers.TryGetValue(_activeLayerId, out var overlay))
+        if (_activeLayerId != 0)
         {
-            foreach (var mapping in overlay)
+            foreach (var mapping in _layerMappings)
             {
                 var index = effective.FindIndex(candidate =>
                     SourceKeyOf(candidate.Source) == SourceKeyOf(mapping.Source));
@@ -669,32 +668,53 @@ public sealed class MappingEngine
     }
 
     /// <summary>
-    /// Enters a temporary layer while its leader is held. The layer inherits every base
+    /// Enters the temporary layer while its leader is held. The layer inherits every base
     /// mapping it does not override, so the switch only touches what the layer actually
-    /// changes: see <see cref="SwitchLayer"/>.
+    /// changes: see <see cref="SwitchLayer"/>. A leader that arrives while the layer is
+    /// already in effect simply joins the ones holding it.
     /// </summary>
-    private void ActivateLayer(int layerId, IGamepadState current, List<InputCommand> commands)
+    private void ActivateLayer(Guid leaderId, IGamepadState current, List<InputCommand> commands)
     {
-        if (_activeLayerId == layerId)
+        _layerHolders.Add(leaderId);
+
+        if (_activeLayerId != 0)
         {
             return;
         }
 
-        SwitchLayer(layerId, current, commands);
+        SwitchLayer(1, current, commands);
     }
 
     /// <summary>
-    /// Leaves the active temporary layer, handing every source it took over back to the base
-    /// layer: see <see cref="SwitchLayer"/>.
+    /// Leaves the temporary layer when its leader is released, handing every source it took
+    /// over back to the base layer: see <see cref="SwitchLayer"/>. The layer stays while
+    /// another leader still holds it, so releasing one of several leaves it to the rest.
     /// </summary>
-    private void DeactivateLayer(IGamepadState current, List<InputCommand> commands)
+    private void DeactivateLayer(Guid leaderId, IGamepadState current, List<InputCommand> commands)
     {
-        if (_activeLayerId == 0)
+        if (!_layerHolders.Remove(leaderId) || _layerHolders.Count > 0)
         {
             return;
         }
 
         SwitchLayer(0, current, commands);
+    }
+
+    /// <summary>
+    /// Flips the temporary layer on each new press edge of a Press-mode leader: the layer
+    /// stays in effect after the release, the way a Press-mode preset leader leaves the slot
+    /// it switched to. Leaving it hands every source it took over back to the base layer.
+    /// </summary>
+    private void ToggleLayer(Guid leaderId, IGamepadState current, List<InputCommand> commands)
+    {
+        if (_activeLayerId != 0)
+        {
+            _layerHolders.Clear();
+            SwitchLayer(0, current, commands);
+            return;
+        }
+
+        ActivateLayer(leaderId, current, commands);
     }
 
     /// <summary>Drops the active layer without emitting anything (profile switch, engine pause).</summary>
@@ -705,17 +725,18 @@ public sealed class MappingEngine
             return;
         }
 
+        _layerHolders.Clear();
         _activeLayerId = 0;
         RebuildEffective();
     }
 
     /// <summary>
-    /// Moves to another layer and re-derives the activation of every source whose effective
-    /// mapping moved with it: the activation the old mapping owned is cancelled, and the new
-    /// mapping adopts one if the user is still holding the source. A source whose effective
-    /// mapping did not change is not touched at all, and neither is one the new layer added
-    /// that nothing is holding. The result is deterministic whatever order the two layers
-    /// list their mappings in.
+    /// Moves the temporary layer in or out and re-derives the activation of every source
+    /// whose effective mapping moved with it: the activation the old mapping owned is
+    /// cancelled, and the new mapping adopts one if the user is still holding the source. A
+    /// source whose effective mapping did not change is not touched at all, and neither is
+    /// one the layer added that nothing is holding. The result is deterministic whatever
+    /// order the two layers list their mappings in.
     /// </summary>
     private void SwitchLayer(int layerId, IGamepadState current, List<InputCommand> commands)
     {
@@ -1840,8 +1861,10 @@ public sealed class MappingEngine
     /// Begins a hold-style activation. A combo is a tap by nature, so it fires both edges at
     /// once and has nothing to end. A leader key in Hold mode switches to its alternate slot
     /// for the duration of the hold; one in Press mode toggles between its two slots on the
-    /// press edge. A layer key enters its temporary layer for the duration of the hold.
-    /// Precision keys emit nothing here - their engagement is tracked separately.
+    /// press edge. A leader key whose action is <see cref="LeaderAction.Layer"/> switches the
+    /// temporary layer instead: Hold enters it for the duration of the hold, Press toggles it
+    /// on each press edge. Precision keys emit nothing here - their engagement is tracked
+    /// separately.
     /// </summary>
     private void BeginHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {
@@ -1862,8 +1885,16 @@ public sealed class MappingEngine
                 // nothing to end, so BeginHold carries the whole activation.
                 commands.Add(new TextCommand(text.Text));
                 break;
-            case SpecialKeyTarget { Kind: SpecialKeyKind.Layer } layer:
-                ActivateLayer(layer.LayerId, current, commands);
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer } layer:
+                if (layer.SwitchMode == LeaderSwitchMode.Press)
+                {
+                    ToggleLayer(mappingId, current, commands);
+                }
+                else
+                {
+                    ActivateLayer(mappingId, current, commands);
+                }
+
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold } leader:
                 commands.Add(new SwitchPresetCommand(leader.SlotB));
@@ -1878,8 +1909,10 @@ public sealed class MappingEngine
 
     /// <summary>
     /// Ends a hold-style activation. A leader key in Hold mode returns to its primary slot
-    /// once the key is released; a layer key leaves its temporary layer, releasing everything
-    /// the layer's mappings put in effect.
+    /// once the key is released; a leader key holding the temporary layer leaves it, releasing
+    /// everything the layer's mappings put in effect - unless another leader still holds it.
+    /// A Press-mode layer leader has nothing to end: the layer it toggled stays until the next
+    /// press edge.
     /// </summary>
     private void EndHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {
@@ -1891,8 +1924,8 @@ public sealed class MappingEngine
             case MouseButtonTarget mouseButton:
                 commands.Add(new MouseUpCommand(mouseButton.Button, new OutputOwner(mappingId)));
                 break;
-            case SpecialKeyTarget { Kind: SpecialKeyKind.Layer }:
-                DeactivateLayer(current, commands);
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer, SwitchMode: LeaderSwitchMode.Hold }:
+                DeactivateLayer(mappingId, current, commands);
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold } leader:
                 commands.Add(new SwitchPresetCommand(leader.SlotA));

@@ -30,4 +30,11 @@ public sealed class WindowsForegroundSource : IForegroundSource
 
         return new ForegroundContext(processName, ForegroundNative.IsFullscreen(hwnd));
     }
+
+    /// <summary>
+    /// Every visible window on the desktop, with its process and title. Windows has no
+    /// equivalent of the foreground query's ambiguity: <c>EnumWindows</c> walks every top-level
+    /// window, so the picker can always offer the programs that are actually open.
+    /// </summary>
+    public IReadOnlyList<ForegroundWindow> ListWindows() => ForegroundNative.EnumerateWindows();
 }

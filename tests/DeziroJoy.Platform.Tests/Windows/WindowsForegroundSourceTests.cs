@@ -69,6 +69,63 @@ public sealed class WindowsForegroundSourceTests
     }
 
     [Fact]
+    public void Enumerating_Windows_Lists_The_Open_Ones_With_Their_Process_Names()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("the user32 window enumeration only exists on Windows");
+            return;
+        }
+
+        var windows = new WindowsForegroundSource().ListWindows();
+
+        // A desktop always has something open; whatever this box has, every entry must name a
+        // program - the picker exists to name one - and carry either a title or none, never a
+        // blank one.
+        Assert.NotEmpty(windows);
+        Assert.All(windows, window =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(window.ProcessName));
+            Assert.True(window.Title is null || window.Title.Length > 0);
+        });
+    }
+
+    [Fact]
+    public void Every_Enumerated_Window_Names_Its_Program_The_Way_The_Rule_Table_Matches_It()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("the user32 window enumeration only exists on Windows");
+            return;
+        }
+
+        // The enumeration is where a program's name enters the picker, and the rule table matches
+        // on the suffix-less form: an enumeration that carried "chrome.exe" would put a second
+        // spelling of the same program in the list the user picks from.
+        Assert.All(new WindowsForegroundSource().ListWindows(), window =>
+            Assert.False(
+                window.ProcessName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase),
+                $"the enumeration offered '{window.ProcessName}' with its .exe suffix"));
+    }
+
+    [Fact]
+    public void An_Unresolvable_Window_Is_Skipped_Rather_Than_Listed_Without_A_Name()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("the user32 window enumeration only exists on Windows");
+            return;
+        }
+
+        // The enumeration reads every visible window the same way the foreground query reads
+        // the one in front: a window with no resolvable process is on its way out, so it is
+        // left out of the list rather than offered as a program nobody can name.
+        var windows = ForegroundNative.EnumerateWindows();
+
+        Assert.All(windows, window => Assert.False(string.IsNullOrEmpty(window.ProcessName)));
+    }
+
+    [Fact]
     public void The_Monitor_Info_Buffer_Matches_The_Win32_Layout()
     {
         // cbSize + two RECTs + dwFlags + CCHDEVICENAME characters. A buffer of any other size
