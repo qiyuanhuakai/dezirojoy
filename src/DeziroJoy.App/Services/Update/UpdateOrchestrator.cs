@@ -50,7 +50,10 @@ public enum UpdatePhase
 /// be stopped over its IPC channel - a medium-integrity process cannot terminate it - which
 /// is exactly what the default daemon seam does, over an endpoint that never starts a daemon:
 /// a liveness probe that launched one would pop UAC for a daemon that was not even running,
-/// and after a successful shutdown would resurrect the daemon it just stopped. The tray is
+/// and after a successful shutdown would resurrect the daemon it just stopped. "Gone" there
+/// means the daemon's process, not only its pipe: the elevated daemon releases the pipe as part
+/// of exiting and can still be unwinding behind it, so the default daemon seam waits for the
+/// process it named before the install is allowed to start. The tray is
 /// asked to exit over the activation channel, because a tray left running holds the old
 /// binary and the instance lease: without the request, a relaunch on Linux would wake the old
 /// tray instead of the new copy.

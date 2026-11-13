@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using DeziroJoy.App.Ipc;
@@ -20,6 +21,24 @@ internal static class UpdateProcessCoordinator
     /// <summary>Pause between daemon-vanish polls.</summary>
     private static readonly TimeSpan DaemonProbePause = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// How long the daemon *process* gets to exit once its pipe is gone. The pipe is the
+    /// daemon's own and it closes it as part of shutting down, so a daemon that still holds the
+    /// pipe has not begun to exit - but the last of it, the part still holding the install
+    /// directory's files open, can outlive the pipe by a moment. Windows will not let an
+    /// installer replace a file a live process has open: its DeleteFile fails with access denied
+    /// (error 5) and it rolls back, which is the failure this wait exists to prevent.
+    /// </summary>
+    private static readonly TimeSpan DaemonExitBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long to wait for a daemon that never named its process - one that was already gone
+    /// when the handshake ran, or a snapshot reporting no injector at all. Its pipe is gone,
+    /// which is the same evidence a vanished process gives, so the grace stands in for the
+    /// process that could not be waited on.
+    /// </summary>
+    private static readonly TimeSpan DaemonExitGrace = TimeSpan.FromMilliseconds(500);
+
     /// <summary>Pause between tray-vanish polls.</summary>
     private static readonly TimeSpan TrayPollPause = TimeSpan.FromMilliseconds(50);
 
@@ -38,6 +57,13 @@ internal static class UpdateProcessCoordinator
     /// - resurrect the daemon from the post-shutdown confirmation and then report the stop as
     /// failed once the budget expired.
     /// </summary>
+    /// <remarks>
+    /// The stop is not finished when the pipe is gone. The daemon releases the pipe as part of
+    /// exiting, and the elevated process that owned it can still be unwinding behind that - still
+    /// holding <c>DeziroJoy.exe</c> and the libraries beside it open - while the installer is
+    /// already trying to replace them. So once the pipe has vanished, the process the daemon's
+    /// own snapshot named is waited on, bounded, and only then is the daemon declared gone.
+    /// </remarks>
     /// <param name="endpoint">
     /// The daemon transport to use. Production leaves it null and gets the launch-free probe
     /// endpoint; tests pass a fake and assert what the stop did.
@@ -48,11 +74,17 @@ internal static class UpdateProcessCoordinator
     /// daemon that takes the pipe but never answers Hello gives up on this budget - which is a
     /// timeout of this service, never a cancellation of the caller.
     /// </param>
+    /// <param name="awaitProcessExit">
+    /// Waits for a daemon process to exit and answers whether it did within the budget.
+    /// Production waits on the real process the daemon named; tests inject a fake so no real
+    /// process is waited on and the wait itself is what gets asserted.
+    /// </param>
     public static async Task<bool> StopDaemonAsync(
         CancellationToken cancellationToken,
         IDaemonEndpoint? endpoint = null,
         TimeSpan? stopBudget = null,
-        TimeSpan? requestTimeout = null)
+        TimeSpan? requestTimeout = null,
+        Func<int, TimeSpan, CancellationToken, Task<bool>>? awaitProcessExit = null)
     {
         endpoint ??= new ProbeOnlyDaemonEndpoint();
         var budget = stopBudget ?? DaemonStopBudget;
@@ -67,14 +99,19 @@ internal static class UpdateProcessCoordinator
         // the same - nothing resident - so that is what the bounded wait below checks. A daemon
         // that refused the shutdown is still running when the budget expires, and that is the
         // honest failure; one that died despite a lost ack is gone, and that is a success.
-        await RequestShutdownAsync(endpoint, requestTimeout, cancellationToken).ConfigureAwait(false);
+        var processId = await RequestShutdownAsync(endpoint, requestTimeout, cancellationToken)
+            .ConfigureAwait(false);
 
         var elapsed = Stopwatch.StartNew();
         while (true)
         {
             if (!await endpoint.EnsureReadyAsync(allowLaunch: false, cancellationToken).ConfigureAwait(false))
             {
-                return true;
+                // The pipe is gone, but the daemon process may still be exiting behind it and
+                // holding the files the installer is about to replace. Wait for the process
+                // itself before declaring the daemon stopped.
+                return await AwaitDaemonExitAsync(processId, awaitProcessExit, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             if (elapsed.Elapsed >= budget)
@@ -87,21 +124,92 @@ internal static class UpdateProcessCoordinator
     }
 
     /// <summary>
-    /// Asks the daemon to exit over IPC. A daemon that vanished between the probe and the
-    /// handshake is not a failure here - the caller's vanish loop decides what the goal state
-    /// is - so the exceptions of a connection that never happened are swallowed rather than
-    /// reported as "could not stop the daemon".
+    /// Waits for the daemon process to be gone, not merely for its pipe. The PID is the one the
+    /// daemon's own handshake snapshot reported; without one the pipe's vanish is all the
+    /// evidence there is, and a bounded grace stands in for the process that cannot be named.
+    /// </summary>
+    private static async Task<bool> AwaitDaemonExitAsync(
+        int? processId,
+        Func<int, TimeSpan, CancellationToken, Task<bool>>? awaitProcessExit,
+        CancellationToken cancellationToken)
+    {
+        if (processId is not { } pid || pid == Environment.ProcessId)
+        {
+            // Nothing to wait on: a daemon that named no process, or - were one ever to serve
+            // the pipe in-process - this very GUI, which is about to exit on its own.
+            await Task.Delay(DaemonExitGrace, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        return await (awaitProcessExit ?? AwaitProcessExitAsync)(pid, DaemonExitBudget, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The production daemon-exit wait: the real process the daemon named, bounded. A process
+    /// that is already gone is a success - that is the goal state, reached before the wait began
+    /// - and one this process cannot open falls back to the same bounded grace an unnamed daemon
+    /// gets, because the pipe is gone either way.
+    /// </summary>
+    private static async Task<bool> AwaitProcessExitAsync(
+        int processId,
+        TimeSpan budget,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+
+            // WaitForExitAsync has no budget of its own, so the budget is a linked token: a
+            // timeout and the caller's own cancellation are told apart by the token, exactly as
+            // everywhere else in this flow.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(budget);
+
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The budget ran out and the caller is still patient: the daemon is still there.
+                return false;
+            }
+        }
+        catch (ArgumentException)
+        {
+            // The daemon exited before the wait started: the goal state, reached early.
+            return true;
+        }
+        catch (Exception exception) when (exception
+            is InvalidOperationException or Win32Exception)
+        {
+            // No handle for it - an elevated daemon a medium-integrity GUI may not be able to
+            // open, or a process this user may not query. The pipe is already gone, so the grace
+            // is what is left to give.
+            await Task.Delay(DaemonExitGrace, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Asks the daemon to exit over IPC and reports the PID of the daemon that answered, so the
+    /// caller can wait for that process to be gone rather than only for its pipe. A daemon that
+    /// vanished between the probe and the handshake is not a failure here - the caller's vanish
+    /// loop decides what the goal state is - so the exceptions of a connection that never
+    /// happened are swallowed rather than reported as "could not stop the daemon".
     /// </summary>
     /// <remarks>
     /// The filter is the one <see cref="GuiActivationClient"/> uses for its exchange, and for
-    /// the same reason: a protocol failure and a timeout are facts about the peer, not about
-    /// the caller. The cancellation case is the subtle one - the controller links its own
+    /// the same reason: a protocol failure and a timeout are facts about the peer, not about the
+    /// caller. The cancellation case is the subtle one - the controller links its own
     /// request timeout into the handshake, so a daemon that takes the pipe and then goes quiet
     /// raises <see cref="OperationCanceledException"/> with the caller's token perfectly
     /// healthy. Letting that through would tell the host the user cancelled, and its message
     /// would claim nothing was stopped while the daemon is in fact still running.
     /// </remarks>
-    private static async Task<bool> RequestShutdownAsync(
+    private static async Task<int?> RequestShutdownAsync(
         IDaemonEndpoint endpoint,
         TimeSpan? requestTimeout,
         CancellationToken cancellationToken)
@@ -111,21 +219,25 @@ internal static class UpdateProcessCoordinator
             await using var controller = new DaemonController(
                 endpoint,
                 requestTimeout: requestTimeout);
-            await controller.ConnectAsync(cancellationToken).ConfigureAwait(false);
-            return await controller.RequestShutdownAsync(cancellationToken).ConfigureAwait(false);
+            var snapshot = await controller.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            await controller.RequestShutdownAsync(cancellationToken).ConfigureAwait(false);
+
+            // A snapshot that names no injector leaves the daemon unnamed: the pipe's vanish is
+            // then the only evidence there is, and the caller's grace stands in for the process.
+            return snapshot.InjectorPid is > 0 ? snapshot.InjectorPid : null;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // This service's own handshake budget expired, not the caller's patience: the
             // vanish loop decides what the goal state is, exactly as for a refused shutdown.
-            return false;
+            return null;
         }
         catch (Exception exception) when (exception
             is DaemonUnavailableException or DaemonHandshakeException or DaemonDisconnectedException
             or FrameProtocolException or JsonException
             or IOException or TimeoutException or ObjectDisposedException)
         {
-            return false;
+            return null;
         }
     }
 

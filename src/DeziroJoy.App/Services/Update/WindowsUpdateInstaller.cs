@@ -1,40 +1,47 @@
+using System.Diagnostics;
+
 namespace DeziroJoy.App.Services;
 
 /// <summary>
 /// Installs the per-user Inno Setup update on Windows. It launches the downloaded
 /// <c>setup.exe</c> with the same silent flags the release workflow's verification uses
 /// (<c>/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…</c>, tools/Packaging/win/build-and-verify.ps1)
-/// and waits for it: a non-zero exit - or a log whose tail says the install did not finish - is
-/// an honest failure, never a success.
+/// and returns the moment it is running, without waiting for it.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The relaunch is deliberately NOT this installer's to make. The setup closes the running
-/// DeziroJoy through the Restart Manager (<c>CloseApplications=yes</c> in DeziroJoy.iss), and the
-/// process running this installer is one of the applications it closes - so an updater that
-/// waited to relaunch the app itself would be terminated mid-install. Instead the relaunch comes
-/// from the setup program's conditional <c>[Run]</c> entry, compiled only when the build passes
-/// <c>/DDeziroJoyUpdateRun</c>, which is why <see cref="UpdateInstallResult.RelaunchHandled"/> is
-/// true here.
+/// Waiting is the bug, not the caution. The process running this installer is one of the
+/// applications the setup's Restart Manager closes (<c>CloseApplications=yes</c> in DeziroJoy.iss),
+/// and it holds its own <c>DeziroJoy.exe</c> and the libraries beside it open for exactly as long
+/// as it lives - so an updater that waited on the installer kept the very files the installer was
+/// about to replace locked, and the setup's DeleteFile failed with access denied (error 5) and
+/// rolled back. The launch is therefore detached: no output redirection, no wait, and success is
+/// reported the instant the setup is up, which lets the orchestrator raise
+/// <see cref="UpdateOrchestrator.RestartRequested"/> so the host exits and releases its files
+/// before the installer needs them.
 /// </para>
 /// <para>
-/// Waiting for the exit code is still correct: if the Restart Manager closes this process before
-/// the setup finishes, the conditional <c>[Run]</c> entry relaunches the app anyway, and the exit
-/// code this installer never reads is simply a success it did not get to observe.
+/// The relaunch is deliberately NOT this installer's to make. The setup relaunches the app from
+/// its conditional <c>[Run]</c> entry, compiled only when the build passes
+/// <c>/DDeziroJoyUpdateRun</c>, which is why <see cref="UpdateInstallResult.RelaunchHandled"/> is
+/// true here. The exit code and the log are the setup's to report: a GUI that has already exited
+/// can read neither, and the conditional relaunch is what makes that safe - a setup that finished
+/// brings the new version up, and one that did not leaves the old install in place with its log
+/// on disk to diagnose from.
 /// </para>
 /// </remarks>
 public sealed class WindowsUpdateInstaller : IUpdateInstaller
 {
-    private readonly IProcessRunner _process;
+    private readonly IUpdateProcessLauncher _launcher;
     private readonly Func<string> _logPath;
 
     /// <summary>
-    /// Internal so the process and log-path seams stay an implementation detail: production and
-    /// the update host use the defaults, tests inject a fake runner and a known log path.
+    /// Internal so the launch and log-path seams stay an implementation detail: production and
+    /// the update host use the defaults, tests inject a recording launcher and a known log path.
     /// </summary>
-    internal WindowsUpdateInstaller(IProcessRunner? process = null, Func<string>? logPath = null)
+    internal WindowsUpdateInstaller(IUpdateProcessLauncher? launcher = null, Func<string>? logPath = null)
     {
-        _process = process ?? new ProcessRunner();
+        _launcher = launcher ?? new UpdateProcessLauncher();
         _logPath = logPath ?? (static () => Path.Combine(
             Path.GetTempPath(),
             $"dezirojoy-setup-{Guid.NewGuid():N}.log"));
@@ -46,61 +53,26 @@ public sealed class WindowsUpdateInstaller : IUpdateInstaller
         UpdateInstallRequest request,
         CancellationToken cancellationToken)
     {
-        var log = _logPath();
-        var result = _process.Run(
+        // The same command line the blocking runner used to build - the flags are the release
+        // workflow's verified form - minus the redirection that turned the launch into a wait.
+        var startInfo = new ProcessStartInfo(
             request.PackagePath,
-            $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=\"{log}\"");
-
-        if (result.ExitCode == 0)
+            $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=\"{_logPath()}\"")
         {
-            // The setup relaunches the app from its conditional [Run] entry; the Restart Manager
-            // closes this updater mid-install, so the relaunch cannot be ours to make.
-            return Task.FromResult(UpdateInstallResult.Ok(relaunchHandled: true));
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        // Detached on purpose: the setup must outlive this process, which is about to exit so
+        // the installer can replace the files it has open.
+        if (!_launcher.Start(startInfo))
+        {
+            return Task.FromResult(UpdateInstallResult.Failed(
+                $"无法启动 Windows 安装程序（{request.PackagePath}）。请前往发布页手动下载安装。"));
         }
 
-        return Task.FromResult(UpdateInstallResult.Failed(DescribeFailure(result, log)));
+        // The setup relaunches the app from its conditional [Run] entry once the new files are
+        // in place; this process exits now so it stops holding the files setup must replace.
+        return Task.FromResult(UpdateInstallResult.Ok(relaunchHandled: true));
     }
-
-    /// <summary>
-    /// Why the setup did not finish. A process that never started means the downloaded setup is
-    /// missing or not runnable; anything else ran and failed, and the tail of its Inno log is the
-    /// most specific reason there is - quoted ahead of the generic "install it by hand" advice.
-    /// </summary>
-    private static string DescribeFailure(ProcessResult result, string log)
-    {
-        if (result.ExitCode < 0)
-        {
-            return $"无法启动 Windows 安装程序（{result.StandardError}）。请前往发布页手动下载安装。";
-        }
-
-        var tail = ReadLogTail(log);
-
-        return string.IsNullOrEmpty(tail)
-            ? $"Windows 安装程序未能完成更新（退出码 {result.ExitCode}）。请前往发布页手动下载安装。"
-            : $"Windows 安装程序未能完成更新（退出码 {result.ExitCode}）：{tail}";
-    }
-
-    /// <summary>The tail of the Inno log: the failure sits near the end, and the whole log is far too long to quote.</summary>
-    private static string ReadLogTail(string log)
-    {
-        try
-        {
-            if (!File.Exists(log))
-            {
-                return string.Empty;
-            }
-
-            var text = File.ReadAllText(log).Trim();
-
-            return text.Length > LogTailLimit ? "…" + text[^LogTailLimit..] : text;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // A log that cannot be read (locked by a still-writing setup, say) must not turn a
-            // clear non-zero exit into a crash: the exit code is the reason, the tail a bonus.
-            return string.Empty;
-        }
-    }
-
-    private const int LogTailLimit = 400;
 }

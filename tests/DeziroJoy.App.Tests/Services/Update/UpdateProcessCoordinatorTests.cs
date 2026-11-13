@@ -13,9 +13,32 @@ namespace DeziroJoy.App.Tests.Services.Update;
 /// confirmation into a resurrection that fails the stop. The fake records every launch
 /// request, so the regression is asserted rather than reasoned about.
 /// </summary>
+/// <remarks>
+/// The other half under test is what "stopped" means. The daemon releases its mapping pipe as
+/// part of exiting, so a stop that returns the moment the pipe is gone can still be racing an
+/// elevated daemon that holds the install directory's files open - and an installer that starts
+/// in that window fails its DeleteFile with access denied (error 5) and rolls back. So the
+/// daemon's own PID is waited on after the pipe vanishes, and the wait is a seam the tests drive.
+/// </remarks>
 public sealed class UpdateProcessCoordinatorTests
 {
+    /// <summary>The PID the fake daemon reports about itself, the way the real one does.</summary>
+    private const int DaemonPid = 4242;
+
     private static CancellationToken Cancellation => TestContext.Current.CancellationToken;
+
+    /// <summary>Runs the production stop over a fake transport with an injected exit wait.</summary>
+    private static Task<bool> StopAsync(
+        FakeDaemonEndpoint endpoint,
+        TimeSpan stopBudget,
+        FakeExitWaiter? exit = null,
+        TimeSpan? requestTimeout = null)
+        => UpdateProcessCoordinator.StopDaemonAsync(
+            Cancellation,
+            endpoint,
+            stopBudget,
+            requestTimeout,
+            (exit ?? new FakeExitWaiter()).WaitAsync);
 
     [Fact]
     public async Task A_Daemon_That_Is_Not_Running_Is_Not_Started_Just_To_Be_Stopped()
@@ -38,10 +61,7 @@ public sealed class UpdateProcessCoordinatorTests
         // daemon answering every probe would exhaust the budget and fail the stop.
         var endpoint = new FakeDaemonEndpoint { IsAnswering = true };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
-            endpoint,
-            TimeSpan.FromSeconds(5));
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5));
 
         Assert.True(stopped, endpoint.Diagnostics);
         Assert.Single(endpoint.Sent.OfType<ShutdownDaemonMessage>());
@@ -57,10 +77,7 @@ public sealed class UpdateProcessCoordinatorTests
         // reporting a failure.
         var endpoint = new FakeDaemonEndpoint { IsAnswering = true, AcknowledgeShutdown = false };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
-            endpoint,
-            TimeSpan.FromSeconds(5));
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5));
 
         Assert.True(stopped, endpoint.Diagnostics);
         Assert.Equal(0, endpoint.LaunchRequests);
@@ -76,10 +93,7 @@ public sealed class UpdateProcessCoordinatorTests
             ExitsOnShutdown = false,
         };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
-            endpoint,
-            TimeSpan.FromMilliseconds(300));
+        var stopped = await StopAsync(endpoint, TimeSpan.FromMilliseconds(300));
 
         Assert.False(stopped, endpoint.Diagnostics);
         Assert.Equal(0, endpoint.LaunchRequests);
@@ -92,10 +106,7 @@ public sealed class UpdateProcessCoordinatorTests
         // loop is what decides, and it finds nothing resident.
         var endpoint = new FakeDaemonEndpoint { IsAnswering = true, AcceptHandshake = false };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
-            endpoint,
-            TimeSpan.FromSeconds(5));
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5));
 
         Assert.True(stopped, endpoint.Diagnostics);
         Assert.Equal(0, endpoint.LaunchRequests);
@@ -127,11 +138,10 @@ public sealed class UpdateProcessCoordinatorTests
         // still running. The honest answer is the vanish loop's: still there, so a failure.
         var endpoint = new FakeDaemonEndpoint { IsAnswering = true, AnswerHello = false };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
+        var stopped = await StopAsync(
             endpoint,
             TimeSpan.FromMilliseconds(300),
-            TimeSpan.FromMilliseconds(200));
+            requestTimeout: TimeSpan.FromMilliseconds(200));
 
         Assert.False(stopped, endpoint.Diagnostics);
         Assert.Equal(0, endpoint.LaunchRequests);
@@ -166,10 +176,7 @@ public sealed class UpdateProcessCoordinatorTests
             HandshakeFailure = new FrameProtocolException("frame payload of 0 bytes"),
         };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
-            endpoint,
-            TimeSpan.FromMilliseconds(300));
+        var stopped = await StopAsync(endpoint, TimeSpan.FromMilliseconds(300));
 
         Assert.False(stopped, endpoint.Diagnostics);
         Assert.Equal(0, endpoint.LaunchRequests);
@@ -186,21 +193,96 @@ public sealed class UpdateProcessCoordinatorTests
             HandshakeFailure = new JsonException("the activation message deserialized to null"),
         };
 
-        var stopped = await UpdateProcessCoordinator.StopDaemonAsync(
-            Cancellation,
-            endpoint,
-            TimeSpan.FromMilliseconds(300));
+        var stopped = await StopAsync(endpoint, TimeSpan.FromMilliseconds(300));
 
         Assert.False(stopped, endpoint.Diagnostics);
         Assert.Equal(0, endpoint.LaunchRequests);
     }
 
     [Fact]
+    public async Task The_Daemon_Process_Is_Waited_On_Once_Its_Pipe_Is_Gone()
+    {
+        // The pipe is the daemon's own and it closes it while exiting: a daemon that is still
+        // unwinding behind that holds the install directory's files open, and an installer that
+        // starts now fails its DeleteFile with access denied. So the process the daemon named in
+        // its own snapshot is waited on before the stop is reported.
+        var endpoint = new FakeDaemonEndpoint { IsAnswering = true };
+        var exit = new FakeExitWaiter();
+
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5), exit);
+
+        Assert.True(stopped, endpoint.Diagnostics);
+        Assert.Equal(DaemonPid, Assert.Single(exit.WaitedPids));
+    }
+
+    [Fact]
+    public async Task A_Daemon_Process_That_Will_Not_Exit_Is_An_Honest_Failure()
+    {
+        // The pipe is gone but the process is not: installing now would race a live daemon for
+        // the files, so the stop fails instead of pretending the daemon is gone.
+        var endpoint = new FakeDaemonEndpoint { IsAnswering = true };
+        var exit = new FakeExitWaiter { Next = false };
+
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5), exit);
+
+        Assert.False(stopped, endpoint.Diagnostics);
+        Assert.Equal(DaemonPid, Assert.Single(exit.WaitedPids));
+    }
+
+    [Fact]
+    public async Task A_Daemon_That_Named_No_Process_Still_Counts_As_Stopped()
+    {
+        // A daemon that was already gone when the handshake ran named no process: its pipe is
+        // gone, which is the same evidence a vanished process gives, and the bounded grace
+        // stands in for the wait that could not be aimed at anything.
+        var endpoint = new FakeDaemonEndpoint { IsAnswering = true, AcceptHandshake = false };
+        var exit = new FakeExitWaiter();
+
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5), exit);
+
+        Assert.True(stopped, endpoint.Diagnostics);
+        Assert.Empty(exit.WaitedPids);
+    }
+
+    [Fact]
+    public async Task A_Snapshot_That_Names_No_Injector_Is_Waited_On_For_Nothing()
+    {
+        // PID 0 is not a process: waiting on it would be waiting on nothing at all, so the
+        // daemon is unnamed and the grace covers it.
+        var endpoint = new FakeDaemonEndpoint { IsAnswering = true, InjectorPid = 0 };
+        var exit = new FakeExitWaiter();
+
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5), exit);
+
+        Assert.True(stopped, endpoint.Diagnostics);
+        Assert.Empty(exit.WaitedPids);
+    }
+
+    [Fact]
+    public async Task A_Daemon_That_Reports_This_Process_Is_Not_Waited_On()
+    {
+        // Were a daemon ever to be served in-process, its reported PID would be this GUI's own:
+        // waiting for that to exit would fail every stop, because the GUI exits only once the
+        // install it is waiting for has already been reported.
+        var endpoint = new FakeDaemonEndpoint
+        {
+            IsAnswering = true,
+            InjectorPid = Environment.ProcessId,
+        };
+        var exit = new FakeExitWaiter();
+
+        var stopped = await StopAsync(endpoint, TimeSpan.FromSeconds(5), exit);
+
+        Assert.True(stopped, endpoint.Diagnostics);
+        Assert.Empty(exit.WaitedPids);
+    }
+
+    [Fact]
     public async Task The_Production_Endpoint_Answers_The_Same_Way_Whatever_It_Is_Asked_About_Launching()
     {
         // A launch-capable endpoint answers the two differently: with a launch allowed it
-        // starts a daemon (UAC on Windows) and waits for it. This one must not, whatever it
-        // is asked for - and must answer well inside the launch budget either way.
+        // starts a daemon (UAC on Windows) and waits for it. This one must not, whatever it is
+        // asked for - and must answer well inside the launch budget either way.
         var endpoint = new ProbeOnlyDaemonEndpoint();
 
         var withLaunch = await ProbeAsync(endpoint, allowLaunch: true);
@@ -244,6 +326,12 @@ public sealed class UpdateProcessCoordinatorTests
             get => Volatile.Read(ref _answering);
             set => Volatile.Write(ref _answering, value);
         }
+
+        /// <summary>
+        /// The PID the daemon's snapshot reports about itself. Zero models a daemon that names
+        /// no injector at all, which is not a process to wait on.
+        /// </summary>
+        public int InjectorPid { get; init; } = DaemonPid;
 
         /// <summary>Whether the daemon leaves after the shutdown is acknowledged.</summary>
         public bool ExitsOnShutdown { get; init; } = true;
@@ -365,7 +453,7 @@ public sealed class UpdateProcessCoordinatorTests
                 case GetStateMessage getState:
                     response = new StateChangedMessage(
                         "daemon-1",
-                        new StateSnapshot(0, 0, false, true, 4242, "high", "Default", null, 0, 0, false),
+                        new StateSnapshot(0, 0, false, true, endpoint.InjectorPid, "high", "Default", null, 0, 0, false),
                         getState.RequestId);
                     break;
 
@@ -483,6 +571,26 @@ public sealed class UpdateProcessCoordinatorTests
             }
 
             return ValueTask.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// A daemon-exit wait that decides without a real process. The PIDs it was asked about are
+    /// recorded, so the tests assert the stop waited on the right process; <see cref="Next"/>
+    /// models a daemon whose process will not exit.
+    /// </summary>
+    private sealed class FakeExitWaiter
+    {
+        /// <summary>What the next wait answers; false models a process that will not exit.</summary>
+        public bool Next { get; set; } = true;
+
+        /// <summary>The PIDs waited on, in order.</summary>
+        public List<int> WaitedPids { get; } = [];
+
+        public Task<bool> WaitAsync(int processId, TimeSpan budget, CancellationToken cancellationToken)
+        {
+            WaitedPids.Add(processId);
+            return Task.FromResult(Next);
         }
     }
 }

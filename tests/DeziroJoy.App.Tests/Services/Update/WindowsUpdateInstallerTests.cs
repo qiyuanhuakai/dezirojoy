@@ -1,23 +1,32 @@
+using System.Diagnostics;
 using DeziroJoy.App.Services;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Services.Update;
 
 /// <summary>
-/// The Windows installer: launch setup.exe with the workflow's silent flags, treat a non-zero
-/// exit as a failure with the log tail, and hand the relaunch to the setup's conditional [Run]
-/// entry. Every process goes through the injected fake runner and the log through a known path,
-/// so no real setup.exe runs here.
+/// The Windows installer: launch setup.exe detached with the workflow's silent flags and hand
+/// the relaunch to the setup's conditional [Run] entry. Every launch goes through the injected
+/// recording launcher and the log through a known path, so no real setup.exe - and no Restart
+/// Manager - is ever involved here.
 /// </summary>
+/// <remarks>
+/// The detachment is what is under test. A GUI that redirects the setup's output and waits for
+/// it keeps its own <c>DeziroJoy.exe</c> and DLLs open for the whole install, while the setup's
+/// Restart Manager (<c>CloseApplications=yes</c> in DeziroJoy.iss) needs that same GUI closed to
+/// replace them - the deadlock that ended in "DeleteFile failed, error 5 (access denied)" and a
+/// rollback. So the launch must carry no redirection, and the install must be reported the
+/// moment the setup is up, not when it finishes.
+/// </remarks>
 public sealed class WindowsUpdateInstallerTests : IDisposable
 {
     private readonly string _log;
-    private readonly FakeRunner _runner;
+    private readonly RecordingLauncher _launcher;
 
     public WindowsUpdateInstallerTests()
     {
         _log = Path.Combine(Path.GetTempPath(), $"dezirojoy-setup-test-{Guid.NewGuid():N}.log");
-        _runner = new FakeRunner();
+        _launcher = new RecordingLauncher();
     }
 
     public void Dispose()
@@ -37,79 +46,78 @@ public sealed class WindowsUpdateInstallerTests : IDisposable
             packagePath,
             "DeziroJoy-0.0.2-win-x64-setup.exe");
 
-    [Fact]
-    public async Task A_Clean_Exit_Is_A_Success_And_The_Setup_Relaunches_The_App()
-    {
-        _runner.Next = new ProcessResult(0, string.Empty, string.Empty);
-        var installer = new WindowsUpdateInstaller(_runner, () => _log);
+    private WindowsUpdateInstaller Installer() => new(_launcher, () => _log);
 
-        var result = await installer.InstallAsync(
+    [Fact]
+    public async Task A_Detached_Launch_Is_A_Success_And_The_Setup_Relaunches_The_App()
+    {
+        var result = await Installer().InstallAsync(
             Request("C:\\updates\\DeziroJoy-0.0.2-win-x64-setup.exe"),
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
 
-        // The relaunch comes from the setup's conditional [Run] entry, not the updater: the
-        // Restart Manager closes the updater mid-install.
+        // The relaunch comes from the setup's conditional [Run] entry, not the updater: the GUI
+        // exits now so it stops holding the files setup must replace.
         Assert.True(result.RelaunchHandled);
 
-        var call = Assert.Single(_runner.Calls);
-        Assert.Equal("C:\\updates\\DeziroJoy-0.0.2-win-x64-setup.exe", call.FileName);
-        Assert.Contains("/VERYSILENT", call.Arguments);
-        Assert.Contains("/SUPPRESSMSGBOXES", call.Arguments);
-        Assert.Contains("/NORESTART", call.Arguments);
-        Assert.Contains($"/LOG=\"{_log}\"", call.Arguments);
+        var start = Assert.Single(_launcher.Calls);
+        Assert.Equal("C:\\updates\\DeziroJoy-0.0.2-win-x64-setup.exe", start.FileName);
+        Assert.Contains("/VERYSILENT", start.Arguments);
+        Assert.Contains("/SUPPRESSMSGBOXES", start.Arguments);
+        Assert.Contains("/NORESTART", start.Arguments);
+        Assert.Contains($"/LOG=\"{_log}\"", start.Arguments);
     }
 
     [Fact]
-    public async Task A_Non_Zero_Exit_Is_A_Failure_With_The_Log_Tail()
+    public async Task The_Launch_Holds_No_Pipe_The_Setup_Could_Block_On()
     {
-        File.WriteAllText(_log, "lots of preamble\n...\nError: Could not copy files. Access denied.\n");
-        _runner.Next = new ProcessResult(2, string.Empty, string.Empty);
-        var installer = new WindowsUpdateInstaller(_runner, () => _log);
-
-        var result = await installer.InstallAsync(
+        // The blocking half of the old installer: capturing the setup's output and reading it to
+        // the end is what kept this GUI alive holding its own files through the install.
+        await Installer().InstallAsync(
             Request("C:\\updates\\setup.exe"),
             TestContext.Current.CancellationToken);
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("退出码 2", result.ErrorMessage);
-        Assert.Contains("Could not copy files", result.ErrorMessage);
+        var start = Assert.Single(_launcher.Calls);
+        Assert.False(start.RedirectStandardOutput);
+        Assert.False(start.RedirectStandardError);
+        Assert.False(start.RedirectStandardInput);
+        Assert.False(start.UseShellExecute);
     }
 
     [Fact]
-    public async Task A_Failure_Without_A_Log_Still_Reports_The_Exit_Code()
+    public async Task The_Command_Line_Is_Passed_Verbatim_Rather_Than_Re_Quoted()
     {
-        _runner.Next = new ProcessResult(3, string.Empty, string.Empty);
-        var installer = new WindowsUpdateInstaller(_runner, () => _log);
-
-        var result = await installer.InstallAsync(
+        // The flags are the release workflow's verified form, quoted /LOG included. Handing them
+        // over as an argument list would let the runtime re-quote the embedded quotes, which is
+        // a needless way to change what Inno's own parser sees.
+        await Installer().InstallAsync(
             Request("C:\\updates\\setup.exe"),
             TestContext.Current.CancellationToken);
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("退出码 3", result.ErrorMessage);
+        var start = Assert.Single(_launcher.Calls);
+        Assert.Empty(start.ArgumentList);
+        Assert.Contains($"/LOG=\"{_log}\"", start.Arguments);
     }
 
     [Fact]
-    public async Task A_Setup_That_Never_Started_Names_The_Reason()
+    public async Task A_Setup_That_Could_Not_Start_Names_What_Failed()
     {
-        _runner.Next = new ProcessResult(-1, string.Empty, "No such file or directory");
-        var installer = new WindowsUpdateInstaller(_runner, () => _log);
+        _launcher.Next = false;
 
-        var result = await installer.InstallAsync(
+        var result = await Installer().InstallAsync(
             Request("C:\\updates\\setup.exe"),
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Contains("无法启动", result.ErrorMessage);
-        Assert.Contains("No such file or directory", result.ErrorMessage);
+        Assert.Contains("C:\\updates\\setup.exe", result.ErrorMessage);
     }
 
     [Fact]
     public void It_Supports_Only_The_Windows_Install_Form()
     {
-        var installer = new WindowsUpdateInstaller(_runner, () => _log);
+        var installer = Installer();
 
         Assert.True(installer.Supports(InstallKind.WindowsInstall));
         Assert.False(installer.Supports(InstallKind.Deb));
@@ -119,15 +127,16 @@ public sealed class WindowsUpdateInstallerTests : IDisposable
         Assert.False(installer.Supports(InstallKind.Portable));
     }
 
-    private sealed class FakeRunner : IProcessRunner
+    /// <summary>Records every launch; <see cref="Next"/> models one that could not be started.</summary>
+    private sealed class RecordingLauncher : IUpdateProcessLauncher
     {
-        public List<(string FileName, string Arguments)> Calls { get; } = [];
+        public List<ProcessStartInfo> Calls { get; } = [];
 
-        public ProcessResult Next { get; set; } = new(0, string.Empty, string.Empty);
+        public bool Next { get; set; } = true;
 
-        public ProcessResult Run(string fileName, string arguments)
+        public bool Start(ProcessStartInfo startInfo)
         {
-            Calls.Add((fileName, arguments));
+            Calls.Add(startInfo);
             return Next;
         }
     }

@@ -53,8 +53,9 @@ public sealed record UpdateInstallResult
 /// An implementation must not return before the new files are in place: the orchestrator has
 /// already stopped the daemon and the tray, so anything still running from the old install
 /// directory is the installer's own doing. Where the install can only finish after this
-/// process is gone - dpkg and rpm cannot replace a running binary (ETXTBSY) - the
-/// implementation hands the work to a detached chain and reports success, with
+/// process is gone - dpkg and rpm cannot replace a running binary (ETXTBSY), and on Windows the
+/// setup's Restart Manager has to close this GUI to replace the files it holds open - the
+/// implementation hands the work to a detached process and reports success, with
 /// <see cref="UpdateInstallResult.RelaunchHandled"/> describing who restarts the app.
 /// </para>
 /// <para>
