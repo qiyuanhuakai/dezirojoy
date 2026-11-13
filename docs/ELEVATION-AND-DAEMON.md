@@ -83,7 +83,7 @@ private static void Send(in INPUT input)
 ### 1.4 已验证的输入路径事实（根因调查当时的快照）
 
 > 下表记录的是**调查当时（修复前）**的仓库状态，保留它是为了说明推理依据。
-> 标 ✗ 的两行现已不成立，见 [1.6 节](#16-调查之后的现状修正)。
+> 标 ✗ 的三行现已不成立，见 [1.6 节](#16-调查之后的现状修正)。
 
 | 项 | 事实 |
 |---|---|
@@ -93,7 +93,7 @@ private static void Send(in INPUT input)
 | 键盘 | 虚拟键 `WVk` + `MapVirtualKeyW` 扫描码；`KEYEVENTF_SCANCODE` 已定义但未使用 |
 | 错误处理 | ✗ 当时：无。返回值丢弃，`GetLastError` 从不读取 |
 | 提权感知 | ✗ 当时：全仓无 `requireAdministrator` / `runas` / `IsUserAnAdmin` / 完整性查询 |
-| 前台窗口感知 | 全仓无 `GetForegroundWindow` / `AttachThreadInput` / `SetForegroundWindow` |
+| 前台窗口感知 | ✗ 当时：全仓无 `GetForegroundWindow` / `AttachThreadInput` / `SetForegroundWindow` |
 
 ### 1.5 修复方向
 
@@ -115,6 +115,7 @@ private static void Send(in INPUT input)
 |---|---|
 | "错误处理不存在" | 已存在。返回值与 `GetLastError` 均被捕获并计数，见 1.3 节 |
 | "提权感知全仓没有" | 已存在。`WindowsProcessElevation.IsElevated` 查询当前进程令牌，`IElevationService` / `ElevationService` 把它暴露给 UI |
+| "前台窗口感知全仓没有" | 已存在。`IForegroundSource` 读取当前前台窗口所属进程：Windows 用 `GetForegroundWindow` + `GetWindowThreadProcessId`（`WindowsForegroundSource`），Linux 用 X11（`X11ForegroundSource`）；`ForegroundWatcher` 轮询它并按 `ForegroundRule` 决定映射是否生效 |
 | "守护进程不存在" | 已存在。`Program.cs --daemon` 走 `DaemonHost.Run()`，不加载任何 Avalonia 程序集；登录时计划任务由 `DaemonInstaller` 注册 |
 
 仍未解决的一项：**组合键部分丢弃时强制释放已按下的修饰键**。`CommandDispatcher` 目前只在
