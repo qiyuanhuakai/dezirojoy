@@ -1117,7 +1117,7 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
-    public async Task Import_From_Writes_Only_The_Active_Preset_Slot()
+    public async Task A_Scheme_Import_Lands_On_The_Slot_The_User_Was_On_And_Replaces_The_Devices_Slot_Set()
     {
         var (vm, host, provider, store) = CreateHost();
         provider.Add("xinput:0", "Xbox Wireless Controller");
@@ -1125,45 +1125,58 @@ public class MainWindowViewModelTests
         SampleHelper.Sample(vm, host);
         await vm.SwitchPresetSlotCommand.ExecuteAsync(3);
         var presets = new PresetStore(store);
-        var untouched = new Dictionary<int, string>
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-scheme-import-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, SchemeBundleCodec.Serialize(new SchemeBundle
         {
-            [1] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 1)!),
-            [2] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 2)!),
-            [4] = ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", 4)!),
-        };
-        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-import-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, ProfileSerializer.Serialize(new GamepadProfile
-        {
-            Name = "Imported slot three",
-            DeviceId = "another-device",
-            Mappings = [],
+            Name = "Imported scheme",
+            Presets =
+            [
+                new SchemePreset
+                {
+                    Slot = 3,
+                    Profile = new GamepadProfile
+                    {
+                        Name = "Imported slot three",
+                        DeviceId = "another-device",
+                        Mappings = [],
+                    },
+                },
+            ],
         }));
 
         try
         {
-            vm.ImportFrom(path);
+            vm.ImportSchemeFrom(path);
+            await vm.ConfirmSchemeImportCommand.ExecuteAsync(null);
         }
         finally
         {
             File.Delete(path);
         }
 
+        Assert.False(vm.IsTransferError, vm.TransferMessage);
         Assert.Equal("Imported slot three", presets.LoadSlot("xinput:0", 3)!.Name);
-        foreach (var (slot, expected) in untouched)
-        {
-            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!));
-        }
+
+        // The slot the user was on is the one the import lands on, whichever slot the bundle
+        // names - the app does not fall back to the base slot and strand the user.
+        Assert.Equal(3, vm.ActivePresetSlot);
+        Assert.Equal("Imported slot three", vm.ActiveProfile!.Name);
+
+        // The bundle is the device's whole scheme, so the slots it does not carry are replaced
+        // rather than left behind: a survivor would switch the app to a profile the user has
+        // just imported away from.
+        Assert.Equal([3], presets.SlotsInUse("xinput:0"));
     }
 
     [Fact]
-    public void Import_From_Reloads_The_Sensitivity_Panels_From_The_Imported_Profile()
+    public async Task A_Scheme_Import_Reloads_The_Sensitivity_Panels_From_The_Imported_Profile()
     {
         var (vm, host, provider, _) = CreateHost();
         provider.Add("xinput:0", "Xbox Wireless Controller");
         provider.SetState("xinput:0", GamepadState.Neutral);
         SampleHelper.Sample(vm, host);
 
-        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-import-{Guid.NewGuid():N}.json");
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-scheme-import-{Guid.NewGuid():N}.json");
         var base_ = vm.ActiveProfile!;
         var imported = base_ with
         {
@@ -1173,17 +1186,23 @@ public class MainWindowViewModelTests
                     : m)
                 .ToList(),
         };
-        File.WriteAllText(path, ProfileSerializer.Serialize(imported));
+        File.WriteAllText(path, SchemeBundleCodec.Serialize(new SchemeBundle
+        {
+            Name = "灵敏度方案",
+            Presets = [new SchemePreset { Slot = 1, Profile = imported }],
+        }));
 
         try
         {
-            vm.ImportFrom(path);
+            vm.ImportSchemeFrom(path);
+            await vm.ConfirmSchemeImportCommand.ExecuteAsync(null);
         }
         finally
         {
             File.Delete(path);
         }
 
+        Assert.False(vm.IsTransferError, vm.TransferMessage);
         Assert.Equal(1234f, vm.MouseSensitivity.MaxSpeed);
     }
 

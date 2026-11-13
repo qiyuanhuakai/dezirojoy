@@ -96,8 +96,9 @@ public sealed record SchemeBundleLoadResult(bool Succeeded, SchemeBundle? Bundle
 /// The one codec for scheme bundles. The embedded profiles go through
 /// <see cref="ProfileSerializer"/>'s own options - the same codec the per-device store uses -
 /// so a profile inside a bundle is byte-for-byte what a profile file holds. Reading never
-/// throws for bad content: a malformed file, a plain profile file, or a bundle a newer build
-/// wrote comes back as a failed result carrying the reason.
+/// throws for bad content: a malformed file or a bundle a newer build wrote comes back as a
+/// failed result carrying the reason, and a plain single-profile file - what the old
+/// single-profile export wrote - is accepted as a one-preset scheme rather than refused.
 /// </summary>
 public static class SchemeBundleCodec
 {
@@ -135,10 +136,17 @@ public static class SchemeBundleCodec
 
     /// <summary>
     /// Reads a bundle from JSON, refusing - rather than throwing on - everything that is not a
-    /// scheme this build can install: a body that does not parse, a plain profile file (no
-    /// preset list), a bundle whose schema or whose preset's schema is newer than this build,
-    /// a preset list that names one slot twice, and a special-key entry whose target is not a
-    /// special key. Each refusal names the reason in the message.
+    /// scheme this build can install: a body that does not parse, a bundle whose schema or
+    /// whose preset's schema is newer than this build, a preset list that names one slot
+    /// twice, and a special-key entry whose target is not a special key. Each refusal names
+    /// the reason in the message.
+    /// <para>
+    /// A body with no preset list is read a second time as a plain profile: the single-profile
+    /// export this design replaced wrote exactly that shape, and a file a user kept from it
+    /// still has to import. Such a file comes back as a one-preset scheme carrying the profile
+    /// in slot 1, so the whole import - preview, atomic apply, undo - treats it like any
+    /// bundle. A body that is neither is refused.
+    /// </para>
     /// </summary>
     public static SchemeBundleLoadResult Parse(string json)
     {
@@ -160,10 +168,45 @@ public static class SchemeBundleCodec
         // "Is this a bundle at all?" comes before "is it new enough?": a plain profile file
         // parses into a bundle with an empty preset list - and its own top-level schema
         // version, which belongs to the profile format and says nothing about this bundle's.
-        // Refusing it as a version mismatch would point the user at the wrong door.
+        // Refusing it as a version mismatch would point the user at the wrong door. So an
+        // empty preset list is read a second time as a profile and wrapped as a one-preset
+        // scheme: the profile becomes slot 1's preset, and the whole import - preview, atomic
+        // apply, undo - treats it like any bundle. The single-profile export this design
+        // replaced wrote exactly this shape, and a file a user kept from it still has to
+        // import. A body that is neither is refused.
         if (bundle.Presets.Count == 0)
         {
-            return SchemeBundleLoadResult.Failed("导入失败：这不是方案包文件（没有预设列表）；单个配置请使用「导入配置」。");
+            GamepadProfile profile;
+            try
+            {
+                profile = ProfileSerializer.Deserialize(json);
+            }
+            catch (JsonException)
+            {
+                return SchemeBundleLoadResult.Failed(
+                    "导入失败：这不是方案包文件（没有预设列表），也不是可识别的 DeziroJoy 配置文件。");
+            }
+
+            if (profile.SchemaVersion > GamepadProfile.CurrentSchemaVersion)
+            {
+                return SchemeBundleLoadResult.Failed(
+                    $"导入失败：配置版本过新（v{profile.SchemaVersion}），" +
+                    $"本应用最高支持 v{GamepadProfile.CurrentSchemaVersion}");
+            }
+
+            bundle = new SchemeBundle
+            {
+                Name = string.IsNullOrWhiteSpace(profile.Name) ? "导入的方案" : profile.Name,
+                Presets =
+                [
+                    new SchemePreset
+                    {
+                        Slot = 1,
+                        Profile = profile,
+                        ActionNames = SchemeBundleFactory.ActionNamesOf(profile),
+                    },
+                ],
+            };
         }
 
         if (bundle.SchemaVersion > SchemeBundle.CurrentSchemaVersion)

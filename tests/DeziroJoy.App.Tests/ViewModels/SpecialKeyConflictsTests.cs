@@ -12,8 +12,11 @@ namespace DeziroJoy.App.Tests.ViewModels;
 /// delays the switch (the double-click window) or repeats it (click auto-repeat, or a long
 /// press with a repeat interval that falls back to the click), while a precision key engages
 /// from the raw button and ignores gestures entirely - but only from the click position, the
-/// one the engine registers it from. A layer key is read the same way: the engine resolves it
-/// from the mapping's own target alone, so one sitting on a gesture action enters no layer.
+/// one the engine registers it from. A leader that switches the temporary layer engages from
+/// any position, exactly as a preset leader does, and its switch reloads nothing - so only a
+/// preset leader's switch cancels an undecided gesture. The deprecated layer key a profile
+/// written before the merge carries is read the precision way: the engine rewrites it only on
+/// the mapping's own target, so one left on a gesture action enters no layer.
 /// The engine swallows nothing: no long-press action consumes the press, so a sibling's quick
 /// press always fires beside the global key. The hints only report; none of them rewrites the
 /// configuration.
@@ -58,8 +61,17 @@ public class SpecialKeyConflictsTests
     private static SpecialKeyTarget Precision(PrecisionMode mode = PrecisionMode.Hold)
         => new(SpecialKeyKind.Precision, mode);
 
-    private static SpecialKeyTarget Layer(int layerId = 2, LeaderSwitchMode switchMode = LeaderSwitchMode.Hold)
-        => new(SpecialKeyKind.Layer, PrecisionMode.Toggle, switchMode, 1, 2, layerId);
+    /// <summary>The leader key that switches the one temporary layer.</summary>
+    private static SpecialKeyTarget Layer(LeaderSwitchMode switchMode = LeaderSwitchMode.Hold)
+        => new(SpecialKeyKind.Leader, PrecisionMode.Toggle, switchMode, 1, 2, LeaderAction.Layer);
+
+    /// <summary>
+    /// The deprecated layer key a profile written before the merge carries. Migration and
+    /// the engine rewrite it on load; a hand-edited profile can still land one on a gesture
+    /// action, where the engine has no case for it and it engages nothing.
+    /// </summary>
+    private static SpecialKeyTarget DeprecatedLayer(LeaderSwitchMode switchMode = LeaderSwitchMode.Hold)
+        => new(SpecialKeyKind.Layer, PrecisionMode.Toggle, switchMode);
 
     private static string Message(IReadOnlyList<SpecialKeyConflict> conflicts)
         => Assert.Single(conflicts).Message;
@@ -814,10 +826,11 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
-    public void A_Layer_Key_On_A_Gesture_Position_Never_Engages()
+    public void A_Layer_Leader_On_A_Gesture_Position_Switches_The_Layer()
     {
-        // The engine resolves a layer leader from the mapping's own target alone, exactly as
-        // it registers a precision key: one sitting on a gesture action enters no layer.
+        // The merged leader engages from any position the engine runs a gesture action
+        // through, so one sitting on a double-click enters the temporary layer - the hint
+        // the deprecated layer key needed is gone.
         var mappings = new[]
         {
             Button(
@@ -828,6 +841,25 @@ public class SpecialKeyConflictsTests
                     doubleClickAction: Layer())),
         };
 
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void A_Deprecated_Layer_Key_On_A_Gesture_Position_Never_Engages()
+    {
+        // The engine rewrites the deprecated layer key only where it sits on the mapping's
+        // own target, exactly as it registers a precision key: one a hand-edited profile
+        // left on a gesture action enters no layer at all.
+        var mappings = new[]
+        {
+            Button(
+                GamepadButton.Back,
+                new NoneTarget(),
+                Gesture(
+                    doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow,
+                    doubleClickAction: DeprecatedLayer())),
+        };
+
         var message = Message(SpecialKeyConflicts.Analyze(mappings));
 
         Assert.Contains("Layer 键", message);
@@ -836,7 +868,7 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
-    public void A_Layer_Key_On_The_Long_Press_Never_Engages()
+    public void A_Deprecated_Layer_Key_On_The_Long_Press_Never_Engages()
     {
         var mappings = new[]
         {
@@ -845,7 +877,7 @@ public class SpecialKeyConflictsTests
                 new NoneTarget(),
                 Gesture(
                     longPressThreshold: ButtonGesture.DefaultLongPressThreshold,
-                    longPressAction: Layer())),
+                    longPressAction: DeprecatedLayer())),
         };
 
         var message = Message(SpecialKeyConflicts.Analyze(mappings));
@@ -856,7 +888,7 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
-    public void A_Bare_Layer_Key_On_Its_Own_Button_Is_No_Conflict()
+    public void A_Bare_Layer_Leader_On_Its_Own_Button_Is_No_Conflict()
     {
         var mappings = new[] { Button(GamepadButton.Back, Layer()) };
 
@@ -873,8 +905,29 @@ public class SpecialKeyConflictsTests
         };
 
         Assert.Equal(
-            "Back 键上还有另一条映射（单击：Enter）：每次按下触发「Layer 键」的同时也会触发Enter。",
+            "Back 键上还有另一条映射（单击：Enter）：每次按下触发「临时层 Leader 键」的同时也会触发Enter。",
             Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
+    public void A_Layer_Leader_Switch_Cancels_No_Pending_Gesture()
+    {
+        // A layer leader switches the temporary layer without reloading the engine, so an
+        // undecided double-click beside it survives the switch - the reload that cancels a
+        // pending gesture is a preset leader's alone.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Layer(LeaderSwitchMode.Hold)),
+            Button(
+                GamepadButton.Back,
+                new KeyPressTarget(GamepadKey.Enter),
+                Gesture(doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow)),
+        };
+
+        var messages = string.Join(" ", SpecialKeyConflicts.Analyze(mappings).Select(conflict => conflict.Message));
+
+        Assert.Contains("双击窗口", messages);
+        Assert.DoesNotContain("未决", messages);
     }
 
     [Fact]

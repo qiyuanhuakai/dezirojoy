@@ -1464,14 +1464,15 @@ public class EngineHostTests
                 new MappingEntry
                 {
                     Source = new ButtonBinding(GamepadButton.RightBumper),
-                    Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: 2),
+                    Target = new SpecialKeyTarget(
+                        SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold, Action: LeaderAction.Layer),
                 },
                 new MappingEntry
                 {
                     Id = layerXId,
                     Source = new ButtonBinding(GamepadButton.X),
                     Target = new KeyPressTarget(GamepadKey.LeftAlt),
-                    Layer = 2,
+                    Layer = 1,
                 },
             ],
         };
@@ -1503,11 +1504,11 @@ public class EngineHostTests
         host.TickOnce(Tick);
 
         layer = Assert.Single(host.ActiveLayers);
-        Assert.Equal(2, layer.LayerId);
+        Assert.Equal(1, layer.LayerId);
 
         // The layer's own X mapping is in effect, the base one is not, and the drag mapping
         // the layer never overrode is still the base layer's own.
-        Assert.Contains(layer.Mappings, m => m.MappingId == layerXId && m.Layer == 2);
+        Assert.Contains(layer.Mappings, m => m.MappingId == layerXId && m.Layer == 1);
         Assert.DoesNotContain(layer.Mappings, m => m.MappingId == baseXId);
         Assert.Contains(layer.Mappings, m => m.MappingId == dragId && m.Layer == 0);
     }

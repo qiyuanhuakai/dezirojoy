@@ -1600,16 +1600,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         await ApplyProfile(fresh);
     }
 
-    /// <summary>
-    /// Raised when the user asks to export. The view owns the file dialog (this view model is
-    /// Avalonia-free), so it answers by calling <see cref="ExportTo"/> with the chosen path, or
-    /// with null when the dialog was dismissed.
-    /// </summary>
-    public event EventHandler? ExportPathRequested;
-
-    /// <summary>Import counterpart of <see cref="ExportPathRequested"/>; answered by <see cref="ImportFrom"/>.</summary>
-    public event EventHandler? ImportPathRequested;
-
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasTransferMessage))]
     private string _transferMessage = string.Empty;
@@ -1619,74 +1609,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool _isTransferError;
 
     public bool HasTransferMessage => !string.IsNullOrEmpty(TransferMessage);
-
-    [RelayCommand]
-    private void ExportProfile() => ExportPathRequested?.Invoke(this, EventArgs.Empty);
-
-    [RelayCommand]
-    private void ImportProfile() => ImportPathRequested?.Invoke(this, EventArgs.Empty);
-
-    /// <summary>
-    /// Writes the active profile to the path the view picked. A null path means the dialog was
-    /// dismissed, which is not an error and says nothing.
-    /// </summary>
-    public void ExportTo(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
-        if (ActiveProfile is null)
-        {
-            SetTransferError("导出失败：没有可导出的配置，请先连接手柄。");
-            return;
-        }
-
-        Report(ProfileTransferService.Export(ActiveProfile, path));
-    }
-
-    /// <summary>
-    /// Applies the profile in the file the view picked, replacing the active device's profile.
-    /// The imported profile is rebound to the connected device so it takes effect immediately
-    /// and survives a reconnect; a malformed file leaves the current profile untouched.
-    /// </summary>
-    public void ImportFrom(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
-        if (PersistenceDeviceId is not { } deviceId)
-        {
-            SetTransferError("导入失败：请先连接手柄。");
-            return;
-        }
-
-        var result = ProfileTransferService.Import(path);
-
-        if (!result.Succeeded || result.Profile is null)
-        {
-            SetTransferError(result.Message);
-            return;
-        }
-
-        var imported = result.Profile with { DeviceId = deviceId };
-
-        _ = ApplyImportedProfile(imported, result);
-    }
-
-    private async Task ApplyImportedProfile(GamepadProfile imported, ProfileTransferResult result)
-    {
-        // ApplyProfile persists the import to the active slot on its own (locally through
-        // ApplyProfileLocally, in daemon mode through the daemon's apply), so there is no
-        // second save to make here.
-        if (await ApplyProfile(imported))
-        {
-            Report(result);
-        }
-    }
 
     private void Report(ProfileTransferResult result)
     {
@@ -1811,10 +1733,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     /// Reads the scheme bundle in the file the view picked and opens its import preview. A
-    /// malformed file, a plain profile file or a bundle a newer build wrote is reported and
-    /// changes nothing; a readable bundle is validated against its own slot set before the
-    /// preview opens, so a leader aimed at a slot the bundle does not carry is refused here
-    /// rather than imported broken.
+    /// malformed file or a bundle a newer build wrote is reported and changes nothing, while a
+    /// plain single-profile file - the shape the old single-profile export wrote - is wrapped
+    /// as a one-preset scheme and previewed like any bundle. A readable bundle is validated
+    /// against its own slot set before the preview opens, so a leader aimed at a slot the
+    /// bundle does not carry is refused here rather than imported broken.
     /// </summary>
     public void ImportSchemeFrom(string? path)
     {
@@ -1877,7 +1800,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// switch that silently does nothing, so it is refused before the import rather than
     /// installed. A leader sits in one of three places - the mapping's own target, or the
     /// gesture's two actions - and all three are examined, because the engine executes gesture
-    /// actions exactly as it executes the mapping's own target.
+    /// actions exactly as it executes the mapping's own target. Only a leader that switches
+    /// preset slots is examined: the layer leader switches the one temporary layer the profile
+    /// already carries and names no slots, so its slot numbers say nothing.
     /// </summary>
     private static string? FirstLeaderOutsideScheme(SchemeBundle bundle)
     {
@@ -1894,7 +1819,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
                 foreach (var target in LeaderCandidates(mapping))
                 {
-                    if (target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader
+                    if (target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Preset } leader
                         && (!slots.Contains(leader.SlotA) || !slots.Contains(leader.SlotB)))
                     {
                         return MappingDescriptions.Button(button.Button, button.Code);

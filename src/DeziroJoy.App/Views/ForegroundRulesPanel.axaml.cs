@@ -13,4 +13,18 @@ namespace DeziroJoy.App.Views;
 public partial class ForegroundRulesPanel : UserControl
 {
     public ForegroundRulesPanel() => InitializeComponent();
+
+    /// <summary>
+    /// Refreshes the window list as a picker opens, so what it offers is what is open right now
+    /// rather than what was open when the panel was built. The enumeration is the platform's to
+    /// answer: a source that cannot list anything leaves the list empty, which the hint above
+    /// the table says rather than leaving a drop-down with nothing in it.
+    /// </summary>
+    private void OnWindowPickerDropDownOpened(object? sender, EventArgs e)
+    {
+        if (DataContext is ViewModels.ForegroundRulesViewModel viewModel)
+        {
+            viewModel.RefreshWindowListCommand.Execute(null);
+        }
+    }
 }

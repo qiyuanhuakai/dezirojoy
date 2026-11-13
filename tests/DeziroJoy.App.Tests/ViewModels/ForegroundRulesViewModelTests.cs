@@ -17,7 +17,11 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
     {
         public ForegroundContext Context { get; set; } = ForegroundContext.Empty;
 
+        public IReadOnlyList<ForegroundWindow> Windows { get; set; } = [];
+
         public ForegroundContext Read() => Context;
+
+        public IReadOnlyList<ForegroundWindow> ListWindows() => Windows;
     }
 
     private sealed class FakeForegroundTarget : IForegroundTarget
@@ -318,5 +322,145 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
         rule.ActionIndex = 0;
         Assert.Equal(ForegroundAction.Profile, rule.Action);
         Assert.Contains("预设", rule.Describe);
+    }
+
+    [Fact]
+    public void Picking_A_Window_Fills_The_Rules_Process_Name()
+    {
+        // The whole point of the picker: a rule names its program by pointing at an open
+        // window instead of typing it. The pick is an edit like any other - staged until 保存 -
+        // and the selection clears, so the same window can be picked for a second rule.
+        var (viewModel, _, source) = Create();
+        source.Windows = [new ForegroundWindow("game", "游戏窗口")];
+
+        viewModel.AddRuleCommand.Execute(null);
+        var rule = viewModel.Rules[0];
+
+        rule.SelectedWindow = new ForegroundWindow("game", "游戏窗口");
+
+        Assert.Equal("game", rule.ProcessName);
+        Assert.Null(rule.SelectedWindow);
+        Assert.True(viewModel.HasUnsavedChanges);
+        Assert.False(viewModel.HasInvalidRules);
+    }
+
+    [Fact]
+    public void The_Window_List_Names_Each_Program_Once_With_The_Foreground_First()
+    {
+        // Several windows of one program are one program to a rule, so the list carries each
+        // name once - and the program in front leads it, because the rule being written is
+        // most often about the program the user just came from.
+        var (viewModel, _, source) = Create();
+        source.Context = new ForegroundContext("explorer", false);
+        viewModel.RefreshCommand.Execute(null);
+
+        source.Windows =
+        [
+            new ForegroundWindow("chrome", "标签页"),
+            new ForegroundWindow("CHROME", "另一个窗口"),
+            new ForegroundWindow("explorer", null),
+            new ForegroundWindow("game", "游戏"),
+        ];
+        viewModel.RefreshWindowListCommand.Execute(null);
+
+        Assert.Equal(["explorer", "chrome", "game"], viewModel.WindowChoices.Select(window => window.ProcessName));
+        Assert.True(viewModel.HasWindowChoices);
+        Assert.Equal("标签页", viewModel.WindowChoices[1].Title);
+    }
+
+    [Fact]
+    public void The_Foreground_Program_Leads_The_List_Even_With_A_Suffix_It_Does_Not_Carry()
+    {
+        // "The program in front" is decided the way the rule table decides it - by the name
+        // normalised, suffix and case aside - so a platform that reports "Chrome.exe" still
+        // leads the list to the "chrome" entry the picker would fill.
+        var (viewModel, _, source) = Create();
+        source.Context = new ForegroundContext("Chrome.exe", false);
+        viewModel.RefreshCommand.Execute(null);
+
+        source.Windows = [new ForegroundWindow("game", "游戏"), new ForegroundWindow("chrome", "标签页")];
+        viewModel.RefreshWindowListCommand.Execute(null);
+
+        Assert.Equal(["chrome", "game"], viewModel.WindowChoices.Select(window => window.ProcessName));
+    }
+
+    [Fact]
+    public void A_Platform_That_Cannot_Enumerate_Windows_Leaves_The_Picker_Empty()
+    {
+        var (viewModel, _, _) = Create();
+
+        viewModel.RefreshWindowListCommand.Execute(null);
+
+        Assert.Empty(viewModel.WindowChoices);
+        Assert.False(viewModel.HasWindowChoices);
+    }
+
+    [Fact]
+    public void The_Window_List_Skips_A_Window_The_Source_Cannot_Name()
+    {
+        // A window with no program name is one the picker cannot fill a rule from, so it is not
+        // offered - an entry that names nothing would be a choice that writes nothing.
+        var (viewModel, _, source) = Create();
+        source.Windows =
+        [
+            new ForegroundWindow(string.Empty, "无名窗口"),
+            new ForegroundWindow("game", "游戏窗口"),
+            new ForegroundWindow("   ", "空白名"),
+        ];
+
+        viewModel.RefreshWindowListCommand.Execute(null);
+
+        Assert.Equal(["game"], viewModel.WindowChoices.Select(window => window.ProcessName));
+    }
+
+    [Fact]
+    public void A_Window_With_No_Title_Still_Fills_The_Rules_Process_Name()
+    {
+        // Matching is by process name alone - the one part every platform can answer - so a
+        // window with no title still lists, labelled by its process, and still fills the rule.
+        var (viewModel, _, source) = Create();
+        source.Windows = [new ForegroundWindow("game", null)];
+
+        viewModel.AddRuleCommand.Execute(null);
+        viewModel.RefreshWindowListCommand.Execute(null);
+
+        var choice = Assert.Single(viewModel.WindowChoices);
+        Assert.Null(choice.Title);
+        Assert.Equal("game", choice.Display);
+
+        viewModel.Rules[0].SelectedWindow = choice;
+
+        Assert.Equal("game", viewModel.Rules[0].ProcessName);
+        Assert.False(viewModel.HasInvalidRules);
+        Assert.True(viewModel.CanSave);
+    }
+
+    [Fact]
+    public void The_Same_Window_Can_Be_Picked_For_A_Second_Rule()
+    {
+        // The selection clears after a pick, so the placeholder returns and the same window can
+        // be picked again - a user writing two rules about one program picks it twice.
+        var (viewModel, _, source) = Create();
+        source.Windows = [new ForegroundWindow("game", "游戏窗口")];
+
+        viewModel.AddRuleCommand.Execute(null);
+        viewModel.AddRuleCommand.Execute(null);
+        viewModel.RefreshWindowListCommand.Execute(null);
+
+        var choice = Assert.Single(viewModel.WindowChoices);
+
+        viewModel.Rules[0].SelectedWindow = choice;
+        viewModel.Rules[1].SelectedWindow = choice;
+
+        Assert.All(viewModel.Rules, rule => Assert.Equal("game", rule.ProcessName));
+        Assert.All(viewModel.Rules, rule => Assert.Null(rule.SelectedWindow));
+        Assert.True(viewModel.CanSave);
+
+        // And the typed-over case: a window picked after the name was edited by hand still wins,
+        // because the pick is the user saying which program they meant.
+        viewModel.Rules[0].ProcessName = "somethingelse";
+        viewModel.Rules[0].SelectedWindow = choice;
+
+        Assert.Equal("game", viewModel.Rules[0].ProcessName);
     }
 }

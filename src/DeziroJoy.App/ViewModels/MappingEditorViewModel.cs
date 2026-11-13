@@ -18,24 +18,29 @@ namespace DeziroJoy.App.ViewModels;
 /// </summary>
 public sealed record GestureActionOption(string Label, MappingTarget? Target);
 
-/// <summary>A special-key sub-kind as the picker shows it: 精准键, Leader 键 or Layer 键.</summary>
+/// <summary>A special-key sub-kind as the picker shows it: 精准键 or Leader 键.</summary>
 public sealed record SpecialKeyKindOption(SpecialKeyKind Value, string Label);
 
 /// <summary>A leader switch mode as the picker shows it: 按下切换 or 按住切换.</summary>
 public sealed record LeaderSwitchModeOption(LeaderSwitchMode Value, string Label);
 
+/// <summary>What a leader key switches, as the picker shows it: 切换预设 or 切换临时层.</summary>
+public sealed record LeaderActionOption(LeaderAction Value, string Label);
+
 /// <summary>
-/// One layer as the layer pickers show it: 基础层, which every mapping already runs, or one
-/// of the temporary layers above it, which only run while a Layer 键 names them.
+/// One layer as the layer picker shows it: 基础层, which every mapping already runs, or the
+/// one 临时层 above it, which only runs while a Leader 键 whose action switches the
+/// temporary layer has it in effect.
 /// </summary>
 public sealed record MappingLayerOption(int Value, string Label);
 
 /// <summary>
-/// One place where a global special key - a 精准键, a Leader 键 or a Layer 键 - collides
-/// with another setting on the same physical button. The two device-level keys are shared
-/// across every preset of the device, so a collision on their trigger button is a
-/// configuration defect rather than a per-preset quirk: the mapping row, the 全局特殊键
-/// area and the editor all read the same verdict and say the same thing about it.
+/// One place where a global special key - a 精准键 or a Leader 键 (which switches 预设 or
+/// the 临时层) - collides with another setting on the same physical button. The two
+/// device-level keys are shared across every preset of the device, so a collision on their
+/// trigger button is a configuration defect rather than a per-preset quirk: the mapping
+/// row, the 全局特殊键 area and the editor all read the same verdict and say the same
+/// thing about it.
 /// </summary>
 /// <param name="Kind">Which global key is at risk.</param>
 /// <param name="Button">The physical button the two settings share.</param>
@@ -80,13 +85,13 @@ public enum SpecialKeyTrigger
 }
 
 /// <summary>
-/// The conflict rules between the global special keys - a 精准键, a Leader 键 or a Layer 键 -
-/// and everything else configured on their trigger buttons. Every rule is stated the way the
-/// engine actually behaves - the gesture machine in <c>ButtonGestureState</c> decides which
-/// press resolves to what, and a precision key engages from the raw button rather than from
-/// the mapping loop - so a hint never warns about a pairing that works and never stays
-/// silent about one that does not. The analysis only reports: fixing a collision stays the
-/// user's edit to make.
+/// The conflict rules between the global special keys - a 精准键 or a Leader 键, whichever
+/// of the two the leader switches - and everything else configured on their trigger
+/// buttons. Every rule is stated the way the engine actually behaves - the gesture machine
+/// in <c>ButtonGestureState</c> decides which press resolves to what, and a precision key
+/// engages from the raw button rather than from the mapping loop - so a hint never warns
+/// about a pairing that works and never stays silent about one that does not. The analysis
+/// only reports: fixing a collision stays the user's edit to make.
 /// </summary>
 /// <remarks>
 /// The engine lets the three gestures coexist: no long-press action consumes the press, so a
@@ -95,23 +100,12 @@ public enum SpecialKeyTrigger
 /// auto-repeat, or a long press that carries a repeat interval and falls back to the click),
 /// and what another entry on the same button can do is fire beside it. A precision key
 /// engages from the raw button, so gestures leave it alone - but only from the click
-/// position, the one the engine registers it from.
+/// position, the one the engine registers it from. A layer leader switches the temporary
+/// layer without reloading the engine, so only a preset leader's switch cancels an
+/// undecided gesture.
 /// </remarks>
 public static class SpecialKeyConflicts
 {
-    /// <summary>
-    /// What one special-key kind is called, the way its own picker names it. The Core record
-    /// has no description of its own and its raw <c>ToString</c> would read as debug output in
-    /// a mapping row, a hint or the editor's header, so every surface names a kind through
-    /// here and the three never drift apart.
-    /// </summary>
-    public static string KindLabel(SpecialKeyKind kind) => kind switch
-    {
-        SpecialKeyKind.Leader => "Leader 键",
-        SpecialKeyKind.Layer => "Layer 键",
-        _ => "精准键",
-    };
-
     /// <summary>
     /// Every collision in one mapping list. Mappings are grouped by physical button - the
     /// button plus the raw code that tells one extra button from another - because a gesture
@@ -209,9 +203,9 @@ public static class SpecialKeyConflicts
                     && TriggerOf(entry) is { } trigger
                     && (own.Kind == SpecialKeyKind.Leader || trigger == SpecialKeyTrigger.Click))
                 {
-                    // The editor's own naming, so a layer key reads as the Layer 键 its
-                    // picker offers rather than as another kind's label.
-                    var keyName = KindLabel(own.Kind);
+                    // The editor's own naming, so a layer leader reads as the 临时层 Leader 键
+                    // its picker offers rather than as another action's label.
+                    var keyName = MappingDescriptions.SpecialKey(own);
 
                     foreach (var other in entries)
                     {
@@ -293,8 +287,10 @@ public static class SpecialKeyConflicts
                         // button never fires, whichever way the leader switches - on the
                         // press, or on the release that hands the slot back. Only a sibling
                         // with a single of its own has something to lose; one that is
-                        // 无功能 has no click waiting behind the window.
-                        if (own.Kind is SpecialKeyKind.Leader or SpecialKeyKind.Layer
+                        // 无功能 has no click waiting behind the window. A layer leader
+                        // switches the temporary layer without reloading anything, so only
+                        // a preset leader's switch cancels the pending gesture.
+                        if (own is { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Preset }
                             && siblingGesture is { HasDoubleClick: true }
                             && other.Target is not NoneTarget)
                         {
@@ -312,9 +308,11 @@ public static class SpecialKeyConflicts
 
                 // The engine registers a precision key from the mapping's own target alone:
                 // one sitting on a gesture action never joins the button set the slowing
-                // reads, so it engages nothing at all. A layer key is read the same way -
-                // the engine resolves a layer leader from the mapping's own target only, so
-                // one sitting on a gesture action enters no layer at all.
+                // reads, so it engages nothing at all. The deprecated Layer 键 is read the
+                // same way - the engine only rewrites one sitting on the mapping's own
+                // target, so one a hand-edited profile left on a gesture action enters no
+                // layer at all. The merged leader engages from any position, so a layer
+                // leader on a gesture action is an ordinary leader here.
                 if (gesture is { } gestureKeys)
                 {
                     if (gestureKeys.DoubleClickAction is SpecialKeyTarget { Kind: SpecialKeyKind.Precision })
@@ -347,7 +345,7 @@ public static class SpecialKeyConflicts
                             code,
                             entry.Id,
                             entry.Id,
-                            $"「Layer 键」设在{label}的双击上不会生效：层切换只识别设在单击上的 Layer 键，请把它改到单击位置。"));
+                            $"「Layer 键」设在{label}的双击上不会生效：旧版层键已合并为 Leader 键的「切换临时层」，请把它改到单击位置。"));
                     }
 
                     if (gestureKeys.LongPressAction is SpecialKeyTarget { Kind: SpecialKeyKind.Layer })
@@ -358,7 +356,7 @@ public static class SpecialKeyConflicts
                             code,
                             entry.Id,
                             entry.Id,
-                            $"「Layer 键」设在{label}的长按上不会生效：层切换只识别设在单击上的 Layer 键，请把它改到单击位置。"));
+                            $"「Layer 键」设在{label}的长按上不会生效：旧版层键已合并为 Leader 键的「切换临时层」，请把它改到单击位置。"));
                     }
                 }
 
@@ -797,7 +795,6 @@ public partial class MappingEditorViewModel : ObservableObject
     [
         new(SpecialKeyKind.Precision, "精准键"),
         new(SpecialKeyKind.Leader, "Leader 键"),
-        new(SpecialKeyKind.Layer, "Layer 键"),
     ];
 
     /// <summary>
@@ -818,6 +815,16 @@ public partial class MappingEditorViewModel : ObservableObject
     ];
 
     /// <summary>
+    /// What a Leader 键 switches, for the picker: 切换预设 flips between the two preset
+    /// slots it names, 切换临时层 switches the one temporary layer the profile carries.
+    /// </summary>
+    public IReadOnlyList<LeaderActionOption> SpecialLeaderActionOptions { get; } =
+    [
+        new(LeaderAction.Preset, "切换预设"),
+        new(LeaderAction.Layer, "切换临时层"),
+    ];
+
+    /// <summary>
     /// The preset slots a leader key can flip between. Starts at the initial four and is
     /// replaced by the window view model with the device's live slots, so a slot the user
     /// added is offered here too.
@@ -826,44 +833,26 @@ public partial class MappingEditorViewModel : ObservableObject
     private IReadOnlyList<int> _specialSlotOptions = [1, 2, 3, 4];
 
     /// <summary>
-    /// The layers a mapping can sit on: 基础层 first, then the temporary layers above it.
-    /// Starts at the base layer plus <see cref="TemporaryLayerCount"/> of them and is replaced
-    /// by the window view model when a device runs more, so a layer the user added is offered
-    /// here too.
+    /// The layers a mapping can sit on: 基础层, which always runs, and the one 临时层 above
+    /// it, which runs only while a Leader 键 whose action switches the temporary layer has
+    /// it in effect. There is exactly one temporary layer, so the picker carries two rows.
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(LayerIdOptions))]
-    private IReadOnlyList<MappingLayerOption> _layerOptions = BuildLayerOptions(TemporaryLayerCount);
-
-    /// <summary>How many temporary layers the editor offers alongside the base layer.</summary>
-    public const int TemporaryLayerCount = 4;
-
-    private static MappingLayerOption[] BuildLayerOptions(int temporaryLayers)
-    {
-        var options = new MappingLayerOption[temporaryLayers + 1];
-        for (var layer = 0; layer <= temporaryLayers; layer++)
-        {
-            options[layer] = new MappingLayerOption(layer, LayerLabel(layer));
-        }
-
-        return options;
-    }
+    private IReadOnlyList<MappingLayerOption> _layerOptions =
+    [
+        new(0, LayerLabel(0)),
+        new(1, LayerLabel(1)),
+    ];
 
     /// <summary>What a layer is called, the way every layer picker names it.</summary>
-    public static string LayerLabel(int layer) => layer <= 0 ? "基础层" : $"第 {layer} 层";
-
-    /// <summary>
-    /// The layers a Layer 键 can enter. 0 is the base layer every mapping already runs, so a
-    /// layer key names 1 or above and the base row is not offered here.
-    /// </summary>
-    public IReadOnlyList<MappingLayerOption> LayerIdOptions =>
-        LayerOptions.Where(option => option.Value >= 1).ToArray();
+    public static string LayerLabel(int layer) => layer <= 0 ? "基础层" : "临时层";
 
     /// <summary>
     /// Which layer the mapping being edited belongs to: 0 for the base layer, which always
-    /// runs, or a temporary layer that only runs while a Layer 键 names it. The tag travels
-    /// with the entry on commit and is restored on reload, so a mapping placed on a layer
-    /// stays there through an edit instead of collapsing back onto the base layer.
+    /// runs, or the one temporary layer that only runs while a Leader 键 whose action
+    /// switches the temporary layer has it in effect. The tag travels with the entry on
+    /// commit and is restored on reload, so a mapping placed on the temporary layer stays
+    /// there through an edit instead of collapsing back onto the base layer.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedLayerOption))]
@@ -890,27 +879,29 @@ public partial class MappingEditorViewModel : ObservableObject
 
     /// <summary>
     /// The layer as the header names it, beside the source and the target: a mapping placed
-    /// on a temporary layer must never read as an ordinary one.
+    /// on the temporary layer must never read as an ordinary one.
     /// </summary>
     public string LayerSummary => $"所属层：{LayerDescription}";
 
     /// <summary>
-    /// True while the mapping's own target is a Layer 键. Such a leader has to sit on the
-    /// base layer: a temporary layer is entered from the base layer only, and the engine
-    /// refuses a profile that names one from inside another - a refusal that would fail the
-    /// whole profile rather than the one mapping. The editor snaps the layer back to 基础层
-    /// instead, and <see cref="LayerHint"/> says why.
+    /// True while the mapping's own target is a Leader 键 whose action switches the
+    /// temporary layer. Such a leader has to sit on the base layer: a temporary layer is
+    /// entered from the base layer only, and the engine refuses a profile that names one
+    /// from inside another - a refusal that would fail the whole profile rather than the
+    /// one mapping. The editor snaps the layer back to 基础层 instead, and
+    /// <see cref="LayerHint"/> says why.
     /// </summary>
     public bool LayerLeaderRequiresBaseLayer => ClickSlot.TargetKind == MappingTargetKind.SpecialKey
-        && ClickSlot.SpecialKind == SpecialKeyKind.Layer;
+        && ClickSlot.SpecialKind == SpecialKeyKind.Leader
+        && ClickSlot.SpecialLeaderAction == LeaderAction.Layer;
 
     /// <summary>
     /// What the layer picker means for the mapping being edited: the inheritance rule for an
-    /// ordinary mapping, or why a Layer 键 has to sit on the base layer.
+    /// ordinary mapping, or why a layer-switching Leader 键 has to sit on the base layer.
     /// </summary>
     public string LayerHint => LayerLeaderRequiresBaseLayer
-        ? "「Layer 键」本身必须放在基础层：临时层只能从基础层进入，引擎会拒绝从其他层切换层的配置，因此该映射的所属层固定为基础层。"
-        : "基础层的映射始终生效；更高的层是临时层，只有按住对应层的「Layer 键」期间才生效，并覆盖同按钮的基础层映射，未覆盖的继承基础层。";
+        ? "「切换临时层」的 Leader 键本身必须放在基础层：临时层只能从基础层进入，引擎会拒绝从其他层切换层的配置，因此该映射的所属层固定为基础层。"
+        : "基础层的映射始终生效；临时层只在「切换临时层」的 Leader 键生效期间运行（按住切换：按住期间；按下切换：每次按下翻转），并覆盖同按钮的基础层映射，未覆盖的继承基础层。";
 
     private void EnforceLayerLeaderPlacement()
     {
@@ -955,28 +946,11 @@ public partial class MappingEditorViewModel : ObservableObject
         set => ActiveSlot.SpecialSlotB = value;
     }
 
-    /// <summary>The temporary layer the active slot's Layer 键 enters.</summary>
-    public int ActiveSpecialLayerId
+    /// <summary>The active slot's leader action: 切换预设 or 切换临时层.</summary>
+    public LeaderAction ActiveSpecialLeaderAction
     {
-        get => ActiveSlot.SpecialLayerId;
-        set => ActiveSlot.SpecialLayerId = value;
-    }
-
-    /// <summary>
-    /// The selected layer picker row for the active slot, kept in step with
-    /// <see cref="ActiveSpecialLayerId"/>. A layer id the picker does not offer reads as
-    /// unlisted, the same shape a hand-edited profile naming one has.
-    /// </summary>
-    public MappingLayerOption? ActiveSpecialLayerIdOption
-    {
-        get => LayerIdOptions.FirstOrDefault(option => option.Value == ActiveSpecialLayerId);
-        set
-        {
-            if (value is not null)
-            {
-                ActiveSpecialLayerId = value.Value;
-            }
-        }
+        get => ActiveSlot.SpecialLeaderAction;
+        set => ActiveSlot.SpecialLeaderAction = value;
     }
 
     /// <summary>The selected sub-kind picker row, kept in step with <see cref="ActiveSpecialKind"/>.</summary>
@@ -1018,38 +992,58 @@ public partial class MappingEditorViewModel : ObservableObject
         }
     }
 
-    /// <summary>True when the special-key editor offers the leader-only controls.</summary>
+    /// <summary>The selected leader-action picker row, kept in step with <see cref="ActiveSpecialLeaderAction"/>.</summary>
+    public LeaderActionOption? ActiveSpecialLeaderActionOption
+    {
+        get => SpecialLeaderActionOptions.First(option => option.Value == ActiveSpecialLeaderAction);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveSpecialLeaderAction = value.Value;
+            }
+        }
+    }
+
+    /// <summary>True when the special-key editor offers the leader controls: the action every leader names.</summary>
     public bool ShowSpecialLeaderControls => ActiveTargetKind == MappingTargetKind.SpecialKey
         && ActiveSpecialKind == SpecialKeyKind.Leader;
 
     /// <summary>
-    /// True when the special-key editor offers the switch-mode control: a leader key and a
-    /// layer key both switch, so the row follows the two of them.
+    /// True when the special-key editor offers the preset-slot controls: a leader that
+    /// switches presets names the two slots it flips between, a layer leader names none.
+    /// </summary>
+    public bool ShowSpecialPresetControls => ShowSpecialLeaderControls
+        && ActiveSpecialLeaderAction == LeaderAction.Preset;
+
+    /// <summary>
+    /// True when the special-key editor offers the switch-mode control: a leader key
+    /// switches under either mode, whichever of the two it switches.
     /// </summary>
     public bool ShowSpecialSwitchControls => ActiveTargetKind == MappingTargetKind.SpecialKey
-        && ActiveSpecialKind is SpecialKeyKind.Leader or SpecialKeyKind.Layer;
+        && ActiveSpecialKind == SpecialKeyKind.Leader;
 
     /// <summary>
-    /// False while the sub-kind is Layer: a temporary layer lives exactly as long as its
-    /// leader is held and the engine rejects a layer key that switches on a press edge, so
-    /// the mode is pinned to 按住切换 and the picker is disabled rather than offering a
-    /// choice that could never run. See <see cref="SpecialLayerHint"/>.
+    /// True while the switch-mode picker is live: both leader actions choose freely between
+    /// 按下切换 and 按住切换 - the engine runs a layer leader under either mode, toggling
+    /// the layer on each press edge or holding it for the duration of the hold - so the
+    /// picker never disables a choice that works. See <see cref="SpecialLayerHint"/>.
     /// </summary>
     public bool SpecialSwitchModeEditable => ActiveTargetKind != MappingTargetKind.SpecialKey
-        || ActiveSpecialKind != SpecialKeyKind.Layer;
+        || ActiveSpecialKind == SpecialKeyKind.Leader;
 
-    /// <summary>True when the special-key editor offers the layer controls.</summary>
-    public bool ShowSpecialLayerControls => ActiveTargetKind == MappingTargetKind.SpecialKey
-        && ActiveSpecialKind == SpecialKeyKind.Layer;
+    /// <summary>True when the special-key editor offers the temporary-layer explanation.</summary>
+    public bool ShowSpecialLayerControls => ShowSpecialLeaderControls
+        && ActiveSpecialLeaderAction == LeaderAction.Layer;
 
     /// <summary>
-    /// What a Layer 键 does, in Chinese: it enters the layer it names for as long as it is
-    /// held, the layer overrides the base mappings that listen on the same input and inherits
-    /// the rest, and the switch mode is pinned to 按住 because the engine rejects anything
-    /// else.
+    /// What a 切换临时层 leader does, in Chinese: it switches the one temporary layer the
+    /// profile carries - 按住 enters it for as long as the key is held, 按下 toggles it on
+    /// each press edge - the layer overrides the base mappings that listen on the same
+    /// input and inherits the rest.
     /// </summary>
     public string SpecialLayerHint => ShowSpecialLayerControls
-        ? "「Layer 键」只能按住切换：临时层只在按住期间存在，松开即回到基础层；按住期间层内映射覆盖同按钮的基础层映射，未覆盖的继承基础层。"
+        ? "「切换临时层」切换配置文件里唯一的临时层：按住切换在按住期间进入，松开即回到基础层；按下切换每次按下翻转。临时层期间层内映射覆盖同按钮的基础层映射，未覆盖的继承基础层。"
         : string.Empty;
 
     /// <summary>True when the special-key editor offers the precision controls.</summary>
@@ -1057,12 +1051,12 @@ public partial class MappingEditorViewModel : ObservableObject
         && ActiveSpecialKind == SpecialKeyKind.Precision;
 
     /// <summary>
-    /// True when a leader key names the same slot twice. Flipping between a slot and itself
-    /// is not a switch, so the editor refuses the commit and says why rather than writing a
-    /// mapping that can never do anything.
+    /// True when a leader key that switches presets names the same slot twice. Flipping
+    /// between a slot and itself is not a switch, so the editor refuses the commit and says
+    /// why rather than writing a mapping that can never do anything. A layer leader names
+    /// no slots, so equal ones are not a conflict there.
     /// </summary>
-    public bool SpecialKeySlotConflict => ActiveTargetKind == MappingTargetKind.SpecialKey
-        && ActiveSpecialKind == SpecialKeyKind.Leader
+    public bool SpecialKeySlotConflict => ShowSpecialPresetControls
         && ActiveSpecialSlotA == ActiveSpecialSlotB;
 
     /// <summary>
@@ -1341,12 +1335,13 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// What a special key does, named the way its own picker names it. The Core record has
-    /// no description of its own, and its raw <c>ToString</c> would read as debug output in
-    /// the editor's header.
+    /// What a special key does, named the way its own picker names it: a leader reads as the
+    /// Leader 键 its sub-kind picker offers, with 临时层 in front when it switches the
+    /// temporary layer. The Core record has no description of its own, and its raw
+    /// <c>ToString</c> would read as debug output in the editor's header.
     /// </summary>
     private static string SpecialKeyDescription(SpecialKeyTarget target)
-        => SpecialKeyConflicts.KindLabel(target.Kind);
+        => MappingDescriptions.SpecialKey(target);
 
     /// <summary>
     /// The selected row of the categorized key list for the active slot. A category header is
@@ -2508,9 +2503,12 @@ public partial class MappingEditorViewModel : ObservableObject
         // the compact surface rather than wherever the previous edit left the list.
         KeyPickerExpanded = false;
 
-        // The layer the mapping sits on is part of the entry: a mapping placed on a temporary
-        // layer has to come back on that layer, or the edit would move it to the base layer.
-        SelectedLayer = entry.Layer;
+        // The layer the mapping sits on is part of the entry: a mapping placed on the
+        // temporary layer has to come back on that layer, or the edit would move it to the
+        // base layer. A profile written before the single-layer model may carry a higher
+        // number - the engine reads any non-zero value as the temporary layer - so the
+        // loaded layer is folded onto the one that remains.
+        SelectedLayer = entry.Layer == 0 ? 0 : 1;
 
         // A load lands the whole draft at once, so the conflict hints are re-measured once
         // here rather than left to whatever the individual setters happened to raise.
@@ -2959,8 +2957,10 @@ public partial class MappingEditorViewModel : ObservableObject
                 OnPropertyChanged(nameof(ScrollSettings));
                 break;
             case nameof(GestureSlotEditor.SpecialKind):
+            case nameof(GestureSlotEditor.SpecialLeaderAction):
                 // A layer leader is the one special key that has to sit on the base layer,
-                // so choosing the kind re-measures where the mapping itself may live.
+                // so choosing the kind - or choosing what the leader switches - re-measures
+                // where the mapping itself may live.
                 EnforceLayerLeaderPlacement();
                 OnPropertyChanged(nameof(TargetDescription));
                 break;
@@ -2968,7 +2968,6 @@ public partial class MappingEditorViewModel : ObservableObject
             case nameof(GestureSlotEditor.SpecialSwitchMode):
             case nameof(GestureSlotEditor.SpecialSlotA):
             case nameof(GestureSlotEditor.SpecialSlotB):
-            case nameof(GestureSlotEditor.SpecialLayerId):
                 OnPropertyChanged(nameof(TargetDescription));
                 break;
             case nameof(GestureSlotEditor.IsNone):
@@ -3046,9 +3045,10 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveSpecialSwitchModeOption));
         OnPropertyChanged(nameof(ActiveSpecialSlotA));
         OnPropertyChanged(nameof(ActiveSpecialSlotB));
-        OnPropertyChanged(nameof(ActiveSpecialLayerId));
-        OnPropertyChanged(nameof(ActiveSpecialLayerIdOption));
+        OnPropertyChanged(nameof(ActiveSpecialLeaderAction));
+        OnPropertyChanged(nameof(ActiveSpecialLeaderActionOption));
         OnPropertyChanged(nameof(ShowSpecialLeaderControls));
+        OnPropertyChanged(nameof(ShowSpecialPresetControls));
         OnPropertyChanged(nameof(ShowSpecialSwitchControls));
         OnPropertyChanged(nameof(SpecialSwitchModeEditable));
         OnPropertyChanged(nameof(ShowSpecialLayerControls));

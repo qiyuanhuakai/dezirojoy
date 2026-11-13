@@ -6,9 +6,10 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Services;
 
 /// <summary>
-/// Import/export of a single profile file. The contract under test is that the file format is
-/// exactly <see cref="ProfileSerializer"/>'s output (no second codec) and that a malformed file
-/// is reported instead of thrown.
+/// Export of a scheme bundle - the single import/export design. The contract under test is
+/// that the file format is exactly <see cref="SchemeBundleCodec"/>'s output (no second codec),
+/// that the extension is normalized for the user, and that a failed write is reported instead
+/// of thrown.
 /// </summary>
 public class ProfileTransferServiceTests : IDisposable
 {
@@ -33,166 +34,98 @@ public class ProfileTransferServiceTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static GamepadProfile SampleProfile(string deviceId = "xinput:0") => new()
+    private static SchemeBundle SampleBundle()
     {
-        Name = "测试配置",
-        DeviceId = deviceId,
-        Layout = GamepadLayout.Xbox,
-        Mappings =
-        [
-            new MappingEntry
-            {
-                Source = new ButtonBinding(GamepadButton.B),
-                Target = new KeyPressTarget(GamepadKey.Enter),
-            },
-            new MappingEntry
-            {
-                Source = new StickBinding(GamepadStick.Right),
-                Target = new MouseMoveTarget(new MouseStickSettings { MaxSpeed = 2400f, DeadZone = 0.2f }),
-            },
-            new MappingEntry
-            {
-                Source = new StickBinding(GamepadStick.Left),
-                Target = new WheelScrollTarget(new ScrollStickSettings { MaxTicksPerSecond = 20f }),
-            },
-        ],
-    };
+        var profile = new GamepadProfile
+        {
+            Name = "测试配置",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B),
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+            ],
+        };
+
+        return new SchemeBundle
+        {
+            Name = "测试方案",
+            AppVersion = "9.9.9-test",
+            Notes = "使用说明：先试主配置。",
+            Presets =
+            [
+                new SchemePreset
+                {
+                    Slot = 1,
+                    Profile = profile,
+                    ActionNames = SchemeBundleFactory.ActionNamesOf(profile),
+                },
+            ],
+        };
+    }
 
     private string TempPath(string name) => Path.Combine(_directory, name);
 
     [Fact]
-    public void Export_Writes_Exactly_What_ProfileSerializer_Produces()
+    public void ExportScheme_Writes_Exactly_What_The_Codec_Produces()
     {
-        var profile = SampleProfile();
+        var bundle = SampleBundle();
         var path = TempPath("export.json");
 
-        var result = ProfileTransferService.Export(profile, path);
+        var result = ProfileTransferService.ExportScheme(bundle, path);
 
         Assert.True(result.Succeeded, result.Message);
         Assert.True(File.Exists(path));
-        Assert.Equal(
-            ProfileSerializer.Serialize(profile with { SchemaVersion = GamepadProfile.CurrentSchemaVersion }),
-            File.ReadAllText(path));
+        Assert.Equal(SchemeBundleCodec.Serialize(bundle), File.ReadAllText(path));
+        Assert.Contains("方案已导出", result.Message);
     }
 
     [Fact]
-    public void Export_Appends_The_Extension_When_The_User_Omits_It()
+    public void ExportScheme_Then_Load_Roundtrips_The_Whole_Bundle()
     {
-        var result = ProfileTransferService.Export(SampleProfile(), TempPath("no-extension"));
+        var bundle = SampleBundle();
+        var path = TempPath("roundtrip.json");
+
+        ProfileTransferService.ExportScheme(bundle, path);
+        var loaded = SchemeBundleCodec.Load(path);
+
+        Assert.True(loaded.Succeeded, loaded.Message);
+        Assert.Equal(bundle.Name, loaded.Bundle!.Name);
+        Assert.Equal(bundle.AppVersion, loaded.Bundle.AppVersion);
+        Assert.Equal(bundle.Notes, loaded.Bundle.Notes);
+        Assert.Equal(bundle.Presets.Count, loaded.Bundle.Presets.Count);
+        Assert.Equal(
+            bundle.Presets[0].Profile.Mappings,
+            loaded.Bundle.Presets[0].Profile.Mappings);
+    }
+
+    [Fact]
+    public void ExportScheme_Appends_The_Extension_When_The_User_Omits_It()
+    {
+        var result = ProfileTransferService.ExportScheme(SampleBundle(), TempPath("no-extension"));
 
         Assert.True(result.Succeeded, result.Message);
         Assert.True(File.Exists(TempPath("no-extension.json")));
     }
 
     [Fact]
-    public void Export_Then_Import_Roundtrips_The_Whole_Profile()
+    public void ExportScheme_To_An_Unwritable_Location_Fails_With_A_Message()
     {
-        var profile = SampleProfile();
-        var path = TempPath("roundtrip.json");
-
-        ProfileTransferService.Export(profile, path);
-        var result = ProfileTransferService.Import(path);
-
-        Assert.True(result.Succeeded, result.Message);
-        Assert.NotNull(result.Profile);
-        Assert.Equal(profile.Name, result.Profile!.Name);
-        Assert.Equal(profile.DeviceId, result.Profile.DeviceId);
-        Assert.Equal(profile.Layout, result.Profile.Layout);
-        Assert.Equal(profile.Mappings.Count, result.Profile.Mappings.Count);
-
-        // Element-wise: the deserializer hands back a List where the source held a read-only
-        // array, so record equality would compare container types rather than content.
-        Assert.Equal(profile.Mappings, result.Profile.Mappings);
-    }
-
-    [Fact]
-    public void Import_Preserves_The_Sensitivity_Settings_Of_Stick_Mappings()
-    {
-        var path = TempPath("settings.json");
-
-        ProfileTransferService.Export(SampleProfile(), path);
-        var result = ProfileTransferService.Import(path);
-
-        var mouse = Assert.IsType<MouseMoveTarget>(
-            result.Profile!.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Right }).Target);
-        var wheel = Assert.IsType<WheelScrollTarget>(
-            result.Profile.Mappings.Single(m => m.Source is StickBinding { Stick: GamepadStick.Left }).Target);
-
-        Assert.Equal(2400f, mouse.Settings.MaxSpeed);
-        Assert.Equal(0.2f, mouse.Settings.DeadZone);
-        Assert.Equal(20f, wheel.Settings.MaxTicksPerSecond);
-    }
-
-    [Theory]
-    [InlineData("{ this is not json")]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("null")]
-    [InlineData("[]")]
-    [InlineData("{\"SchemaVersion\":1}")]
-    [InlineData("{\"Name\":\"x\",\"Mappings\":\"not-a-list\"}")]
-    public void Import_Of_A_Malformed_File_Fails_With_A_Message_And_No_Profile(string content)
-    {
-        var path = TempPath("malformed.json");
-        File.WriteAllText(path, content);
-
-        var result = ProfileTransferService.Import(path);
-
-        Assert.False(result.Succeeded);
-        Assert.Null(result.Profile);
-        Assert.False(string.IsNullOrWhiteSpace(result.Message));
-        Assert.Contains("导入失败", result.Message);
-    }
-
-    [Fact]
-    public void Import_Of_A_Missing_File_Fails_Instead_Of_Throwing()
-    {
-        var result = ProfileTransferService.Import(TempPath("does-not-exist.json"));
-
-        Assert.False(result.Succeeded);
-        Assert.Null(result.Profile);
-        Assert.Contains("导入失败", result.Message);
-    }
-
-    [Fact]
-    public void Import_Of_A_Newer_Schema_Version_Is_Refused()
-    {
-        var path = TempPath("future.json");
-        File.WriteAllText(path, "{\"SchemaVersion\":99,\"Name\":\"来自未来\",\"Mappings\":[]}");
-
-        var result = ProfileTransferService.Import(path);
-
-        Assert.False(result.Succeeded);
-        Assert.Null(result.Profile);
-        Assert.Contains("版本过新", result.Message);
-    }
-
-    [Fact]
-    public void Import_Of_An_Empty_Mapping_List_Succeeds()
-    {
-        var path = TempPath("empty-mappings.json");
-        File.WriteAllText(path, "{\"SchemaVersion\":1,\"Name\":\"空配置\",\"Mappings\":[]}");
-
-        var result = ProfileTransferService.Import(path);
-
-        Assert.True(result.Succeeded, result.Message);
-        Assert.NotNull(result.Profile);
-        Assert.Empty(result.Profile!.Mappings);
-    }
-
-    [Fact]
-    public void Export_To_An_Unwritable_Location_Fails_With_A_Message()
-    {
-        var result = ProfileTransferService.Export(SampleProfile(), Path.Combine(_directory, "no", "such", "dir", "p.json"));
+        var result = ProfileTransferService.ExportScheme(
+            SampleBundle(), Path.Combine(_directory, "no", "such", "dir", "p.json"));
 
         Assert.False(result.Succeeded);
         Assert.Contains("导出失败", result.Message);
     }
 
     [Fact]
-    public void Export_Without_A_Destination_Fails_With_A_Message()
+    public void ExportScheme_Without_A_Destination_Fails_With_A_Message()
     {
-        var result = ProfileTransferService.Export(SampleProfile(), "   ");
+        var result = ProfileTransferService.ExportScheme(SampleBundle(), "   ");
 
         Assert.False(result.Succeeded);
         Assert.Contains("导出失败", result.Message);
@@ -201,8 +134,8 @@ public class ProfileTransferServiceTests : IDisposable
     [Fact]
     public void The_Picker_Filter_Only_Admits_Json_Files()
     {
-        Assert.Equal(".json", ProfileTransferService.Extension);
-        Assert.All(ProfileTransferService.Patterns, pattern => Assert.EndsWith(".json", pattern));
-        Assert.False(string.IsNullOrWhiteSpace(ProfileTransferService.TypeName));
+        Assert.Equal(".json", ProfileTransferService.SchemeExtension);
+        Assert.All(ProfileTransferService.SchemePatterns, pattern => Assert.EndsWith(".json", pattern));
+        Assert.False(string.IsNullOrWhiteSpace(ProfileTransferService.SchemeTypeName));
     }
 }

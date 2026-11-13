@@ -485,7 +485,7 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
-    public async Task A_Malformed_Daemon_Profile_No_Longer_Blocks_Save_And_Import()
+    public async Task A_Malformed_Daemon_Profile_No_Longer_Blocks_Save_And_The_Scheme_Import_That_Repairs_It()
     {
         var context = await CreateDaemonPresetViewModel();
         await using var viewModel = context.ViewModel;
@@ -493,16 +493,30 @@ public sealed class MainWindowViewModelDaemonTests
         viewModel.DaemonSnapshot = viewModel.DaemonSnapshot! with { ProfileJson = "{not-json" };
         var untouched = new Dictionary<int, string>
         {
-            [2] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 2)!),
-            [3] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 3)!),
+            [2] = BodyOf(context.Presets.LoadSlot("pad-1", 2)!),
+            [3] = BodyOf(context.Presets.LoadSlot("pad-1", 3)!),
         };
-        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-malformed-import-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, ProfileSerializer.Serialize(viewModel.ActiveProfile with { Name = "Repaired by import" }));
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-malformed-scheme-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, SchemeBundleCodec.Serialize(new SchemeBundle
+        {
+            Name = "修复方案",
+            Presets =
+            [
+                new SchemePreset
+                {
+                    Slot = 1,
+                    Profile = viewModel.ActiveProfile with { Name = "Repaired by import" },
+                },
+                new SchemePreset { Slot = 2, Profile = context.Presets.LoadSlot("pad-1", 2)! },
+                new SchemePreset { Slot = 3, Profile = context.Presets.LoadSlot("pad-1", 3)! },
+            ],
+        }));
 
         try
         {
             viewModel.SaveProfileCommand.Execute(null);
-            viewModel.ImportFrom(path);
+            viewModel.ImportSchemeFrom(path);
+            await viewModel.ConfirmSchemeImportCommand.ExecuteAsync(null);
         }
         finally
         {
@@ -511,18 +525,19 @@ public sealed class MainWindowViewModelDaemonTests
 
         // The body is unreadable, so the GUI falls back to the device the daemon itself
         // reports - the same rule the daemon applies to a body whose own device id it cannot
-        // read. A damaged profile must not lock the user out of the save and the import that
-        // repair it, and no slot other than the device's own active one is touched.
-        Assert.False(viewModel.IsTransferError);
+        // read. A damaged profile must not lock the user out of the save and the scheme import
+        // that repair it, and the import lands on that device alone: the slots the scheme
+        // re-ships keep every mapping they had, so repairing one slot rewrites nothing else.
+        Assert.False(viewModel.IsTransferError, viewModel.TransferMessage);
         Assert.Equal("Repaired by import", context.Presets.LoadSlot("pad-1", 1)!.Name);
         foreach (var (slot, expected) in untouched)
         {
-            Assert.Equal(expected, ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
+            Assert.Equal(expected, BodyOf(context.Presets.LoadSlot("pad-1", slot)!));
         }
     }
 
     [Fact]
-    public async Task Daemon_Import_Saves_The_Active_Slot_Once_And_Does_Not_Overwrite_Slot_One()
+    public async Task Daemon_Scheme_Import_Lands_On_The_Active_Slot_And_Replaces_The_Devices_Slot_Set()
     {
         var context = await CreateDaemonPresetViewModel();
         await using var viewModel = context.ViewModel;
@@ -530,23 +545,31 @@ public sealed class MainWindowViewModelDaemonTests
         Assert.Null(viewModel.ActiveController);
         Assert.Empty(viewModel.Controllers);
         await viewModel.SwitchPresetSlotCommand.ExecuteAsync(2);
-        var untouched = new Dictionary<int, string>
+        await WaitForCondition(() => viewModel.ActivePresetSlot == 2);
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-daemon-scheme-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, SchemeBundleCodec.Serialize(new SchemeBundle
         {
-            [1] = ProfileSerializer.Serialize(presets.LoadSlot("pad-1", 1)!),
-            [3] = ProfileSerializer.Serialize(presets.LoadSlot("pad-1", 3)!),
-            [4] = ProfileSerializer.Serialize(presets.LoadSlot("pad-1", 4)!),
-        };
-        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-daemon-import-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, ProfileSerializer.Serialize(new GamepadProfile
-        {
-            Name = "Imported daemon slot two",
-            DeviceId = "another-device",
-            Mappings = [],
+            Name = "导入的方案",
+            Presets =
+            [
+                new SchemePreset { Slot = 1, Profile = presets.LoadSlot("pad-1", 1)! },
+                new SchemePreset
+                {
+                    Slot = 2,
+                    Profile = new GamepadProfile
+                    {
+                        Name = "Imported daemon slot two",
+                        DeviceId = "another-device",
+                        Mappings = [],
+                    },
+                },
+            ],
         }));
 
         try
         {
-            viewModel.ImportFrom(path);
+            viewModel.ImportSchemeFrom(path);
+            await viewModel.ConfirmSchemeImportCommand.ExecuteAsync(null);
             await WaitForCondition(() => viewModel.ActiveProfile?.Name == "Imported daemon slot two");
         }
         finally
@@ -554,11 +577,19 @@ public sealed class MainWindowViewModelDaemonTests
             File.Delete(path);
         }
 
+        Assert.False(viewModel.IsTransferError, viewModel.TransferMessage);
         Assert.Equal("Imported daemon slot two", presets.LoadSlot("pad-1", 2)!.Name);
-        foreach (var (slot, expected) in untouched)
-        {
-            Assert.Equal(expected, ProfileSerializer.Serialize(presets.LoadSlot("pad-1", slot)!));
-        }
+
+        // The slot the user was on is the one the import lands on: the daemon is asked to move
+        // to it rather than to fall back to the base slot, so the client that imported keeps
+        // working on the slot it imported into. The file's own device id says nothing - the
+        // scheme lands on the device the daemon reports.
+        Assert.Equal(2, viewModel.ActivePresetSlot);
+        Assert.Equal(2, viewModel.DaemonSnapshot!.ActivePresetSlot);
+
+        // The bundle is the device's whole scheme, so the two slots it carries are the two the
+        // device holds afterwards - the four initial slots are replaced, not merged.
+        Assert.Equal([1, 2], presets.SlotsInUse("pad-1"));
     }
 
     [Fact]
@@ -857,6 +888,14 @@ public sealed class MainWindowViewModelDaemonTests
 
         Assert.True(condition());
     }
+
+    /// <summary>
+    /// A slot's serialized body without its slot bookkeeping. A scheme import re-stamps the slot
+    /// number it writes each profile into, so comparing what an import left behind has to look
+    /// past that field and pin the mappings themselves.
+    /// </summary>
+    private static string BodyOf(GamepadProfile profile)
+        => ProfileSerializer.Serialize(profile with { PresetSlot = 0 });
 
     private static async Task WaitForSuspension(FakeDaemonHost host, bool expected)
     {

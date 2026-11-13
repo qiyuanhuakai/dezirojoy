@@ -5,6 +5,14 @@ namespace DeziroJoy.App.Services;
 /// <summary>
 /// JSON file store under %APPDATA%/DeziroJoy/profiles (Windows) or
 /// ~/.config/DeziroJoy/profiles (Linux). One file per device id.
+/// <para>
+/// Every read migrates what it loads (<see cref="ProfileMigration.Migrate"/>), so a profile
+/// written before the current schema version comes back upgraded - a deprecated Layer 键
+/// rewritten as the leader that replaced it, the several temporary layers folded into the
+/// one that remains - instead of relying on each consumer to normalize it. Writes always
+/// stamp the current schema version, so a migrated profile is persisted in its new shape on
+/// the next save.
+/// </para>
 /// </summary>
 public sealed class FileProfileStore : IProfileStore
 {
@@ -32,8 +40,9 @@ public sealed class FileProfileStore : IProfileStore
         // A damaged file reads as what it can rather than as a failure. The caller is
         // building the device's runtime, so one unreadable mapping must not take the whole
         // profile - and with it the pad's mapping - away: whatever parses still runs, and
-        // the next save writes the readable profile back over the damaged one.
-        return ProfileSerializer.Load(File.ReadAllText(path)).Profile;
+        // the next save writes the readable profile back over the damaged one. Whatever
+        // came back is migrated, so a salvaged body lands in the current shape too.
+        return ProfileMigration.Migrate(ProfileSerializer.Load(File.ReadAllText(path)).Profile);
     }
 
     public void Save(GamepadProfile profile)
@@ -66,7 +75,7 @@ public sealed class FileProfileStore : IProfileStore
         {
             try
             {
-                profiles.Add(ProfileSerializer.Deserialize(File.ReadAllText(path)));
+                profiles.Add(ProfileMigration.Migrate(ProfileSerializer.Deserialize(File.ReadAllText(path))));
             }
             catch (System.Text.Json.JsonException)
             {

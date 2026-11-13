@@ -98,9 +98,11 @@ public sealed class PresetStore
     /// the legacy migration base, the "unmigrated reads as primary" shape - so it is refused
     /// outright rather than deleted, and a device is never left preset-less. A slot that holds
     /// nothing is a no-op rather than an error. Leader repair runs before the delete, against
-    /// the slots that survive it: each surviving profile with a leader naming the deleted slot
-    /// is retargeted to the lowest surviving slot that keeps its two ends distinct, and a
-    /// leader with no distinct survivor left is dropped rather than left unswitchable.
+    /// the slots that survive it: each surviving profile with a preset-switching leader naming
+    /// the deleted slot is retargeted to the lowest surviving slot that keeps its two ends
+    /// distinct, and a leader with no distinct survivor left is dropped rather than left
+    /// unswitchable. A leader whose action switches the temporary layer names no slots, so it
+    /// is never retargeted and never dropped by a delete.
     /// </para>
     /// </summary>
     public PresetDeleteOutcome DeleteSlot(string deviceId, int slot)
@@ -149,9 +151,10 @@ public sealed class PresetStore
     /// places - the mapping's own <see cref="MappingEntry.Target"/>, or a button gesture's
     /// <see cref="ButtonGesture.DoubleClickAction"/> / <see cref="ButtonGesture.LongPressAction"/> -
     /// and all three are repaired, because the engine executes gesture actions exactly as it
-    /// executes the mapping's own target. The deleted end is retargeted to the lowest surviving
-    /// slot that keeps the pair distinct; when no distinct survivor remains the reference is
-    /// removed - the whole mapping for a target leader (its <see cref="MappingEntry.Target"/> is
+    /// executes the mapping's own target. Only a leader that switches presets names slots, so
+    /// only one is repaired: the deleted end is retargeted to the lowest surviving slot that
+    /// keeps the pair distinct; when no distinct survivor remains the reference is removed -
+    /// the whole mapping for a target leader (its <see cref="MappingEntry.Target"/> is
     /// required), or just the gesture action for a gesture leader (the gesture then re-fires the
     /// click, its timing and fallback intact). Profiles untouched by the delete are never re-saved.
     /// </summary>
@@ -190,9 +193,9 @@ public sealed class PresetStore
 
     /// <summary>
     /// Repairs one mapping's Leader references, returning it unchanged when nothing named the
-    /// deleted slot. A target leader with no distinct survivor is unswitchable, so the whole
-    /// mapping is dropped (null); a gesture leader with no distinct survivor loses only its
-    /// action, keeping the gesture's timing and its re-fire-the-click fallback.
+    /// deleted slot. A preset-switching target leader with no distinct survivor is unswitchable,
+    /// so the whole mapping is dropped (null); a gesture leader with no distinct survivor loses
+    /// only its action, keeping the gesture's timing and its re-fire-the-click fallback.
     /// </summary>
     private static MappingEntry? RepairMapping(MappingEntry mapping, int deletedSlot, IReadOnlyList<int> surviving)
     {
@@ -250,15 +253,17 @@ public sealed class PresetStore
 
     /// <summary>
     /// Classifies one candidate Leader target against the deleted slot and, when it can be kept,
-    /// produces the retargeted leader. A candidate that is not a Leader naming the deleted slot is
-    /// <see cref="LeaderRepair.Untouched"/>; one that is, is retargeted to the lowest surviving
+    /// produces the retargeted leader. A candidate that is not a preset-switching Leader naming
+    /// the deleted slot is <see cref="LeaderRepair.Untouched"/> - a precision key names no slot,
+    /// and a leader whose action switches the temporary layer names no slot either, so a delete
+    /// never retargets or drops one. One that does name it is retargeted to the lowest surviving
     /// slot other than its surviving end, or <see cref="LeaderRepair.Dropped"/> when none remains.
     /// </summary>
     private static LeaderRepair TryRepairLeader(
         MappingTarget? target, int deletedSlot, IReadOnlyList<int> surviving, out MappingTarget? repaired)
     {
         repaired = target;
-        if (target is not SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader
+        if (target is not SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Preset } leader
             || (leader.SlotA != deletedSlot && leader.SlotB != deletedSlot))
         {
             return LeaderRepair.Untouched;
@@ -621,6 +626,8 @@ public sealed class PresetStore
     /// half-imported. Slot numbers are preserved rather than renumbered, because a leader key
     /// names the two slots it flips between: a device whose live slots are 1, 3 and 4 keeps
     /// that shape, and its leader keeps pointing where the user aimed it. The profiles are
+    /// migrated on the way in (<see cref="ProfileMigration.Migrate"/>), so a bundle written
+    /// before the single-layer model lands folded into the one temporary layer it left behind,
     /// rebound to their slot keys and tagged with the slot they are stored in, exactly the way
     /// <see cref="SaveSlot"/> stores any other slot.
     /// <para>
@@ -651,7 +658,7 @@ public sealed class PresetStore
 
         foreach (var (slot, profile) in slots.OrderBy(pair => pair.Key))
         {
-            SaveSlot(deviceId, slot, profile with { PresetSlot = slot });
+            SaveSlot(deviceId, slot, ProfileMigration.Migrate(profile) with { PresetSlot = slot });
         }
     }
 

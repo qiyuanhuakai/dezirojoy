@@ -340,23 +340,24 @@ public class MappingDescriptionsTests
     }
 
     [Fact]
-    public void A_Layer_Key_Target_Names_The_Layer_It_Enters()
+    public void A_Layer_Leader_Target_Names_The_Layer_It_Switches()
     {
-        // A layer leader's row must say which temporary layer it enters, because the layer
-        // number is the whole configuration: the same button means something different on
-        // every layer, and "临时层键" alone would not tell the user what they just bound.
+        // A layer leader's row must say it switches the temporary layer: there is exactly
+        // one, so the summary names it without a number - the same button does something
+        // different on the layer, and which layer is the whole configuration.
         Assert.Equal(
-            "临时层 2 键",
-            MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Layer, LayerId: 2)));
+            "临时层 Leader 键",
+            MappingDescriptions.Target(
+                new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold, Action: LeaderAction.Layer)));
         Assert.DoesNotContain("SpecialKeyTarget", MappingDescriptions.Target(
-            new SpecialKeyTarget(SpecialKeyKind.Layer, LayerId: 2)));
+            new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold, Action: LeaderAction.Layer)));
     }
 
     [Fact]
-    public void A_Layer_Key_Target_Without_A_Layer_Still_Names_The_Kind()
+    public void A_Deprecated_Layer_Key_Still_Names_The_Kind()
     {
-        // Layers run from 1 upward by contract, but a row must stay readable even for a
-        // hand-edited profile that names 0: the kind alone, never "临时层 0 键".
+        // The kind the merged leader replaced can still reach a profile through a hand edit;
+        // a row must stay readable for it rather than falling back to the record text.
         Assert.Equal("临时层键", MappingDescriptions.Target(new SpecialKeyTarget(SpecialKeyKind.Layer)));
     }
 

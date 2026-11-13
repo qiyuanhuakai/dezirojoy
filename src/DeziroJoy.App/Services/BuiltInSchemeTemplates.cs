@@ -19,8 +19,8 @@ public static class BuiltInSchemeTemplates
     /// The Windows pair: slot 1 「桌面办公」 for browser and editor work, slot 2 「游戏竞技」
     /// for shooters and action games. Both carry the same three global special keys - a
     /// precision key on the left-stick click, a leader on Back that flips between the two
-    /// presets, and a layer key on RB that enters each preset's own first temporary layer -
-    /// so the special keys behave identically whichever preset is active.
+    /// presets, and a leader on RB that switches the temporary layer - so the special keys
+    /// behave identically whichever preset is active.
     /// </summary>
     public static SchemeBundle Windows { get; } = CreateWindows();
 
@@ -41,7 +41,7 @@ public static class BuiltInSchemeTemplates
                 "WASD，左右扳机是鼠标左右键，十字键选物品栏；按住 RB 的临时层里 A/B/X/Y 是地图、" +
                 "背包、记分板和聊天发送。" +
                 "两套预设共享同一组全局特殊键：左摇杆按下是精准键（按一下启用、再按一下取消，瞄准更稳），" +
-                "Back 键按下在两套预设之间切换，RB 按住进入各自的第一临时层。" +
+                "Back 键按下在两套预设之间切换，RB 按住进入临时层。" +
                 "导入后会整体替换当前设备的全部预设，可在导入确认后撤销一次。",
             Presets =
             [
@@ -62,7 +62,7 @@ public static class BuiltInSchemeTemplates
             [
                 PrecisionKey(),
                 LeaderKey(),
-                LayerKey(),
+                LayerLeaderKey(),
             ],
             Layers =
             [
@@ -157,8 +157,8 @@ public static class BuiltInSchemeTemplates
             // 全局特殊键（两套预设共用）
             PrecisionMapping(),
             LeaderMapping(),
-            LayerMapping(),
-            // 第一临时层（按住 RB）：窗口管理与翻页
+            LayerLeaderMapping(),
+            // 临时层（按住 RB）：窗口管理与翻页
             new MappingEntry
             {
                 Source = new ButtonBinding(GamepadButton.A),
@@ -308,8 +308,8 @@ public static class BuiltInSchemeTemplates
             // 全局特殊键（两套预设共用）
             PrecisionMapping(),
             LeaderMapping(),
-            LayerMapping(),
-            // 第一临时层（按住 RB）：地图、背包、记分板、聊天
+            LayerLeaderMapping(),
+            // 临时层（按住 RB）：地图、背包、记分板、聊天
             new MappingEntry
             {
                 Source = new ButtonBinding(GamepadButton.A),
@@ -355,13 +355,13 @@ public static class BuiltInSchemeTemplates
         new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Press, SlotA: 1, SlotB: 2),
         Enabled: true);
 
-    /// <summary>Layer 键：按住 RB 进入第一临时层。</summary>
-    private static PresetStore.DeviceSpecialKey LayerKey() => new(
+    /// <summary>临时层 Leader 键：按住 RB 进入临时层。</summary>
+    private static PresetStore.DeviceSpecialKey LayerLeaderKey() => new(
         GamepadButton.RightBumper,
         Code: 0,
-        SpecialKeyKind.Layer,
+        SpecialKeyKind.Leader,
         PresetStore.SpecialKeyPosition.Target,
-        new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: 1),
+        LayerLeaderTarget(),
         Enabled: true);
 
     /// <summary>
@@ -387,10 +387,20 @@ public static class BuiltInSchemeTemplates
         Enabled = true,
     };
 
-    private static MappingEntry LayerMapping() => new()
+    /// <summary>
+    /// The leader key that switches the temporary layer, as the mapping both presets carry:
+    /// 按住 RB enters the one temporary layer, exactly as the layer key did before the merge.
+    /// </summary>
+    private static MappingEntry LayerLeaderMapping() => new()
     {
         Source = new ButtonBinding(GamepadButton.RightBumper),
-        Target = new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold, LayerId: 1),
+        Target = LayerLeaderTarget(),
         Enabled = true,
     };
+
+    /// <summary>A leader key that switches the one temporary layer while it is held.</summary>
+    private static SpecialKeyTarget LayerLeaderTarget() => new(
+        SpecialKeyKind.Leader,
+        SwitchMode: LeaderSwitchMode.Hold,
+        Action: LeaderAction.Layer);
 }

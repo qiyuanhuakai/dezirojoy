@@ -206,6 +206,87 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void A_Rule_Can_Pick_Its_Program_From_The_Open_Windows()
+    {
+        var store = new ForegroundRuleStore(Path.Combine(_directory, ForegroundRuleStore.FileName));
+        var source = new StubForegroundSource(
+            new ForegroundContext("explorer", false),
+            [new ForegroundWindow("game", "游戏窗口"), new ForegroundWindow("chrome", null)]);
+        var watcher = new ForegroundWatcher(source, new StubForegroundTarget(), store.Load());
+        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store));
+
+        viewModel.AddRuleCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var picker = panel.GetVisualDescendants().OfType<ComboBox>().Single(box => box.Name == "RuleWindowPicker");
+
+        // The picker offers what the platform enumerated - one entry per open window, titled
+        // where the window has a title - and picking one fills the rule's program name.
+        Assert.Equal(2, picker.Items.Cast<ForegroundWindow>().Count());
+        Assert.Contains(
+            picker.Items.Cast<ForegroundWindow>(),
+            window => window is { ProcessName: "game", Title: "游戏窗口" });
+
+        picker.SelectedItem = picker.Items.Cast<ForegroundWindow>().Single(window => window.ProcessName == "game");
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("game", viewModel.Rules[0].ProcessName);
+        Assert.True(viewModel.HasUnsavedChanges);
+    }
+
+    [AvaloniaFact]
+    public void Opening_The_Picker_Re_Reads_The_Windows_That_Are_Open()
+    {
+        // The list is only looked at when a picker opens, so that is when it is read: a program
+        // opened after the panel was built has to show up in it, not the list the panel was
+        // built with.
+        var store = new ForegroundRuleStore(Path.Combine(_directory, ForegroundRuleStore.FileName));
+        var source = new StubForegroundSource(new ForegroundContext("explorer", false));
+        var watcher = new ForegroundWatcher(source, new StubForegroundTarget(), store.Load());
+        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store));
+
+        viewModel.AddRuleCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var picker = panel.GetVisualDescendants().OfType<ComboBox>().Single(box => box.Name == "RuleWindowPicker");
+        Assert.Empty(picker.Items.Cast<ForegroundWindow>());
+
+        source.Windows = [new ForegroundWindow("game", "游戏窗口")];
+        Click(picker, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(picker.IsDropDownOpen, "the click opens the drop-down, which is what re-reads the list");
+        var offered = picker.Items.Cast<ForegroundWindow>().ToList();
+        Assert.Equal("game", Assert.Single(offered).ProcessName);
+    }
+
+    [AvaloniaFact]
+    public void A_Platform_That_Cannot_Enumerate_Windows_Says_So_Above_The_Table()
+    {
+        var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
+
+        var hint = panel.GetVisualDescendants().OfType<TextBlock>()
+            .Single(text => text.Text == "当前平台无法列出已打开的窗口，请手动输入进程名。");
+
+        // An empty drop-down has to say why it is empty: a picker with nothing in it and no
+        // explanation reads as a broken one rather than as a platform limitation.
+        Assert.True(hint.IsEffectivelyVisible);
+        Assert.False(viewModel.HasWindowChoices);
+
+        viewModel.AddRuleCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(panel.GetVisualDescendants().OfType<ComboBox>()
+            .Single(box => box.Name == "RuleWindowPicker")
+            .Items.Cast<ForegroundWindow>());
+    }
+
+    [AvaloniaFact]
     public void Saving_From_The_Panel_Applies_The_Table_And_Reports_It()
     {
         var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
@@ -243,9 +324,20 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
         Dispatcher.UIThread.RunJobs();
     }
 
-    private sealed class StubForegroundSource(ForegroundContext context) : IForegroundSource
+    private sealed class StubForegroundSource(ForegroundContext context, IReadOnlyList<ForegroundWindow>? windows = null)
+        : IForegroundSource
     {
-        public ForegroundContext Read() => context;
+        public ForegroundContext Context { get; } = context;
+
+        /// <summary>
+        /// What the platform reports as open. Settable so a test can open a program after the
+        /// panel was built and watch the picker re-read it as the drop-down opens.
+        /// </summary>
+        public IReadOnlyList<ForegroundWindow> Windows { get; set; } = windows ?? [];
+
+        public ForegroundContext Read() => Context;
+
+        public IReadOnlyList<ForegroundWindow> ListWindows() => Windows;
     }
 
     private sealed class StubForegroundTarget : IForegroundTarget

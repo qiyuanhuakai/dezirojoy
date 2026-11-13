@@ -9,9 +9,11 @@ namespace DeziroJoy.App.Tests.Services;
 /// <summary>
 /// The scheme-bundle format: one file carrying a device's whole preset set, its device-global
 /// special keys, its temporary layers, readable action names, the exporting version and usage
-/// notes. The contract under test is that a round trip loses none of that, that a file which is
-/// not a bundle is refused with guidance rather than parsed into an empty scheme, and that the
-/// built-in Windows template is a complete, engine-valid, mutually-consistent scheme.
+/// notes. The contract under test is that a round trip loses none of that, that a plain
+/// single-profile file - what the old single-profile export wrote - is wrapped as a one-preset
+/// scheme instead of refused, that a body which is neither is refused with guidance rather than
+/// parsed into an empty scheme, and that the built-in Windows template is a complete,
+/// engine-valid, mutually-consistent scheme.
 /// </summary>
 public class SchemeBundleTests : IDisposable
 {
@@ -189,20 +191,76 @@ public class SchemeBundleTests : IDisposable
     }
 
     [Fact]
-    public void Load_Of_A_Plain_Profile_File_Is_Refused_With_Guidance()
+    public void Load_Of_A_Plain_Profile_File_Wraps_It_As_A_One_Preset_Scheme()
     {
-        var path = TempPath("single-profile.json");
-        File.WriteAllText(path, ProfileSerializer.Serialize(new GamepadProfile
+        // What the removed single-profile export wrote - or any profile file a user kept -
+        // is still readable: it arrives as a one-preset scheme carrying that profile.
+        var profile = new GamepadProfile
         {
-            Name = "单个配置",
-            Mappings = [new MappingEntry { Source = new ButtonBinding(GamepadButton.B), Target = new KeyPressTarget(GamepadKey.Enter) }],
-        }));
+            Name = "旧版单个配置",
+            Layout = GamepadLayout.DualShock,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B),
+                    Target = new KeyPressTarget(GamepadKey.Enter),
+                },
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.LeftStick),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Precision, PrecisionMode.Toggle),
+                },
+            ],
+        };
+        var path = TempPath("single-profile.json");
+        File.WriteAllText(path, ProfileSerializer.Serialize(profile));
+
+        var result = SchemeBundleCodec.Load(path);
+
+        Assert.True(result.Succeeded, result.Message);
+        var bundle = result.Bundle!;
+
+        Assert.Equal("旧版单个配置", bundle.Name);
+        var preset = Assert.Single(bundle.Presets);
+        Assert.Equal(1, preset.Slot);
+        Assert.Equal("旧版单个配置", preset.Profile.Name);
+        Assert.Equal(profile.Mappings, preset.Profile.Mappings);
+        Assert.Contains(preset.ActionNames, action => action.Action == "Enter");
+
+        // The bundle does not name the special keys, so the import takes the subset the
+        // profile itself carries - the same rule a bundle without the section follows.
+        Assert.Null(bundle.SpecialKeys);
+    }
+
+    [Fact]
+    public void Load_Of_A_Plain_Profile_Newer_Than_This_Build_Is_Refused()
+    {
+        var path = TempPath("future-profile.json");
+        File.WriteAllText(path, "{\"SchemaVersion\":99,\"Name\":\"来自未来\",\"Mappings\":[]}");
 
         var result = SchemeBundleCodec.Load(path);
 
         Assert.False(result.Succeeded);
         Assert.Null(result.Bundle);
-        Assert.Contains("导入配置", result.Message);
+        Assert.Contains("版本过新", result.Message);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"SchemaVersion\":1}")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public void Load_Of_A_Body_That_Is_Neither_A_Bundle_Nor_A_Profile_Is_Refused(string content)
+    {
+        var path = TempPath("neither.json");
+        File.WriteAllText(path, content);
+
+        var result = SchemeBundleCodec.Load(path);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Bundle);
+        Assert.Contains("导入失败", result.Message);
     }
 
     [Fact]
@@ -303,8 +361,8 @@ public class SchemeBundleTests : IDisposable
         var template = BuiltInSchemeTemplates.Windows;
 
         // Every preset carries the same device-global special keys - the leader flips between
-        // the two presets the bundle actually ships, and the layer key names a layer both
-        // presets populate.
+        // the two presets the bundle actually ships, and the layer leader switches the one
+        // temporary layer both presets populate.
         foreach (var preset in template.Presets)
         {
             var kinds = preset.Profile.Mappings
@@ -313,13 +371,14 @@ public class SchemeBundleTests : IDisposable
                 .ToList();
 
             Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Precision);
-            Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Layer && key.LayerId == 1);
-            var leader = Assert.Single(kinds, key => key.Kind == SpecialKeyKind.Leader);
-            Assert.Equal(1, leader.SlotA);
-            Assert.Equal(2, leader.SlotB);
+            Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Leader && key.Action == LeaderAction.Layer);
+            var presetLeader = Assert.Single(
+                kinds, key => key.Kind == SpecialKeyKind.Leader && key.Action is LeaderAction.Preset);
+            Assert.Equal(1, presetLeader.SlotA);
+            Assert.Equal(2, presetLeader.SlotB);
 
-            // The layer the layer key names is populated in this very preset, so holding the
-            // key does something in both of them.
+            // The layer the layer leader enters is populated in this very preset, so holding
+            // the key does something in both of them.
             Assert.Contains(preset.Profile.Mappings, m => m.Layer == 1);
         }
 
@@ -327,7 +386,8 @@ public class SchemeBundleTests : IDisposable
         Assert.Equal(3, template.SpecialKeys!.Count);
         Assert.Contains(template.SpecialKeys, key => key.Kind == SpecialKeyKind.Precision);
         Assert.Contains(template.SpecialKeys, key => key.Kind == SpecialKeyKind.Leader);
-        Assert.Contains(template.SpecialKeys, key => key.Kind == SpecialKeyKind.Layer);
+        Assert.Contains(template.SpecialKeys, key =>
+            key.Target is SpecialKeyTarget { Action: LeaderAction.Layer });
     }
 
     [Fact]

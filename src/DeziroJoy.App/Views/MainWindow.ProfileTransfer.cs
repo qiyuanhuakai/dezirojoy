@@ -9,10 +9,11 @@ using DeziroJoy.App.Views;
 namespace DeziroJoy.App;
 
 /// <summary>
-/// The view half of the import/export seam. <see cref="MainWindowViewModel"/> is deliberately
-/// Avalonia-free, so it raises a request for a path and this partial performs the native dialog
-/// through <see cref="TopLevel.StorageProvider"/>, then hands the chosen path back. A dismissed
-/// dialog hands back null, which the view model treats as "nothing happened".
+/// The view half of the scheme import/export seam. <see cref="MainWindowViewModel"/> is
+/// deliberately Avalonia-free, so it raises a request for a path and this partial performs the
+/// native dialog through <see cref="TopLevel.StorageProvider"/>, then hands the chosen path
+/// back. A dismissed dialog hands back null, which the view model treats as "nothing happened".
+/// The scheme bundle is the single import/export design, so this seam carries it alone.
 /// </summary>
 /// <remarks>
 /// Wired from <see cref="Window.Opened"/> rather than the constructor: the picker only has a
@@ -47,21 +48,9 @@ public partial class MainWindow
 
     private void WireProfileTransfer()
     {
-        ViewModel.ExportPathRequested += OnExportPathRequested;
-        ViewModel.ImportPathRequested += OnImportPathRequested;
         ViewModel.ExportSchemePathRequested += OnExportSchemePathRequested;
         ViewModel.ImportSchemePathRequested += OnImportSchemePathRequested;
         ViewModel.SchemeImportPreviewRequested += OnSchemeImportPreviewRequested;
-    }
-
-    private async void OnExportPathRequested(object? sender, EventArgs e)
-    {
-        ViewModel.ExportTo(await PickSavePathAsync());
-    }
-
-    private async void OnImportPathRequested(object? sender, EventArgs e)
-    {
-        ViewModel.ImportFrom(await PickOpenPathAsync());
     }
 
     private async void OnExportSchemePathRequested(object? sender, EventArgs e)
@@ -106,33 +95,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task<string?> PickSavePathAsync()
-    {
-        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-        {
-            Title = "导出配置",
-            SuggestedFileName = SuggestedFileName(),
-            DefaultExtension = ProfileTransferService.Extension,
-            FileTypeChoices = [JsonFileType()],
-        });
-
-        return file is null ? null : file.Path.LocalPath;
-    }
-
-    private async Task<string?> PickOpenPathAsync()
-    {
-        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "导入配置",
-            AllowMultiple = false,
-            FileTypeFilter = [JsonFileType()],
-        });
-
-        return files is [var file, ..] ? file.Path.LocalPath : null;
-    }
-
-    /// <summary>The scheme counterparts of the profile pickers: a bundle is JSON too, so the
-    /// filter differs by its human-readable name alone.</summary>
+    /// <summary>A scheme is JSON, so the picker filter is the JSON one, named for the scheme.</summary>
     private async Task<string?> PickSchemeSavePathAsync()
     {
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
@@ -158,26 +121,14 @@ public partial class MainWindow
         return files is [var file, ..] ? file.Path.LocalPath : null;
     }
 
-    private static FilePickerFileType JsonFileType()
-        => new(ProfileTransferService.TypeName) { Patterns = ProfileTransferService.Patterns };
-
     private static FilePickerFileType SchemeFileType()
         => new(ProfileTransferService.SchemeTypeName) { Patterns = ProfileTransferService.SchemePatterns };
 
     /// <summary>
-    /// Prefills the save dialog with the active profile's name. The name is user-editable text,
-    /// so anything the filesystem would reject is replaced before it reaches the dialog.
+    /// Prefills the scheme save dialog with the device's own preset name. The name is
+    /// user-editable text, so anything the filesystem would reject is replaced before it
+    /// reaches the dialog.
     /// </summary>
-    private string SuggestedFileName()
-    {
-        var name = ViewModel.ActiveProfile?.Name;
-        var safe = string.IsNullOrWhiteSpace(name) ? "dezirojoy-profile" : name;
-        var invalid = Path.GetInvalidFileNameChars();
-
-        return string.Join("_", safe.Split(invalid, StringSplitOptions.RemoveEmptyEntries)) + ProfileTransferService.Extension;
-    }
-
-    /// <summary>Prefills the scheme save dialog with the device's own preset name.</summary>
     private string SuggestedSchemeFileName()
     {
         var name = ViewModel.ActiveProfile?.Name;

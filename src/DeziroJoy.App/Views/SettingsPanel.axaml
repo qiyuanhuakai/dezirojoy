@@ -45,12 +45,6 @@
                                         Content="保存配置" Command="{Binding SaveProfileCommand}" />
                                 <Button x:Name="ResetToDefaultButton" Classes="ghost" Margin="0,0,8,8"
                                         Content="恢复默认" Command="{Binding ResetToDefaultCommand}" />
-                                <Button x:Name="ExportProfileButton" Classes="ghost" Margin="0,0,8,8"
-                                        Content="导出配置" Command="{Binding ExportProfileCommand}" />
-                                <Button x:Name="ImportProfileButton" Classes="ghost" Margin="0,0,8,8"
-                                        Content="导入配置" Command="{Binding ImportProfileCommand}" />
-                            </WrapPanel>
-                            <WrapPanel Margin="0,0,0,0">
                                 <Button x:Name="ExportSchemeButton" Classes="ghost" Margin="0,0,8,8"
                                         Content="导出方案" Command="{Binding ExportSchemeCommand}" />
                                 <Button x:Name="ImportSchemeButton" Classes="ghost" Margin="0,0,8,8"

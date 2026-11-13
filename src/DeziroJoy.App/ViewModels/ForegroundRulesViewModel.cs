@@ -39,9 +39,22 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
         LoadFromStore();
         SyncFromWatcher();
+        RefreshWindowList();
     }
 
     public ObservableCollection<ForegroundRuleItem> Rules { get; } = [];
+
+    /// <summary>
+    /// The windows the picker offers: what the platform enumerates as open right now, one entry
+    /// per program, the program in front first and the rest alphabetical. Several windows of one
+    /// program are one program to a rule, so each name appears once. Refreshed when a picker
+    /// opens rather than on the panel's poll - the list is only looked at then, and an
+    /// enumeration nobody sees would be work for nothing.
+    /// </summary>
+    public ObservableCollection<ForegroundWindow> WindowChoices { get; } = [];
+
+    /// <summary>Whether the picker has anything to offer, which is what the panel's hint hides on.</summary>
+    public bool HasWindowChoices => WindowChoices.Count > 0;
 
     /// <summary>Whether the whole table runs. Off keeps the table and stops it applying anything.</summary>
     [ObservableProperty]
@@ -142,6 +155,38 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
     {
         _watcher.Refresh();
         SyncFromWatcher();
+    }
+
+    /// <summary>
+    /// Re-reads the open windows for the picker. Runs when a picker opens - the panel calls it
+    /// from the drop-down - and once when this view model is built, so the list is never stale
+    /// by more than the time the panel was open. The enumeration is the platform's to answer:
+    /// a source that cannot list anything leaves the list empty, which the panel says rather
+    /// than leaving a drop-down with nothing in it.
+    /// </summary>
+    [RelayCommand]
+    private void RefreshWindowList()
+    {
+        // The same notion of "the same program" the rule table matches on, so a platform that
+        // reports the foreground as "Chrome.exe" still leads the list to "chrome".
+        var foreground = ForegroundRule.NormalizeProcessName(ForegroundProcessName);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var choices = _watcher.ListWindows()
+            .Where(window => !string.IsNullOrWhiteSpace(window.ProcessName))
+            .OrderBy(window => string.Equals(
+                ForegroundRule.NormalizeProcessName(window.ProcessName), foreground, StringComparison.Ordinal) ? 0 : 1)
+            .ThenBy(window => window.ProcessName, StringComparer.OrdinalIgnoreCase)
+            .Where(window => seen.Add(window.ProcessName))
+            .ToList();
+
+        WindowChoices.Clear();
+
+        foreach (var choice in choices)
+        {
+            WindowChoices.Add(choice);
+        }
+
+        OnPropertyChanged(nameof(HasWindowChoices));
     }
 
     /// <summary>

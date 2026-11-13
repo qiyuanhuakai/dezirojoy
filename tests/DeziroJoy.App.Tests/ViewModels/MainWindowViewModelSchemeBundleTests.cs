@@ -12,8 +12,9 @@ namespace DeziroJoy.App.Tests.ViewModels;
 
 /// <summary>
 /// The scheme-bundle seam: exporting a device's whole scheme, previewing what an import will
-/// replace, applying it as one atomic operation and undoing it. The view is stood in for by
-/// answering the path requests directly, exactly like the single-profile transfer tests do.
+/// replace, applying it as one atomic operation and undoing it. The scheme bundle is the single
+/// import/export design, so a plain single-profile file is imported through it as a one-preset
+/// scheme. The view is stood in for by answering the path requests directly.
 /// </summary>
 public class MainWindowViewModelSchemeBundleTests : IDisposable
 {
@@ -296,12 +297,13 @@ public class MainWindowViewModelSchemeBundleTests : IDisposable
                 .Select(m => (SpecialKeyTarget)m.Target)
                 .ToList();
             Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Precision);
-            Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Layer && key.LayerId == 1);
-            Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Leader && key.SlotA == 1 && key.SlotB == 2);
+            Assert.Contains(kinds, key => key.Kind == SpecialKeyKind.Leader && key.Action == LeaderAction.Layer);
+            Assert.Contains(kinds, key =>
+                key.Kind == SpecialKeyKind.Leader && key.Action is LeaderAction.Preset && key.SlotA == 1 && key.SlotB == 2);
         }
 
-        // The leader flips between the two slots the template actually shipped, and the layer
-        // key's layer is populated in both presets.
+        // The preset leader flips between the two slots the template actually shipped, and the
+        // layer the layer leader enters is populated in both presets.
         Assert.Contains(desktop.Mappings, m => m.Layer == 1);
         Assert.Contains(gaming.Mappings, m => m.Layer == 1);
     }
@@ -322,20 +324,44 @@ public class MainWindowViewModelSchemeBundleTests : IDisposable
     }
 
     [Fact]
-    public void Import_Of_A_Single_Profile_File_Points_At_The_Single_Profile_Door()
+    public async Task Import_Of_A_Plain_Profile_File_Imports_It_As_A_One_Preset_Scheme()
     {
-        var (vm, _, _, _) = Connected();
+        var (vm, _, _, store) = Connected();
         File.WriteAllText(TempPath("single.json"), ProfileSerializer.Serialize(new GamepadProfile
         {
-            Name = "单个配置",
-            Mappings = [],
+            Name = "旧版单个配置",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.X),
+                    Target = new KeyPressTarget(GamepadKey.Space),
+                },
+            ],
         }));
 
         vm.ImportSchemeFrom(TempPath("single.json"));
 
-        Assert.True(vm.IsTransferError);
-        Assert.Contains("导入配置", vm.TransferMessage);
-        Assert.False(vm.IsSchemePreviewOpen);
+        Assert.False(vm.IsTransferError, vm.TransferMessage);
+        Assert.True(vm.IsSchemePreviewOpen);
+
+        // The old single-profile file arrives as a one-preset scheme: slot 1 is replaced and
+        // the slots the scheme does not carry are marked for removal, like any bundle.
+        var preview = vm.SchemePreview!;
+        Assert.Equal("旧版单个配置", preview.SchemeName);
+        Assert.Single(preview.Presets);
+        Assert.Contains(preview.Rows, row =>
+            row.Kind == SchemePreviewRowKind.Replaced && row.Slot == 1 && row.IncomingName == "旧版单个配置");
+
+        await vm.ConfirmSchemeImportCommand.ExecuteAsync(null);
+
+        Assert.False(vm.IsTransferError, vm.TransferMessage);
+        var presets = new PresetStore(store);
+        Assert.Equal([1], presets.SlotsInUse("xinput:0"));
+        Assert.Equal("旧版单个配置", store.Load("xinput:0")!.Name);
+        Assert.Equal("旧版单个配置", vm.ActiveProfile!.Name);
+        Assert.Contains(vm.Mappings, row => row.TargetText.Contains("Space"));
+        Assert.True(vm.CanUndoSchemeImport);
     }
 
     [Fact]

@@ -77,6 +77,26 @@ public partial class ForegroundRuleItem : ObservableObject
     [NotifyPropertyChangedFor(nameof(Describe))]
     private bool _fullscreenOnly;
 
+    /// <summary>
+    /// The window the picker has just chosen. Held only for the moment of the choice: the
+    /// process name is written into the rule and the selection cleared, so the placeholder
+    /// returns and the same window can be picked again for another rule - and so the box never
+    /// shows a window the user has since typed over by hand.
+    /// </summary>
+    [ObservableProperty]
+    private ForegroundWindow? _selectedWindow;
+
+    partial void OnSelectedWindowChanged(ForegroundWindow? value)
+    {
+        if (value is null || string.IsNullOrWhiteSpace(value.ProcessName))
+        {
+            return;
+        }
+
+        ProcessName = value.ProcessName;
+        SelectedWindow = null;
+    }
+
     /// <summary>Whether this rule switches profile, which is the only shape that names a slot.</summary>
     public bool IsProfileAction => Action == ForegroundAction.Profile;
 

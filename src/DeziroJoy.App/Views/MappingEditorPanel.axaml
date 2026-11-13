@@ -311,14 +311,14 @@
                            IsVisible="{Binding HasSpecialKeyConflict}"
                            Text="{Binding SpecialKeyConflictHint}" />
 
-                <!-- 所属层. A mapping belongs to one layer: 基础层 always runs, and a
-                     temporary layer runs only while a Layer 键 names it - it overrides the
-                     base mappings that listen on the same input and inherits everything it
-                     does not override, so a second layer that rebinds a few buttons leaves
-                     the rest of the profile running exactly as it was. The row leads the
-                     body because the layer is a property of the mapping itself, chosen
-                     before the gesture and the target it fires, and the header above names
-                     the layer the draft is on. -->
+                <!-- 所属层. A mapping belongs to one layer: 基础层 always runs, and the
+                     single 临时层 runs only while a Leader 键 whose action switches the
+                     temporary layer has it in effect - it overrides the base mappings that
+                     listen on the same input and inherits everything it does not override,
+                     so a layer that rebinds a few buttons leaves the rest of the profile
+                     running exactly as it was. The row leads the body because the layer is
+                     a property of the mapping itself, chosen before the gesture and the
+                     target it fires, and the header above names the layer the draft is on. -->
                 <StackPanel x:Name="LayerRow" Margin="0,0,0,12">
                     <TextBlock Classes="sectionLabel" Text="所属层" />
                     <Grid Margin="0,8,0,0">
@@ -756,10 +756,12 @@
                 </StackPanel>
 
                 <!-- 特殊键. The sub-kind leads and only the controls that sub-kind reads
-                     follow: 精准键 carries its trigger mode, Leader 键 carries the switch
-                     mode and the two preset slots it flips between, Layer 键 carries the
-                     layer it enters with the switch mode pinned to 按住. Equal slots are
-                     refused with the same explanatory hint the gesture exclusion uses. -->
+                     follow: 精准键 carries its trigger mode, Leader 键 carries what it
+                     switches - 切换预设 with the two preset slots it flips between, or
+                     切换临时层 with the one temporary layer - and both carry the switch
+                     mode, which the engine honors under either 按下切换 or 按住切换.
+                     Equal slots are refused with the same explanatory hint the gesture
+                     exclusion uses. -->
                 <StackPanel x:Name="SpecialKeyRow" Margin="0,12,0,0"
                             IsEnabled="{Binding ActiveTargetEditable}"
                             IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=SpecialKey}">
@@ -775,6 +777,25 @@
                                   SelectedItem="{Binding ActiveSpecialKindOption, Mode=TwoWay}">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:SpecialKeyKindOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <!-- What the Leader 键 switches: the two preset slots it flips between,
+                         or the one temporary layer the profile carries. A layer leader
+                         names no slots, so the slot rows below wait for 切换预设. -->
+                    <Grid x:Name="SpecialLeaderActionRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLeaderControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="切换内容" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="SpecialLeaderActionCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding SpecialLeaderActionOptions}"
+                                  SelectedItem="{Binding ActiveSpecialLeaderActionOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:LeaderActionOption">
                                     <TextBlock Text="{Binding Label}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
@@ -814,14 +835,14 @@
                             </ComboBox.ItemTemplate>
                         </ComboBox>
                     </Grid>
-                    <!-- A layer key is the one leader whose mode is fixed: a temporary layer
-                         lives exactly as long as its leader is held, and the engine rejects a
-                         layer key that switches on a press edge. The row stays to say so,
-                         disabled rather than hidden, and the hint spells the reason out. -->
+                    <!-- Both leader actions choose their switch mode freely: a layer leader
+                         toggles the temporary layer on each press edge under 按下切换 and
+                         holds it for the duration of the hold under 按住切换. The hint
+                         spells out what each mode does to the layer. -->
                     <TextBlock x:Name="SpecialSwitchModeHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ShowSpecialLayerControls}"
-                               Text="「Layer 键」只能按住切换：临时层只在按住期间存在，松开即回到基础层，因此切换方式固定为按住切换。" />
-                    <Grid x:Name="SpecialSlotARow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLeaderControls}">
+                               Text="「切换临时层」两种切换方式都可用：按住切换在按住期间进入临时层，松开即回到基础层；按下切换每次按下翻转临时层。" />
+                    <Grid x:Name="SpecialSlotARow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialPresetControls}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150" />
                             <ColumnDefinition Width="*" />
@@ -831,7 +852,7 @@
                                   ItemsSource="{Binding SpecialSlotOptions}"
                                   SelectedItem="{Binding ActiveSpecialSlotA, Mode=TwoWay}" />
                     </Grid>
-                    <Grid x:Name="SpecialSlotBRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLeaderControls}">
+                    <Grid x:Name="SpecialSlotBRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialPresetControls}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150" />
                             <ColumnDefinition Width="*" />
@@ -844,26 +865,10 @@
                     <TextBlock x:Name="SpecialSlotHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding SpecialKeySlotConflict}"
                                Text="Leader 键的两个槽位不能相同：请为槽位 A 与槽位 B 选择不同的预设，否则按下该键不会切换任何配置。" />
-                    <!-- The layer a Layer 键 enters, and what that layer does while it is
-                         held: it overrides the base mappings that listen on the same input
-                         and inherits the rest, so a second layer that rebinds a few buttons
-                         leaves the rest of the profile running exactly as it was. -->
-                    <Grid x:Name="SpecialLayerIdRow" Margin="0,8,0,0" IsVisible="{Binding ShowSpecialLayerControls}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="进入的层" VerticalAlignment="Center" Margin="0" />
-                        <ComboBox Grid.Column="1" x:Name="SpecialLayerIdCombo" HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding LayerIdOptions}"
-                                  SelectedItem="{Binding ActiveSpecialLayerIdOption, Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:MappingLayerOption">
-                                    <TextBlock Text="{Binding Label}" />
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                    </Grid>
+                    <!-- What the temporary layer does while the leader has it in effect: it
+                         overrides the base mappings that listen on the same input and
+                         inherits the rest, so a layer that rebinds a few buttons leaves the
+                         rest of the profile running exactly as it was. -->
                     <TextBlock x:Name="SpecialLayerHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ShowSpecialLayerControls}"
                                Text="{Binding SpecialLayerHint}" />

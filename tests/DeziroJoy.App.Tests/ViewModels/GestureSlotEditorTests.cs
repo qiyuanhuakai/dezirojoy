@@ -127,79 +127,103 @@ public class GestureSlotEditorTests
     }
 
     [Fact]
-    public void A_Layer_Special_Key_Round_Trips_Its_Layer_Id()
+    public void A_Layer_Leader_Round_Trips_Its_Action()
     {
         var slot = new GestureSlotEditor();
         slot.TargetKind = MappingTargetKind.SpecialKey;
-        slot.SpecialKind = SpecialKeyKind.Layer;
-        slot.SpecialLayerId = 3;
+        slot.SpecialKind = SpecialKeyKind.Leader;
+        slot.SpecialLeaderAction = LeaderAction.Layer;
 
         Assert.Equal(
             new SpecialKeyTarget(
-                SpecialKeyKind.Layer, PrecisionMode.Toggle, LeaderSwitchMode.Hold, 1, 2, LayerId: 3),
+                SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, 1, 2, Action: LeaderAction.Layer),
             slot.BuildTarget());
 
         var reloaded = new GestureSlotEditor();
         reloaded.LoadAction(slot.BuildTarget());
 
-        Assert.Equal(SpecialKeyKind.Layer, reloaded.SpecialKind);
-        Assert.Equal(3, reloaded.SpecialLayerId);
+        Assert.Equal(SpecialKeyKind.Leader, reloaded.SpecialKind);
+        Assert.Equal(LeaderAction.Layer, reloaded.SpecialLeaderAction);
         Assert.Equal(slot.BuildTarget(), reloaded.BuildTarget());
         Assert.Equal(slot.BuildAction(), reloaded.BuildAction());
     }
 
     [Fact]
-    public void A_Layer_Leader_Is_Hold_Only()
+    public void A_Layer_Leader_Chooses_Its_Switch_Mode_Freely()
     {
-        // The engine rejects a layer key that switches on a press edge, so choosing the kind
-        // pins the switch mode instead of leaving a draft that could never run.
+        // The engine runs a layer leader under either mode: 按住 enters the layer for the
+        // duration of the hold, 按下 toggles it on each press edge. The draft keeps
+        // whichever mode the user picked instead of pinning one that could never run.
         var slot = new GestureSlotEditor();
         slot.TargetKind = MappingTargetKind.SpecialKey;
-        slot.SpecialSwitchMode = LeaderSwitchMode.Press;
+        slot.SpecialSwitchMode = LeaderSwitchMode.Hold;
 
-        slot.SpecialKind = SpecialKeyKind.Layer;
+        slot.SpecialKind = SpecialKeyKind.Leader;
+        slot.SpecialLeaderAction = LeaderAction.Layer;
 
         Assert.Equal(LeaderSwitchMode.Hold, slot.SpecialSwitchMode);
         Assert.Equal(
             LeaderSwitchMode.Hold,
             Assert.IsType<SpecialKeyTarget>(slot.BuildTarget()).SwitchMode);
 
-        // A hand-edited profile that carries a Press-mode layer key is repaired on load.
+        // A hand-edited profile that carries a Press-mode layer leader loads as it stands.
         var loaded = new GestureSlotEditor();
         loaded.LoadAction(
-            new SpecialKeyTarget(SpecialKeyKind.Layer, PrecisionMode.Toggle, LeaderSwitchMode.Press, LayerId: 2));
+            new SpecialKeyTarget(
+                SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, Action: LeaderAction.Layer));
 
-        Assert.Equal(LeaderSwitchMode.Hold, loaded.SpecialSwitchMode);
-        Assert.Equal(2, loaded.SpecialLayerId);
+        Assert.Equal(LeaderSwitchMode.Press, loaded.SpecialSwitchMode);
+        Assert.Equal(LeaderAction.Layer, loaded.SpecialLeaderAction);
         Assert.Equal(
             new SpecialKeyTarget(
-                SpecialKeyKind.Layer, PrecisionMode.Toggle, LeaderSwitchMode.Hold, 1, 2, LayerId: 2),
+                SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Press, 1, 2, Action: LeaderAction.Layer),
             loaded.BuildTarget());
     }
 
     [Fact]
-    public void A_Fresh_Layer_Draft_Starts_On_The_First_Layer()
+    public void A_Deprecated_Layer_Key_Loads_As_The_Leader_That_Replaced_It()
     {
-        // Layer 0 is the base layer every mapping already runs, so a layer key names 1 up.
-        var slot = new GestureSlotEditor();
+        // A profile written before the merge still deserializes the deprecated kind; the
+        // draft rewrites it exactly as ProfileMigration and the engine do, so the picker
+        // never offers a kind the editor no longer writes.
+        var loaded = new GestureSlotEditor();
+        loaded.LoadAction(new SpecialKeyTarget(SpecialKeyKind.Layer, SwitchMode: LeaderSwitchMode.Hold));
 
-        slot.TargetKind = MappingTargetKind.SpecialKey;
-        slot.SpecialKind = SpecialKeyKind.Layer;
-
-        Assert.Equal(GestureSlotEditor.FirstLayerId, slot.SpecialLayerId);
-        Assert.Equal(1, Assert.IsType<SpecialKeyTarget>(slot.BuildTarget()).LayerId);
+        Assert.Equal(MappingTargetKind.SpecialKey, loaded.TargetKind);
+        Assert.Equal(SpecialKeyKind.Leader, loaded.SpecialKind);
+        Assert.Equal(LeaderAction.Layer, loaded.SpecialLeaderAction);
+        Assert.Equal(LeaderSwitchMode.Hold, loaded.SpecialSwitchMode);
+        Assert.Equal(
+            new SpecialKeyTarget(
+                SpecialKeyKind.Leader, PrecisionMode.Toggle, LeaderSwitchMode.Hold, 1, 2, Action: LeaderAction.Layer),
+            loaded.BuildTarget());
     }
 
     [Fact]
-    public void Reset_Returns_A_Layer_Draft_To_The_First_Layer()
+    public void A_Fresh_Leader_Draft_Starts_On_切换预设()
+    {
+        // A leader names what it switches, and the default is the pair of preset slots the
+        // Core record's own defaults describe.
+        var slot = new GestureSlotEditor();
+
+        slot.TargetKind = MappingTargetKind.SpecialKey;
+        slot.SpecialKind = SpecialKeyKind.Leader;
+
+        Assert.Equal(LeaderAction.Preset, slot.SpecialLeaderAction);
+        Assert.Equal(LeaderAction.Preset, Assert.IsType<SpecialKeyTarget>(slot.BuildTarget()).Action);
+    }
+
+    [Fact]
+    public void Reset_Returns_A_Layer_Leader_Draft_To_切换预设()
     {
         var slot = new GestureSlotEditor();
-        slot.LoadAction(new SpecialKeyTarget(SpecialKeyKind.Layer, LayerId: 4));
+        slot.LoadAction(
+            new SpecialKeyTarget(SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold, Action: LeaderAction.Layer));
 
         slot.Reset();
 
         Assert.Equal(SpecialKeyKind.Precision, slot.SpecialKind);
-        Assert.Equal(GestureSlotEditor.FirstLayerId, slot.SpecialLayerId);
+        Assert.Equal(LeaderAction.Preset, slot.SpecialLeaderAction);
         Assert.Equal(LeaderSwitchMode.Press, slot.SpecialSwitchMode);
         Assert.Equal(new KeyPressTarget(GamepadKey.Enter), slot.BuildTarget());
     }

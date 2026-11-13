@@ -835,7 +835,7 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void The_Settings_Surface_Offers_Export_And_Import_Next_To_Save_And_Reset()
+    public void The_Settings_Surface_Offers_The_Scheme_Transfer_Next_To_Save_And_Reset()
     {
         var (window, viewModel, _, _) = BuildWindow();
         window.UpdateLayout();
@@ -847,18 +847,25 @@ public sealed class MainWindowGuiTests
 
         var save = buttons.Single(b => b.Name == "SaveProfileButton");
         var reset = buttons.Single(b => b.Name == "ResetToDefaultButton");
-        var export = buttons.Single(b => b.Name == "ExportProfileButton");
-        var import = buttons.Single(b => b.Name == "ImportProfileButton");
+        var export = buttons.Single(b => b.Name == "ExportSchemeButton");
+        var import = buttons.Single(b => b.Name == "ImportSchemeButton");
+        var template = buttons.Single(b => b.Name == "ImportWindowsTemplateButton");
 
         Assert.Equal("保存配置", save.Content);
         Assert.Equal("恢复默认", reset.Content);
-        Assert.Equal("导出配置", export.Content);
-        Assert.Equal("导入配置", import.Content);
+        Assert.Equal("导出方案", export.Content);
+        Assert.Equal("导入方案", import.Content);
+        Assert.Equal("导入 Windows 内置模板", template.Content);
 
         Assert.Same(viewModel.SaveProfileCommand, save.Command);
         Assert.Same(viewModel.ResetToDefaultCommand, reset.Command);
-        Assert.Same(viewModel.ExportProfileCommand, export.Command);
-        Assert.Same(viewModel.ImportProfileCommand, import.Command);
+        Assert.Same(viewModel.ExportSchemeCommand, export.Command);
+        Assert.Same(viewModel.ImportSchemeCommand, import.Command);
+        Assert.Same(viewModel.ImportWindowsTemplateCommand, template.Command);
+
+        // Transfer is scheme-only: the single-profile pair the card used to carry is gone, so
+        // nothing on this surface can move one profile in isolation.
+        Assert.DoesNotContain(buttons, button => button.Content as string is "导出配置" or "导入配置");
 
         // The profile card left the sidebar for the settings surface, so the buttons are
         // reachable there and nowhere else.
@@ -964,16 +971,21 @@ public sealed class MainWindowGuiTests
     }
 
     [AvaloniaFact]
-    public void The_View_Answers_Both_Picker_Requests_So_The_Buttons_Reach_A_Dialog()
+    public void The_View_Answers_The_Scheme_Picker_Requests_So_The_Buttons_Reach_A_Dialog()
     {
         var (_, viewModel, _, _) = BuildWindow();
 
         // The view model is Avalonia-free, so the only thing that turns a button press into a
-        // file dialog is this subscription. It lives in MainWindow.axaml's Loaded handler, and
-        // losing it fails silently: the buttons stay enabled and nothing happens. Reflection is
-        // the only way to observe a field-like event's subscriber list from outside the class.
-        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.ExportPathRequested)));
-        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.ImportPathRequested)));
+        // file dialog is this subscription. It lives in MainWindow's Opened handler, and losing
+        // it fails silently: the buttons stay enabled and nothing happens. Reflection is the
+        // only way to observe a field-like event's subscriber list from outside the class.
+        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.ExportSchemePathRequested)));
+        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.ImportSchemePathRequested)));
+
+        // The import preview dialog is the other half of the same seam: the view model owns the
+        // flow's state and asks the view to show it, so a lost subscription would import
+        // without ever previewing what it replaces.
+        Assert.NotNull(SubscriberOf(viewModel, nameof(MainWindowViewModel.SchemeImportPreviewRequested)));
     }
 
     private static Delegate? SubscriberOf(MainWindowViewModel viewModel, string eventName)

@@ -342,7 +342,14 @@ public sealed class SettingsPanelGuiTests : IDisposable
             text => text.Text == "引擎");
 
         // Every settings surface left it.
-        foreach (var name in new[] { "SaveProfileButton", "ResetToDefaultButton", "ExportProfileButton", "ImportProfileButton" })
+        foreach (var name in new[]
+                 {
+                     "SaveProfileButton",
+                     "ResetToDefaultButton",
+                     "ExportSchemeButton",
+                     "ImportSchemeButton",
+                     "ImportWindowsTemplateButton",
+                 })
         {
             Assert.DoesNotContain(descendants, control => control is Button { Name: var buttonName } && buttonName == name);
         }
@@ -383,7 +390,7 @@ public sealed class SettingsPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Settings_Surface_Holds_The_Profile_Commands_Of_The_Same_View_Model()
+    public void The_Settings_Surface_Holds_The_Scheme_Transfer_Commands_Of_The_Same_View_Model()
     {
         var (window, viewModel, _, _) = BuildWindow();
         window.UpdateLayout();
@@ -395,8 +402,11 @@ public sealed class SettingsPanelGuiTests : IDisposable
 
         Assert.Same(viewModel.SaveProfileCommand, ButtonNamed(buttons, "SaveProfileButton").Command);
         Assert.Same(viewModel.ResetToDefaultCommand, ButtonNamed(buttons, "ResetToDefaultButton").Command);
-        Assert.Same(viewModel.ExportProfileCommand, ButtonNamed(buttons, "ExportProfileButton").Command);
-        Assert.Same(viewModel.ImportProfileCommand, ButtonNamed(buttons, "ImportProfileButton").Command);
+        Assert.Same(viewModel.ExportSchemeCommand, ButtonNamed(buttons, "ExportSchemeButton").Command);
+        Assert.Same(viewModel.ImportSchemeCommand, ButtonNamed(buttons, "ImportSchemeButton").Command);
+        Assert.Same(
+            viewModel.ImportWindowsTemplateCommand,
+            ButtonNamed(buttons, "ImportWindowsTemplateButton").Command);
 
         // The transfer feedback the profile card reports through is bound live.
         viewModel.TransferMessage = "导入失败：配置文件已损坏。";

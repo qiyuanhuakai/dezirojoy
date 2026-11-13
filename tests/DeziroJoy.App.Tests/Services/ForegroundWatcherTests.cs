@@ -16,17 +16,25 @@ namespace DeziroJoy.App.Tests.Services;
 public sealed class ForegroundWatcherTests
 {
     /// <summary>A foreground source the test moves by hand.</summary>
-    private sealed class FakeForegroundSource : IForegroundSource
+    private sealed class FakeForegroundSource : IForegroundSource, IDisposable
     {
         public ForegroundContext Context { get; set; } = ForegroundContext.Empty;
 
+        public IReadOnlyList<ForegroundWindow> Windows { get; set; } = [];
+
         public int Reads { get; private set; }
+
+        public bool Disposed { get; private set; }
 
         public ForegroundContext Read()
         {
             Reads++;
             return Context;
         }
+
+        public IReadOnlyList<ForegroundWindow> ListWindows() => Windows;
+
+        public void Dispose() => Disposed = true;
     }
 
     /// <summary>
@@ -389,6 +397,68 @@ public sealed class ForegroundWatcherTests
         watcher.Refresh();
 
         Assert.Equal(2, raised);
+    }
+
+    [Fact]
+    public void A_Source_That_Cannot_Enumerate_Windows_Lists_None()
+    {
+        // The fake reads the foreground and nothing more: the window list is the platform's
+        // second answer, and a source that has none reports an empty list rather than throwing
+        // or inventing one - the picker then has nothing to offer and the user types the name.
+        var (watcher, _, _) = Create();
+
+        Assert.Empty(watcher.ListWindows());
+    }
+
+    [Fact]
+    public void The_Null_Source_Reports_No_Foreground_Program_And_No_Windows()
+    {
+        // The stand-in for a platform with no foreground query at all - Wayland, a box with no X
+        // server. Both answers are empty: no rule matches, the desktop default runs, and the
+        // picker has nothing to offer.
+        var watcher = new ForegroundWatcher(NullForegroundSource.Instance, new FakeForegroundTarget());
+
+        watcher.Refresh();
+
+        Assert.Null(watcher.ForegroundProcessName);
+        Assert.Null(watcher.LastDecision!.Rule);
+        Assert.Equal(ForegroundDecisionKind.Default, watcher.LastDecision!.Kind);
+        Assert.Empty(watcher.ListWindows());
+        Assert.Contains("不支持", watcher.SourceNote);
+    }
+
+    [Fact]
+    public void Disposing_The_Watcher_Releases_A_Source_That_Holds_A_Connection()
+    {
+        // The source is the watcher's for its lifetime and nothing else reads it, so a source
+        // that holds one - the X11 one holds a connection - is closed with the watcher rather
+        // than left to the process exit.
+        var source = new FakeForegroundSource();
+        using var watcher = new ForegroundWatcher(source, new FakeForegroundTarget());
+
+        watcher.Dispose();
+
+        Assert.True(source.Disposed);
+    }
+
+    [Fact]
+    public void The_Window_List_Comes_From_The_Source_Unchanged()
+    {
+        // The watcher adds no second copy of the platform's answer: the panel shows what the
+        // source enumerated, in the order it enumerated it, so a fake can pin the whole path.
+        var source = new FakeForegroundSource
+        {
+            Windows = [new ForegroundWindow("chrome", "新标签页"), new ForegroundWindow("game", null)],
+        };
+        var watcher = new ForegroundWatcher(source, new FakeForegroundTarget());
+
+        var windows = watcher.ListWindows();
+
+        Assert.Equal(2, windows.Count);
+        Assert.Equal("chrome", windows[0].ProcessName);
+        Assert.Equal("新标签页", windows[0].Title);
+        Assert.Equal("game", windows[1].ProcessName);
+        Assert.Null(windows[1].Title);
     }
 
     [Fact]

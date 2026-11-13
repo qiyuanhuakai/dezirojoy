@@ -184,6 +184,15 @@ public sealed class ForegroundWatcher : IDisposable
     /// <summary>The program in front as the last poll read it, or null when there is none.</summary>
     public string? ForegroundProcessName => _context.ProcessName;
 
+    /// <summary>
+    /// The windows that are open right now, straight from the platform - the list the rules
+    /// panel's picker offers. Read on demand rather than polled: a picker is opened by the
+    /// user, so this costs one enumeration per open and nothing in between, and it goes through
+    /// the source the watcher already owns, sharing its connection where one is held rather
+    /// than opening a second.
+    /// </summary>
+    public IReadOnlyList<ForegroundWindow> ListWindows() => _source.ListWindows();
+
     /// <summary>What the last poll resolved to, including the reason the UI quotes.</summary>
     public ForegroundDecision? LastDecision => _decision;
 

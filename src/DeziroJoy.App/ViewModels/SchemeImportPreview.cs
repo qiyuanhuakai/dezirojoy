@@ -179,6 +179,11 @@ public sealed record SchemeImportPreview
 
         return target.Kind switch
         {
+            // A layer leader switches the one temporary layer the profile carries, so it names
+            // no slots - the slot pair the preset leader shows would read as configuration it
+            // does not have.
+            SpecialKeyKind.Leader when target.Action is LeaderAction.Layer =>
+                $"{trigger}：临时层 Leader 键（{MappingDescriptions.LeaderSwitchModeLabel(target.SwitchMode)}）",
             SpecialKeyKind.Leader =>
                 $"{trigger}：Leader 键（槽位 {target.SlotA} ↔ {target.SlotB}，{MappingDescriptions.LeaderSwitchModeLabel(target.SwitchMode)}）",
             SpecialKeyKind.Layer =>

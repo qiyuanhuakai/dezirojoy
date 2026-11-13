@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:mapping="clr-namespace:DeziroJoy.Core.Mapping;assembly=DeziroJoy.Core"
              xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
              x:Class="DeziroJoy.App.Views.ForegroundRulesPanel"
              x:DataType="vm:ForegroundRulesViewModel">
@@ -130,6 +131,14 @@
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                                Text="按进程名匹配（大小写、.exe 后缀不影响）；优先级数值大的先匹配，数值相同时按列表顺序。填 * 表示任意程序。" />
 
+                    <!-- The picker's own hint, and the honest one where the platform cannot
+                         enumerate: an empty drop-down has to say why it is empty. -->
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Text="程序名也可以从当前打开的窗口里选：展开规则行的「从当前窗口选择」下拉框，选中即填入该规则的程序名。" />
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               IsVisible="{Binding HasWindowChoices, Converter={StaticResource Not}}"
+                               Text="当前平台无法列出已打开的窗口，请手动输入进程名。" />
+
                     <ItemsControl x:Name="RulesList" Margin="0,12,0,0" ItemsSource="{Binding Rules}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ForegroundRuleItem">
@@ -149,6 +158,22 @@
                                                 <TextBlock Classes="fieldLabel" Text="程序名" />
                                                 <TextBox Classes="ruleProcess" x:Name="RuleProcessBox"
                                                          Text="{Binding ProcessName, Mode=TwoWay}" />
+                                                <!-- The picker: the windows the platform reports as
+                                                     open right now, so a rule can name its program
+                                                     by pointing at it. Selection fills the program
+                                                     name and clears, so the placeholder returns
+                                                     and the same window can be picked twice. -->
+                                                <ComboBox Classes="ruleCombo" Margin="0,6,0,0" x:Name="RuleWindowPicker"
+                                                          PlaceholderText="从当前窗口选择…"
+                                                          ItemsSource="{ReflectionBinding DataContext.WindowChoices, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                          SelectedItem="{Binding SelectedWindow, Mode=TwoWay}"
+                                                          DropDownOpened="OnWindowPickerDropDownOpened">
+                                                    <ComboBox.ItemTemplate>
+                                                        <DataTemplate x:DataType="mapping:ForegroundWindow">
+                                                            <TextBlock Text="{Binding Display}" />
+                                                        </DataTemplate>
+                                                    </ComboBox.ItemTemplate>
+                                                </ComboBox>
                                             </StackPanel>
                                             <StackPanel Grid.Column="1" Margin="0,0,10,0">
                                                 <TextBlock Classes="fieldLabel" Text="优先级" />

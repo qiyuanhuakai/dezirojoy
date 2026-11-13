@@ -76,18 +76,19 @@ public static class MappingDescriptions
 
     /// <summary>
     /// What a special key does, named the way its own picker names it: a leader key flips
-    /// between the two preset slots it carries, a layer key enters the temporary layer it
-    /// names, a precision key slows the stick while it is engaged. The Core record has no
+    /// between the two preset slots it carries or switches the one temporary layer, a
+    /// precision key slows the stick while it is engaged. The Core record has no
     /// description of its own and its raw <c>ToString</c> would read as debug output in a
     /// mapping row, so the row - like the editor's header - says the kind alone. The slot
     /// pair and the switch mode live in the editor's own pickers, not in the summary the
-    /// two share; the layer number is the one field a layer key's summary keeps, because it
-    /// is the whole configuration - the same button does something different on every layer.
+    /// two share; there is exactly one temporary layer, so a layer leader names the layer
+    /// it switches without a number.
     /// </summary>
-    public static string SpecialKey(SpecialKeyTarget target) => target.Kind switch
+    public static string SpecialKey(SpecialKeyTarget target) => target switch
     {
-        SpecialKeyKind.Leader => "Leader 键",
-        SpecialKeyKind.Layer => target.LayerId > 0 ? $"临时层 {target.LayerId} 键" : "临时层键",
+        { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer } => "临时层 Leader 键",
+        { Kind: SpecialKeyKind.Leader } => "Leader 键",
+        { Kind: SpecialKeyKind.Layer } => "临时层键",
         _ => "精准键",
     };
 
