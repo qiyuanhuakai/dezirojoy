@@ -611,17 +611,14 @@ jobs:
           cat > body.md <<'NOTES'
           ## DeziroJoy vVERSION
 
-          DeziroJoy 0.0.1 正式版：把游戏手柄映射为鼠标与键盘的跨平台工具。Windows 走
-          XInput + SendInput（提权常驻守护进程作为唯一注入权威），Linux 走 evdev +
-          uinput（systemd 用户单元常驻），读取与注入都在内核级，与显示服务器无关。
-          从 alpha 到本版，映射引擎、配置体验与常驻架构已趋稳定，本版起作为正式版本
-          提供安装包与内置自动更新。
-
-          本批新增两件事：**内置自动更新**——设置页检查更新、opt-in 自动下载、一次
-          点击安装、sha256 校验，并为每种包格式提供对应安装器；以及 **RPM / AppImage
-          两种 Linux 新包格式**（原有 .deb 与 Windows per-user 安装器不变）。安装与
-          卸载都走系统标准途径，安装器不注册自启动、计划任务或 udev 规则（登录自启动
-          与常驻服务请在应用内「设置」中按需开启），卸载也不会删除用户配置。欢迎按
+          DeziroJoy 0.0.2-beta.1 预览版：把游戏手柄映射为鼠标与键盘的跨平台工具。
+          Windows 走 XInput + SendInput（提权常驻守护进程作为唯一注入权威），Linux 走
+          evdev + uinput（systemd 用户单元常驻），读取与注入都在内核级，与显示服务器
+          无关。本版在 0.0.1 正式版（内置自动更新、deb / rpm / AppImage 与 Windows
+          per-user 安装器）之上，集中修正四个影响连续操作可靠性的运行时问题，并新增
+          Leader 临时层与不抢焦点的命令提示浮层。安装与卸载都走系统标准途径，安装器
+          不注册自启动、计划任务或 udev 规则（登录自启动与常驻服务请在应用内「设置」
+          中按需开启），卸载也不会删除用户配置。欢迎按
           [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
 
           ### 本版更新
@@ -651,16 +648,26 @@ jobs:
 
           #### 本批新增
 
-          - **内置自动更新**：设置页「更新」区显示当前版本并检查 GitHub releases；
-            发现新版本可 opt-in 自动下载（启动时自动检查默认关闭、随设置持久化），
-            下载经 sha256 校验后一次点击安装。每种包格式有对应安装器：Windows 以
-            /VERYSILENT 重启编译好的 setup（带条件 [Run] 重启项，安装完成后由 Setup
-            重启应用），Linux deb / rpm 调系统包管理器，AppImage 以租约文件重启。
-            握手超时、取消与协议异常都有明确中文反馈，不卡死、不伪装成功
-          - **RPM / AppImage 新包格式**：Linux 除 .deb 外新增 .rpm（Fedora / RHEL /
-            openSUSE，`dnf install`）与便携 AppImage（`chmod +x` 后直接运行）。三种
-            Linux 格式的 /opt/dezirojoy 载荷完全一致，只是容器不同；都随包带
-            fix-device-access.sh 与 hicolor 主题图标（AppImage 以根 PNG 作 .DirIcon）
+          - **曲线强度限定 [0,1]**：强度大于 1 时旧公式会外推，导致轻推反向、幅度
+            越界（如激进曲线 m=0.25、强度 2 输出 −0.125）。界面滑块、导入配置与引擎
+            一致把强度限制在 [0,1]，该范围内混合曲线单调且值域不越界；旧配置导入自动
+            归一，既有预设（强度 1）不受影响
+          - **输出所有权表**：按键 / 修饰键 / 鼠标键按持有者（映射 / 宏实例 / 设备）
+            引用计数，第一个持有者按下、最后一个释放才抬起，取消 / 断连只撤销对应
+            持有者。修复 LB 按住 Ctrl 时 X 组合键结束误抬 Ctrl、两宏共享 Ctrl、两映射
+            共享鼠标左键、两手柄输出同一按键互抢；修饰键与普通键同组
+          - **采样间断健壮性**：位移积分与动作计时分别限幅，周期补发设每 tick 预算，
+            长间断后清理累计状态并重新采纳输入基线——鼠标不再大跳移、`every 50ms tap`
+            不再集中补发上百次，正常小步长重复补齐仍不丢单位
+          - **手势处理器生命周期**：Reset 保留手势鼠标处理器注册、只清状态，暂停 /
+            恢复与 GUI 接管 / 归还后双击 / 长按→鼠标移动不再失效
+          - **Leader 临时层**：按住 Layer 键进入只覆盖少数按钮的临时层，未覆盖映射
+            继承基础层，相同持续动作跨层保持（RT 拖拽不因按住 RB 中断）；Leader 先于
+            普通键解析，松开 / 断连 / 异常退出可靠释放；保留原有完整预设切换。编辑器
+            可新建 Hold 型 Layer 键并把映射放入指定层
+          - **不抢焦点命令提示浮层**：按住层 Leader 时屏幕边缘显示当前层按键的可读
+            动作名（如「X：复制」），复用实时手柄图，不夺取目标应用键盘焦点；松开 /
+            断连即消失
 
           ### 下载
 
@@ -726,19 +733,25 @@ jobs:
             没有 Guide 位，Windows 通道永不报告该键按下（可视化器 Guide 常灭、
             Guide 映射不触发均为可解释状态）；Linux 上 evdev 经 BTN_MODE 正常
             识别。
+          - Leader 临时层与命令提示浮层为本版新增：浮层仅在渲染进程显示，关窗到
+            托盘（无渲染窗口）时不显示；临时层每设备默认最多 4 层，层键只能按住
+            （Hold）触发。真实键盘与映射同时按住同一按键的输入混用不在输出所有权
+            表的处理范围内。
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 1914 项，
-          1908 通过、0 失败、6 项跳过（Windows 专属 / 跨平台分支）；release.yml 已通过
-          actionlint；本地另构建 linux-x64 三种包格式（deb / rpm / AppImage），校验
-          control / spec 元数据与载荷完整性（hicolor 七尺寸图标、fix-device-access.sh
-          0755、desktop entry），并从安装 / 解包位置冒烟运行 daemon（完整安装 / 卸载
-          循环与 Windows Inno 安装器需对应平台运行器，由 Release workflow 验证）。
-          Windows / Ubuntu 双平台 CI、四 RID、Windows Inno per-user EXE 与 Linux 三种
-          包格式的构建与安装验证由 Release workflow 执行；本轮未进行 Windows 真机、
-          物理手柄或人工 GUI 实测，不以自动化测试替代人工验收。
-          人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
+          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 2053 项，
+          2047 通过、0 失败、6 项跳过（Windows 专属 / 跨平台分支），含本轮新增的输出
+          所有权、采样间断、手势处理器生命周期、Leader 临时层、曲线强度与命令提示
+          浮层回归测试；release.yml 已通过 actionlint；本地另构建 linux-x64 deb，校验
+          control 元数据与载荷完整性（hicolor 七尺寸图标、fix-device-access.sh 0755、
+          desktop entry），并从解包位置冒烟运行 daemon；rpm / AppImage 本机缺
+          rpmbuild / appimagetool，由 Release workflow 构建校验（完整安装 / 卸载循环
+          与 Windows Inno 安装器需对应平台运行器，由 Release workflow 验证）。
+          Windows / Ubuntu 双平台 CI、四 RID、
+          Windows Inno per-user EXE 与 Linux 三种包格式的构建与安装验证由 Release
+          workflow 执行；本轮未进行 Windows 真机、物理手柄或人工 GUI 实测，不以自动化
+          测试替代人工验收。人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
 
