@@ -42,6 +42,8 @@ public class EngineHostTests
 
         public void KeyUp(GamepadKey key) => Calls.Add($"up:{key}");
 
+        public void SendText(string text) => Calls.Add($"text:{text}");
+
         public void MouseMove(int dx, int dy) => Calls.Add($"move:{dx},{dy}");
 
         public void ScrollWheel(int horizontalNotches, int verticalNotches)
@@ -440,6 +442,131 @@ public class EngineHostTests
         host.TickOnce(Tick);
 
         Assert.Contains("down:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void The_Native_Gamepad_Pause_Stops_Injection_And_Keeps_Sampling()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+
+        // A foreground rule hands the pad to the program in front: whatever the mapping held
+        // is lifted, so no key stays stuck down inside a game that just took the pad over.
+        host.SetNativeGamepadPaused(true);
+        Assert.True(host.IsNativeGamepadPaused);
+        Assert.Contains("up:Enter", sink.Calls);
+
+        sink.Calls.Clear();
+        var sampled = 0;
+        host.Sampled += (_, _) => sampled++;
+        host.TickOnce(Tick);
+
+        Assert.Empty(sink.Calls);
+        Assert.Equal(1, sampled);
+    }
+
+    [Fact]
+    public void Resuming_From_The_Native_Gamepad_Pause_Fires_Again()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        host.SetNativeGamepadPaused(true);
+        host.SetNativeGamepadPaused(false);
+        Assert.False(host.IsNativeGamepadPaused);
+
+        sink.Calls.Clear();
+        host.TickOnce(Tick);
+
+        Assert.Contains("down:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void The_Three_Pauses_Are_Independent_Of_Each_Other()
+    {
+        var (host, provider, sink) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+
+        // The foreground rule pauses while the user's own mapping pause is also on.
+        host.SetMappingEnabled(false);
+        host.SetNativeGamepadPaused(true);
+        host.SetNativeGamepadPaused(false);
+
+        // The rule lifting its pause must not resume an injection the user asked to stop.
+        sink.Calls.Clear();
+        host.TickOnce(Tick);
+        Assert.Empty(sink.Calls);
+
+        // And the GUI hijack lease is a third switch of its own: it suspends while the native
+        // pause is already active, and releasing it leaves the native pause in charge.
+        host.SetMappingEnabled(true);
+        host.SetNativeGamepadPaused(true);
+        host.SetInjectionSuspended(true);
+        host.SetInjectionSuspended(false);
+
+        Assert.True(host.IsNativeGamepadPaused);
+        Assert.False(host.IsInjectionSuspended);
+        Assert.True(host.IsMappingEnabled);
+
+        sink.Calls.Clear();
+        host.TickOnce(Tick);
+        Assert.Empty(sink.Calls);
+
+        host.SetNativeGamepadPaused(false);
+        host.TickOnce(Tick);
+        Assert.Contains("down:Enter", sink.Calls);
+    }
+
+    [Fact]
+    public void The_Native_Gamepad_Pause_Releases_What_A_Temporary_Layer_Holds()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(LayerProfile());
+
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(GamepadButtonMask.RightBumper | GamepadButtonMask.X, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(["down:LeftAlt"], sink.Calls);
+
+        // The game in front takes the pad: the layer's modifier must not stay stuck down.
+        host.SetNativeGamepadPaused(true);
+
+        Assert.Equal(["down:LeftAlt", "up:LeftAlt"], sink.Calls);
+    }
+
+    [Fact]
+    public void The_Native_Gamepad_Pause_Neither_Takes_Nor_Releases_The_Injection_Mutex()
+    {
+        // Its own slot, so the suite never serialises on one name.
+        var name = $"Global\\DeziroJoy.Injection.Tests.{Guid.NewGuid():N}";
+        using var first = new EngineHost(new NoGamepadProvider(), new NullOutputSink(), new InMemoryProfileStore(), name);
+        using var second = new EngineHost(new NoGamepadProvider(), new NullOutputSink(), new InMemoryProfileStore(), name);
+
+        first.Start(TimeSpan.FromMilliseconds(2));
+        Assert.True(first.IsRunning);
+
+        // The pause gates dispatch only. The slot stays taken - a pause that released it would
+        // let a second engine inject alongside the first and double every input.
+        first.SetNativeGamepadPaused(true);
+
+        Assert.Throws<InjectionAlreadyActiveException>(() => second.Start(TimeSpan.FromMilliseconds(2)));
+        Assert.False(second.IsRunning);
     }
 
     [Fact]

@@ -39,6 +39,8 @@ internal sealed class RecordingOutputSink : IOutputSink
 
     public void KeyUp(GamepadKey key) => Calls.Add($"up:{key}");
 
+    public void SendText(string text) => Calls.Add($"text:{text}");
+
     public void MouseMove(int dx, int dy) => Calls.Add($"move:{dx},{dy}");
 
     public void ScrollWheel(int horizontalNotches, int verticalNotches)

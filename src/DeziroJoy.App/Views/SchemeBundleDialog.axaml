@@ -1,0 +1,229 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+        xmlns:svc="clr-namespace:DeziroJoy.App.Services"
+        xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
+        x:Class="DeziroJoy.App.Views.SchemeBundleDialog"
+        x:DataType="vm:MainWindowViewModel"
+        Title="导入方案"
+        Width="560"
+        SizeToContent="Height"
+        MaxHeight="720"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource AppBackgroundBrush}">
+
+    <!--
+        The scheme import preview. The view model raises SchemeImportPreviewRequested once it
+        has a bundle read and validated; this window shows what the import will do to every
+        preset slot, the device-global special keys it will install, the temporary layers it
+        populates and the readable action names of every incoming mapping - then applies as
+        one atomic operation on 确认导入 and offers the one-level undo afterwards. It closes
+        itself when the view model clears IsSchemePreviewOpen, so the view model stays the only
+        owner of the flow's state.
+    -->
+
+    <Window.Resources>
+        <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
+    </Window.Resources>
+
+    <Window.Styles>
+        <Style Selector=":is(Border).card">
+            <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusXl}" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <Style Selector="TextBlock.cardTitle">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style Selector="Button.ghost">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusLg}" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style Selector="Button.ghost:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusLg}" />
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Margin="16" RowDefinitions="Auto,*,Auto">
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Classes="cardTitle" Text="{Binding SchemePreview.SchemeName}" />
+            <TextBlock Classes="hint" Margin="0,4,0,0"
+                       IsVisible="{Binding SchemePreview.HasAppVersion}"
+                       Text="{Binding SchemePreview.AppVersion, StringFormat='导出的软件版本：{0}'}" />
+            <TextBlock Classes="hint" Margin="0,8,0,0"
+                       IsVisible="{Binding SchemePreview.HasNotes}"
+                       Text="{Binding SchemePreview.Notes}" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+
+                <Border Classes="card">
+                    <StackPanel>
+                        <TextBlock Classes="cardTitle" Text="预设槽位变化" />
+                        <ItemsControl x:Name="SlotRows" Margin="0,10,0,0"
+                                      ItemsSource="{Binding SchemePreview.Rows}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SchemePreviewRow">
+                                    <StackPanel Margin="0,4">
+                                        <TextBlock Text="{Binding Summary}" FontSize="12"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{Binding Detail}" FontSize="11" Margin="0,2,0,0"
+                                                   Foreground="{DynamicResource HintTextBrush}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding SchemePreview.HasSpecialKeys}">
+                    <StackPanel>
+                        <TextBlock Classes="cardTitle" Text="全局特殊键" />
+                        <ItemsControl x:Name="SpecialKeyLines" Margin="0,10,0,0"
+                                      ItemsSource="{Binding SchemePreview.SpecialKeyLines}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <TextBlock Text="{Binding}" FontSize="11" Margin="0,3"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card" IsVisible="{Binding SchemePreview.HasLayers}">
+                    <StackPanel>
+                        <TextBlock Classes="cardTitle" Text="临时层" />
+                        <ItemsControl x:Name="LayerLines" Margin="0,10,0,0"
+                                      ItemsSource="{Binding SchemePreview.LayerLines}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <TextBlock Text="{Binding}" FontSize="11" Margin="0,3" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="card">
+                    <StackPanel>
+                        <TextBlock Classes="cardTitle" Text="导入后各预设的按键" />
+                        <ItemsControl x:Name="IncomingPresets" Margin="0,10,0,0"
+                                      ItemsSource="{Binding SchemePreview.Presets}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="svc:SchemePreset">
+                                    <StackPanel Margin="0,6">
+                                        <TextBlock FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                                   Text="{Binding Profile.Name}" />
+                                        <ItemsControl Margin="0,4,0,0" ItemsSource="{Binding ActionNames}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="svc:SchemeActionName">
+                                                    <StackPanel Orientation="Horizontal" Margin="0,1">
+                                                        <TextBlock Text="{Binding Source}" FontSize="11"
+                                                                   Foreground="{DynamicResource HintTextBrush}" />
+                                                        <TextBlock Text=" → " FontSize="11"
+                                                                   Foreground="{DynamicResource HintTextBrush}" />
+                                                        <TextBlock Text="{Binding Action}" FontSize="11"
+                                                                   Foreground="{DynamicResource HintTextBrush}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Margin="0,12,0,0">
+            <TextBlock Classes="hint" TextWrapping="Wrap"
+                       IsVisible="{Binding HasTransferMessage}"
+                       Foreground="{Binding IsTransferError, Converter={StaticResource TransferMessageBrush}}"
+                       Text="{Binding TransferMessage}" />
+
+            <Grid Margin="0,12,0,0" ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0" VerticalAlignment="Center" Classes="hint"
+                           IsVisible="{Binding SchemePreview.ReplacesAnything}"
+                           Text="导入会整体替换上述槽位，导入后可在本窗口撤销一次。" />
+                <Button Grid.Column="1" x:Name="CancelSchemeButton" Classes="ghost" Content="取消"
+                        Margin="8,0,0,0" IsVisible="{Binding !SchemeImportApplied}"
+                        Command="{Binding CancelSchemeImportCommand}" />
+                <Button Grid.Column="2" x:Name="ConfirmSchemeButton" Classes="primary" Content="确认导入"
+                        Margin="8,0,0,0" IsVisible="{Binding !SchemeImportApplied}"
+                        Command="{Binding ConfirmSchemeImportCommand}" />
+                <Button Grid.Column="1" x:Name="UndoSchemeButton" Classes="primary" Content="撤销导入"
+                        Margin="8,0,0,0"
+                        IsVisible="{Binding SchemeImportApplied}"
+                        IsEnabled="{Binding CanUndoSchemeImport}"
+                        Command="{Binding UndoSchemeImportCommand}" />
+                <Button Grid.Column="2" x:Name="CloseSchemeButton" Classes="ghost" Content="关闭"
+                        Margin="8,0,0,0" IsVisible="{Binding SchemeImportApplied}"
+                        Command="{Binding CancelSchemeImportCommand}" />
+            </Grid>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -86,6 +86,28 @@ public class MappingDescriptionsTests
     }
 
     [Fact]
+    public void The_Physical_Unit_Note_No_Longer_Claims_Full_Decoupling()
+    {
+        // The output is a relative displacement, so the OS pointer-speed setting scales it
+        // afterwards: "完全解耦" promised a screen speed the app cannot guarantee.
+        var text = MappingDescriptions.PhysicalSpeedUnit();
+
+        Assert.DoesNotContain("完全解耦", text);
+        Assert.Contains("相对位移", text);
+        Assert.Contains("指针", text);
+    }
+
+    [Fact]
+    public void The_Max_Speed_Description_Admits_The_OS_Pointer_Speed_Scales_The_Output()
+    {
+        var text = MappingDescriptions.MouseMaxSpeed();
+
+        Assert.Contains("相对位移", text);
+        Assert.Contains("指针", text);
+        Assert.DoesNotContain("完全解耦", text);
+    }
+
+    [Fact]
     public void The_Deadzone_Description_Says_What_It_Removes_And_That_Top_Speed_Survives()
     {
         var mouse = MappingDescriptions.MouseDeadZone();
@@ -387,5 +409,69 @@ public class MappingDescriptionsTests
         Assert.Equal("鼠标左键", MappingDescriptions.ActionName(new MouseButtonTarget(MouseButton.Left)));
         Assert.Equal("鼠标移动", MappingDescriptions.ActionName(new MouseMoveTarget(new MouseStickSettings())));
         Assert.Equal("滚轮滚动", MappingDescriptions.ActionName(new WheelScrollTarget(new ScrollStickSettings())));
+    }
+
+    [Theory]
+    [InlineData(GamepadKey.VolumeUp, "音量加")]
+    [InlineData(GamepadKey.VolumeDown, "音量减")]
+    [InlineData(GamepadKey.VolumeMute, "静音")]
+    [InlineData(GamepadKey.MediaPlayPause, "播放/暂停")]
+    [InlineData(GamepadKey.MediaStop, "停止播放")]
+    [InlineData(GamepadKey.MediaPrevTrack, "上一曲")]
+    [InlineData(GamepadKey.MediaNextTrack, "下一曲")]
+    [InlineData(GamepadKey.BrowserBack, "浏览器后退")]
+    [InlineData(GamepadKey.BrowserForward, "浏览器前进")]
+    [InlineData(GamepadKey.BrowserRefresh, "刷新")]
+    [InlineData(GamepadKey.BrowserStop, "停止加载")]
+    [InlineData(GamepadKey.BrowserHome, "浏览器主页")]
+    [InlineData(GamepadKey.BrowserSearch, "浏览器搜索")]
+    [InlineData(GamepadKey.BrowserFavorites, "收藏夹")]
+    [InlineData(GamepadKey.LaunchMail, "打开邮件")]
+    [InlineData(GamepadKey.LaunchApp1, "启动应用1")]
+    [InlineData(GamepadKey.LaunchApp2, "启动应用2")]
+    [InlineData(GamepadKey.Sleep, "睡眠")]
+    [InlineData(GamepadKey.PrintScreen, "截屏")]
+    public void A_Media_Browser_Or_System_Key_Reads_As_Chinese_Not_The_Enum_Name(
+        GamepadKey key, string expected)
+    {
+        // The shared table was written before the media keys existed, so its raw form is
+        // the enum's own name - VolumeUp, BrowserRefresh - which reads as debug output in
+        // a mapping row and in the layer hint overlay. Every surface that names a key goes
+        // through here, so the picker, the row and the gesture-action list cannot drift.
+        Assert.Equal(expected, MappingDescriptions.Key(key));
+        Assert.Equal(expected, MappingDescriptions.Target(new KeyPressTarget(key)));
+        Assert.Equal(expected, MappingDescriptions.ActionName(new KeyPressTarget(key)));
+    }
+
+    [Fact]
+    public void A_Text_Target_Reads_As_The_String_It_Types()
+    {
+        // A text target is the string it types, so the row names the string: 文本输出：hello
+        // says what the press does, where the kind alone would only say which picker built
+        // it. The record's own ToString would read as 输入文本「hello」 - a third wording
+        // for the same thing, which is exactly what a shared table exists to prevent.
+        Assert.Equal("文本输出：hello", MappingDescriptions.Target(new TextTarget("hello")));
+        Assert.Equal("文本输出：hello", MappingDescriptions.ActionName(new TextTarget("hello")));
+        Assert.DoesNotContain("TextTarget", MappingDescriptions.Target(new TextTarget("hello")));
+    }
+
+    [Fact]
+    public void An_Empty_Text_Target_Reads_As_The_Kind_Alone()
+    {
+        // A draft that carries no string yet has nothing to name, so the row says the kind
+        // rather than trailing a colon into nothing.
+        Assert.Equal("文本输出", MappingDescriptions.Target(new TextTarget(string.Empty)));
+    }
+
+    [Fact]
+    public void A_Text_Step_Inside_A_Program_Reads_As_The_String_It_Types()
+    {
+        // The DSL's own text step names the string it types, so a program never shows the
+        // step as a record dump.
+        Assert.Equal(
+            "点按 A；输入文本「hi」",
+            MappingDescriptions.ComplexShortcutSteps(ComplexShortcutDsl.Parse("tap A\ntext hi")));
+        Assert.DoesNotContain("TextStep", MappingDescriptions.ComplexShortcutSteps(
+            ComplexShortcutDsl.Parse("text hi")));
     }
 }

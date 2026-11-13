@@ -264,6 +264,15 @@ public sealed class DaemonController : IAsyncDisposable
     public Task<MutationResult> SetInjectionSuspendedAsync(bool suspended, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SetInjectionSuspendedMessage(requestId, suspended), cancellationToken);
 
+    /// <summary>
+    /// Pauses or resumes keyboard and mouse mapping for native gamepad input - the pause a
+    /// foreground rule asks for, distinct from the user's own pause and from this connection's
+    /// hijack lease. A refused or unknown outcome is reported in the result rather than thrown,
+    /// so a rule that could not be honoured leaves the watcher's next poll to try again.
+    /// </summary>
+    public Task<MutationResult> SetNativeGamepadPausedAsync(bool paused, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SetNativeGamepadPausedMessage(requestId, paused), cancellationToken);
+
     public Task<MutationResult> SwitchPresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SwitchPresetSlotMessage(requestId, deviceId, slot), cancellationToken);
 

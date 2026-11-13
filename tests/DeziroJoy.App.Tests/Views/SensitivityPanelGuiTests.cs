@@ -192,6 +192,26 @@ public sealed class SensitivityPanelGuiTests
     }
 
     [AvaloniaFact]
+    public void ScrollRateSlider_Reaches_Half_Notch_Steps_And_Round_Trips_Them()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var slider = ScrollSensitivityPanelOf(window).FindControl<Slider>("ScrollRateSlider")!;
+
+        // Fractional notches accumulate in the engine, so the slider is allowed half-notch
+        // steps: finer slow scrolling is a real setting, not a rounding artifact.
+        Assert.Equal(0.5d, slider.TickFrequency);
+
+        slider.Value = 12.5;
+
+        Assert.Equal(12.5f, viewModel.ScrollSensitivity.MaxTicksPerSecond);
+        Assert.Equal(12.5f, viewModel.ScrollSensitivity.BuildSettings().MaxTicksPerSecond);
+
+        var loaded = new ScrollSensitivityViewModel();
+        loaded.LoadFrom(viewModel.ScrollSensitivity.BuildSettings());
+        Assert.Equal(12.5f, loaded.MaxTicksPerSecond);
+    }
+
+    [AvaloniaFact]
     public void Apply_Preserves_The_New_Sensitivity_Values()
     {
         var (window, viewModel, host, provider) = BuildWindow();
@@ -233,5 +253,145 @@ public sealed class SensitivityPanelGuiTests
         // The mouse values survive the scroll apply: the reload reads them back from the profile.
         Assert.Equal(1.25f, viewModel.MouseSensitivity.ScaleX);
         Assert.Equal(PrecisionMode.Toggle, viewModel.MouseSensitivity.PrecisionMode);
+    }
+
+    [AvaloniaFact]
+    public void The_Mouse_Panel_Switches_Between_Demo_And_Real_Input()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var panel = MouseSensitivityPanelOf(window);
+
+        // The synthetic sweep is the default; the real-input calibration is opt-in.
+        Assert.False(viewModel.MouseSensitivity.IsRealInputMode);
+        Assert.True(panel.FindControl<RadioButton>("DemoModeRadio")!.IsChecked);
+        Assert.False(panel.FindControl<StackPanel>("RealInputCard")!.IsVisible);
+
+        panel.FindControl<RadioButton>("RealInputModeRadio")!.IsChecked = true;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.MouseSensitivity.IsRealInputMode);
+        Assert.True(panel.FindControl<StackPanel>("RealInputCard")!.IsVisible);
+
+        panel.FindControl<RadioButton>("DemoModeRadio")!.IsChecked = true;
+
+        Assert.False(viewModel.MouseSensitivity.IsRealInputMode);
+        Assert.False(panel.FindControl<StackPanel>("RealInputCard")!.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void The_Mouse_Panel_Real_Input_Readouts_Follow_Fake_Samples()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var panel = MouseSensitivityPanelOf(window);
+        var sensitivity = viewModel.MouseSensitivity;
+        sensitivity.IsRealInputMode = true;
+        sensitivity.IsLive = true;
+        sensitivity.ResponseTime = 0f;
+
+        // No gamepad needed: the panel reads the same IGamepadState samples the visualizer
+        // does, so a fake sample drives the whole raw -> deadzone -> speed chain.
+        sensitivity.ApplySample(GamepadState.Create(default, 0f, 0f, 0.5f, 0f));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("X 0.50", panel.FindControl<TextBlock>("RawStickXText")!.Text);
+        Assert.Equal("Y 0.00", panel.FindControl<TextBlock>("RawStickYText")!.Text);
+        Assert.Equal("|0.50|", panel.FindControl<TextBlock>("RawMagnitudeText")!.Text);
+        Assert.Contains("px/s", panel.FindControl<TextBlock>("DailySpeedText")!.Text);
+
+        // The window's preview timer recomputes the live lease whenever the dispatcher runs
+        // jobs, so the lease is re-armed after the flush - exactly what a running engine
+        // keeps true in production - and the held sample then advances through the engine.
+        sensitivity.IsLive = true;
+
+        for (var i = 0; i < 5; i++)
+        {
+            sensitivity.Advance(TimeSpan.FromSeconds(1.0 / 60.0));
+        }
+
+        Assert.True(sensitivity.CurrentSpeed > 0);
+        Assert.Contains("px/s", panel.FindControl<TextBlock>("CurrentSpeedText")!.Text);
+    }
+
+    [AvaloniaFact]
+    public void The_Mouse_Panel_Drift_Buttons_Drive_The_Deadzone_Suggestion()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var panel = MouseSensitivityPanelOf(window);
+        var sensitivity = viewModel.MouseSensitivity;
+        sensitivity.IsRealInputMode = true;
+
+        var apply = panel.FindControl<Button>("ApplyDeadZoneButton")!;
+        Assert.False(apply.IsEnabled, "nothing measured yet, so there is nothing to confirm");
+
+        panel.FindControl<Button>("StartDriftButton")!.Command!.Execute(null);
+        Assert.True(sensitivity.IsMeasuringDrift);
+
+        for (var i = 0; i < 40; i++)
+        {
+            sensitivity.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+        }
+
+        panel.FindControl<Button>("StopDriftButton")!.Command!.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(sensitivity.IsMeasuringDrift);
+        Assert.True(apply.IsEnabled);
+        Assert.Contains("已采集", panel.FindControl<TextBlock>("DriftStatusText")!.Text);
+
+        // Confirming writes the suggestion into the deadzone the engine runs.
+        apply.Command!.Execute(null);
+
+        Assert.Equal(sensitivity.SuggestedDeadZone!.Value, sensitivity.DeadZone, 3);
+    }
+
+    [AvaloniaFact]
+    public void The_Scroll_Panel_Offers_Real_Input_Calibration()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var panel = ScrollSensitivityPanelOf(window);
+        var sensitivity = viewModel.ScrollSensitivity;
+        sensitivity.IsRealInputMode = true;
+        sensitivity.IsLive = true;
+        sensitivity.ResponseTime = 0f;
+
+        panel.FindControl<RadioButton>("ScrollRealInputModeRadio")!.IsChecked = true;
+        Assert.True(sensitivity.IsRealInputMode);
+
+        // The wheel mapping reads the left stick.
+        sensitivity.ApplySample(GamepadState.Create(default, 0f, 0.6f, 0f, 0f));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("|0.60|", panel.FindControl<TextBlock>("ScrollRawMagnitudeText")!.Text);
+
+        // See the mouse panel's readout test: the preview timer recomputes the live lease
+        // on dispatcher job runs, so it is re-armed after the flush.
+        sensitivity.IsLive = true;
+
+        for (var i = 0; i < 5; i++)
+        {
+            sensitivity.Advance(TimeSpan.FromSeconds(1.0 / 60.0));
+        }
+
+        Assert.True(sensitivity.CurrentRate > 0);
+        Assert.Contains("格/s", panel.FindControl<TextBlock>("CurrentRateText")!.Text);
+
+        var apply = panel.FindControl<Button>("ScrollApplyDeadZoneButton")!;
+        panel.FindControl<Button>("ScrollStartDriftButton")!.Command!.Execute(null);
+        for (var i = 0; i < 40; i++)
+        {
+            sensitivity.ApplySample(GamepadState.Create(default, 0f, 0.04f, 0f, 0f));
+        }
+
+        panel.FindControl<Button>("ScrollStopDriftButton")!.Command!.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(apply.IsEnabled);
+        apply.Command!.Execute(null);
+        Assert.Equal(sensitivity.SuggestedDeadZone!.Value, sensitivity.DeadZone, 3);
     }
 }

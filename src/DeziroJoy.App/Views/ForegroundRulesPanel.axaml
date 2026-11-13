@@ -1,0 +1,229 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
+             x:Class="DeziroJoy.App.Views.ForegroundRulesPanel"
+             x:DataType="vm:ForegroundRulesViewModel">
+
+    <!--
+        The 前台规则 surface: which program runs which profile, which programs get the pad
+        themselves, and - the question the user actually asks - why the profile that is running
+        right now is the one running. Every line here reads the live watcher through this view
+        model; nothing is a second copy of the state.
+
+        The active-state card comes first on purpose: the explanation is the feature's whole
+        point, so it is the first thing on screen and the last thing to scroll away. The rule
+        table follows, and the lock sits beside the state rather than inside the table because it
+        is a control, not a rule.
+    -->
+
+    <UserControl.Resources>
+        <conv:BoolNegationConverter x:Key="Not" />
+    </UserControl.Resources>
+
+    <UserControl.Styles>
+        <!-- The same form-control chrome the mapping editor gives its interval box, so the two
+             numeric editors in the app read as one thing. -->
+        <Style Selector="NumericUpDown">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+
+        <Style Selector="TextBox.ruleProcess">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,4" />
+        </Style>
+
+        <Style Selector="ComboBox.ruleCombo">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+    </UserControl.Styles>
+
+    <ScrollViewer>
+        <StackPanel Margin="20,16" MaxWidth="720">
+
+            <TextBlock Classes="cardTitle" Text="前台规则" Margin="0,0,0,4" />
+            <TextBlock Classes="hint" TextWrapping="Wrap" Margin="0,0,0,14"
+                       Text="按当前前台程序选择配置：命中规则时切换到该规则指定的预设，没有任何规则命中时使用下方的桌面默认配置；需要原生手柄输入的程序则暂停键鼠映射。" />
+
+            <!-- The active state, and the reason it is the active one. -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="cardTitle" Text="当前生效" />
+                    <Grid Margin="0,12,0,0" ColumnDefinitions="110,*">
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="前台程序" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                   x:Name="ForegroundProcessText"
+                                   Text="{Binding ForegroundProcessText}" />
+                    </Grid>
+                    <Grid Margin="0,6,0,0" ColumnDefinitions="110,*">
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="生效配置" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                                   x:Name="ActiveProfileText"
+                                   Text="{Binding ActiveProfileText}" />
+                    </Grid>
+                    <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                               x:Name="ActiveReasonText"
+                               Foreground="{DynamicResource AccentBrush}"
+                               Text="{Binding ActiveReason}" />
+
+                    <!-- The locked state. Accent ink while locked: it is a state the user must
+                         never have to guess about, and it says what is frozen and what stands
+                         down rather than just "on". -->
+                    <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                               x:Name="LockStateText"
+                               IsVisible="{Binding IsLocked}"
+                               Foreground="{DynamicResource AccentBrush}"
+                               Text="{Binding LockStateText}" />
+
+                    <WrapPanel Margin="0,14,0,0">
+                        <Button x:Name="RefreshRulesButton" Classes="ghost" Content="立即检测"
+                                Command="{Binding RefreshCommand}" />
+                        <Button x:Name="ToggleLockButton" Classes="ghost" Margin="8,0,0,0"
+                                Content="{Binding LockButtonText}" Command="{Binding ToggleLockCommand}" />
+                    </WrapPanel>
+                    <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Text="锁定后前台规则暂停生效，保持当前配置不变；再次点击解锁并交还控制权。" />
+                </StackPanel>
+            </Border>
+
+            <!-- The desktop default and the on/off switch. -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="cardTitle" Text="桌面默认" />
+                    <Grid Margin="0,12,0,0" ColumnDefinitions="110,120,*">
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="默认预设" VerticalAlignment="Center" />
+                        <NumericUpDown Grid.Column="1" x:Name="DefaultSlotBox"
+                                       Minimum="1" Maximum="12" Increment="1"
+                                       Value="{Binding DefaultSlot, Mode=TwoWay}" />
+                        <TextBlock Grid.Column="2" Classes="hint" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Text="没有规则命中、以及停在桌面时使用该预设。" />
+                    </Grid>
+                    <CheckBox x:Name="ForegroundEnabledBox" Content="启用前台规则" Margin="0,14,0,0"
+                              IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Text="关闭后前台规则暂停生效，始终使用桌面默认配置；规则表会保留，重新打开即可恢复。" />
+                </StackPanel>
+            </Border>
+
+            <!-- The rule table. -->
+            <Border Classes="card">
+                <StackPanel>
+                    <TextBlock Classes="cardTitle" Text="规则" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Text="按进程名匹配（大小写、.exe 后缀不影响）；优先级数值大的先匹配，数值相同时按列表顺序。填 * 表示任意程序。" />
+
+                    <ItemsControl x:Name="RulesList" Margin="0,12,0,0" ItemsSource="{Binding Rules}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ForegroundRuleItem">
+                                <Border Classes="card" Margin="0,0,0,8" Padding="12">
+                                    <StackPanel>
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBlock Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center"
+                                                       Text="{Binding Describe}" />
+                                            <Button Grid.Column="1" Classes="ghost" Content="删除" x:Name="RuleDeleteButton"
+                                                    FontSize="10" Padding="8,4"
+                                                    Command="{ReflectionBinding DataContext.DeleteRuleCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}" />
+                                        </Grid>
+
+                                        <Grid Margin="0,8,0,0" ColumnDefinitions="150,110,90">
+                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
+                                                <TextBlock Classes="fieldLabel" Text="程序名" />
+                                                <TextBox Classes="ruleProcess" x:Name="RuleProcessBox"
+                                                         Text="{Binding ProcessName, Mode=TwoWay}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Margin="0,0,10,0">
+                                                <TextBlock Classes="fieldLabel" Text="优先级" />
+                                                <NumericUpDown x:Name="RulePriorityBox" Minimum="-99" Maximum="99"
+                                                               Increment="1"
+                                                               Value="{Binding Priority, Mode=TwoWay}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Classes="fieldLabel" Text="动作" />
+                                                <ComboBox Classes="ruleCombo" x:Name="RuleActionCombo"
+                                                          SelectedIndex="{Binding ActionIndex, Mode=TwoWay}">
+                                                    <ComboBoxItem Content="切换配置" />
+                                                    <ComboBoxItem Content="原生手柄" />
+                                                </ComboBox>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- The slot the rule activates. Hidden for a native-gamepad
+                                             rule: mapping is paused there, so which profile would
+                                             run is moot. -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                    IsVisible="{Binding IsProfileAction}">
+                                            <TextBlock Classes="fieldLabel" Text="切换到预设" Width="150"
+                                                       VerticalAlignment="Center" />
+                                            <NumericUpDown x:Name="RuleSlotBox" Width="110"
+                                                           Minimum="1" Maximum="12" Increment="1"
+                                                           Value="{Binding Slot, Mode=TwoWay}" />
+                                            <TextBlock Classes="hint" VerticalAlignment="Center" Margin="12,0,0,0"
+                                                       Text="该程序在前台时使用这个预设。" />
+                                        </StackPanel>
+
+                                        <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                                                   IsVisible="{Binding IsNativeGamepadAction}"
+                                                   Text="该程序在前台时暂停键鼠映射，让游戏直接读取手柄；离开后自动恢复。" />
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                            <CheckBox Content="启用" IsChecked="{Binding Enabled, Mode=TwoWay}" />
+                                            <CheckBox Content="仅全屏时生效" Margin="16,0,0,0"
+                                                      IsChecked="{Binding FullscreenOnly, Mode=TwoWay}" />
+                                        </StackPanel>
+                                        <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                                   Text="「仅全屏」是辅助条件：平台检测不到是否全屏时规则仍然命中（Wayland 无法读取前台），可随时取消勾选。" />
+
+                                        <!-- A rule that can never match says so, rather than sitting
+                                             in the table looking like it does something. -->
+                                        <TextBlock Classes="conflictHint" Margin="0,8,0,0" TextWrapping="Wrap"
+                                                   IsVisible="{Binding IsValid, Converter={StaticResource Not}}"
+                                                   Text="{Binding ValidationMessage}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <WrapPanel Margin="0,4,0,0">
+                        <Button x:Name="AddRuleButton" Classes="ghost" Content="新增规则"
+                                Command="{Binding AddRuleCommand}" />
+                        <Button x:Name="SaveRulesButton" Classes="primary" Margin="8,0,0,0" Content="保存并生效"
+                                Command="{Binding SaveCommand}" IsEnabled="{Binding CanSave}" />
+                        <Button x:Name="RevertRulesButton" Classes="ghost" Margin="8,0,0,0" Content="放弃更改"
+                                Command="{Binding RevertCommand}" IsEnabled="{Binding HasUnsavedChanges}" />
+                    </WrapPanel>
+
+                    <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                               x:Name="RulesStatusText"
+                               IsVisible="{Binding HasStatusMessage}"
+                               Foreground="{DynamicResource AccentBrush}"
+                               Text="{Binding StatusMessage}" />
+
+                    <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                               x:Name="SourceNoteText"
+                               Text="{Binding SourceNote}" />
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

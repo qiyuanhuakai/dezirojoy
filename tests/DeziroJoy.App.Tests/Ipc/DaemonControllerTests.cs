@@ -69,6 +69,26 @@ public sealed class DaemonControllerTests
     }
 
     [Fact]
+    public async Task SetNativeGamepadPaused_Sends_The_Message_And_Returns_The_Ack()
+    {
+        var endpoint = new FakeEndpoint();
+        await using var controller = new DaemonController(endpoint);
+        await ConnectAsync(controller);
+        endpoint.Channel.OnSend = message => message is SetNativeGamepadPausedMessage request
+            ? new MutationAckMessage(request.RequestId, true, 1, 1)
+            : null;
+
+        var paused = await controller.SetNativeGamepadPausedAsync(true, TestContext.Current.CancellationToken);
+        var resumed = await controller.SetNativeGamepadPausedAsync(false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(MutationOutcome.Accepted, paused.Outcome);
+        Assert.Equal(MutationOutcome.Accepted, resumed.Outcome);
+        Assert.Equal(
+            [true, false],
+            endpoint.Channel.Sent.OfType<SetNativeGamepadPausedMessage>().Select(message => message.Paused));
+    }
+
+    [Fact]
     public async Task A_Revision_Conflict_Is_Refused_And_Never_Replayed()
     {
         var endpoint = new FakeEndpoint();

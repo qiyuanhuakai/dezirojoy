@@ -65,6 +65,89 @@ public class SpecialKeyConflictsTests
         => Assert.Single(conflicts).Message;
 
     [Fact]
+    public void A_Siblings_Double_Click_Delays_Its_Own_Single()
+    {
+        // The single cannot fire until the window closes, and a second press inside it
+        // resolves the double-click instead - that single never fires at all.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader()),
+            Button(
+                GamepadButton.Back,
+                new KeyPressTarget(GamepadKey.Enter),
+                Gesture(doubleClickWindow: 0.4f)),
+        };
+
+        var message = Assert.Single(
+            SpecialKeyConflicts.Analyze(mappings),
+            conflict => conflict.Message.Contains("双击窗口")).Message;
+
+        Assert.Contains("单击要等双击窗口（0.4 秒）结束才触发", message);
+        Assert.Contains("这一次单击不再触发", message);
+    }
+
+    [Fact]
+    public void A_Siblings_Long_Press_Moves_Its_Single_To_The_Release()
+    {
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader()),
+            Button(
+                GamepadButton.Back,
+                new KeyPressTarget(GamepadKey.Enter),
+                Gesture(longPressThreshold: 0.6f)),
+        };
+
+        var message = Assert.Single(
+            SpecialKeyConflicts.Analyze(mappings),
+            conflict => conflict.Message.Contains("长按阈值")).Message;
+
+        Assert.Contains("单击要等松开才触发", message);
+        Assert.Contains("长按阈值（0.6 秒）", message);
+    }
+
+    [Fact]
+    public void A_Switch_Cancels_An_Undecided_Double_Click()
+    {
+        // The switch reloads the engine, and a reload cancels a gesture that has not
+        // resolved - whichever way the leader switches, on the press or on the release.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader(LeaderSwitchMode.Hold)),
+            Button(
+                GamepadButton.Back,
+                new KeyPressTarget(GamepadKey.Enter),
+                Gesture(doubleClickWindow: ButtonGesture.DefaultDoubleClickWindow)),
+        };
+
+        var message = Assert.Single(
+            SpecialKeyConflicts.Analyze(mappings),
+            conflict => conflict.Message.Contains("未决")).Message;
+
+        Assert.Contains("取消这次未决的判定", message);
+        Assert.Contains("都不会触发", message);
+    }
+
+    [Fact]
+    public void A_Sibling_Carrying_A_Key_Of_Its_Own_Is_Not_Measured_By_The_Delay_Rules()
+    {
+        // Two global keys on one button: the sibling's gesture is the other key's business,
+        // so the delay and cancel rules stay out of it rather than naming the same fact twice.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Leader()),
+            Button(
+                GamepadButton.Back,
+                Precision(),
+                Gesture(doubleClickWindow: 0.4f)),
+        };
+
+        Assert.DoesNotContain(
+            "双击窗口",
+            string.Join(" ", SpecialKeyConflicts.Analyze(mappings).Select(conflict => conflict.Message)));
+    }
+
+    [Fact]
     public void A_Profile_Without_Special_Keys_Has_No_Conflicts()
     {
         var mappings = new[]

@@ -3,6 +3,7 @@
              xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
              xmlns:controls="clr-namespace:DeziroJoy.App.Views.Controls"
              xmlns:views="clr-namespace:DeziroJoy.App.Views"
+             xmlns:conv="clr-namespace:DeziroJoy.App.Views.Converters"
              x:Class="DeziroJoy.App.Views.MouseSensitivityPanel"
              x:DataType="vm:MouseSensitivityViewModel">
 
@@ -13,10 +14,19 @@
         DataContext="{Binding MouseSensitivity}" - so every path here is relative to that view
         model, and the preview controls inherit it rather than rebinding it.
 
+        The preview column also carries the input-source switch: the synthetic sweep by
+        default, or real host samples that expose the raw stick, the deadzone-filtered
+        deflection and the final speed, plus the at-rest drift measurement that suggests a
+        confirmable deadzone.
+
         The 应用 button writes the settings into the active profile, which is the window's
         orchestration, so its command reaches the window's view model through the Window
         ancestor.
     -->
+
+    <UserControl.Resources>
+        <conv:BoolNegationConverter x:Key="Not" />
+    </UserControl.Resources>
 
     <ScrollViewer>
         <Grid Margin="20,16">
@@ -197,7 +207,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Classes="fieldLabel" Text="当前速度" Margin="0" VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
+                    <TextBlock Grid.Column="1" x:Name="CurrentSpeedText" Classes="readout" VerticalAlignment="Center"
                                Text="{Binding CurrentSpeed, StringFormat='{}{0:F0} px/s'}" />
                 </Grid>
                 <Grid Margin="0,6,0,0" Width="200">
@@ -209,6 +219,89 @@
                     <TextBlock Grid.Column="1" Classes="readout" VerticalAlignment="Center"
                                Text="{Binding TravelDistance, StringFormat='{}{0:F0} px'}" />
                 </Grid>
+
+                <StackPanel Margin="0,18,0,0" Width="240">
+                    <TextBlock Classes="cardTitle" Text="预览输入" Margin="0,0,0,8" />
+                    <RadioButton x:Name="DemoModeRadio" Content="演示动画" GroupName="MousePreviewInput"
+                                 IsChecked="{Binding IsRealInputMode, Converter={StaticResource Not}, Mode=TwoWay}" />
+                    <RadioButton x:Name="RealInputModeRadio" Content="真实输入校准" GroupName="MousePreviewInput" Margin="0,6,0,0"
+                                 IsChecked="{Binding IsRealInputMode, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,8,0,0" Text="{Binding RealInputHint}" />
+                </StackPanel>
+
+                <StackPanel x:Name="RealInputCard" Margin="0,18,0,0" Width="240" IsVisible="{Binding IsRealInputMode}">
+                    <TextBlock Classes="cardTitle" Text="输入链路" Margin="0,0,0,8" />
+
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="50" />
+                            <ColumnDefinition Width="50" />
+                            <ColumnDefinition Width="50" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="原始摇杆" VerticalAlignment="Center" Margin="0" />
+                        <TextBlock Grid.Column="1" x:Name="RawStickXText" Classes="readout" VerticalAlignment="Center"
+                                   Text="{Binding RawStickX, StringFormat='X {0:F2}'}" />
+                        <TextBlock Grid.Column="2" x:Name="RawStickYText" Classes="readout" VerticalAlignment="Center"
+                                   Text="{Binding RawStickY, StringFormat='Y {0:F2}'}" />
+                        <TextBlock Grid.Column="3" x:Name="RawMagnitudeText" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding RawMagnitude, StringFormat='|{0:F2}|'}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="50" />
+                            <ColumnDefinition Width="50" />
+                            <ColumnDefinition Width="50" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="死区过滤后" VerticalAlignment="Center" Margin="0" />
+                        <TextBlock Grid.Column="1" x:Name="FilteredStickXText" Classes="readout" VerticalAlignment="Center"
+                                   Text="{Binding FilteredStickX, StringFormat='X {0:F2}'}" />
+                        <TextBlock Grid.Column="2" x:Name="FilteredStickYText" Classes="readout" VerticalAlignment="Center"
+                                   Text="{Binding FilteredStickY, StringFormat='Y {0:F2}'}" />
+                        <TextBlock Grid.Column="3" x:Name="FilteredMagnitudeText" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding FilteredMagnitude, StringFormat='|{0:F2}|'}" />
+                    </Grid>
+
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="日常速度" VerticalAlignment="Center" Margin="0" />
+                        <TextBlock Grid.Column="1" x:Name="DailySpeedText" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding DailySpeed, StringFormat='{}{0:F0} px/s'}" />
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="精准速度" VerticalAlignment="Center" Margin="0" />
+                        <TextBlock Grid.Column="1" x:Name="PrecisionSpeedText" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding PrecisionSpeed, StringFormat='{}{0:F0} px/s'}" />
+                    </Grid>
+
+                    <TextBlock Classes="cardTitle" Text="静差采集" Margin="0,8,0,8" />
+                    <TextBlock Classes="hint" Margin="0,0,0,8" Text="{Binding DriftHint}" />
+                    <TextBlock x:Name="DriftStatusText" Classes="hint" Margin="0,0,0,8" Text="{Binding DriftStatus}" />
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="建议死区" VerticalAlignment="Center" Margin="0" />
+                        <TextBlock Grid.Column="1" x:Name="SuggestedDeadZoneText" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Text="{Binding SuggestedDeadZoneText}" />
+                    </Grid>
+                    <WrapPanel>
+                        <Button x:Name="StartDriftButton" Content="开始采集" Command="{Binding StartDriftMeasurementCommand}" />
+                        <Button x:Name="StopDriftButton" Content="停止采集" Margin="8,0,0,0"
+                                Command="{Binding StopDriftMeasurementCommand}" />
+                        <Button x:Name="ApplyDeadZoneButton" Content="采用建议死区" Margin="8,0,0,0"
+                                IsEnabled="{Binding CanApplySuggestion}" Command="{Binding ApplySuggestedDeadZoneCommand}" />
+                    </WrapPanel>
+                </StackPanel>
 
                 <TextBlock Classes="cardTitle" Text="响应曲线" Margin="0,22,0,12" />
                 <controls:ResponseCurveGraph x:Name="CurveGraphHost" />

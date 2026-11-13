@@ -62,6 +62,16 @@ public interface IDaemonHost
 
     void SetInjectionSuspended(bool suspended);
 
+    /// <summary>Whether mapping is paused so the program in front reads the gamepad itself.</summary>
+    bool IsNativeGamepadPaused { get; }
+
+    /// <summary>
+    /// Pauses or resumes keyboard and mouse mapping for native gamepad input. Independent of
+    /// <see cref="SetMappingEnabled"/> and <see cref="SetInjectionSuspended"/>: the three pauses
+    /// never lift one another, and none of them stops the mapping loop or the injection mutex.
+    /// </summary>
+    void SetNativeGamepadPaused(bool paused);
+
     /// <summary>Swaps the active profile of one connected device.</summary>
     void Reload(string deviceId, GamepadProfile profile);
 

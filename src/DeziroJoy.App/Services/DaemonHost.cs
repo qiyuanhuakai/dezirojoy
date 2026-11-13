@@ -18,6 +18,13 @@ namespace DeziroJoy.App.Services;
 /// No Avalonia window, no <c>App</c> object and no UI stack are ever constructed, which is
 /// what keeps the resident process near the bare .NET memory floor instead of the ~145 MB
 /// Avalonia baseline (see docs/ELEVATION-AND-DAEMON.md).
+/// <para>
+/// Being the mapping authority, the daemon also runs the foreground rules itself: the same
+/// <see cref="ForegroundWatcher"/> the GUI drives over its own host in local mode, here over
+/// the daemon's own <see cref="EngineHost"/> and for the daemon's whole life. A window that
+/// connects only edits and displays the table, so closing to the tray - the primary resident
+/// mode - never stops the rules from running.
+/// </para>
 /// </summary>
 public static class DaemonHost
 {
@@ -34,10 +41,10 @@ public static class DaemonHost
     /// exits. Every supported termination path exits from its own handler, so this method
     /// only returns if a future runtime lets a handler return normally.
     ///
-    /// The daemon is the authority: it owns the provider, sink, <see cref="EngineHost"/> and
-    /// the injection mutex, and it serves the version-1 mapping control channel on
-    /// <see cref="IpcContract.PipeName"/> for the whole of its life. A second daemon that
-    /// finds this one already listening exits cleanly instead of competing for the slot
+    /// The daemon is the authority: it owns the provider, sink, <see cref="EngineHost"/>, the
+    /// foreground rules and the injection mutex, and it serves the version-1 mapping control
+    /// channel on <see cref="IpcContract.PipeName"/> for the whole of its life. A second daemon
+    /// that finds this one already listening exits cleanly instead of competing for the slot
     /// (section 4.7).
     /// </summary>
     public static int Run()
@@ -115,6 +122,21 @@ public static class DaemonHost
         using var shutdown = new ManualResetEventSlim();
         var pipeTask = ServePipeAsync(daemon, pipeCts.Token);
         var presenceTask = MonitorPresenceAsync(composition.Host, pipeCts.Token);
+
+        // The mapping authority runs the foreground rules for the daemon's whole life, with no
+        // GUI in the picture: the engine host is the target - the same one the GUI drives over
+        // its own host in local mode - and the shared rule table on disk is where the rules
+        // come from, re-read on every poll because a window's 保存 writes that file and the
+        // control channel carries no verb for a rule edit. Closing to the tray, the primary
+        // resident mode, must not stop the rules from running.
+        using var foreground = new DaemonForeground(
+            composition.Host,
+            composition.ProfileStore,
+            daemon,
+            ForegroundSourceFactory.Create(),
+            new ForegroundRuleStore(),
+            pipeCts.Token);
+
         daemon.ShutdownRequested += () => shutdown.Set();
 
         composition.Host.RefreshPresence();
@@ -127,6 +149,7 @@ public static class DaemonHost
         {
             pipeCts.Cancel();
             Shutdown(composition);
+            foreground.Stop();
             Console.Out.Flush();
             Environment.Exit(0);
         }
@@ -150,19 +173,112 @@ public static class DaemonHost
         // StartupCompleteMarker also means termination handlers are installed: clients and
         // process tests may signal us as soon as they observe it without racing registration.
         Console.WriteLine(BuildStartupSummary(composition, DefaultInterval));
+        Console.WriteLine(BuildForegroundNote(foreground.Watcher));
 
         // The IPC shutdown path wakes the main thread only after its acknowledgement was
         // written. Signal handlers retain their explicit-exit behaviour on Unix.
         shutdown.Wait();
         pipeCts.Cancel();
         Shutdown(composition);
-        Task.WaitAll([pipeTask, presenceTask], TimeSpan.FromSeconds(5));
+        Task.WaitAll([pipeTask, presenceTask, foreground.Loop], TimeSpan.FromSeconds(5));
+        foreground.Stop();
         Console.Out.Flush();
 
         terminate?.Dispose();
         hangup?.Dispose();
 
         return 0;
+    }
+
+    /// <summary>
+    /// Builds the resident daemon's own foreground watcher: the platform source, the daemon's
+    /// engine host as the target, and the shared rule table as the starting point. The target
+    /// is <see cref="EngineHostForegroundTarget"/> - the same one the GUI drives over its own
+    /// host in local mode - because in daemon mode this process is the one that owns mapping,
+    /// so a rule reaches the engine directly rather than over the control channel. Neither path
+    /// touches the injection mutex, so the resident model survives both.
+    /// </summary>
+    internal static ForegroundWatcher CreateForegroundWatcher(
+        EngineHost host,
+        IProfileStore profileStore,
+        IForegroundSource source,
+        ForegroundRuleStore rules)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(profileStore);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(rules);
+
+        return new ForegroundWatcher(
+            source,
+            new EngineHostForegroundTarget(host, new PresetStore(profileStore)),
+            rules.Load());
+    }
+
+    /// <summary>
+    /// Drives the daemon's foreground watcher for its whole life: one poll per
+    /// <see cref="ForegroundWatcher.DefaultInterval"/>, and a re-read of the shared rule table
+    /// whenever the file on disk changed. The file is the channel - the control protocol has
+    /// no verb for a rule edit - so a daemon that never re-read it would run whatever table
+    /// the last window left for the rest of its life. Independent of any GUI by construction:
+    /// the loop runs whether or not a window is connected, which is what makes closing to the
+    /// tray stop mattering.
+    /// </summary>
+    internal static async Task MonitorForegroundAsync(
+        ForegroundWatcher watcher,
+        ForegroundRuleStore rules,
+        CancellationToken cancellationToken,
+        TimeSpan? interval = null)
+    {
+        ArgumentNullException.ThrowIfNull(watcher);
+        ArgumentNullException.ThrowIfNull(rules);
+
+        var poll = interval ?? ForegroundWatcher.DefaultInterval;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                // An edit lands at once - the same contract the panel's 保存 has - and a table
+                // that has not changed costs one file read and no parse.
+                if (rules.LoadIfChanged() is { } edited)
+                {
+                    watcher.Update(edited);
+                }
+
+                watcher.Refresh();
+
+                await Task.Delay(poll, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                // A failing poll must never take the mapping down with it: the rules are a
+                // convenience over the engine, and the engine is the daemon's reason to exist.
+                Console.WriteLine($"[DeziroJoy] foreground watcher error: {exception.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The journal's one line about the foreground rules: how many are in charge and at what
+    /// cadence. The daemon has no panel to explain itself with - stdout under systemd is the
+    /// only surface a headless install has - so a resident install that never opens a window
+    /// still gets told the rules are running.
+    /// </summary>
+    internal static string BuildForegroundNote(ForegroundWatcher watcher)
+    {
+        ArgumentNullException.ThrowIfNull(watcher);
+
+        var settings = watcher.Settings;
+        var table = settings.Enabled
+            ? $"{settings.Rules.Count} 条规则"
+            : "已停用";
+
+        return $"[DeziroJoy] 前台规则：{table} · 轮询 {ForegroundWatcher.DefaultInterval.TotalMilliseconds:0.#} ms";
     }
 
     private static async Task MonitorPresenceAsync(EngineHost host, CancellationToken cancellationToken)
@@ -500,10 +616,155 @@ public static class DaemonHost
 
         public void SetInjectionSuspended(bool suspended) => _composition.Host.SetInjectionSuspended(suspended);
 
+        public bool IsNativeGamepadPaused => _composition.Host.IsNativeGamepadPaused;
+
+        public void SetNativeGamepadPaused(bool paused) => _composition.Host.SetNativeGamepadPaused(paused);
+
         public void Reload(string deviceId, GamepadProfile profile) => _composition.Host.Reload(deviceId, profile);
 
         public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
             => _composition.Host.SwitchPresetSlot(slot, profiles);
+    }
+
+    /// <summary>
+    /// The resident daemon's foreground authority: the watcher over this process's own engine
+    /// host, the mirror that keeps the server's published slot in step with it, and the poll
+    /// loop that drives both. Owned as one object so shutdown lifts all three together - the
+    /// loop stops, the mirror detaches, and a pause a rule left behind is released - and so a
+    /// test can run the whole daemon-side path against a fake foreground source with no window,
+    /// no pipe and no GUI anywhere in the picture.
+    /// </summary>
+    internal sealed class DaemonForeground : IDisposable
+    {
+        private readonly ForegroundSlotMirror _mirror;
+
+        private bool _stopped;
+
+        public DaemonForeground(
+            EngineHost host,
+            IProfileStore profileStore,
+            DaemonServer server,
+            IForegroundSource source,
+            ForegroundRuleStore rules,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(server);
+            ArgumentNullException.ThrowIfNull(rules);
+
+            Watcher = CreateForegroundWatcher(host, profileStore, source, rules);
+            _mirror = new ForegroundSlotMirror(host, server, Watcher, host.ActivePresetSlot);
+            _mirror.Start();
+            Loop = MonitorForegroundAsync(Watcher, rules, cancellationToken);
+        }
+
+        /// <summary>The watcher itself, for the journal note and for tests.</summary>
+        public ForegroundWatcher Watcher { get; }
+
+        /// <summary>The poll loop, so the caller can wait for it before lifting the watcher.</summary>
+        public Task Loop { get; }
+
+        /// <summary>
+        /// Lifts the authority. The caller waits for <see cref="Loop"/> first: disposing the
+        /// watcher mid-poll would answer a refresh the loop is still inside.
+        /// </summary>
+        public void Stop()
+        {
+            if (_stopped)
+            {
+                return;
+            }
+
+            _stopped = true;
+            _mirror.Stop();
+            Watcher.Dispose();
+        }
+
+        public void Dispose() => Stop();
+    }
+
+    /// <summary>
+    /// Keeps the server's published app-wide slot equal to the engine host's. The foreground
+    /// watcher drives the host directly - the same target the GUI uses over its own host in
+    /// local mode - while the server keeps a second record of the slot that every connected
+    /// GUI reads: its selector, its snapshot body, and the slot an edit is saved into. A
+    /// rule-driven switch that reached only the host would leave that record quoting a slot the
+    /// engine had left, so each poll's outcome is mirrored through the same request path the
+    /// leader key uses - one revision bump, and every window follows the rule.
+    /// <para>
+    /// A GUI's own switch already updates the record through the server; watching the
+    /// publication is what stops this mirror from sending it a second time. The two counters
+    /// are written from the poll loop and from the pipe threads alike, hence volatile: a lost
+    /// update costs one redundant request, never a wrong slot, because the request itself is
+    /// resolved by the server from the store.
+    /// </para>
+    /// </summary>
+    private sealed class ForegroundSlotMirror : IDisposable
+    {
+        private readonly EngineHost _host;
+
+        private readonly DaemonServer _server;
+
+        private readonly ForegroundWatcher _watcher;
+
+        /// <summary>The slot the server last published, whether by this mirror or by a GUI.</summary>
+        private volatile int _published;
+
+        /// <summary>The slot this mirror last asked for, so a refusal is not re-sent per poll.</summary>
+        private volatile int _requested;
+
+        private bool _stopped;
+
+        public ForegroundSlotMirror(
+            EngineHost host,
+            DaemonServer server,
+            ForegroundWatcher watcher,
+            int publishedSlot)
+        {
+            _host = host;
+            _server = server;
+            _watcher = watcher;
+            _published = publishedSlot;
+            _requested = publishedSlot;
+        }
+
+        public void Start()
+        {
+            _server.StateChanged += OnPublished;
+            _watcher.StateChanged += OnPolled;
+        }
+
+        public void Stop()
+        {
+            if (_stopped)
+            {
+                return;
+            }
+
+            _stopped = true;
+            _server.StateChanged -= OnPublished;
+            _watcher.StateChanged -= OnPolled;
+        }
+
+        public void Dispose() => Stop();
+
+        private void OnPublished(StateChangedMessage message)
+        {
+            _published = message.Snapshot.ActivePresetSlot;
+            _requested = _published;
+        }
+
+        private void OnPolled()
+        {
+            var slot = _host.ActivePresetSlot;
+
+            if (slot == _published || slot == _requested)
+            {
+                return;
+            }
+
+            _requested = slot;
+            _server.RequestPresetSlotSwitch(slot);
+        }
     }
 
     private static string DescribeElevation(EngineComposition composition)

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 
@@ -244,6 +245,68 @@ public static class SpecialKeyConflicts
                                 other.Id,
                                 $"{label}上还有另一条映射（{PositionName(position)}：{description}）：{BesideTheKey(trigger, position, keyName, description)}"));
                         }
+
+                        // A sibling carrying a global key of its own is another entry's
+                        // business, so the delay and cancel rules below stay with siblings
+                        // that carry none - the same fact is then reported exactly once.
+                        if (KeyOf(other) is not null)
+                        {
+                            continue;
+                        }
+
+                        var siblingGesture = OtherGesture(other);
+
+                        // 双击 delays the sibling's single: the click cannot fire until the
+                        // window closes, and a second press inside it resolves the
+                        // double-click instead - that single never fires at all.
+                        if (siblingGesture is { HasDoubleClick: true } doubleClick
+                            && other.Target is not NoneTarget)
+                        {
+                            conflicts.Add(new SpecialKeyConflict(
+                                own.Kind,
+                                button,
+                                code,
+                                entry.Id,
+                                other.Id,
+                                $"{label}上还有一条映射配了双击手势：它的单击要等双击窗口（{Seconds(doubleClick.DoubleClickWindow)}）"
+                                + "结束才触发，窗口内按下第二次时触发的是双击、这一次单击不再触发。"));
+                        }
+
+                        // 长按 moves the sibling's single to the release: the click waits
+                        // for the button to come up, and a hold past the threshold fires the
+                        // long press instead - again with no single at all.
+                        if (siblingGesture is { HasEffectiveLongPress: true } longPress
+                            && other.Target is not NoneTarget)
+                        {
+                            conflicts.Add(new SpecialKeyConflict(
+                                own.Kind,
+                                button,
+                                code,
+                                entry.Id,
+                                other.Id,
+                                $"{label}上还有一条映射配了长按：它的单击要等松开才触发，"
+                                + $"按住越过长按阈值（{Seconds(longPress.LongPressThreshold)}）时触发的是长按、这一次单击不再触发。"));
+                        }
+
+                        // A switch reloads the engine, and a reload cancels a gesture that
+                        // has not resolved: an undecided click or double-click on the same
+                        // button never fires, whichever way the leader switches - on the
+                        // press, or on the release that hands the slot back. Only a sibling
+                        // with a single of its own has something to lose; one that is
+                        // 无功能 has no click waiting behind the window.
+                        if (own.Kind is SpecialKeyKind.Leader or SpecialKeyKind.Layer
+                            && siblingGesture is { HasDoubleClick: true }
+                            && other.Target is not NoneTarget)
+                        {
+                            conflicts.Add(new SpecialKeyConflict(
+                                own.Kind,
+                                button,
+                                code,
+                                entry.Id,
+                                other.Id,
+                                $"{label}上有一条未决的双击判定：触发「{keyName}」会切换预设，"
+                                + "切换引发的引擎重载会取消这次未决的判定，随之而来的单击与双击都不会触发。"));
+                        }
                     }
                 }
 
@@ -298,6 +361,7 @@ public static class SpecialKeyConflicts
                             $"「Layer 键」设在{label}的长按上不会生效：层切换只识别设在单击上的 Layer 键，请把它改到单击位置。"));
                     }
                 }
+
             }
         }
 
@@ -518,17 +582,24 @@ public partial class MappingEditorViewModel : ObservableObject
         MappingTargetKind.MouseMove,
         MappingTargetKind.WheelScroll,
         MappingTargetKind.SpecialKey,
+        MappingTargetKind.Text,
+        MappingTargetKind.ComplexShortcut,
     ];
 
     /// <summary>
-    /// The long-press tab's list: every kind plus 复杂快捷键. A complex shortcut is the long
-    /// press's own action, so the long-press gesture is the only place the kind is offered -
-    /// the click and the double-click would produce a gesture whose program can never start.
+    /// The kinds a stick source offers. A stick has no gestures, so nothing can start a
+    /// program: 复杂快捷键 stays off the list rather than offering a mapping the engine
+    /// refuses.
     /// </summary>
-    private static readonly MappingTargetKind[] LongPressTargetKinds =
+    private static readonly MappingTargetKind[] StickTargetKinds =
     [
-        .. AllTargetKinds,
-        MappingTargetKind.ComplexShortcut,
+        MappingTargetKind.KeyPress,
+        MappingTargetKind.KeyCombo,
+        MappingTargetKind.MouseButton,
+        MappingTargetKind.MouseMove,
+        MappingTargetKind.WheelScroll,
+        MappingTargetKind.SpecialKey,
+        MappingTargetKind.Text,
     ];
 
     private readonly SortedSet<int> _extraButtonCodes = [];
@@ -636,12 +707,15 @@ public partial class MappingEditorViewModel : ObservableObject
         get => ActiveSlot.TargetKind;
         set
         {
+            ActiveSlot.TargetKind = value;
+
             if (value == MappingTargetKind.ComplexShortcut)
             {
-                PointComplexShortcutAtTheLongPress();
+                // A program only ever runs from the position that carries it, so choosing the
+                // kind on a tab arms that tab's own trigger - the editor can then never write
+                // a program whose trigger names a different position.
+                ActiveSlot.Trigger = TriggerForGesture(SelectedGestureKind);
             }
-
-            ActiveSlot.TargetKind = value;
         }
     }
 
@@ -1053,6 +1127,118 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     /// <summary>
+    /// The active slot's short text, as the 输入文本 box reads and writes it. Typed on the
+    /// press edge and bounded by <see cref="GestureSlotEditor.TextMaxLength"/>.
+    /// </summary>
+    public string ActiveText
+    {
+        get => ActiveSlot.Text;
+        set => ActiveSlot.Text = value.Length > TextMaxLength ? value[..TextMaxLength] : value;
+    }
+
+    /// <summary>How long the active slot's text is, for the counter beside the box.</summary>
+    public int ActiveTextLength => ActiveSlot.Text.Length;
+
+    /// <summary>The longest string a text target may carry, the Core's own bound.</summary>
+    public static int TextMaxLength => GestureSlotEditor.TextMaxLength;
+
+    /// <summary>
+    /// True when the active slot's target is one this build does not know. The draft shows it
+    /// as an unsupported mapping and commits it back exactly as the profile carries it; the
+    /// only thing that replaces it is the user picking something else.
+    /// </summary>
+    public bool ActiveTargetUnsupported => ActiveSlot.Unsupported is not null;
+
+    /// <summary>How the unsupported target reads, naming its discriminator.</summary>
+    public string? ActiveTargetUnsupportedDescription => ActiveSlot.UnsupportedDescription;
+
+    /// <summary>What the target area shows while the draft carries a target this build cannot read.</summary>
+    public string UnsupportedTargetHint => ActiveTargetUnsupported
+        ? "该映射使用的功能此版本不支持（可能是由更新版本写入的）。它会原样保留，不会被覆盖；重新选择功能即可替换它。"
+        : string.Empty;
+
+    // ---- 输入文本键盘: a gamepad-navigable on-screen keyboard --------------------
+
+    /// <summary>
+    /// The on-screen keyboard that types the active slot's text. It exists so a short text
+    /// target - a search query, a file name, a URL - can be entered with the gamepad alone;
+    /// full IME composition is a follow-up, and the physical-keyboard capture stays the way
+    /// to type anything its pages do not carry.
+    /// </summary>
+    public TextKeyboard TextKeyboard { get; } = new();
+
+    /// <summary>True when the keyboard is offered: the active slot's target is a text target.</summary>
+    public bool ShowTextKeyboard => ActiveTargetKind == MappingTargetKind.Text && !ActiveTargetUnsupported;
+
+    /// <summary>
+    /// True while the gamepad may drive the on-screen keyboard: the mapping editor is open
+    /// and the window's own gamepad navigation is in scope - the same lease every other
+    /// editor press answers to. The view keeps it in step, because the window's scope and its
+    /// navigation toggle are the window's to know, and <see cref="CaptureGamepadSample"/>
+    /// reads it beside <see cref="ShowTextKeyboard"/> so a press spent on the keyboard is
+    /// never also spent navigating.
+    /// </summary>
+    public bool TextKeyboardGamepadInScope { get; set; }
+
+    /// <summary>
+    /// Applies one pressed key of the on-screen keyboard to the active slot's text. An insert
+    /// key types its text at the end - the draft has no cursor of its own - and an action key
+    /// runs its own edit.
+    /// </summary>
+    public void ApplyTextKeyboardKey(TextKeyboardKey key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+
+        switch (key.Action)
+        {
+            case TextKeyboardAction.Backspace:
+                var text = ActiveSlot.Text;
+                ActiveText = text.Length > 0 ? text[..^1] : text;
+                break;
+            case TextKeyboardAction.Clear:
+                ActiveText = string.Empty;
+                break;
+            case TextKeyboardAction.Space:
+            case TextKeyboardAction.Insert:
+                ActiveText = AppendText(key.Text);
+                break;
+            case TextKeyboardAction.Confirm:
+                break;
+        }
+    }
+
+    /// <summary>Types more text, stopping at the Core's bound rather than refusing the key.</summary>
+    private string AppendText(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return ActiveSlot.Text;
+        }
+
+        var current = ActiveSlot.Text;
+        var room = GestureSlotEditor.TextMaxLength - current.Length;
+        return room <= 0 ? current : current + text[..(int)Math.Min(room, text.Length)];
+    }
+
+    /// <summary>Moves the on-screen keyboard's cursor; false when the cursor is already at that edge.</summary>
+    public bool MoveTextKeyboardCursor(InputDirection direction) => TextKeyboard.Move(direction);
+
+    /// <summary>Shows the on-screen keyboard's next page, wrapping around at the end.</summary>
+    public void ShowNextTextKeyboardPage() => TextKeyboard.ShowPage(TextKeyboard.NextPage);
+
+    /// <summary>Shows the on-screen keyboard's previous page, wrapping around at the start.</summary>
+    public void ShowPreviousTextKeyboardPage() => TextKeyboard.ShowPage(TextKeyboard.PreviousPage);
+
+    /// <summary>Presses the key the on-screen keyboard's cursor is on.</summary>
+    public void ActivateTextKeyboardKey()
+    {
+        if (TextKeyboard.Activate() is { } key)
+        {
+            ApplyTextKeyboardKey(key);
+        }
+    }
+
+    /// <summary>
     /// 无功能 for the active slot: it resolves and emits nothing.
     /// </summary>
     public bool ActiveIsNone
@@ -1127,6 +1313,13 @@ public partial class MappingEditorViewModel : ObservableObject
     {
         get
         {
+            if (ActiveTargetUnsupported)
+            {
+                return ActiveGestureCanBeDisabled
+                    ? $"{ActiveGestureName}：{ActiveTargetUnsupportedDescription ?? "不支持的映射"}"
+                    : ActiveTargetUnsupportedDescription ?? "不支持的映射";
+            }
+
             if (ActiveGestureCanBeDisabled && !ActiveGestureEnabled)
             {
                 return $"{ActiveGestureName}：已关闭";
@@ -1137,7 +1330,7 @@ public partial class MappingEditorViewModel : ObservableObject
             {
                 GestureSlotFunction.None => "无功能",
                 GestureSlotFunction.RepeatClick => "重复单击的功能",
-                _ when IsLongPressSelected && LongPressRunsComplexShortcut => "复杂快捷键",
+                _ when ActiveRunsComplexShortcut => "复杂快捷键",
                 _ => target is SpecialKeyTarget special
                     ? SpecialKeyDescription(special)
                     : MappingDescriptions.Target(target),
@@ -1210,17 +1403,38 @@ public partial class MappingEditorViewModel : ObservableObject
         get => ClickSlot.TargetKind;
         set
         {
+            ClickSlot.TargetKind = value;
+
             if (value == MappingTargetKind.ComplexShortcut)
             {
-                PointComplexShortcutAtTheLongPress();
-                return;
+                ClickSlot.Trigger = TriggerForGesture(GestureKind.Click);
             }
-
-            ClickSlot.TargetKind = value;
         }
     }
 
-    // ---- 复杂快捷键: a DSL program the long press runs -------------------------
+    /// <summary>The trigger a gesture position carries, the one a program on it runs from.</summary>
+    private static ActionTrigger TriggerForGesture(GestureKind gesture) => gesture switch
+    {
+        GestureKind.DoubleClick => ActionTrigger.DoubleClick,
+        GestureKind.LongPress => ActionTrigger.LongPress,
+        _ => ActionTrigger.Press,
+    };
+
+    // ---- 复杂快捷键: a DSL program any of the three positions can run ------------
+
+    /// <summary>
+    /// True when the click's own target is a program. A program at the click position runs
+    /// from the button's own press - or its release - so the click target and the two
+    /// gesture actions each carry their own program independently.
+    /// </summary>
+    public bool ClickRunsComplexShortcut => !SourceIsStick
+        && ClickSlot.TargetKind == MappingTargetKind.ComplexShortcut
+        && ClickSlot.Function == GestureSlotFunction.Target;
+
+    /// <summary>True when the double-click's action is a program.</summary>
+    public bool DoubleClickRunsComplexShortcut => !SourceIsStick
+        && DoubleClickSlot.TargetKind == MappingTargetKind.ComplexShortcut
+        && DoubleClickSlot.Function == GestureSlotFunction.Target;
 
     /// <summary>
     /// True when the long-press draft runs a complex shortcut program. The program is the
@@ -1235,13 +1449,26 @@ public partial class MappingEditorViewModel : ObservableObject
         && LongPressSlot.TargetKind == MappingTargetKind.ComplexShortcut
         && LongPressSlot.Function == GestureSlotFunction.Target;
 
+    /// <summary>True when any of the three positions runs a program.</summary>
+    public bool RunsComplexShortcut => ClickRunsComplexShortcut
+        || DoubleClickRunsComplexShortcut
+        || LongPressRunsComplexShortcut;
+
     /// <summary>
-    /// True when the 启用手势 checkbox is live. A long press running a complex shortcut
-    /// cannot be switched off: the program is the long press's own action, so a disabled
-    /// long press would leave it unreachable - the editor keeps the gesture on and says
-    /// why instead of writing a mapping the engine refuses.
+    /// True when the active slot runs a program: the slot the switcher has selected, which
+    /// is the one the strategy pickers and the preview describe.
     /// </summary>
-    public bool ActiveGestureToggleEnabled => !(IsLongPressSelected && LongPressRunsComplexShortcut);
+    public bool ActiveRunsComplexShortcut => !SourceIsStick
+        && ActiveSlot.TargetKind == MappingTargetKind.ComplexShortcut
+        && ActiveSlot.Function == GestureSlotFunction.Target;
+
+    /// <summary>
+    /// True when the 启用手势 checkbox is live. A slot running a complex shortcut cannot be
+    /// switched off: the program is that position's own action, so a disabled gesture would
+    /// leave it unreachable - the editor keeps the gesture on and says why instead of
+    /// writing a mapping the engine refuses.
+    /// </summary>
+    public bool ActiveGestureToggleEnabled => !ActiveRunsComplexShortcut;
 
     /// <summary>The active slot's script, as the script card's text box reads and writes it.</summary>
     public string ActiveComplexShortcutScript
@@ -1290,43 +1517,268 @@ public partial class MappingEditorViewModel : ObservableObject
     /// writing a program the engine cannot build would fail the whole profile at reload,
     /// so the editor stops here and the script card already says what is wrong.
     /// </summary>
-    public bool ComplexShortcutScriptInvalid => LongPressRunsComplexShortcut
+    public bool ComplexShortcutScriptInvalid => ActiveRunsComplexShortcut
         && ComplexShortcutScriptError is not null;
 
     private string? _complexShortcutScriptError;
 
     private string? _complexShortcutScriptSummary;
 
-    /// <summary>
-    /// Moves the authoring of a complex shortcut to the long press and arms the bare
-    /// gesture it runs from. The picker offers the kind on the long-press tab alone, so
-    /// this only fires for a programmatic path that names it elsewhere; the kind is
-    /// meaningless without the long press that drives it.
-    /// </summary>
-    private void PointComplexShortcutAtTheLongPress()
-    {
-        if (SelectedGestureKind != GestureKind.LongPress)
-        {
-            SelectedGestureKind = GestureKind.LongPress;
-        }
+    // ---- 触发方式 / 执行方式 / 重复方式: the strategy the GUI shares with the DSL ----
 
-        // A repeat would restart the program on every interval and the engine refuses the
-        // pairing; the click and the double-click stay independent of the program.
-        LongPressRepeatInterval = 0f;
+    /// <summary>A trigger as the picker shows it: the position's own word.</summary>
+    public sealed record ActionTriggerOption(ActionTrigger Value, string Label);
+
+    /// <summary>An execution strategy as the picker shows it.</summary>
+    public sealed record ActionExecutionOption(ActionExecution Value, string Label);
+
+    /// <summary>A repeat policy as the picker shows it.</summary>
+    public sealed record ActionRepeatOption(ActionRepeat Value, string Label);
+
+    /// <summary>The triggers a program on the click position can run from.</summary>
+    private static readonly ActionTriggerOption[] ClickTriggerOptions =
+    [
+        new(ActionTrigger.Press, "单击"),
+        new(ActionTrigger.Release, "松开"),
+    ];
+
+    /// <summary>The trigger a program on the double-click position runs from.</summary>
+    private static readonly ActionTriggerOption[] DoubleClickTriggerOptions =
+    [
+        new(ActionTrigger.DoubleClick, "双击"),
+    ];
+
+    /// <summary>The trigger a program on the long-press position runs from.</summary>
+    private static readonly ActionTriggerOption[] LongPressTriggerOptions =
+    [
+        new(ActionTrigger.LongPress, "长按"),
+    ];
+
+    /// <summary>Every execution strategy, in the picker's order.</summary>
+    private static readonly ActionExecutionOption[] ExecutionOptions =
+    [
+        new(ActionExecution.WhileHeld, "按住期间执行"),
+        new(ActionExecution.Once, "执行一次"),
+        new(ActionExecution.Toggle, "再按切换"),
+    ];
+
+    /// <summary>Every repeat policy, in the picker's order.</summary>
+    private static readonly ActionRepeatOption[] RepeatOptions =
+    [
+        new(ActionRepeat.Restart, "重新开始"),
+        new(ActionRepeat.Ignore, "忽略"),
+        new(ActionRepeat.Queue, "排队"),
+    ];
+
+    /// <summary>
+    /// The triggers the active slot's program can run from. A program only ever starts from
+    /// the position that carries it, so the list is that position's own - offering the
+    /// others would write a mapping the engine refuses.
+    /// </summary>
+    public IReadOnlyList<ActionTriggerOption> ActiveActionTriggerOptions => SelectedGestureKind switch
+    {
+        GestureKind.DoubleClick => DoubleClickTriggerOptions,
+        GestureKind.LongPress => LongPressTriggerOptions,
+        _ => ClickTriggerOptions,
+    };
+
+    /// <summary>Every execution strategy, for the picker.</summary>
+    public IReadOnlyList<ActionExecutionOption> ActionExecutionOptions { get; } = ExecutionOptions;
+
+    /// <summary>Every repeat policy, for the picker.</summary>
+    public IReadOnlyList<ActionRepeatOption> ActionRepeatOptions { get; } = RepeatOptions;
+
+    /// <summary>The active slot's trigger.</summary>
+    /// <remarks>
+    /// A slot that is not running a program has no trigger of its own, so it reads as the
+    /// position's - the trigger the kind would arm if it were chosen here.
+    /// </remarks>
+    public ActionTrigger ActiveActionTrigger
+    {
+        get => ActiveSlot.TargetKind == MappingTargetKind.ComplexShortcut
+            ? ActiveSlot.Trigger
+            : TriggerForGesture(SelectedGestureKind);
+        set
+        {
+            ActiveSlot.Trigger = value;
+
+            // A release-triggered program runs to its end: nothing is held once the button
+            // is up, so the other two strategies have nothing to key off and are moved off
+            // rather than offered.
+            if (value == ActionTrigger.Release)
+            {
+                ActiveActionExecution = ActionExecution.Once;
+            }
+            else if (ActiveSlot.Trigger == ActionTrigger.DoubleClick
+                     && ActiveActionExecution == ActionExecution.WhileHeld)
+            {
+                // A double-click holds nothing either.
+                ActiveActionExecution = ActionExecution.Once;
+            }
+        }
     }
+
+    /// <summary>The active slot's execution strategy.</summary>
+    public ActionExecution ActiveActionExecution
+    {
+        get => ActiveSlot.Execution;
+        set
+        {
+            ActiveSlot.Execution = value;
+
+            // A queued run starts when the current one ends - which is the release that also
+            // stops a held program - so the pairing is moved off rather than refused later.
+            if (value == ActionExecution.WhileHeld && ActiveActionRepeat == ActionRepeat.Queue)
+            {
+                ActiveActionRepeat = ActionRepeat.Restart;
+            }
+        }
+    }
+
+    /// <summary>The active slot's repeat policy.</summary>
+    public ActionRepeat ActiveActionRepeat
+    {
+        get => ActiveSlot.Repeat;
+        set => ActiveSlot.Repeat = value;
+    }
+
+    /// <summary>The selected trigger picker row, kept in step with <see cref="ActiveActionTrigger"/>.</summary>
+    public ActionTriggerOption? ActiveActionTriggerOption
+    {
+        get => ActiveActionTriggerOptions.FirstOrDefault(option => option.Value == ActiveActionTrigger);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveActionTrigger = value.Value;
+            }
+        }
+    }
+
+    /// <summary>The selected execution picker row, kept in step with <see cref="ActiveActionExecution"/>.</summary>
+    public ActionExecutionOption? ActiveActionExecutionOption
+    {
+        get => ActionExecutionOptions.FirstOrDefault(option => option.Value == ActiveActionExecution);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveActionExecution = value.Value;
+            }
+        }
+    }
+
+    /// <summary>The selected repeat picker row, kept in step with <see cref="ActiveActionRepeat"/>.</summary>
+    public ActionRepeatOption? ActiveActionRepeatOption
+    {
+        get => ActionRepeatOptions.FirstOrDefault(option => option.Value == ActiveActionRepeat);
+        set
+        {
+            if (value is not null)
+            {
+                ActiveActionRepeat = value.Value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when a trigger picker offers a choice at all: the double-click and the long-press
+    /// positions each have exactly one trigger, so their row is a readout rather than a picker.
+    /// </summary>
+    public bool ActionTriggerEditable => ActiveActionTriggerOptions.Count > 1;
+
+    /// <summary>
+    /// The repeat policies the current execution strategy can use. 排队 needs a run that ends
+    /// on its own, so it is not offered beside 按住期间执行.
+    /// </summary>
+    public IReadOnlyList<ActionRepeatOption> AvailableActionRepeatOptions => ActiveActionExecution == ActionExecution.WhileHeld
+        ? [.. RepeatOptions.Where(option => option.Value != ActionRepeat.Queue)]
+        : RepeatOptions;
+
+    /// <summary>True when the strategy card is shown at all: the active slot runs a program.</summary>
+    public bool ShowActionStrategy => ActiveRunsComplexShortcut;
+
+    /// <summary>
+    /// What the three strategy fields mean for the program being edited, in Chinese. The
+    /// wording names the position the program rides in, because that is what decides which
+    /// triggers it can answer.
+    /// </summary>
+    public string ActionStrategyHint => SelectedGestureKind switch
+    {
+        GestureKind.DoubleClick => "该程序挂在双击上：第二次按下时开始执行。",
+        GestureKind.LongPress => "该程序挂在长按上：按住越过长按阈值后开始执行。",
+        _ => ActiveActionTrigger == ActionTrigger.Release
+            ? "该程序挂在单击上：松开按键时开始执行。"
+            : "该程序挂在单击上：按下按键时开始执行。",
+    };
+
+    /// <summary>
+    /// The press/release order the script produces, as plain-language lines: every output in
+    /// the order the engine emits it, with the keys a hold step pressed released at the end.
+    /// The preview is the compiled program run without a clock, so it shows what the user
+    /// actually gets rather than the script's own words.
+    /// </summary>
+    public IReadOnlyList<string> ActiveActionPreview
+    {
+        get
+        {
+            if (!ActiveRunsComplexShortcut)
+            {
+                return [];
+            }
+
+            try
+            {
+                var target = ActiveSlot.BuildTarget();
+                if (target is not ComplexShortcutTarget program)
+                {
+                    return [];
+                }
+
+                return [.. ComplexShortcutRuntime.Preview(program).Select(DescribeCommand)];
+            }
+            catch (ComplexShortcutParseException)
+            {
+                // The script card already says what is wrong; the preview stays empty
+                // rather than leaking a parse failure into a second place.
+                return [];
+            }
+        }
+    }
+
+    /// <summary>One previewed output as the user reads it.</summary>
+    private static string DescribeCommand(InputCommand command) => command switch
+    {
+        KeyDownCommand down => $"按下 {MappingDescriptions.Key(down.Key)}",
+        KeyUpCommand up => $"松开 {MappingDescriptions.Key(up.Key)}",
+        MouseDownCommand mouseDown => $"按住鼠标{ButtonName(mouseDown.Button)}",
+        MouseUpCommand mouseUp => $"松开鼠标{ButtonName(mouseUp.Button)}",
+        TextCommand text => $"输入「{text.Text}」",
+        _ => command.ToString() ?? string.Empty,
+    };
+
+    private static string ButtonName(MouseButton button) => button switch
+    {
+        MouseButton.Left => "左键",
+        MouseButton.Right => "右键",
+        MouseButton.Middle => "中键",
+        MouseButton.XButton1 => "侧键1",
+        MouseButton.XButton2 => "侧键2",
+        _ => "按键",
+    };
 
     /// <summary>Fills the script box with the example program, so the grammar is one click from a working script.</summary>
     [RelayCommand]
     private void FillComplexShortcutExample() => ActiveComplexShortcutScript = GestureSlotEditor.ExampleScript;
 
     /// <summary>
-    /// Parses the long-press script and publishes the error or the plain-language summary
+    /// Parses the active slot's script and publishes the error or the plain-language summary
     /// the script card shows. Runs on every editor notification, so the card is live while
     /// the script is typed and stays in step when the gesture or the source changes.
     /// </summary>
     private void RefreshComplexShortcutScript()
     {
-        if (!LongPressRunsComplexShortcut)
+        if (!ActiveRunsComplexShortcut)
         {
             ComplexShortcutScriptError = null;
             ComplexShortcutScriptSummary = null;
@@ -1336,7 +1788,7 @@ public partial class MappingEditorViewModel : ObservableObject
         try
         {
             ComplexShortcutScriptSummary = MappingDescriptions.ComplexShortcutSteps(
-                ComplexShortcutDsl.Parse(LongPressSlot.Script ?? string.Empty));
+                ComplexShortcutDsl.Parse(ActiveSlot.Script ?? string.Empty));
             ComplexShortcutScriptError = null;
         }
         catch (ComplexShortcutParseException exception)
@@ -1605,12 +2057,12 @@ public partial class MappingEditorViewModel : ObservableObject
     /// picker has to be shown. A stick is an axis, so driving a digital target from it needs
     /// to know which deflection presses; a button is binary, so driving a continuous target
     /// from it needs to know which way it deflects. Every digital target counts for the
-    /// stick - key, combo, mouse button and special key alike - because the engine rejects
-    /// a directionless stick driving any of them.
+    /// stick - key, combo, mouse button, text and special key alike - because the engine
+    /// rejects a directionless stick driving any of them.
     /// </summary>
     public bool NeedsDirection => SourceIsStick
         ? TargetKind is MappingTargetKind.KeyPress or MappingTargetKind.KeyCombo
-            or MappingTargetKind.MouseButton or MappingTargetKind.SpecialKey
+            or MappingTargetKind.MouseButton or MappingTargetKind.Text or MappingTargetKind.SpecialKey
         : TargetKind is MappingTargetKind.MouseMove or MappingTargetKind.WheelScroll;
 
     public bool ShowDirectionPicker => NeedsDirection;
@@ -1769,12 +2221,16 @@ public partial class MappingEditorViewModel : ObservableObject
 
     private void SyncDoubleClickOption()
     {
-        var option = DoubleClickAction is { } action
-            ? GestureActionOptions.FirstOrDefault(
-                candidate => EqualityComparer<MappingTarget>.Default.Equals(candidate.Target, action))
-            : DoubleClickEnabled
-                ? GestureRepeatOption
-                : GestureOffOption;
+        // A complex shortcut is not one of the picker's rows, so it reads as unlisted - the
+        // same shape a hand-edited profile naming a target the picker does not carry has.
+        var option = DoubleClickRunsComplexShortcut
+            ? null
+            : DoubleClickAction is { } action
+                ? GestureActionOptions.FirstOrDefault(
+                    candidate => EqualityComparer<MappingTarget>.Default.Equals(candidate.Target, action))
+                : DoubleClickEnabled
+                    ? GestureRepeatOption
+                    : GestureOffOption;
 
         if (!EqualityComparer<GestureActionOption?>.Default.Equals(option, _selectedDoubleClickOption))
         {
@@ -1815,6 +2271,11 @@ public partial class MappingEditorViewModel : ObservableObject
     {
         get
         {
+            if (ActiveTargetUnsupported)
+            {
+                return ActiveTargetUnsupportedDescription ?? "不支持的映射";
+            }
+
             if (ClickIsNone)
             {
                 return "无功能";
@@ -2016,9 +2477,19 @@ public partial class MappingEditorViewModel : ObservableObject
         // own target with a bare long press - is the exception: its program becomes the long
         // press's action and the click reads 无功能, which is what a quick press did when the
         // program owned the target.
-        if (entry.Target is ComplexShortcutTarget complex)
+        // The v1 shape is recognised from the target alone: a program sitting on the
+        // mapping's own target with the long-press trigger every profile written before the
+        // strategy fields existed has. One that also carries a long-press action of its own
+        // is a profile the engine refuses, so it loads as it stands rather than having the
+        // action silently dropped.
+        var v1Program = entry.Target is ComplexShortcutTarget { Trigger: ActionTrigger.LongPress } program
+            && entry.Source is ButtonBinding { Gesture: { LongPressAction: null } }
+            ? program
+            : null;
+
+        if (v1Program is not null)
         {
-            LongPressSlot.LoadAction(complex);
+            LongPressSlot.LoadAction(v1Program);
             ClickSlot.LoadAction(new NoneTarget());
 
             // A hand-edited profile may pair the program with gestures the engine refuses;
@@ -2130,10 +2601,11 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Feeds one engine sample into button capture. Only a press edge selects a button, so a
-    /// button held down before capture was armed is ignored; samples are also tracked while
-    /// capture is disarmed so arming it never fires on an already-held button. Returns true
-    /// when this sample was consumed as the mapping's new source, so the caller knows the
+    /// Feeds one engine sample into button capture and into the on-screen keyboard, in that
+    /// order. Only a press edge selects a button, so a button held down before capture was
+    /// armed is ignored; samples are also tracked while capture is disarmed so arming it never
+    /// fires on an already-held button. Returns true when this sample was spent here - as the
+    /// mapping's new source, or on the keyboard's cursor, key or page - so the caller knows the
     /// press must not also drive navigation.
     /// </summary>
     public bool CaptureGamepadSample(IGamepadState state)
@@ -2168,6 +2640,13 @@ public partial class MappingEditorViewModel : ObservableObject
             }
         }
 
+        // The keyboard answers the pad only once the capture above has had its say: a press
+        // that armed a capture has already named the source it wants.
+        if (!consumed && TextKeyboardGamepadInScope && ShowTextKeyboard && CaptureTextKeyboard(edges))
+        {
+            consumed = true;
+        }
+
         _previousCaptureButtons = pressed;
         _previousCaptureExtra.Clear();
         foreach (var code in state.ExtraButtons)
@@ -2176,6 +2655,65 @@ public partial class MappingEditorViewModel : ObservableObject
         }
 
         return consumed;
+    }
+
+    /// <summary>
+    /// Routes one sample's press edges to the on-screen keyboard: the D-pad moves the cursor,
+    /// A presses the key the cursor sits on and the bumpers turn the page. Returns false when
+    /// the keyboard spent nothing - an edge it does not own, or a push the cursor refused at
+    /// the page's edge - so the caller knows the press may still navigate, exactly as an arrow
+    /// key at the edge falls through to the body's scroll.
+    /// </summary>
+    private bool CaptureTextKeyboard(GamepadButtonMask edges)
+    {
+        // The bumpers turn the page and A presses the focused key: both are the keyboard's
+        // own, so the press is spent even when there is only one page to show.
+        if (edges.Has(GamepadButton.LeftBumper))
+        {
+            ShowPreviousTextKeyboardPage();
+            return true;
+        }
+
+        if (edges.Has(GamepadButton.RightBumper))
+        {
+            ShowNextTextKeyboardPage();
+            return true;
+        }
+
+        if (edges.Has(GamepadButton.A))
+        {
+            ActivateTextKeyboardKey();
+            return true;
+        }
+
+        var direction = DirectionOf(edges);
+        return direction is not null && MoveTextKeyboardCursor(direction.Value);
+    }
+
+    /// <summary>The direction a sample's edges name, or null when they name none.</summary>
+    private static InputDirection? DirectionOf(GamepadButtonMask edges)
+    {
+        if (edges.Has(GamepadButton.DPadUp))
+        {
+            return InputDirection.Up;
+        }
+
+        if (edges.Has(GamepadButton.DPadDown))
+        {
+            return InputDirection.Down;
+        }
+
+        if (edges.Has(GamepadButton.DPadLeft))
+        {
+            return InputDirection.Left;
+        }
+
+        if (edges.Has(GamepadButton.DPadRight))
+        {
+            return InputDirection.Right;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -2242,14 +2780,11 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The kinds the 类型 picker offers for one gesture. 复杂快捷键 joins the list on the
-    /// long-press tab of a button source alone: the engine binds the program to a bare long
-    /// press, so no other gesture - and no stick, which has no gestures at all - can run it.
+    /// The kinds the 类型 picker offers for one source. A stick has no gestures, so nothing
+    /// can start a program there and 复杂快捷键 stays off its list.
     /// </summary>
     private MappingTargetKind[] AvailableKindsForGesture(GestureKind gesture)
-        => !SourceIsStick && gesture == GestureKind.LongPress
-            ? LongPressTargetKinds
-            : AllTargetKinds;
+        => SourceIsStick ? StickTargetKinds : AllTargetKinds;
 
     partial void OnSelectedButtonChanged(GamepadButton value)
     {
@@ -2298,9 +2833,10 @@ public partial class MappingEditorViewModel : ObservableObject
 
     partial void OnClickRepeatEnabledChanged(bool value)
     {
-        if (value && LongPressRunsComplexShortcut)
+        if (value && RunsComplexShortcut)
         {
-            // The repeat makes the long press inert, so the program could never start:
+            // The repeat makes the click re-fire whatever sits on it - a program included -
+            // and makes the long press inert, so a program could never run as configured:
             // the request is refused rather than written into a mapping the engine rejects.
             ClickRepeatEnabled = false;
             return;
@@ -2347,7 +2883,6 @@ public partial class MappingEditorViewModel : ObservableObject
             LongPressEnabled = true;
             return;
         }
-
         if (value)
         {
             // Configuring the long-press switches auto-repeat off, and vice versa.
@@ -2388,6 +2923,32 @@ public partial class MappingEditorViewModel : ObservableObject
                 break;
             case nameof(GestureSlotEditor.SelectedMouseButton):
                 OnPropertyChanged(nameof(SelectedMouseButton));
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+            case nameof(GestureSlotEditor.Text):
+                OnPropertyChanged(nameof(ActiveText));
+                OnPropertyChanged(nameof(ActiveTextLength));
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+            case nameof(GestureSlotEditor.Unsupported):
+                OnPropertyChanged(nameof(ActiveTargetUnsupported));
+                OnPropertyChanged(nameof(ActiveTargetUnsupportedDescription));
+                OnPropertyChanged(nameof(UnsupportedTargetHint));
+                OnPropertyChanged(nameof(TargetDescription));
+                break;
+            case nameof(GestureSlotEditor.Trigger):
+            case nameof(GestureSlotEditor.Execution):
+            case nameof(GestureSlotEditor.Repeat):
+                OnPropertyChanged(nameof(ActiveActionTrigger));
+                OnPropertyChanged(nameof(ActiveActionTriggerOption));
+                OnPropertyChanged(nameof(ActionTriggerEditable));
+                OnPropertyChanged(nameof(ActiveActionExecution));
+                OnPropertyChanged(nameof(ActiveActionExecutionOption));
+                OnPropertyChanged(nameof(ActiveActionRepeat));
+                OnPropertyChanged(nameof(ActiveActionRepeatOption));
+                OnPropertyChanged(nameof(AvailableActionRepeatOptions));
+                OnPropertyChanged(nameof(ActionStrategyHint));
+                OnPropertyChanged(nameof(ActiveActionPreview));
                 OnPropertyChanged(nameof(TargetDescription));
                 break;
             case nameof(GestureSlotEditor.MouseSettings):
@@ -2435,6 +2996,8 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(DoubleClickAction));
         OnPropertyChanged(nameof(HasDoubleClickAction));
         OnPropertyChanged(nameof(DoubleClickActionDescription));
+        OnPropertyChanged(nameof(DoubleClickRunsComplexShortcut));
+        OnPropertyChanged(nameof(RunsComplexShortcut));
         NotifyActiveSlotChanged();
     }
 
@@ -2451,6 +3014,8 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(LongPressAction));
         OnPropertyChanged(nameof(HasLongPressAction));
         OnPropertyChanged(nameof(LongPressActionDescription));
+        OnPropertyChanged(nameof(LongPressRunsComplexShortcut));
+        OnPropertyChanged(nameof(RunsComplexShortcut));
         NotifyActiveSlotChanged();
     }
 
@@ -2499,6 +3064,25 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ActiveGestureName));
         OnPropertyChanged(nameof(ActiveTargetDescription));
         OnPropertyChanged(nameof(ActiveTargetEditable));
+        OnPropertyChanged(nameof(ActiveText));
+        OnPropertyChanged(nameof(ActiveTextLength));
+        OnPropertyChanged(nameof(ShowTextKeyboard));
+        OnPropertyChanged(nameof(ActiveTargetUnsupported));
+        OnPropertyChanged(nameof(ActiveTargetUnsupportedDescription));
+        OnPropertyChanged(nameof(UnsupportedTargetHint));
+
+        // The strategy surface: which tab can carry a program, the trigger/execution/repeat
+        // pickers, and the press/release preview of the script.
+        OnPropertyChanged(nameof(ClickRunsComplexShortcut));
+        OnPropertyChanged(nameof(DoubleClickRunsComplexShortcut));
+        OnPropertyChanged(nameof(LongPressRunsComplexShortcut));
+        OnPropertyChanged(nameof(RunsComplexShortcut));
+        OnPropertyChanged(nameof(ActiveRunsComplexShortcut));
+        OnPropertyChanged(nameof(ShowActionStrategy));
+        OnPropertyChanged(nameof(ActionTriggerEditable));
+        OnPropertyChanged(nameof(ActionStrategyHint));
+        OnPropertyChanged(nameof(ActiveActionTriggerOptions));
+        OnPropertyChanged(nameof(ActiveActionPreview));
 
         // The conflict hints ride the same chokepoint: every draft edit re-measures the
         // draft against the profile's other mappings on its button.
@@ -2708,7 +3292,37 @@ public partial class MappingEditorViewModel : ObservableObject
     }
 
     private static KeyPickerItem KeyOptionFor(GamepadKey key)
-        => new() { Label = MappingDescriptions.Key(key), Key = key };
+        => new() { Label = KeyLabel(key), Key = key };
+
+    /// <summary>
+    /// What a key is called in the picker. The shared description table names the keys it was
+    /// written for; the media and system keys appended after it are named here so the picker
+    /// stays Chinese-first rather than showing an enum name. Every other key delegates, so the
+    /// two surfaces cannot drift apart on the keys they both cover.
+    /// </summary>
+    private static string KeyLabel(GamepadKey key) => key switch
+    {
+        GamepadKey.VolumeUp => "音量加",
+        GamepadKey.VolumeDown => "音量减",
+        GamepadKey.VolumeMute => "静音",
+        GamepadKey.MediaPlayPause => "播放/暂停",
+        GamepadKey.MediaStop => "停止播放",
+        GamepadKey.MediaPrevTrack => "上一曲",
+        GamepadKey.MediaNextTrack => "下一曲",
+        GamepadKey.BrowserBack => "浏览器后退",
+        GamepadKey.BrowserForward => "浏览器前进",
+        GamepadKey.BrowserRefresh => "刷新",
+        GamepadKey.BrowserStop => "停止加载",
+        GamepadKey.BrowserHome => "浏览器主页",
+        GamepadKey.BrowserSearch => "浏览器搜索",
+        GamepadKey.BrowserFavorites => "收藏夹",
+        GamepadKey.LaunchMail => "打开邮件",
+        GamepadKey.LaunchApp1 => "启动应用1",
+        GamepadKey.LaunchApp2 => "启动应用2",
+        GamepadKey.Sleep => "睡眠",
+        GamepadKey.PrintScreen => "截屏",
+        _ => MappingDescriptions.Key(key),
+    };
 
     private KeyPickerItem? CurrentKeyOption()
         => KeyOptions.FirstOrDefault(

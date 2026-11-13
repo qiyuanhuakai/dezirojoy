@@ -333,6 +333,59 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void SetNativeGamepadPaused_Round_Trips_And_Is_Distinct_From_The_Other_Two_Pauses()
+    {
+        var paused = new SetNativeGamepadPausedMessage("req-1", true);
+        var resumed = new SetNativeGamepadPausedMessage("req-2", false);
+
+        var restoredPaused = Assert.IsType<SetNativeGamepadPausedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(paused)));
+        var restoredResumed = Assert.IsType<SetNativeGamepadPausedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(resumed)));
+
+        Assert.True(restoredPaused.Paused);
+        Assert.False(restoredResumed.Paused);
+
+        // Three pauses on the wire, three kinds: a snapshot must not be able to confuse them.
+        var kinds = new[]
+        {
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(new SetMappingEnabledMessage("r", false))),
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(new SetInjectionSuspendedMessage("r", false))),
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(new SetNativeGamepadPausedMessage("r", false))),
+        };
+
+        Assert.Equal(3, kinds.Distinct().Count());
+    }
+
+    [Fact]
+    public void StateChanged_Round_Trips_The_Native_Gamepad_Pause()
+    {
+        var message = new StateChangedMessage("daemon-instance-1", new StateSnapshot(
+            1, 1, true, true, 1234, "high", "Xbox Default", null, 10, 0, true)
+        {
+            NativeGamepadPaused = true,
+        });
+
+        var restored = Assert.IsType<StateChangedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.True(restored.Snapshot.NativeGamepadPaused);
+    }
+
+    [Fact]
+    public void An_Older_Snapshot_Without_The_Native_Gamepad_Pause_Reads_As_Not_Paused()
+    {
+        // The field is additive: a daemon that predates it writes no property at all, and the
+        // client must read that as "no foreground rule has paused mapping" rather than fail.
+        var json = IpcSerializer.Serialize(new StateChangedMessage("daemon-instance-1", new StateSnapshot(
+            1, 1, true, true, 1234, "high", "Xbox Default", null, 10, 0, true)));
+
+        var restored = Assert.IsType<StateChangedMessage>(IpcSerializer.Deserialize(json));
+
+        Assert.False(restored.Snapshot.NativeGamepadPaused);
+    }
+
+    [Fact]
     public void StateChanged_Round_Trips_The_Daemon_Instance_Id_So_A_Restart_Is_Distinguishable()
     {
         var before = new StateChangedMessage("daemon-instance-1", new StateSnapshot(

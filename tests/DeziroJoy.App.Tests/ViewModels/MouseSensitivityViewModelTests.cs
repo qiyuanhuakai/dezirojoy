@@ -445,4 +445,241 @@ public class MouseSensitivityViewModelTests
         Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewX);
         Assert.NotEqual(MouseSensitivityViewModel.PreviewCenter, vm.PreviewY);
     }
+
+    [Fact]
+    public void Real_Input_Mode_Shows_Raw_Deadzone_Filtered_And_Final_Speed()
+    {
+        var vm = new MouseSensitivityViewModel
+        {
+            MaxSpeed = 1600f,
+            ResponseTime = 0f,
+            IsLive = true,
+            IsRealInputMode = true,
+        };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.5f, -0.25f));
+
+        // Stage 1: the raw stick, exactly as the pad reported it.
+        Assert.Equal(0.5, vm.RawStickX);
+        Assert.Equal(-0.25, vm.RawStickY);
+        Assert.Equal(0.559, vm.RawMagnitude, 3);
+
+        // Stage 2: the deadzone-filtered deflection the response curve actually sees -
+        // the radial ramp rescales (0.559 - 0.15) / (1 - 0.15) back onto full deflection.
+        Assert.Equal(0.481, vm.FilteredMagnitude, 3);
+        Assert.Equal(0.430, vm.FilteredStickX, 3);
+
+        // Stage 3: the engine's own smoothed speed, which with no smoothing equals the
+        // daily target speed computed from the filtered deflection.
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.Equal(vm.DailySpeed, vm.CurrentSpeed, 3);
+        Assert.True(vm.CurrentSpeed > 0, $"expected real speed, got {vm.CurrentSpeed}");
+    }
+
+    [Fact]
+    public void Real_Input_Mode_Reads_The_Right_Stick_Only()
+    {
+        var vm = new MouseSensitivityViewModel
+        {
+            MaxSpeed = 1600f,
+            ResponseTime = 0f,
+            IsLive = true,
+            IsRealInputMode = true,
+        };
+
+        // The mouse mapping reads the right stick, so the left one is not the mouse's input.
+        vm.ApplySample(GamepadState.Create(default, 0.8f, 0f, 0f, 0f));
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.Equal(0, vm.CurrentSpeed);
+        Assert.Equal(0, vm.RawMagnitude);
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.8f, 0f));
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.True(vm.CurrentSpeed > 0, $"expected real speed, got {vm.CurrentSpeed}");
+    }
+
+    [Fact]
+    public void Demo_Mode_Ignores_Real_Samples()
+    {
+        // The synthetic sweep is the default preview: a real sample arriving while the demo
+        // radio is checked must not hijack the script or move the calibration readouts.
+        var vm = new MouseSensitivityViewModel { MaxSpeed = 1600f, ResponseTime = 0f, IsLive = true };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.9f, 0f));
+
+        Assert.Equal(0, vm.RawStickX);
+        Assert.Equal(0, vm.RawMagnitude);
+
+        AdvanceMany(vm, 30);
+
+        Assert.True(vm.CurrentSpeed > 0, $"expected the demo sweep, got {vm.CurrentSpeed}");
+    }
+
+    [Fact]
+    public void The_Precision_Key_From_Real_Input_Splits_Daily_And_Precision_Speed()
+    {
+        var vm = new MouseSensitivityViewModel
+        {
+            MaxSpeed = 1600f,
+            PrecisionScale = 0.35f,
+            ResponseTime = 0f,
+            IsLive = true,
+            IsRealInputMode = true,
+        };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 1f, 0f));
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        // Daily and precision are tuned separately: each has its own readout at full
+        // deflection, and the key only moves the engine's output, never the daily number.
+        Assert.False(vm.PrecisionActive);
+        Assert.Equal(1600, vm.DailySpeed, 3);
+        Assert.Equal(560, vm.PrecisionSpeed, 3);
+        Assert.Equal(1600, vm.CurrentSpeed, 3);
+
+        vm.ApplySample(GamepadState.Create(GamepadButton.LeftStick.ToMask(), 0f, 0f, 1f, 0f));
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.True(vm.PrecisionActive);
+        Assert.Equal(560, vm.CurrentSpeed, 3);
+        Assert.Equal(1600, vm.DailySpeed, 3);
+    }
+
+    [Fact]
+    public void Drift_Measurement_Suggests_A_Deadzone_Above_The_Observed_Rest_Drift()
+    {
+        var vm = new MouseSensitivityViewModel { IsRealInputMode = true };
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+        Assert.True(vm.IsMeasuringDrift);
+
+        // A stick resting with noise: the magnitudes hover around 0.05 with a 0.054 peak.
+        for (var i = 0; i < 40; i++)
+        {
+            vm.ApplySample(GamepadState.Create(default, 0f, 0f, i % 2 == 0 ? 0.05f : 0.03f, i % 2 == 0 ? 0.02f : -0.04f));
+        }
+
+        vm.StopDriftMeasurementCommand.Execute(null);
+
+        Assert.False(vm.IsMeasuringDrift);
+        Assert.Equal(40, vm.DriftSampleCount);
+        Assert.Equal(0.054, vm.DriftMaxMagnitude, 3);
+
+        // The suggestion clears the observed peak with headroom, rounded up to a step the
+        // deadzone slider can actually represent - and it waits for confirmation.
+        Assert.Equal(0.07, vm.SuggestedDeadZone!.Value, 3);
+        Assert.Equal("0.07", vm.SuggestedDeadZoneText);
+        Assert.True(vm.CanApplySuggestion);
+        Assert.Equal(0.15f, vm.DeadZone);
+
+        vm.ApplySuggestedDeadZoneCommand.Execute(null);
+
+        Assert.Equal(0.07f, vm.DeadZone);
+        Assert.Equal(0.07f, vm.BuildSettings().DeadZone);
+    }
+
+    [Fact]
+    public void A_Clean_Stick_Suggests_No_Deadzone()
+    {
+        var vm = new MouseSensitivityViewModel { IsRealInputMode = true };
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 30; i++)
+        {
+            vm.ApplySample(GamepadState.Neutral);
+        }
+
+        vm.StopDriftMeasurementCommand.Execute(null);
+
+        Assert.Null(vm.SuggestedDeadZone);
+        Assert.Equal("—", vm.SuggestedDeadZoneText);
+        Assert.False(vm.CanApplySuggestion);
+
+        // Nothing to confirm, so applying must not silently wipe the configured deadzone.
+        vm.ApplySuggestedDeadZoneCommand.Execute(null);
+
+        Assert.Equal(0.15f, vm.DeadZone);
+    }
+
+    [Fact]
+    public void The_Deadzone_Suggestion_Needs_Enough_Samples_And_Is_Clamped_To_The_Slider()
+    {
+        var few = new MouseSensitivityViewModel { IsRealInputMode = true };
+        few.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 19; i++)
+        {
+            few.ApplySample(GamepadState.Create(default, 0f, 0f, 0.05f, 0f));
+        }
+
+        Assert.Null(few.SuggestedDeadZone);
+
+        few.ApplySample(GamepadState.Create(default, 0f, 0f, 0.05f, 0f));
+        Assert.Equal(0.07, few.SuggestedDeadZone!.Value, 3);
+
+        // A wildly drifting pad must still suggest a deadzone the slider can reach.
+        var wild = new MouseSensitivityViewModel { IsRealInputMode = true };
+        wild.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 30; i++)
+        {
+            wild.ApplySample(GamepadState.Create(default, 0f, 0f, 1f, 0f));
+        }
+
+        Assert.Equal(0.6, wild.SuggestedDeadZone!.Value, 3);
+    }
+
+    [Fact]
+    public void Leaving_Real_Input_Mode_Clears_The_Calibration_State()
+    {
+        var vm = new MouseSensitivityViewModel { IsLive = true, IsRealInputMode = true };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.5f, 0f));
+        vm.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 30; i++)
+        {
+            vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+        }
+
+        Assert.True(vm.SuggestedDeadZone is not null);
+
+        vm.IsRealInputMode = false;
+
+        // Re-entering starts a clean session instead of confirming stale numbers, and the
+        // parked sample decays the preview like any other rest.
+        Assert.False(vm.IsMeasuringDrift);
+        Assert.Equal(0, vm.DriftSampleCount);
+        Assert.Null(vm.SuggestedDeadZone);
+        Assert.Equal(0, vm.RawStickX);
+        Assert.Equal(0, vm.RawMagnitude);
+        Assert.Equal(0, vm.DailySpeed);
+        Assert.False(vm.IsRealInputMode);
+
+        // With the calibration off and the pad still live the demo sweep takes back over;
+        // dropping the lease parks the preview at rest.
+        AdvanceMany(vm, 5);
+        Assert.True(vm.CurrentSpeed > 0, "leaving the calibration returns to the demo sweep");
+
+        vm.IsLive = false;
+        AdvanceMany(vm, 700);
+
+        Assert.Equal(0, vm.CurrentSpeed);
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewX);
+        Assert.Equal(MouseSensitivityViewModel.PreviewCenter, vm.PreviewY);
+    }
+
+    [Fact]
+    public void Reset_Returns_The_Panel_To_Demo_Mode()
+    {
+        var vm = new MouseSensitivityViewModel { IsRealInputMode = true };
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+        vm.Reset();
+
+        Assert.False(vm.IsRealInputMode);
+        Assert.False(vm.IsRealInputMode);
+        Assert.False(vm.IsMeasuringDrift);
+        Assert.Null(vm.SuggestedDeadZone);
+    }
 }

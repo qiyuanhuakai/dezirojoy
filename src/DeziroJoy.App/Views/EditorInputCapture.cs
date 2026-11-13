@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -16,7 +17,9 @@ namespace DeziroJoy.App.Views;
 /// <see cref="MappingEditorViewModel.CaptureGamepadSample"/> and every key press/release to the
 /// keyboard-capture entry points, so the mapping editor can be filled from live input without
 /// the window's code-behind taking part. The view model decides whether capture is armed, so
-/// ordinary typing and ordinary gamepad use are untouched.
+/// ordinary typing and ordinary gamepad use are untouched. The window's own gamepad scope is
+/// mirrored onto the editor as well, because the on-screen keyboard is the one part of the
+/// editor that answers the pad outside a capture.
 /// </summary>
 public sealed class EditorInputCapture : Control
 {
@@ -38,9 +41,11 @@ public sealed class EditorInputCapture : Control
         _window = window;
         _viewModel = viewModel;
         viewModel.Host.Sampled += OnSampled;
+        viewModel.PropertyChanged += OnViewModelPropertyChanged;
         window.AddHandler(InputElement.KeyDownEvent, OnKeyDown, RoutingStrategies.Tunnel, handledEventsToo: true);
         window.AddHandler(InputElement.KeyUpEvent, OnKeyUp, RoutingStrategies.Tunnel, handledEventsToo: true);
         window.Deactivated += OnWindowDeactivated;
+        RefreshTextKeyboardScope();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -54,6 +59,8 @@ public sealed class EditorInputCapture : Control
         if (_viewModel is not null)
         {
             _viewModel.Host.Sampled -= OnSampled;
+            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            _viewModel.Editor.TextKeyboardGamepadInScope = false;
         }
 
         if (_window is not null)
@@ -77,6 +84,39 @@ public sealed class EditorInputCapture : Control
         }
 
         Dispatcher.UIThread.Post(() => editor.CaptureGamepadSample(args.State));
+    }
+
+    /// <summary>
+    /// The window's scope or its navigation toggle moved, so the editor's on-screen keyboard
+    /// is told whether it still answers the pad.
+    /// </summary>
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(MainWindowViewModel.IsEditing)
+            or nameof(MainWindowViewModel.GamepadNavigationEnabled)
+            or nameof(MainWindowViewModel.IsPhysicalInputInScope))
+        {
+            RefreshTextKeyboardScope();
+        }
+    }
+
+    /// <summary>
+    /// Mirrors the window's gamepad scope onto the editor: the on-screen keyboard takes the
+    /// pad only while the editor is open and the window's own navigation is in scope, which is
+    /// the same lease every other editor press answers to. A window that closes to the tray
+    /// therefore leaves the keyboard deaf to the pad even though the editor - and the draft it
+    /// holds - outlives the window.
+    /// </summary>
+    private void RefreshTextKeyboardScope()
+    {
+        if (_viewModel is not { } viewModel)
+        {
+            return;
+        }
+
+        viewModel.Editor.TextKeyboardGamepadInScope = viewModel.IsEditing
+            && viewModel.GamepadNavigationEnabled
+            && viewModel.IsPhysicalInputInScope;
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)

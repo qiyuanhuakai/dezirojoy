@@ -191,6 +191,88 @@
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
 
+        <!-- The text box: the same form-control chrome the combo boxes and the script
+             editor wear, opened up into one line. A text target is a short string - a
+             search query, a file name, a URL - so it reads and edits on one line rather
+             than in the multi-line editor the script card uses. -->
+        <Style Selector="TextBox.textBox">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+
+        <!-- A key on the on-screen keyboard: the same focusable cap idiom the key picker
+             uses, so the gamepad cursor and keyboard focus both land on a visible box.
+             Two states wear the accent surface, and neither rests on colour alone: the
+             VM's own cursor (the "focused" class the code-behind mirrors from
+             TextKeyboard.FocusedKey) also raises the label weight, and real keyboard
+             focus rings the border. The border thickness never changes, so neither
+             shifts the cap. -->
+        <Style Selector="Button.textKey">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Classes="textKeyFrame" Background="{TemplateBinding Background}"
+                            BorderThickness="1" BorderBrush="Transparent"
+                            CornerRadius="{DynamicResource CornerRadiusMd}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.textKey:pointerover Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey:pressed Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey:focus Border.textKeyFrame">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <!-- The cursor the gamepad drives: the same key-cap surface washed in the accent
+             tone, so the cap the cursor sits on is the one that reads as selected. -->
+        <Style Selector="Button.textKey.focused Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey TextBlock.textKeyLabel">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey.focused TextBlock.textKeyLabel">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <!-- The press/release preview: one plain-language line per output, in the order the
+             engine emits it. It reads as a list, not as a paragraph, because the order is
+             the point. -->
+        <Style Selector="TextBlock.previewLine">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Margin" Value="0,0,0,2" />
+        </Style>
+
     </UserControl.Styles>
 
     <Grid RowDefinitions="Auto,*">
@@ -328,6 +410,17 @@
                                    Text="按住时重复触发单击的间隔，范围 0.05–2.00 秒，步进 0.05 秒。" />
                     </StackPanel>
                 </StackPanel>
+
+                <!-- A target this build does not know: a profile written by a newer build
+                     names a discriminator no type here claims. The draft shows it as an
+                     unsupported mapping and commits it back exactly as the profile carries
+                     it - the one thing that replaces it is the user picking something else.
+                     It leads the target area because the banner describes the very controls
+                     below it: they cannot describe a target they do not know. -->
+                <TextBlock x:Name="UnsupportedTargetBanner" Classes="hint" Margin="0,0,0,10"
+                           TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                           IsVisible="{Binding ActiveTargetUnsupported}"
+                           Text="{Binding UnsupportedTargetHint}" />
 
                 <!-- The shared target editor. Every control below reads and writes the active
                      slot, so the three gestures are configured through one surface instead of
@@ -473,6 +566,94 @@
                     <CheckBox x:Name="ModifierShiftBox" Content="Shift" Margin="14,0,0,0" IsChecked="{Binding ActiveModifierShift, Mode=TwoWay}" />
                     <CheckBox x:Name="ModifierAltBox" Content="Alt" Margin="14,0,0,0" IsChecked="{Binding ActiveModifierAlt, Mode=TwoWay}" />
                     <CheckBox x:Name="ModifierWinBox" Content="Win" Margin="14,0,0,0" IsChecked="{Binding ActiveModifierWin, Mode=TwoWay}" />
+                </StackPanel>
+
+                <!-- 输入文本. A text target types a short string - a search query, a file
+                     name, a URL - on the press edge; it is a tap, so it holds nothing and
+                     repeats nothing. The box is the physical-keyboard way in, the on-screen
+                     keyboard below is the gamepad way in, and the two write the same draft.
+                     The bound is the Core's own, so a paste that runs long is trimmed rather
+                     than refused, and the counter names it instead of leaving the trim to be
+                     discovered. -->
+                <StackPanel x:Name="TextRow" Margin="0,10,0,0" IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=Text}">
+                    <TextBlock Classes="sectionLabel" Text="输入文本" />
+                    <TextBox x:Name="ActiveTextBox" Classes="textBox"
+                             MaxLength="{x:Static vm:MappingEditorViewModel.TextMaxLength}"
+                             Text="{Binding ActiveText, Mode=TwoWay}"
+                             AutomationProperties.Name="输入文本" />
+                    <TextBlock x:Name="ActiveTextLengthText" Classes="hint" Margin="0,6,0,0"
+                               Text="{Binding ActiveTextLength, StringFormat='已输入 {0} / 256 个字符，超出部分会被裁掉'}" />
+                </StackPanel>
+
+                <!-- 屏幕键盘. A basic keyboard that types the draft with the gamepad alone:
+                     the cursor sits on one cap, the direction keys move it and A presses
+                     it. It is deliberately basic - it types the characters its pages
+                     carry and nothing else - so a character no page carries is out of reach
+                     here and the physical-keyboard capture above stays the way to type one.
+                     The pages lead as one segmented row, the same surface language as the
+                     gesture switcher and the key picker's navigator, and the grid shows the
+                     active page's keys a row at a time. -->
+                <StackPanel x:Name="TextKeyboardRow" Margin="0,12,0,0" IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ShowTextKeyboard}">
+                    <TextBlock Classes="sectionLabel" Text="屏幕键盘" />
+                    <TextBlock Classes="hint" Margin="0,0,0,8" TextWrapping="Wrap"
+                               Text="键盘：聚焦到某个按键后用方向键移动光标，按空格输入光标处的字符。手柄：方向键移动光标，A 键输入光标处的字符，LB / RB 切换键盘页。上方标签同样切换键盘页，也可以直接用上面的方框键入。" />
+
+                    <Border x:Name="TextKeyboardPages" Background="{DynamicResource SubtleBrush}"
+                            CornerRadius="{DynamicResource CornerRadiusMd}"
+                            Padding="3" Margin="0,0,0,8" HorizontalAlignment="Left">
+                        <ItemsControl x:Name="TextKeyboardPageNav" ItemsSource="{Binding TextKeyboard.Pages}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:TextKeyboardPage">
+                                    <RadioButton Classes="keyCategorySegment" GroupName="TextKeyboardPages"
+                                                 Content="{Binding Name}"
+                                                 AutomationProperties.Name="{Binding Name}"
+                                                 Loaded="OnTextKeyboardTabLoaded"
+                                                 Click="OnTextKeyboardPageClick" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+
+                    <Border Classes="pickerWell">
+                        <!-- One ItemsControl per row, so a short row stays short instead of
+                             stretching to the longest one's width: the action row's four
+                             caps line up under the first four letter caps rather than
+                             spreading across the whole card. -->
+                        <ItemsControl x:Name="TextKeyboardGrid" Classes="keyGrid"
+                                      ItemsSource="{Binding TextKeyboard.ActivePage.Rows}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <ItemsControl Classes="keyGrid" ItemsSource="{Binding}" Margin="0,0,0,4">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <UniformGrid Columns="{Binding Count}" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:TextKeyboardKey">
+                                                <Button Classes="textKey" Click="OnTextKeyboardKeyClick"
+                                                        Loaded="OnTextKeyboardKeyLoaded">
+                                                    <TextBlock Classes="textKeyLabel" Text="{Binding Label}" />
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
                 </StackPanel>
 
                 <!-- What the slot does beyond a target. 无功能 is explicit for every slot; the
@@ -686,6 +867,88 @@
                     <TextBlock x:Name="SpecialLayerHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ShowSpecialLayerControls}"
                                Text="{Binding SpecialLayerHint}" />
+                </StackPanel>
+
+                <!-- 执行策略. The trigger, the execution and the repeat policy are the three
+                     fields the GUI and the DSL share, so they are stated here once rather
+                     than twice: the same words name them in the script's own grammar. The
+                     card follows the active slot, exactly as the target editor does - a
+                     program is the slot's own action, whichever of the three positions
+                     carries it. The trigger row is a readout on the two gesture positions,
+                     because each answers exactly one trigger; only the click offers a
+                     choice, and the hint names the position the program rides in. -->
+                <StackPanel x:Name="ActionStrategyRow" Margin="0,12,0,0"
+                            IsEnabled="{Binding ActiveTargetEditable}"
+                            IsVisible="{Binding ShowActionStrategy}">
+                    <TextBlock Classes="sectionLabel" Text="执行策略" />
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="触发方式" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="ActionTriggerCombo" HorizontalAlignment="Stretch"
+                                  IsEnabled="{Binding ActionTriggerEditable}"
+                                  ItemsSource="{Binding ActiveActionTriggerOptions}"
+                                  SelectedItem="{Binding ActiveActionTriggerOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:MappingEditorViewModel+ActionTriggerOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="执行方式" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="ActionExecutionCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding ActionExecutionOptions}"
+                                  SelectedItem="{Binding ActiveActionExecutionOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:MappingEditorViewModel+ActionExecutionOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <!-- 排队 needs a run that ends on its own, so it leaves the list while
+                         按住期间执行 is chosen rather than being offered and then refused. -->
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="重复方式" VerticalAlignment="Center" Margin="0" />
+                        <ComboBox Grid.Column="1" x:Name="ActionRepeatCombo" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding AvailableActionRepeatOptions}"
+                                  SelectedItem="{Binding ActiveActionRepeatOption, Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="vm:MappingEditorViewModel+ActionRepeatOption">
+                                    <TextBlock Text="{Binding Label}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </Grid>
+                    <TextBlock x:Name="ActionStrategyHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
+                               Text="{Binding ActionStrategyHint}" />
+
+                    <!-- What the script actually produces: every output in the order the
+                         engine emits it, with the keys a hold step pressed released at the
+                         end. It is the compiled program run without a clock, so it shows
+                         what the user gets rather than the script's own words - and it stays
+                         empty while the script does not parse, leaving the parse error in
+                         the card below as the single place that names the failure. -->
+                    <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="执行顺序" />
+                    <ItemsControl x:Name="ActionPreviewList" ItemsSource="{Binding ActiveActionPreview}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Classes="previewLine" Text="{Binding}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
 
                 <!-- 复杂快捷键. The long press - and only the long press - can run a program:

@@ -1434,4 +1434,171 @@ public class PresetStoreTests
         // The engine still builds it, exactly as it did before the fan-out.
         _ = new MappingEngine(synced);
     }
+
+    // ---- Scheme replace, capture and restore ----------------------------------
+
+    [Fact]
+    public void ReplaceScheme_Writes_Every_Slot_And_Removes_The_Slots_The_Scheme_Does_Not_Carry()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("旧主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile("旧第二套", "pad-1"));
+        store.SaveSlot("pad-1", 3, SpecialSlotProfile("旧第三套", "pad-1"));
+
+        store.ReplaceScheme("pad-1", new Dictionary<int, GamepadProfile>
+        {
+            [1] = SpecialSlotProfile("新主配置", "pad-1"),
+            [2] = SpecialSlotProfile("新第二套", "pad-1"),
+        });
+
+        Assert.Equal([1, 2], store.SlotsInUse("pad-1"));
+        Assert.Equal("新主配置", store.LoadSlot("pad-1", 1)!.Name);
+        Assert.Equal("新第二套", store.LoadSlot("pad-1", 2)!.Name);
+        Assert.Null(inner.Load("preset3:pad-1"));
+    }
+
+    [Fact]
+    public void ReplaceScheme_Preserves_Slot_Numbers_And_Tags_The_Profiles_With_Them()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+
+        // A device whose live slots skip a number - the user deleted slot 2 at some point -
+        // keeps that shape, so a leader naming slots 1 and 3 still flips between them.
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 3, SpecialSlotProfile("第三套", "pad-1"));
+
+        store.ReplaceScheme("pad-1", new Dictionary<int, GamepadProfile>
+        {
+            [1] = SpecialSlotProfile("新主配置", "pad-1"),
+            [3] = SpecialSlotProfile("新第三套", "pad-1"),
+        });
+
+        Assert.Equal([1, 3], store.SlotsInUse("pad-1"));
+        Assert.Equal(1, store.LoadSlot("pad-1", 1)!.PresetSlot);
+        Assert.Equal(3, store.LoadSlot("pad-1", 3)!.PresetSlot);
+        Assert.Equal("preset3:pad-1", store.LoadSlot("pad-1", 3)!.DeviceId);
+    }
+
+    [Fact]
+    public void ReplaceScheme_Refuses_A_Scheme_Without_Its_Base_Preset()
+    {
+        var store = new PresetStore(new InMemoryProfileStore());
+
+        Assert.Throws<ArgumentException>(() =>
+            store.ReplaceScheme("pad-1", new Dictionary<int, GamepadProfile>()));
+    }
+
+    [Fact]
+    public void CaptureSlots_And_RestoreSlots_Round_Trip_The_Whole_Slot_Set()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1", precision: PrecisionKey));
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile("第二套", "pad-1"));
+
+        var snapshot = store.CaptureSlots("pad-1");
+
+        // A replace that adds a slot, rewrites the others and drops none.
+        store.ReplaceScheme("pad-1", new Dictionary<int, GamepadProfile>
+        {
+            [1] = SpecialSlotProfile("导入的主配置", "pad-1"),
+            [2] = SpecialSlotProfile("导入的第二套", "pad-1"),
+            [5] = SpecialSlotProfile("导入的第五套", "pad-1"),
+        });
+
+        store.RestoreSlots("pad-1", snapshot);
+
+        Assert.Equal([1, 2], store.SlotsInUse("pad-1"));
+        Assert.Equal("主配置", store.LoadSlot("pad-1", 1)!.Name);
+        Assert.Equal("第二套", store.LoadSlot("pad-1", 2)!.Name);
+        Assert.Null(inner.Load("preset5:pad-1"));
+
+        // The restore is exact, not approximate: the precision key the snapshot carried is
+        // back in the profile, so an undo cannot quietly drop a device-global key.
+        Assert.Contains(store.LoadSlot("pad-1", 1)!.Mappings, m => m.Target is SpecialKeyTarget);
+    }
+
+    [Fact]
+    public void RestoreSlots_Removes_A_Slot_The_Snapshot_Does_Not_Name()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1"));
+        var snapshot = store.CaptureSlots("pad-1");
+
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile("新增的第二套", "pad-1"));
+        store.RestoreSlots("pad-1", snapshot);
+
+        Assert.Equal([1], store.SlotsInUse("pad-1"));
+        Assert.Null(inner.Load("preset2:pad-1"));
+    }
+
+    [Fact]
+    public void SpecialKeysInEffect_Merges_The_Subset_Across_Slots_With_The_Earlier_Slot_Winning()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1", precision: PrecisionKey));
+        // A store edited by hand: the leader exists only in slot 2, and slot 2 carries a
+        // second, conflicting precision key on the same button.
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile(
+            "第二套", "pad-1", precision: PrecisionKey with { PrecisionMode = PrecisionMode.Hold }, leader: LeaderKey));
+
+        var keys = store.SpecialKeysInEffect("pad-1");
+
+        Assert.Equal(2, keys.Count);
+        var precision = Assert.Single(keys, key => key.Kind == SpecialKeyKind.Precision);
+        Assert.Equal(PrecisionMode.Toggle, ((SpecialKeyTarget)precision.Target).PrecisionMode);
+        var leader = Assert.Single(keys, key => key.Kind == SpecialKeyKind.Leader);
+        Assert.Equal(GamepadButton.Back, leader.Button);
+        Assert.Equal(PresetStore.SpecialKeyPosition.Target, leader.Position);
+        Assert.True(leader.Enabled);
+    }
+
+    [Fact]
+    public void SpecialKeysInEffect_Over_A_Profile_List_Uses_The_Same_Rule()
+    {
+        var keys = PresetStore.SpecialKeysInEffect(
+        [
+            SpecialSlotProfile("主配置", "pad-1", precision: PrecisionKey with { PrecisionMode = PrecisionMode.Hold }),
+            SpecialSlotProfile("第二套", "pad-1", precision: PrecisionKey, leader: LeaderKey),
+        ]);
+
+        Assert.Equal(2, keys.Count);
+        Assert.Equal(
+            PrecisionMode.Hold,
+            ((SpecialKeyTarget)Assert.Single(keys, key => key.Kind == SpecialKeyKind.Precision).Target).PrecisionMode);
+    }
+
+    [Fact]
+    public void SyncSpecialKeys_From_A_Listed_Set_Installs_Keys_No_Profile_Carries()
+    {
+        var inner = new InMemoryProfileStore();
+        var store = new PresetStore(inner);
+        store.SaveSlot("pad-1", 1, SpecialSlotProfile("主配置", "pad-1"));
+        store.SaveSlot("pad-1", 2, SpecialSlotProfile("第二套", "pad-1"));
+
+        // The listed set names a leader neither profile carries - the shape a scheme bundle
+        // whose special-key section is authoritative arrives in.
+        store.SyncSpecialKeys("pad-1",
+        [
+            new PresetStore.DeviceSpecialKey(
+                GamepadButton.Back,
+                0,
+                SpecialKeyKind.Leader,
+                PresetStore.SpecialKeyPosition.Target,
+                LeaderKey,
+                Enabled: true),
+        ]);
+
+        foreach (var slot in new[] { 1, 2 })
+        {
+            var profile = store.LoadSlot("pad-1", slot)!;
+            _ = new MappingEngine(profile);
+            Assert.Contains(profile.Mappings, m =>
+                m.Source is ButtonBinding { Button: GamepadButton.Back } && m.Target is SpecialKeyTarget);
+        }
+    }
 }

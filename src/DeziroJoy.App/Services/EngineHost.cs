@@ -23,6 +23,13 @@ public sealed class ControllerSampledEventArgs : EventArgs
 /// Ties provider, per-device engines, dispatchers and the output sink together.
 /// <see cref="TickOnce"/> is deterministic and thread-free (used by tests and the UI);
 /// <see cref="Start"/> runs the same loop on a background thread for live mapping.
+/// <para>
+/// Three independent switches gate dispatch: the user's mapping toggle
+/// (<see cref="SetMappingEnabled"/>), the GUI's input hijack lease
+/// (<see cref="SetInjectionSuspended"/>), and the foreground rule that hands the pad to the
+/// program in front (<see cref="SetNativeGamepadPaused"/>). None of them lifts another's
+/// pause, and none of them touches the injection mutex.
+/// </para>
 /// </summary>
 public sealed class EngineHost : IDisposable
 {
@@ -54,6 +61,7 @@ public sealed class EngineHost : IDisposable
     private Thread? _thread;
     private volatile bool _running;
     private volatile bool _injectionSuspended;
+    private volatile bool _nativeGamepadPaused;
     private volatile int _injectionVerdict;
     private int _presenceVersion;
 
@@ -158,7 +166,7 @@ public sealed class EngineHost : IDisposable
 
                 _lastStates[descriptor.DeviceId] = state;
 
-                if (IsMappingEnabled && !_injectionSuspended)
+                if (IsMappingEnabled && !_injectionSuspended && !_nativeGamepadPaused)
                 {
                     var commands = runtime.Engine.Tick(state, (float)delta.TotalSeconds);
                     runtime.Dispatcher.DispatchAll(commands);
@@ -263,6 +271,47 @@ public sealed class EngineHost : IDisposable
             _injectionSuspended = suspended;
 
             if (suspended)
+            {
+                foreach (var runtime in _runtimes.Values)
+                {
+                    runtime.Engine.Reset();
+                    runtime.Dispatcher.ReleaseAll();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// True while a foreground rule asked for native gamepad input: the program in front reads
+    /// the pad itself, so keyboard and mouse mapping pauses. Sampling continues exactly as it
+    /// does under <see cref="IsInjectionSuspended"/> - the UI keeps highlighting the pad - and
+    /// the pause is deliberately independent of the other two: <see cref="IsMappingEnabled"/> is
+    /// the user's own mapping pause and <see cref="IsInjectionSuspended"/> is the GUI's input
+    /// hijack lease. Three independent switches, so the foreground rule lifting its pause can
+    /// never resume an injection the user or the editor asked to stop.
+    /// </summary>
+    public bool IsNativeGamepadPaused => _nativeGamepadPaused;
+
+    /// <summary>
+    /// Pauses or resumes injection for the program in front. Pausing releases everything
+    /// currently held, so no key stays stuck down in a game that just took the pad over;
+    /// resuming lets the next tick re-press whatever is still held, because
+    /// <see cref="MappingEngine.Reset"/> cleared the press edges. The injection mutex is
+    /// untouched: this gates dispatch only, exactly as the other two pauses do, so the
+    /// resident-daemon model and the one-injector-at-a-time guarantee are unaffected.
+    /// </summary>
+    public void SetNativeGamepadPaused(bool paused)
+    {
+        lock (_sync)
+        {
+            if (_nativeGamepadPaused == paused)
+            {
+                return;
+            }
+
+            _nativeGamepadPaused = paused;
+
+            if (paused)
             {
                 foreach (var runtime in _runtimes.Values)
                 {

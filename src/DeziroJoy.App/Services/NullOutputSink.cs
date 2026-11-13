@@ -17,6 +17,10 @@ public sealed class NullOutputSink : IOutputSink
     {
     }
 
+    public void SendText(string text)
+    {
+    }
+
     public void MouseMove(int dx, int dy)
     {
     }

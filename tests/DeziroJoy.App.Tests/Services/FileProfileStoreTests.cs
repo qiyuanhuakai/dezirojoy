@@ -67,6 +67,52 @@ public class FileProfileStoreTests : IDisposable
     }
 
     [Fact]
+    public void A_Damaged_Profile_File_Loads_What_It_Can_Instead_Of_Throwing()
+    {
+        var store = new FileProfileStore(_directory);
+        File.WriteAllText(Path.Combine(_directory, "dev-damaged.json"), """
+        {
+          "Name": "damaged",
+          "Mappings": [
+            { "Source": { "$type": "button", "Button": "A" }, "Target": { "$type": "key", "Key": "Enter" } },
+            { "Source": { "$type": "button", "Button": "NotAButton" }, "Target": { "$type": "key", "Key": "Escape" } }
+          ]
+        }
+        """);
+
+        var loaded = store.Load("dev-damaged");
+
+        Assert.NotNull(loaded);
+        Assert.Equal("damaged", loaded.Name);
+        Assert.Single(loaded.Mappings);
+        Assert.Equal(GamepadKey.Enter, Assert.IsType<KeyPressTarget>(loaded.Mappings[0].Target).Key);
+    }
+
+    [Fact]
+    public void A_Profile_With_An_Unknown_Target_Survives_The_File_Store()
+    {
+        var store = new FileProfileStore(_directory);
+        var profile = SampleProfile("dev-future") with
+        {
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.B),
+                    Target = new UnknownTarget("hapticPattern", """{ "$type": "hapticPattern", "Intensity": 3 }"""),
+                },
+            ],
+        };
+
+        store.Save(profile);
+        var loaded = store.Load("dev-future");
+
+        var target = Assert.IsType<UnknownTarget>(Assert.Single(loaded!.Mappings).Target);
+        Assert.Equal("hapticPattern", target.Discriminator);
+        Assert.Contains("Intensity", target.RawJson);
+    }
+
+    [Fact]
     public void Save_Overwrites_The_Previous_Profile()
     {
         var store = new FileProfileStore(_directory);

@@ -50,6 +50,15 @@
                                 <Button x:Name="ImportProfileButton" Classes="ghost" Margin="0,0,8,8"
                                         Content="导入配置" Command="{Binding ImportProfileCommand}" />
                             </WrapPanel>
+                            <WrapPanel Margin="0,0,0,0">
+                                <Button x:Name="ExportSchemeButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导出方案" Command="{Binding ExportSchemeCommand}" />
+                                <Button x:Name="ImportSchemeButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导入方案" Command="{Binding ImportSchemeCommand}" />
+                                <Button x:Name="ImportWindowsTemplateButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="导入 Windows 内置模板"
+                                        Command="{Binding ImportWindowsTemplateCommand}" />
+                            </WrapPanel>
                             <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
                                        IsVisible="{Binding HasTransferMessage}"
                                        Foreground="{Binding IsTransferError, Converter={StaticResource TransferMessageBrush}}"

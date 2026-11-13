@@ -66,6 +66,11 @@ public static class MappingDescriptions
         WheelScrollTarget => "滚轮滚动",
         ComplexShortcutTarget complex => ComplexShortcut(complex),
         SpecialKeyTarget special => SpecialKey(special),
+
+        // A text target is the string it types, so the row names the string rather than the
+        // kind: 文本输出：hello says what the press does, where 输入文本 alone would only
+        // say which picker built it. An empty draft reads as the kind alone.
+        TextTarget text => string.IsNullOrEmpty(text.Text) ? "文本输出" : $"文本输出：{text.Text}",
         _ => target.ToString() ?? string.Empty,
     };
 
@@ -240,6 +245,30 @@ public static class MappingDescriptions
         GamepadKey.LeftAlt => "Alt",
         GamepadKey.LeftWin => "Win",
         >= GamepadKey.F1 and <= GamepadKey.F24 => key.ToString(),
+
+        // The media, browser and system keys appended to the vocabulary after the shared
+        // table was written. They are named here rather than left to the enum's own
+        // ToString, which would read as VolumeUp in a mapping row; the picker, the row and
+        // the gesture-action list all read this one table, so the three cannot drift.
+        GamepadKey.VolumeUp => "音量加",
+        GamepadKey.VolumeDown => "音量减",
+        GamepadKey.VolumeMute => "静音",
+        GamepadKey.MediaPlayPause => "播放/暂停",
+        GamepadKey.MediaStop => "停止播放",
+        GamepadKey.MediaPrevTrack => "上一曲",
+        GamepadKey.MediaNextTrack => "下一曲",
+        GamepadKey.BrowserBack => "浏览器后退",
+        GamepadKey.BrowserForward => "浏览器前进",
+        GamepadKey.BrowserRefresh => "刷新",
+        GamepadKey.BrowserStop => "停止加载",
+        GamepadKey.BrowserHome => "浏览器主页",
+        GamepadKey.BrowserSearch => "浏览器搜索",
+        GamepadKey.BrowserFavorites => "收藏夹",
+        GamepadKey.LaunchMail => "打开邮件",
+        GamepadKey.LaunchApp1 => "启动应用1",
+        GamepadKey.LaunchApp2 => "启动应用2",
+        GamepadKey.Sleep => "睡眠",
+        GamepadKey.PrintScreen => "截屏",
         _ => key.ToString(),
     };
 
@@ -284,12 +313,15 @@ public static class MappingDescriptions
     /// <summary>
     /// The project's headline differentiator, stated where the user can see it: speed is a
     /// physical quantity, so the same number feels the same on every mouse and every display.
+    /// The output itself is a relative displacement, so the OS pointer-speed setting scales it
+    /// afterwards: the px/s number is what DeziroJoy emits, not a guarantee of identical
+    /// on-screen speed under every system setting.
     /// </summary>
     public static string PhysicalSpeedUnit()
-        => "速度以物理单位「像素/秒 @ 满幅」表示，与鼠标 DPI、显示器分辨率完全解耦：换鼠标、换屏幕，同一数值手感不变。";
+        => "速度以物理单位「像素/秒 @ 满幅」表示，与鼠标 DPI、显示器分辨率无关：换鼠标、换屏幕，同一数值手感不变。输出为相对位移，系统指针速度设置（如 Windows 指针速度、Linux 指针加速度）会再缩放它，因此 px/s 不保证等于每种系统设置下的实际屏幕速度。";
 
     public static string MouseMaxSpeed()
-        => "摇杆推到底（满幅）时的指针速度，单位 像素/秒。这是物理速度而非百分比，因此与鼠标 DPI 和屏幕分辨率无关。";
+        => "摇杆推到底（满幅）时的指针速度，单位 像素/秒。这是物理速度而非百分比，因此与鼠标 DPI 和屏幕分辨率无关；但输出是相对位移，系统指针速度设置会再缩放它，px/s 不保证等于实际屏幕速度。";
 
     public static string MouseDeadZone()
         => "以摇杆中心为圆心的圆形（径向）死区：幅度不超过设定值的输入被完全丢弃，消除静差漂移；超出部分按比例放大到满幅，所以最高速度不变，只损失中心附近的微调精度。";

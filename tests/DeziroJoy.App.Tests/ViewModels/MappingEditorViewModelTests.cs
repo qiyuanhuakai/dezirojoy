@@ -193,6 +193,7 @@ public class MappingEditorViewModelTests
             [
                 MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
                 MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll, MappingTargetKind.SpecialKey,
+                MappingTargetKind.Text, MappingTargetKind.ComplexShortcut,
             ],
             editor.AvailableTargetKinds);
     }
@@ -208,6 +209,7 @@ public class MappingEditorViewModelTests
             [
                 MappingTargetKind.KeyPress, MappingTargetKind.KeyCombo, MappingTargetKind.MouseButton,
                 MappingTargetKind.MouseMove, MappingTargetKind.WheelScroll, MappingTargetKind.SpecialKey,
+                MappingTargetKind.Text,
             ],
             editor.AvailableTargetKinds);
     }
@@ -2452,13 +2454,14 @@ public class MappingEditorViewModelTests
     // ---- 复杂快捷键: a DSL program the long press runs ------------------------
 
     [Fact]
-    public void The_Complex_Shortcut_Kind_Is_Offered_On_The_Long_Press_Tab_Alone()
+    public void The_Complex_Shortcut_Kind_Is_Offered_On_Every_Gesture_Of_A_Button()
     {
-        // A program is the long press's own action, so no other gesture can run it - and
-        // a stick has no gestures at all.
+        // Any of the three positions can carry a program - the position is the program's
+        // trigger - so the kind is offered on every tab. A stick has no gestures at all, so
+        // nothing can start a program there.
         var editor = new MappingEditorViewModel();
 
-        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+        Assert.Contains(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
 
         editor.SelectedGestureKind = GestureKind.LongPress;
 
@@ -2466,7 +2469,7 @@ public class MappingEditorViewModelTests
 
         editor.SelectedGestureKind = GestureKind.DoubleClick;
 
-        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+        Assert.Contains(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
 
         editor.SourceIsStick = true;
         editor.SelectedGestureKind = GestureKind.LongPress;
@@ -2713,7 +2716,11 @@ public class MappingEditorViewModelTests
         Assert.Null(editor.ComplexShortcutScriptError);
         Assert.Null(editor.ComplexShortcutScriptSummary);
         Assert.Equal(MappingTargetKind.KeyPress, editor.TargetKind);
-        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+
+        // The kind stays on the list - every gesture of a button can carry a program - but
+        // the draft it left behind is gone.
+        Assert.Contains(MappingTargetKind.ComplexShortcut, editor.AvailableTargetKinds);
+        Assert.False(editor.ShowActionStrategy);
     }
 
     // ---- Special-key conflict hints while editing ------------------------------

@@ -1343,28 +1343,42 @@ public sealed class GestureEditorGuiTests
     }
 
     [AvaloniaFact]
-    public void The_Complex_Shortcut_Card_Is_Offered_On_The_Long_Press_Tab_Alone()
+    public void The_Complex_Shortcut_Card_Opens_On_The_Gesture_That_Carries_The_Program()
     {
+        // Any of the three positions can carry a program - the position is the program's
+        // trigger - so the card opens wherever the kind is chosen and leaves with it.
         var (window, viewModel) = OpenEditorOn("LeftBumper");
 
         var panel = EditorPanelOf(window);
         var combo = panel.FindControl<ComboBox>("TargetKindCombo")!;
         var card = panel.FindControl<StackPanel>("ComplexShortcutRow")!;
 
-        // The click's list does not carry the kind, so the card never opens there.
-        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
         Assert.False(card.IsVisible);
 
+        foreach (var tab in new[] { "GestureClickTab", "GestureDoubleClickTab", "GestureLongPressTab" })
+        {
+            SelectTab(window, viewModel, tab);
+
+            Assert.Contains(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
+
+            ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal(MappingTargetKind.ComplexShortcut, combo.SelectedItem);
+            Assert.True(card.IsVisible);
+
+            ChooseTargetKind(window, MappingTargetKind.KeyPress);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.False(card.IsVisible);
+        }
+
+        // The example button fills a working program.
         SelectTab(window, viewModel, "GestureLongPressTab");
-
-        Assert.Contains(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
-
         ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
 
-        Assert.Equal(MappingTargetKind.ComplexShortcut, combo.SelectedItem);
-        Assert.True(card.IsVisible);
-
-        // The example button fills a working program, and the card leaves with the kind.
         var scriptBox = panel.FindControl<TextBox>("ComplexShortcutScriptBox")!;
         scriptBox.Text = "tap F5";
         window.UpdateLayout();
@@ -1376,17 +1390,12 @@ public sealed class GestureEditorGuiTests
 
         Assert.Equal("hold Alt\nevery 1s tap Tab", scriptBox.Text);
 
-        ChooseTargetKind(window, MappingTargetKind.KeyPress);
+        // A stick has no gestures, so nothing can start a program there and the kind is off
+        // its list.
+        viewModel.Editor.SourceIsStick = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.False(card.IsVisible);
-
-        // And the kind itself is gone from every other gesture's list.
-        SelectTab(window, viewModel, "GestureClickTab");
-        Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
-
-        SelectTab(window, viewModel, "GestureDoubleClickTab");
         Assert.DoesNotContain(MappingTargetKind.ComplexShortcut, combo.Items.Cast<MappingTargetKind>());
     }
 
@@ -1494,5 +1503,441 @@ public sealed class GestureEditorGuiTests
         Assert.False(viewModel.Editor.IsCapturingKey);
         Assert.Equal(GamepadKey.F5, viewModel.Editor.LongPressSlot.SelectedKey);
         Assert.Equal("hold Alt\nevery 1s tap Tab", viewModel.Editor.LongPressSlot.Script);
+    }
+
+    // ---- 输入文本 / 屏幕键盘 / 执行策略 / 执行顺序 / 不支持的映射 ----------------
+
+    private static TextKeyboardKey FocusedTextKey(Window window)
+        => Assert.IsType<TextKeyboardKey>(
+            EditorPanelOf(window).FindControl<ItemsControl>("TextKeyboardGrid")!
+                .GetLogicalDescendants().OfType<Button>()
+                .First(button => button.Classes.Contains("focused")).DataContext);
+
+    private static Button TextKeyButton(Window window, string label)
+        => EditorPanelOf(window).FindControl<ItemsControl>("TextKeyboardGrid")!
+            .GetLogicalDescendants().OfType<Button>()
+            .First(button => (button.DataContext as TextKeyboardKey)?.Label == label);
+
+    private static RadioButton[] TextKeyboardTabs(Window window)
+        => EditorPanelOf(window).FindControl<ItemsControl>("TextKeyboardPageNav")!
+            .GetLogicalDescendants().OfType<RadioButton>().ToArray();
+
+    /// <summary>The A button on a keyboard: a press and a release, the pair a cap answers.</summary>
+    private static void PressSpace(Window window)
+    {
+        window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// <summary>
+    /// One host tick with the pad holding <paramref name="state"/>, dispatched through the
+    /// window's own Sampled wiring - the path a real sample takes, so the editor's capture and
+    /// the window's navigation each see it exactly once. A press is an edge, so a held button
+    /// needs a neutral step between two presses of it.
+    /// </summary>
+    private static void PadStep(EngineHost host, FakeGamepadProvider provider, Window window, GamepadState state)
+    {
+        provider.SetState(DeviceId, state);
+        host.TickOnce(SampleHelper.Tick);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    /// <summary>Opens the editor on one element with the keyboard offered, ready for the pad.</summary>
+    private static (MainWindow Window, MainWindowViewModel ViewModel, EngineHost Host, FakeGamepadProvider Provider)
+        OpenTextKeyboardEditor()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.LeftBumper));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(viewModel.IsEditing);
+
+        ChooseTargetKind(window, MappingTargetKind.Text);
+        Assert.True(viewModel.Editor.ShowTextKeyboard);
+        Assert.True(EditorPanelOf(window).FindControl<StackPanel>("TextKeyboardRow")!.IsVisible);
+
+        return (window, viewModel, host, provider);
+    }
+
+    private static MappingRowViewModel RowOf(MainWindowViewModel viewModel, GamepadButton button)
+        => viewModel.Mappings.First(row => row.Entry.Source is ButtonBinding binding && binding.Button == button);
+
+    [AvaloniaFact]
+    public void The_Text_Target_Opens_Its_Box_Counter_And_Keyboard()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var panel = EditorPanelOf(window);
+
+        var textRow = panel.FindControl<StackPanel>("TextRow")!;
+        var textBox = panel.FindControl<TextBox>("ActiveTextBox")!;
+        var counter = panel.FindControl<TextBlock>("ActiveTextLengthText")!;
+        var keyboard = panel.FindControl<StackPanel>("TextKeyboardRow")!;
+
+        // Nothing about another kind needs a string, so neither surface is offered yet.
+        Assert.False(textRow.IsVisible);
+        Assert.False(keyboard.IsVisible);
+
+        ChooseTargetKind(window, MappingTargetKind.Text);
+
+        Assert.True(textRow.IsVisible);
+        Assert.True(keyboard.IsVisible);
+
+        // The bound is the Core's own, so a paste that runs long is trimmed rather than
+        // refused - and the counter names it instead of leaving the trim to be discovered.
+        Assert.Equal(GestureSlotEditor.TextMaxLength, textBox.MaxLength);
+        Assert.Contains("已输入 0 / 256", counter.Text);
+
+        // The box is the physical-keyboard way in; the keyboard below is the gamepad way
+        // in. Both write the same draft, and the counter follows it.
+        textBox.Text = "open folder";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("open folder", viewModel.Editor.ActiveText);
+        Assert.Equal(11, viewModel.Editor.ActiveTextLength);
+        Assert.Contains("已输入 11 / 256", counter.Text);
+    }
+
+    [AvaloniaFact]
+    public void The_On_Screen_Keyboard_Types_With_The_Gamepad_Alone()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var panel = EditorPanelOf(window);
+
+        ChooseTargetKind(window, MappingTargetKind.Text);
+
+        // The cursor starts on the first key of the first page, and it is the cap that
+        // reads as focused: the cursor is view-model state, not real focus, so the panel
+        // marks it the way it marks a selected key cap.
+        Assert.Equal("a", FocusedTextKey(window).Label);
+        Assert.Contains("focused", TextKeyButton(window, "a").Classes);
+
+        // The keyboard owns the arrow keys while it holds focus, so the cursor is driven
+        // from a cap the way a gamepad user would arrive at it.
+        window.Focus();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(TextKeyButton(window, "a").Focus());
+        Dispatcher.UIThread.RunJobs();
+
+        // The D-pad moves the cursor, and the cap it lands on takes real focus with it, so
+        // the focus ring and the cursor highlight never disagree about where the press
+        // would land.
+        window.KeyPress(Key.Right, RawInputModifiers.None, PhysicalKey.ArrowRight, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("b", FocusedTextKey(window).Label);
+        Assert.True(TextKeyButton(window, "b").IsFocused);
+
+        window.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("k", FocusedTextKey(window).Label);
+
+        // A presses the key the cursor is on. Space rather than Enter: Enter is the
+        // editor's own commit pair, which the window owns. A button answers Space on the
+        // release, exactly as it answers a pointer press.
+        PressSpace(window);
+        Assert.Equal("k", viewModel.Editor.ActiveText);
+
+        PressSpace(window);
+        Assert.Equal("kk", viewModel.Editor.ActiveText);
+
+        // The action row ends every page: the cursor reaches it by moving to the first
+        // column and down to the last row, where 退格 deletes the character before it.
+        window.KeyPress(Key.Left, RawInputModifiers.None, PhysicalKey.ArrowLeft, null);
+        window.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        window.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("退格", FocusedTextKey(window).Label);
+
+        PressSpace(window);
+        Assert.Equal("k", viewModel.Editor.ActiveText);
+    }
+
+    [AvaloniaFact]
+    public void The_Gamepad_Alone_Moves_The_Cursor_Presses_A_Key_And_Turns_Pages()
+    {
+        var (window, viewModel, host, provider) = OpenTextKeyboardEditor();
+        var panel = EditorPanelOf(window);
+
+        // A shown, active mapping tab with navigation on, so the pad answers the editor.
+        Assert.True(viewModel.IsPhysicalInputInScope);
+        Assert.True(viewModel.GamepadNavigationEnabled);
+
+        // The cursor starts on the first key of the first page, and the cap it sits on is the
+        // one that reads as focused: the cursor is view-model state, not real focus.
+        Assert.Equal("a", FocusedTextKey(window).Label);
+
+        // The D-pad moves the cursor, and the cap it lands on wears the highlight.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadRight, 0, 0, 0, 0));
+        Assert.Equal("b", FocusedTextKey(window).Label);
+        Assert.Contains("focused", TextKeyButton(window, "b").Classes);
+
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadDown, 0, 0, 0, 0));
+        Assert.Equal("k", FocusedTextKey(window).Label);
+
+        // A presses the key the cursor is on, and the draft - and the box that reads it -
+        // follow it.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+        Assert.Equal("k", viewModel.Editor.ActiveText);
+        Assert.Equal("k", panel.FindControl<TextBox>("ActiveTextBox")!.Text);
+
+        // The press was spent on the keyboard, so it never also navigated: the editor is
+        // still on the element it was opened for.
+        Assert.Equal(GamepadButton.LeftBumper, viewModel.Editor.SelectedButton);
+
+        // The bumpers turn the page. 小写 is the first page, so a left bumper wraps around to
+        // the last one, and the page it shows opens on its own first key.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+        Assert.Equal("常用", viewModel.Editor.TextKeyboard.ActivePage.Name);
+        Assert.Equal("https://", FocusedTextKey(window).Label);
+        Assert.Equal(
+            ["常用"],
+            TextKeyboardTabs(window).Where(tab => tab.IsChecked == true).Select(tab => tab.Content as string));
+
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        Assert.Equal("小写", viewModel.Editor.TextKeyboard.ActivePage.Name);
+        Assert.Equal(
+            ["小写"],
+            TextKeyboardTabs(window).Where(tab => tab.IsChecked == true).Select(tab => tab.Content as string));
+
+        // The fragment the wrapped-to page offered types whole, so the pad alone has entered
+        // a URL fragment and a letter.
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+        Assert.Equal("ka", viewModel.Editor.ActiveText);
+    }
+
+    [AvaloniaFact]
+    public void The_Keyboard_Answers_The_Pad_Only_While_The_Window_Is_In_Scope()
+    {
+        var (window, viewModel, host, provider) = OpenTextKeyboardEditor();
+
+        Assert.True(viewModel.Editor.TextKeyboardGamepadInScope);
+
+        // Leaving the mapping tab releases the pad, and coming back restores it - the same
+        // lease every other editor press answers to.
+        window.FindControl<TabControl>("MainTabs")!.SelectedIndex = 1;
+        Assert.False(viewModel.Editor.TextKeyboardGamepadInScope);
+
+        window.FindControl<TabControl>("MainTabs")!.SelectedIndex = 0;
+        Assert.True(viewModel.Editor.TextKeyboardGamepadInScope);
+
+        // Closing the window - the resident-daemon mode, where the tray owns the pad - leaves
+        // the keyboard deaf to it even though the editor and its draft outlive the window.
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.Editor.TextKeyboardGamepadInScope);
+
+        PadStep(host, provider, window, GamepadState.Neutral);
+        PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.DPadRight, 0, 0, 0, 0));
+        Assert.Equal("a", viewModel.Editor.TextKeyboard.FocusedKey!.Label);
+    }
+
+    [AvaloniaFact]
+    public void The_Keyboard_Page_Tabs_Switch_The_Grid_And_Reset_The_Cursor()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var panel = EditorPanelOf(window);
+
+        ChooseTargetKind(window, MappingTargetKind.Text);
+
+        var tabs = TextKeyboardTabs(window);
+
+        Assert.Equal(
+            ["小写", "大写", "数字", "符号", "常用"],
+            tabs.Select(tab => tab.Content as string));
+        Assert.Equal(
+            ["小写"],
+            tabs.Where(tab => tab.IsChecked == true).Select(tab => tab.Content as string));
+
+        // Every page ends with the same action row, so a tab never has to be hunted for.
+        Assert.Contains(TextKeyButton(window, "完成"), panel.GetLogicalDescendants().OfType<Button>());
+
+        Click(tabs.First(tab => tab.Content as string == "常用"), window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("常用", viewModel.Editor.TextKeyboard.ActivePage.Name);
+
+        // The tab that was pressed reads as checked and the rest do not, and the page's
+        // own keys are on screen with the cursor back on the first one.
+        Assert.Equal(
+            ["常用"],
+            tabs.Where(tab => tab.IsChecked == true).Select(tab => tab.Content as string));
+        Assert.Equal("https://", FocusedTextKey(window).Label);
+
+        // A press on a cap types that cap's own fragment, and leaves the cursor on it.
+        Click(TextKeyButton(window, "www."), window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("www.", viewModel.Editor.ActiveText);
+        Assert.Equal("www.", FocusedTextKey(window).Label);
+    }
+
+    [AvaloniaFact]
+    public void The_Strategy_Pickers_Read_The_Active_Slot()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var panel = EditorPanelOf(window);
+
+        var card = panel.FindControl<StackPanel>("ActionStrategyRow")!;
+        var trigger = panel.FindControl<ComboBox>("ActionTriggerCombo")!;
+        var execution = panel.FindControl<ComboBox>("ActionExecutionCombo")!;
+        var repeat = panel.FindControl<ComboBox>("ActionRepeatCombo")!;
+
+        // The card follows the active slot, so it waits for a program on that slot.
+        Assert.False(card.IsVisible);
+
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+        Assert.True(card.IsVisible);
+
+        // The click position answers two triggers, so its row is a picker.
+        Assert.True(trigger.IsEnabled);
+        Assert.Equal(2, trigger.Items.Cast<MappingEditorViewModel.ActionTriggerOption>().Count());
+        Assert.Equal(3, execution.Items.Cast<MappingEditorViewModel.ActionExecutionOption>().Count());
+        Assert.Equal(
+            "该程序挂在单击上：按下按键时开始执行。",
+            panel.FindControl<TextBlock>("ActionStrategyHint")!.Text);
+
+        // 排队 needs a run that ends on its own, so it leaves the list beside 按住期间执行
+        // rather than being offered and then refused.
+        Assert.DoesNotContain(
+            repeat.Items.Cast<MappingEditorViewModel.ActionRepeatOption>(),
+            option => option.Value == ActionRepeat.Queue);
+
+        execution.SelectedItem = execution.Items.Cast<MappingEditorViewModel.ActionExecutionOption>()
+            .First(option => option.Value == ActionExecution.Once);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(ActionExecution.Once, viewModel.Editor.ActiveActionExecution);
+        Assert.Contains(
+            repeat.Items.Cast<MappingEditorViewModel.ActionRepeatOption>(),
+            option => option.Value == ActionRepeat.Queue);
+
+        // The double-click and the long-press each answer exactly one trigger, so their
+        // row is a readout rather than a picker - and the hint names the position instead.
+        SelectTab(window, viewModel, "GestureDoubleClickTab");
+        Assert.False(card.IsVisible);
+
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+        Assert.True(card.IsVisible);
+
+        Assert.False(trigger.IsEnabled);
+        Assert.Single(trigger.Items.Cast<MappingEditorViewModel.ActionTriggerOption>());
+        Assert.Equal(
+            "该程序挂在双击上：第二次按下时开始执行。",
+            panel.FindControl<TextBlock>("ActionStrategyHint")!.Text);
+    }
+
+    [AvaloniaFact]
+    public void The_Preview_Lists_The_Press_And_Release_Order()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var panel = EditorPanelOf(window);
+
+        ChooseTargetKind(window, MappingTargetKind.ComplexShortcut);
+        panel.FindControl<TextBox>("ComplexShortcutScriptBox")!.Text = "hold Alt\ntap Tab";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The compiled program, one line per output in the order the engine emits it, with
+        // the held key released at the end.
+        Assert.Equal(
+            ["按下 Alt", "按下 Tab", "松开 Tab", "松开 Alt"],
+            panel.FindControl<ItemsControl>("ActionPreviewList")!.Items.Cast<string>());
+
+        // A script that does not parse leaves the preview empty: the parse error in the
+        // card below is the single place that names the failure.
+        panel.FindControl<TextBox>("ComplexShortcutScriptBox")!.Text = "hold Alt\nfrobnicate";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(panel.FindControl<ItemsControl>("ActionPreviewList")!.Items.Cast<string>());
+        Assert.True(panel.FindControl<TextBlock>("ComplexShortcutErrorText")!.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void An_Unsupported_Target_Shows_Its_Banner_And_Keeps_The_Draft()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+        var panel = EditorPanelOf(window);
+
+        var banner = panel.FindControl<TextBlock>("UnsupportedTargetBanner")!;
+        Assert.False(banner.IsVisible);
+
+        // A profile written by a newer build names a target this one cannot read.
+        viewModel.Editor.LoadFrom(new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.LeftBumper),
+            Target = new UnknownTarget("wand", """{"$type":"wand","Wave":3}"""),
+        });
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.Editor.ActiveTargetUnsupported);
+        Assert.True(banner.IsVisible);
+        Assert.Contains("原样保留", banner.Text);
+        Assert.Contains("wand", viewModel.Editor.ActiveTargetUnsupportedDescription!);
+
+        // The banner leads the target area, above the controls it explains.
+        var targetLabel = panel.GetLogicalDescendants().OfType<TextBlock>()
+            .First(text => text.Text == "目标动作");
+        Assert.True(
+            banner.TranslatePoint(new Point(0, 0), window)!.Value.Y
+            < targetLabel.TranslatePoint(new Point(0, 0), window)!.Value.Y);
+
+        // The keyboard is not offered for a target no page can type, and the text box is
+        // not offered either - the banner is the whole answer here.
+        Assert.False(panel.FindControl<StackPanel>("TextKeyboardRow")!.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void A_Media_Key_And_A_Text_Target_Read_As_Chinese_In_The_Row()
+    {
+        var (window, viewModel) = OpenEditorOn("LeftBumper");
+
+        // A media key: the row names what the key does, not the enum it came from.
+        ChooseKey(window, GamepadKey.BrowserRefresh);
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        Assert.Equal("刷新", RowOf(viewModel, GamepadButton.LeftBumper).TargetText);
+
+        // A text target: the row names the string it types, so the press is legible
+        // without opening the editor.
+        Click(Model(window).FindControl<Control>("LeftBumper")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        ChooseTargetKind(window, MappingTargetKind.Text);
+        EditorPanelOf(window).FindControl<TextBox>("ActiveTextBox")!.Text = "hello";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
+        Assert.False(viewModel.IsEditing);
+
+        Assert.Equal("文本输出：hello", RowOf(viewModel, GamepadButton.LeftBumper).TargetText);
     }
 }

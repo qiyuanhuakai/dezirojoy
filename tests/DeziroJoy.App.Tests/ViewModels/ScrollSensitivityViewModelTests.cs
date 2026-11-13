@@ -1,4 +1,5 @@
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using Xunit;
 
@@ -215,5 +216,165 @@ public class ScrollSensitivityViewModelTests
 
         Assert.Equal(1f, vm.CurveStrength);
         Assert.Equal(1f, vm.BuildSettings().CurveStrength);
+    }
+
+    [Fact]
+    public void Real_Input_Mode_Shows_Raw_Deadzone_Filtered_And_Final_Rate()
+    {
+        var vm = new ScrollSensitivityViewModel
+        {
+            MaxTicksPerSecond = 24f,
+            ResponseTime = 0f,
+            IsLive = true,
+            IsRealInputMode = true,
+        };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0.6f, 0f, 0f));
+
+        // Stage 1: the raw stick, exactly as the pad reported it.
+        Assert.Equal(0.6, vm.RawMagnitude, 3);
+
+        // Stage 2: the deadzone-filtered deflection the response curve sees -
+        // (0.6 - 0.2) / (1 - 0.2) ramps back onto full deflection.
+        Assert.Equal(0.5, vm.FilteredMagnitude, 3);
+
+        // Stage 3: the engine's own smoothed rate, which with no smoothing equals the
+        // target rate computed from the filtered deflection.
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.Equal(vm.DailyRate, vm.CurrentRate, 3);
+        Assert.True(vm.CurrentRate > 0, $"expected a real rate, got {vm.CurrentRate}");
+    }
+
+    [Fact]
+    public void Real_Input_Mode_Reads_The_Left_Stick_Only()
+    {
+        var vm = new ScrollSensitivityViewModel
+        {
+            MaxTicksPerSecond = 24f,
+            ResponseTime = 0f,
+            IsLive = true,
+            IsRealInputMode = true,
+        };
+
+        // The wheel mapping reads the left stick, so the right one is not the wheel's input.
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.8f, 0f));
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.Equal(0, vm.CurrentRate);
+        Assert.Equal(0, vm.RawMagnitude);
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0.8f, 0f, 0f));
+        vm.Advance(TimeSpan.FromSeconds(1.0 / 64.0));
+
+        Assert.True(vm.CurrentRate > 0, $"expected a real rate, got {vm.CurrentRate}");
+    }
+
+    [Fact]
+    public void Demo_Mode_Ignores_Real_Samples()
+    {
+        var vm = new ScrollSensitivityViewModel { MaxTicksPerSecond = 24f, ResponseTime = 0f, IsLive = true };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0.9f, 0f, 0f));
+
+        Assert.Equal(0, vm.RawMagnitude);
+
+        AdvanceMany(vm, 30);
+
+        Assert.True(vm.CurrentRate > 0, $"expected the demo sweep, got {vm.CurrentRate}");
+    }
+
+    [Fact]
+    public void Drift_Measurement_Suggests_A_Deadzone_Above_The_Observed_Rest_Drift()
+    {
+        var vm = new ScrollSensitivityViewModel { IsRealInputMode = true };
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 40; i++)
+        {
+            // The wheel reads the left stick, so the drift rides the left axes.
+            vm.ApplySample(GamepadState.Create(default, i % 2 == 0 ? 0.05f : 0.03f, i % 2 == 0 ? 0.02f : -0.04f, 0f, 0f));
+        }
+
+        vm.StopDriftMeasurementCommand.Execute(null);
+
+        Assert.Equal(40, vm.DriftSampleCount);
+        Assert.Equal(0.054, vm.DriftMaxMagnitude, 3);
+        Assert.Equal(0.07, vm.SuggestedDeadZone!.Value, 3);
+        Assert.Equal(0.2f, vm.DeadZone);
+
+        vm.ApplySuggestedDeadZoneCommand.Execute(null);
+
+        Assert.Equal(0.07f, vm.DeadZone);
+        Assert.Equal(0.07f, vm.BuildSettings().DeadZone);
+    }
+
+    [Fact]
+    public void A_Clean_Stick_Suggests_No_Deadzone()
+    {
+        var vm = new ScrollSensitivityViewModel { IsRealInputMode = true };
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 30; i++)
+        {
+            vm.ApplySample(GamepadState.Neutral);
+        }
+
+        vm.StopDriftMeasurementCommand.Execute(null);
+
+        Assert.Null(vm.SuggestedDeadZone);
+        Assert.False(vm.CanApplySuggestion);
+
+        vm.ApplySuggestedDeadZoneCommand.Execute(null);
+
+        Assert.Equal(0.2f, vm.DeadZone);
+    }
+
+    [Fact]
+    public void Leaving_Real_Input_Mode_Clears_The_Calibration_State()
+    {
+        var vm = new ScrollSensitivityViewModel { IsLive = true, IsRealInputMode = true };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0.5f, 0f, 0f));
+        vm.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 30; i++)
+        {
+            vm.ApplySample(GamepadState.Create(default, 0.04f, 0.01f, 0f, 0f));
+        }
+
+        Assert.True(vm.SuggestedDeadZone is not null);
+
+        vm.IsRealInputMode = false;
+
+        Assert.False(vm.IsMeasuringDrift);
+        Assert.Equal(0, vm.DriftSampleCount);
+        Assert.Null(vm.SuggestedDeadZone);
+        Assert.Equal(0, vm.RawMagnitude);
+        Assert.Equal(0, vm.DailyRate);
+        Assert.False(vm.IsRealInputMode);
+
+        // With the calibration off and the pad still live the demo sweep takes back over;
+        // dropping the lease parks the preview at rest.
+        AdvanceMany(vm, 5);
+        Assert.True(vm.CurrentRate > 0, "leaving the calibration returns to the demo sweep");
+
+        vm.IsLive = false;
+        AdvanceMany(vm, 700);
+
+        Assert.Equal(0, vm.CurrentRate);
+    }
+
+    [Fact]
+    public void Reset_Returns_The_Panel_To_Demo_Mode()
+    {
+        var vm = new ScrollSensitivityViewModel { IsRealInputMode = true };
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+        vm.Reset();
+
+        Assert.False(vm.IsRealInputMode);
+        Assert.False(vm.IsRealInputMode);
+        Assert.False(vm.IsMeasuringDrift);
+        Assert.Null(vm.SuggestedDeadZone);
     }
 }

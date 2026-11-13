@@ -4,6 +4,7 @@ using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views;
 
 namespace DeziroJoy.App;
 
@@ -20,6 +21,12 @@ namespace DeziroJoy.App;
 /// </remarks>
 public partial class MainWindow
 {
+    /// <summary>
+    /// The scheme import preview dialog, or null while none is open. One at a time: a second
+    /// import request reuses the open dialog rather than stacking a second window over it.
+    /// </summary>
+    private SchemeBundleDialog? _schemeDialog;
+
     private void OnWindowOpened(object? sender, EventArgs e)
     {
         Opened -= OnWindowOpened;
@@ -42,6 +49,9 @@ public partial class MainWindow
     {
         ViewModel.ExportPathRequested += OnExportPathRequested;
         ViewModel.ImportPathRequested += OnImportPathRequested;
+        ViewModel.ExportSchemePathRequested += OnExportSchemePathRequested;
+        ViewModel.ImportSchemePathRequested += OnImportSchemePathRequested;
+        ViewModel.SchemeImportPreviewRequested += OnSchemeImportPreviewRequested;
     }
 
     private async void OnExportPathRequested(object? sender, EventArgs e)
@@ -52,6 +62,48 @@ public partial class MainWindow
     private async void OnImportPathRequested(object? sender, EventArgs e)
     {
         ViewModel.ImportFrom(await PickOpenPathAsync());
+    }
+
+    private async void OnExportSchemePathRequested(object? sender, EventArgs e)
+    {
+        ViewModel.ExportSchemeTo(await PickSchemeSavePathAsync());
+    }
+
+    private async void OnImportSchemePathRequested(object? sender, EventArgs e)
+    {
+        ViewModel.ImportSchemeFrom(await PickSchemeOpenPathAsync());
+    }
+
+    /// <summary>
+    /// Shows the scheme import preview once the view model has one ready. The dialog closes
+    /// itself when the view model ends the flow, so this only ever opens.
+    /// </summary>
+    private void OnSchemeImportPreviewRequested(object? sender, EventArgs e)
+    {
+        if (_schemeDialog is { IsVisible: true })
+        {
+            return;
+        }
+
+        _schemeDialog = new SchemeBundleDialog(ViewModel);
+        _schemeDialog.Closed += OnSchemeDialogClosed;
+        _schemeDialog.Show(this);
+    }
+
+    private void OnSchemeDialogClosed(object? sender, EventArgs e)
+    {
+        if (_schemeDialog is { } dialog)
+        {
+            dialog.Closed -= OnSchemeDialogClosed;
+            _schemeDialog = null;
+        }
+
+        // The window can also be closed through its own caption, which leaves the flow open
+        // in the view model; dismissing it here keeps the two in step.
+        if (ViewModel.IsSchemePreviewOpen)
+        {
+            ViewModel.CancelSchemeImportCommand.Execute(null);
+        }
     }
 
     private async Task<string?> PickSavePathAsync()
@@ -79,8 +131,38 @@ public partial class MainWindow
         return files is [var file, ..] ? file.Path.LocalPath : null;
     }
 
+    /// <summary>The scheme counterparts of the profile pickers: a bundle is JSON too, so the
+    /// filter differs by its human-readable name alone.</summary>
+    private async Task<string?> PickSchemeSavePathAsync()
+    {
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "导出方案",
+            SuggestedFileName = SuggestedSchemeFileName(),
+            DefaultExtension = ProfileTransferService.SchemeExtension,
+            FileTypeChoices = [SchemeFileType()],
+        });
+
+        return file is null ? null : file.Path.LocalPath;
+    }
+
+    private async Task<string?> PickSchemeOpenPathAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "导入方案",
+            AllowMultiple = false,
+            FileTypeFilter = [SchemeFileType()],
+        });
+
+        return files is [var file, ..] ? file.Path.LocalPath : null;
+    }
+
     private static FilePickerFileType JsonFileType()
         => new(ProfileTransferService.TypeName) { Patterns = ProfileTransferService.Patterns };
+
+    private static FilePickerFileType SchemeFileType()
+        => new(ProfileTransferService.SchemeTypeName) { Patterns = ProfileTransferService.SchemePatterns };
 
     /// <summary>
     /// Prefills the save dialog with the active profile's name. The name is user-editable text,
@@ -93,5 +175,15 @@ public partial class MainWindow
         var invalid = Path.GetInvalidFileNameChars();
 
         return string.Join("_", safe.Split(invalid, StringSplitOptions.RemoveEmptyEntries)) + ProfileTransferService.Extension;
+    }
+
+    /// <summary>Prefills the scheme save dialog with the device's own preset name.</summary>
+    private string SuggestedSchemeFileName()
+    {
+        var name = ViewModel.ActiveProfile?.Name;
+        var safe = string.IsNullOrWhiteSpace(name) ? "dezirojoy-scheme" : $"{name} 方案";
+        var invalid = Path.GetInvalidFileNameChars();
+
+        return string.Join("_", safe.Split(invalid, StringSplitOptions.RemoveEmptyEntries)) + ProfileTransferService.SchemeExtension;
     }
 }

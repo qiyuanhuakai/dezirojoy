@@ -34,6 +34,27 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _syncTimer = new() { Interval = SyncInterval };
 
+    /// <summary>
+    /// The foreground rules' own poll. The engine ticks at 2 ms; the program in front changes on
+    /// the user's timescale, so the rules are read at the watcher's own cadence and never from
+    /// the mapping loop. The timer belongs to the window because the watcher it drives belongs to
+    /// the view model, which outlives the window in daemon mode.
+    /// <para>
+    /// What the poll drives depends on who owns mapping: the engine host in local mode, and in
+    /// daemon mode the display only - the resident daemon runs its own watcher over its own
+    /// engine host, so this one keeps the panel current without applying anything. Closing the
+    /// window to the tray therefore stops the display, never the rules.
+    /// </para>
+    /// </summary>
+    private readonly DispatcherTimer _foregroundTimer = new() { Interval = ForegroundWatcher.DefaultInterval };
+
+    /// <summary>
+    /// The tab the 前台规则 panel was hosted in, or null before the window is wired and after it
+    /// is closed. Held as the tab rather than as the panel's view model so the window's disposal
+    /// stays a question of layout: the view model it carries is released with the tab.
+    /// </summary>
+    private TabItem? _foregroundRulesTab;
+
     private readonly System.Diagnostics.Stopwatch _previewClock = new();
 
     private TimeSpan _lastPreviewTime;
@@ -273,6 +294,8 @@ public partial class MainWindow : Window
             tabs.SelectionChanged += (_, _) => UpdatePhysicalInputScope();
         }
 
+        HostForegroundRules();
+
         Opened += (_, _) =>
         {
             _windowActive = IsActive;
@@ -293,6 +316,35 @@ public partial class MainWindow : Window
 
         Closed += OnClosed;
     }
+
+    /// <summary>
+    /// Hosts the 前台规则 surface as a tab of its own and starts the poll that drives it. The
+    /// panel is built here rather than in XAML because its view model needs the live watcher the
+    /// window's view model owns, and because the tab's place is a decision about the window's
+    /// layout rather than about the rules. Everything the panel shows reads the watcher through
+    /// that view model - the active-rule explanation above all - so there is no second copy of
+    /// the state to drift.
+    /// </summary>
+    private void HostForegroundRules()
+    {
+        var panel = new ForegroundRulesPanel { DataContext = new ForegroundRulesViewModel(ViewModel.Foreground) };
+        var tab = new TabItem
+        {
+            Header = "前台规则",
+            Content = panel,
+        };
+
+        if (this.FindControl<TabControl>("MainTabs") is { } tabs)
+        {
+            tabs.Items.Add(tab);
+        }
+
+        _foregroundRulesTab = tab;
+        _foregroundTimer.Tick += OnForegroundTick;
+        _foregroundTimer.Start();
+    }
+
+    private void OnForegroundTick(object? sender, EventArgs e) => ViewModel.Foreground.Refresh();
 
     private void OnHostSampled(object? sender, ControllerSampledEventArgs args)
     {
@@ -340,6 +392,27 @@ public partial class MainWindow : Window
         _syncTimer.Stop();
         _previewTimer.Tick -= OnPreviewTick;
         _syncTimer.Tick -= OnSyncTick;
+
+        // The rules panel and its poll go with the window: a window built afterwards starts from
+        // a clean slate, so a destroy/recreate cycle never stacks a second timer or a second
+        // subscription to the same watcher. The watcher itself belongs to the view model.
+        _foregroundTimer.Stop();
+        _foregroundTimer.Tick -= OnForegroundTick;
+
+        if (_foregroundRulesTab is { } tab)
+        {
+            _foregroundRulesTab = null;
+
+            if (tab.Content is ForegroundRulesPanel { DataContext: IDisposable rules })
+            {
+                rules.Dispose();
+            }
+
+            if (tab.Parent is TabControl tabs)
+            {
+                tabs.Items.Remove(tab);
+            }
+        }
 
         if (_host is { } host)
         {

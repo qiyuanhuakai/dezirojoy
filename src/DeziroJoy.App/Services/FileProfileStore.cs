@@ -24,7 +24,16 @@ public sealed class FileProfileStore : IProfileStore
     {
         var path = PathFor(deviceId);
 
-        return File.Exists(path) ? ProfileSerializer.Deserialize(File.ReadAllText(path)) : null;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        // A damaged file reads as what it can rather than as a failure. The caller is
+        // building the device's runtime, so one unreadable mapping must not take the whole
+        // profile - and with it the pad's mapping - away: whatever parses still runs, and
+        // the next save writes the readable profile back over the damaged one.
+        return ProfileSerializer.Load(File.ReadAllText(path)).Profile;
     }
 
     public void Save(GamepadProfile profile)

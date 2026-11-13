@@ -542,6 +542,165 @@ public sealed class PresetStore
     }
 
     /// <summary>
+    /// The device-global special keys the device has in effect, in slot-then-profile order.
+    /// The subset is the one <see cref="CanonicalizeSpecialKeys"/> would converge the slots
+    /// onto - every slot read in ascending order, the first occurrence of each identity
+    /// winning - so this describes the device as it stands without writing anything. It is
+    /// what a scheme bundle exports as its special-key section, and what an import preview
+    /// shows as the keys the device will end up with.
+    /// </summary>
+    public IReadOnlyList<DeviceSpecialKey> SpecialKeysInEffect(string deviceId)
+        => SpecialKeysInEffect(
+            SlotsInUse(deviceId)
+                .Select(slot => LoadSlot(deviceId, slot))
+                .Where(profile => profile is not null)
+                .Select(profile => profile!));
+
+    /// <summary>
+    /// The device-global special keys a set of profiles carries, under the same rule the
+    /// device walk uses: the profiles in the order given, the first occurrence of each
+    /// identity winning. A scheme bundle uses it over its own presets, so the subset a
+    /// bundle installs is decided exactly the way a device's would be.
+    /// </summary>
+    public static IReadOnlyList<DeviceSpecialKey> SpecialKeysInEffect(IEnumerable<GamepadProfile> profiles)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        var keys = new List<DeviceSpecialKey>();
+        var seen = new HashSet<SpecialKeyId>();
+
+        foreach (var profile in profiles)
+        {
+            foreach (var (id, value) in ExtractSpecialKeys(profile))
+            {
+                if (seen.Add(id))
+                {
+                    keys.Add(new DeviceSpecialKey(
+                        id.Button, id.Code, id.Kind, id.Position, value.Target, value.Enabled));
+                }
+            }
+        }
+
+        return keys;
+    }
+
+    /// <summary>
+    /// Fans an explicit device-global special-key subset out to every slot of the device -
+    /// the write half of the sharing rule driven by a listed set rather than by one profile.
+    /// A scheme import uses it: the bundle names the keys the device will carry, so the
+    /// profiles alone do not have to be the ones that introduce them, and a key the bundle
+    /// lists but no preset carries is installed rather than dropped. Where the list and a
+    /// slot disagree, the list wins - the same collision rule
+    /// <see cref="SyncSpecialKeys(string, GamepadProfile)"/> applies, one source at one
+    /// position holding one thing.
+    /// </summary>
+    public void SyncSpecialKeys(string deviceId, IReadOnlyList<DeviceSpecialKey> keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+
+        var canonical = new Dictionary<SpecialKeyId, SpecialKeyValue>();
+        foreach (var key in keys)
+        {
+            // The bundle's section is data, not a type guarantee: anything that is not a
+            // special key cannot occupy a special-key position and is left out rather than
+            // written where the fan-out would put it.
+            if (key.Target is SpecialKeyTarget target)
+            {
+                canonical[new SpecialKeyId(key.Button, key.Code, key.Kind, key.Position)] =
+                    new SpecialKeyValue(target, key.Enabled);
+            }
+        }
+
+        WriteSpecialKeys(deviceId, SlotsInUse(deviceId), canonical);
+    }
+
+    /// <summary>
+    /// Replaces the device's whole preset set with the scheme's: every slot the scheme names
+    /// is written, and every slot the device holds that the scheme does not name is removed.
+    /// This is the store half of a scheme import - one operation, so the device is never seen
+    /// half-imported. Slot numbers are preserved rather than renumbered, because a leader key
+    /// names the two slots it flips between: a device whose live slots are 1, 3 and 4 keeps
+    /// that shape, and its leader keeps pointing where the user aimed it. The profiles are
+    /// rebound to their slot keys and tagged with the slot they are stored in, exactly the way
+    /// <see cref="SaveSlot"/> stores any other slot.
+    /// <para>
+    /// The removed slots are deleted outright rather than through <see cref="DeleteSlot"/>:
+    /// that method repairs leader references and refuses to leave a device preset-less, both
+    /// of which are the scheme's own business - a scheme always carries its base preset, and
+    /// its leaders name slots it carries, which the import validates before it gets here.
+    /// </para>
+    /// </summary>
+    public void ReplaceScheme(string deviceId, IReadOnlyDictionary<int, GamepadProfile> slots)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+
+        if (slots.Count == 0)
+        {
+            throw new ArgumentException("a scheme carries at least its base preset", nameof(slots));
+        }
+
+        foreach (var slot in slots.Keys)
+        {
+            ValidateSlot(slot);
+        }
+
+        foreach (var slot in SlotsInUse(deviceId).Where(slot => !slots.ContainsKey(slot)))
+        {
+            _store.Delete(KeyFor(deviceId, slot));
+        }
+
+        foreach (var (slot, profile) in slots.OrderBy(pair => pair.Key))
+        {
+            SaveSlot(deviceId, slot, profile with { PresetSlot = slot });
+        }
+    }
+
+    /// <summary>
+    /// The device's current preset set as a snapshot: every slot in use mapped to the profile
+    /// it holds. The caller keeps it across a scheme import so the replace can be undone, or
+    /// rolled back when the reload that follows it fails.
+    /// </summary>
+    public IReadOnlyDictionary<int, GamepadProfile?> CaptureSlots(string deviceId)
+    {
+        var snapshot = new Dictionary<int, GamepadProfile?>();
+
+        foreach (var slot in SlotsInUse(deviceId))
+        {
+            snapshot[slot] = LoadSlot(deviceId, slot);
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Restores a device's preset set to a captured snapshot exactly: every slot the snapshot
+    /// holds is written back, and every slot the device holds that the snapshot does not name
+    /// is removed. The counterpart of <see cref="ReplaceScheme"/> - an import's undo, or a
+    /// half-landed import's rollback - so the device ends up precisely where it started,
+    /// including slots the replace created and slots it deleted.
+    /// </summary>
+    public void RestoreSlots(string deviceId, IReadOnlyDictionary<int, GamepadProfile?> snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        foreach (var slot in SlotsInUse(deviceId).Where(slot => !snapshot.ContainsKey(slot)))
+        {
+            _store.Delete(KeyFor(deviceId, slot));
+        }
+
+        foreach (var (slot, profile) in snapshot)
+        {
+            if (profile is null)
+            {
+                _store.Delete(KeyFor(deviceId, slot));
+                continue;
+            }
+
+            SaveSlot(deviceId, slot, profile);
+        }
+    }
+
+    /// <summary>
     /// Rewrites each listed slot's special-key subset to <paramref name="canonical"/>,
     /// saving only the slots that actually changed. Returns whether any slot was rewritten.
     /// </summary>
@@ -916,7 +1075,7 @@ public sealed class PresetStore
     /// a <see cref="SpecialKeyKind"/> but sit in different positions are different keys - one
     /// button can be a precision key on its click and a leader on its long press.
     /// </summary>
-    private enum SpecialKeyPosition
+    public enum SpecialKeyPosition
     {
         /// <summary>The mapping's own <see cref="MappingEntry.Target"/>.</summary>
         Target,
@@ -927,6 +1086,21 @@ public sealed class PresetStore
         /// <summary>The gesture's <see cref="ButtonGesture.LongPressAction"/>.</summary>
         LongPress,
     }
+
+    /// <summary>
+    /// One device-global special key as it sits in a profile: the physical button that triggers
+    /// it - the button plus the raw code that tells one extra button from another - its kind,
+    /// the position it occupies, the target itself and whether the mapping that carries it is
+    /// enabled. This is the whole identity of the key, so it can be listed, written to a scheme
+    /// bundle and fanned back out to every slot of a device without the profile it came from.
+    /// </summary>
+    public sealed record DeviceSpecialKey(
+        GamepadButton Button,
+        int Code,
+        SpecialKeyKind Kind,
+        SpecialKeyPosition Position,
+        MappingTarget Target,
+        bool Enabled);
 
     /// <summary>
     /// The identity of one device-global special key: the physical button that triggers it -

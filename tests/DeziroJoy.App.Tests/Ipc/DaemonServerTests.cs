@@ -37,6 +37,9 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public bool IsInjectionSuspended { get; private set; }
 
+    /// <summary>The third pause: mapping is off for the program in front, the loop still runs.</summary>
+    public bool IsNativeGamepadPaused { get; private set; }
+
     public event Action<bool>? InjectionSuspensionChanged;
 
     public bool HasController { get; set; }
@@ -128,6 +131,8 @@ internal sealed class FakeDaemonHost : IDaemonHost
         IsInjectionSuspended = suspended;
         InjectionSuspensionChanged?.Invoke(suspended);
     }
+
+    public void SetNativeGamepadPaused(bool paused) => IsNativeGamepadPaused = paused;
 
     public void Reload(string deviceId, GamepadProfile profile)
     {
@@ -2238,6 +2243,69 @@ public class DaemonServerTests
         await server.ProcessAsync(new SetMappingEnabledMessage("req-4", true));
         Assert.True(host.IsMappingEnabled);
         Assert.Equal(0, host.StopCalls);
+    }
+
+    [Fact]
+    public async Task The_Native_Gamepad_Pause_Is_The_Third_Pause_And_Leaves_The_Other_Two_Alone()
+    {
+        // What a foreground rule for a program that reads the pad itself asks for. It must not
+        // be confusable with the user's own pause or with the editor's hijack lease: the three
+        // are set by three different things and none of them may lift another.
+        var (server, _, host) = CreateRunning();
+        await server.ProcessAsync(new StartMessage("req-start", 0));
+        await server.ProcessAsync(new SetMappingEnabledMessage("req-user-pause", false));
+        await server.ProcessAsync(new SetInjectionSuspendedMessage("req-lease", true), "client-a");
+
+        var paused = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetNativeGamepadPausedMessage("req-native", true)));
+
+        Assert.True(paused.Accepted);
+        Assert.True(host.IsRunning);
+        Assert.True(host.IsNativeGamepadPaused);
+        Assert.False(host.IsMappingEnabled);
+        Assert.True(host.IsInjectionSuspended);
+        Assert.Equal(0, host.StopCalls);
+
+        // Releasing the foreground rule's pause hands the pad back to the mapping, and to
+        // nothing else: the user's own pause and the editor's lease are still in charge.
+        var resumed = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetNativeGamepadPausedMessage("req-native-off", false)));
+
+        Assert.True(resumed.Accepted);
+        Assert.False(host.IsNativeGamepadPaused);
+        Assert.False(host.IsMappingEnabled);
+        Assert.True(host.IsInjectionSuspended);
+    }
+
+    [Fact]
+    public async Task The_Native_Gamepad_Pause_Reaches_Every_Gui_In_The_Snapshot()
+    {
+        // The pause is the one state a client cannot derive from its own connection, so it is
+        // published - unlike the hijack lease, which is per-connection by definition.
+        var (server, _, host) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        await server.ProcessAsync(new SetNativeGamepadPausedMessage("req-1", true));
+
+        var push = Assert.Single(pushes);
+        Assert.True(push.Snapshot.NativeGamepadPaused);
+        Assert.True(host.IsNativeGamepadPaused);
+    }
+
+    [Fact]
+    public async Task Repeating_The_Native_Gamepad_Pause_Changes_Nothing()
+    {
+        // The watcher polls four times a second and is idempotent on its own side; a repeat that
+        // reached the host would still be harmless, but a snapshot per repeat would not be.
+        var (server, _, _) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        await server.ProcessAsync(new SetNativeGamepadPausedMessage("req-1", true));
+        await server.ProcessAsync(new SetNativeGamepadPausedMessage("req-2", true));
+
+        Assert.Single(pushes);
     }
 
     [Fact]

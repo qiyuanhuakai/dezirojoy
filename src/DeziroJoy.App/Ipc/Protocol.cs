@@ -57,6 +57,7 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(StopMessage), "stop")]
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
+[JsonDerivedType(typeof(SetNativeGamepadPausedMessage), "set-native-gamepad-paused")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
 [JsonDerivedType(typeof(DeletePresetSlotMessage), "delete-preset-slot")]
 [JsonDerivedType(typeof(ShutdownDaemonMessage), "shutdown-daemon")]
@@ -122,6 +123,18 @@ public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : 
 
 /// <summary>GUI to daemon: suspend dispatch while this connection's explicit hijack lease owns input.</summary>
 public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
+
+/// <summary>
+/// GUI to daemon: pause or resume keyboard and mouse mapping so the program in front reads the
+/// gamepad itself. Deliberately a third pause, distinct from both of the others:
+/// <see cref="SetMappingEnabledMessage"/> is the user's own pause and
+/// <see cref="SetInjectionSuspendedMessage"/> is this connection's hijack lease, and the three
+/// must never lift one another. It is what a foreground rule for a native-gamepad program asks
+/// for, so the daemon - which owns mapping in daemon mode - can honour the rule the GUI's
+/// watcher resolved. The mapping loop keeps running and the injection mutex is untouched, so
+/// the resident model survives it exactly as it survives the other two.
+/// </summary>
+public sealed record SetNativeGamepadPausedMessage(string RequestId, bool Paused) : IpcMessage;
 
 /// <summary>
 /// GUI to daemon: switch the active preset slot. The slot is app-wide rather than
@@ -248,6 +261,14 @@ public sealed record StateSnapshot(
     /// profile body this snapshot already carries.
     /// </summary>
     public IReadOnlyList<ActiveLayerSnapshot> Layers { get; init; } = [];
+
+    /// <summary>
+    /// Whether keyboard and mouse mapping is paused so the program in front reads the gamepad
+    /// itself - the third pause, beside <see cref="MappingEnabled"/> and the per-connection
+    /// hijack lease. A foreground rule sets it, so every connected GUI shows the same answer
+    /// about what the program in front is being handed.
+    /// </summary>
+    public bool NativeGamepadPaused { get; init; }
 }
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>

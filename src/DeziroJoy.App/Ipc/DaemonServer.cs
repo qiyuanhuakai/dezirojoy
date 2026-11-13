@@ -203,6 +203,9 @@ public sealed partial class DaemonServer
             case SetInjectionSuspendedMessage setSuspended:
                 return HandleSetInjectionSuspended(setSuspended, connectionId);
 
+            case SetNativeGamepadPausedMessage nativePaused:
+                return HandleSetNativeGamepadPaused(nativePaused);
+
             case SwitchPresetSlotMessage switchSlot:
                 return HandleSwitchPresetSlot(switchSlot);
 
@@ -745,6 +748,31 @@ public sealed partial class DaemonServer
     }
 
     /// <summary>
+    /// Pauses or resumes keyboard and mouse mapping for native gamepad input - the third pause,
+    /// what a foreground rule for a program that reads the pad itself asks for. It is a dispatch
+    /// state like <see cref="HandleSetMappingEnabled"/> and unlike the hijack lease, so it is
+    /// published: every connected GUI has to agree on what the program in front is being handed,
+    /// and the pause is the one state a client cannot derive from its own connection. The
+    /// mapping loop keeps running, the injection mutex is never touched, and the user's own pause
+    /// and the editor's lease are left exactly as they were.
+    /// </summary>
+    private MutationAckMessage HandleSetNativeGamepadPaused(SetNativeGamepadPausedMessage request)
+    {
+        lock (_sync)
+        {
+            // A pause that is already in effect is acked without publishing: the watcher polls
+            // four times a second, and a snapshot per poll would be noise every GUI has to adopt.
+            if (_host.IsNativeGamepadPaused != request.Paused)
+            {
+                _host.SetNativeGamepadPaused(request.Paused);
+                PublishStateChange();
+            }
+
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    /// <summary>
     /// Starts the mapping loop. Returns the refusal message when another process holds the
     /// injection mutex, or null on success. The caller only acks after this returns, so a
     /// start ack always follows a real mutex acquire.
@@ -924,6 +952,7 @@ public sealed partial class DaemonServer
             ProfileJson = string.IsNullOrEmpty(profileJson) ? null : profileJson,
             Devices = _host.ConnectedDevices,
             Layers = LayerStateSource?.Invoke() ?? [],
+            NativeGamepadPaused = _host.IsNativeGamepadPaused,
         };
     }
 }

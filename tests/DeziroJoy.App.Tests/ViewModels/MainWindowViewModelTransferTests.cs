@@ -214,4 +214,36 @@ public class MainWindowViewModelTransferTests : IDisposable
         Assert.False(vm.IsTransferError);
         Assert.Contains("已导出", vm.TransferMessage);
     }
+
+    [Fact]
+    public void ApplySample_Feeds_The_Real_Input_Calibration_Of_Both_Sensitivity_Panels()
+    {
+        var (vm, host, provider, _) = Connected();
+        provider.SetState(
+            "xinput:0",
+            GamepadState.Create(default, leftStickX: 0f, leftStickY: -0.5f, rightStickX: 0.25f, rightStickY: 0f));
+        vm.MouseSensitivity.IsRealInputMode = true;
+        vm.ScrollSensitivity.IsRealInputMode = true;
+
+        SampleHelper.Sample(vm, host);
+
+        // The panels read the same samples the visualizer does: the mouse panel the right
+        // stick, the scroll panel the left.
+        Assert.Equal(0.25, vm.MouseSensitivity.RawStickX);
+        Assert.Equal(-0.5, vm.ScrollSensitivity.RawStickY);
+    }
+
+    [Fact]
+    public void ApplyPresenceSample_Feeds_The_Calibration_While_The_Engine_Is_Stopped()
+    {
+        var (vm, _, _, _) = Connected();
+        vm.MouseSensitivity.IsRealInputMode = true;
+
+        // The presence poll carries its own state, so the calibration is fed the same way
+        // the running engine's samples are.
+        var state = GamepadState.Create(default, leftStickX: 0f, leftStickY: 0f, rightStickX: 0.75f, rightStickY: 0f);
+        vm.ApplyPresenceSample(new ControllerSampledEventArgs(vm.ActiveController!, state));
+
+        Assert.Equal(0.75, vm.MouseSensitivity.RawStickX);
+    }
 }

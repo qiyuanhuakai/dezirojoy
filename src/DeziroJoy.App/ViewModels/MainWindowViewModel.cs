@@ -130,6 +130,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private string? _daemonInputDeviceId;
 
+    /// <summary>
+    /// What the daemon's profile body could not be read for, or null when it parsed whole.
+    /// Kept so the notice survives the next accepted mutation, which clears the transfer
+    /// message: the damaged body is still what the daemon is serving until the user commits
+    /// a profile over it, so the reason part of the table is missing must not vanish.
+    /// </summary>
+    private string? _profileDamage;
+
     /// <summary>The device whose slots <see cref="PresetSlots"/> was last built for.</summary>
     private string? _presetSlotDeviceId;
 
@@ -171,6 +179,19 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         DaemonSettings = new DaemonSettingsViewModel();
         Update = new UpdateSettingsViewModel(_updateService, _settings);
         LayerHint = new LayerHintViewModel();
+
+        // The foreground rules run on their own timer against their own target: the engine host
+        // while this window owns mapping, nothing at all while the resident daemon does. The
+        // daemon runs the same watcher over its own engine host for its whole life, so a window
+        // that also drove would send every switch and pause twice; what it still owes the user
+        // is the panel - the program in front, the rule that matches it and the decision it
+        // resolves to, all read off the shared table the daemon is running. Neither path touches
+        // the injection mutex, so the three pauses stay independent.
+        IForegroundTarget foregroundTarget = _daemon is null
+            ? new EngineHostForegroundTarget(_host, _presets)
+            : new NullForegroundTarget();
+
+        Foreground = new ForegroundWatcher(ForegroundSourceFactory.Create(), foregroundTarget);
 
         // Fixed for the lifetime of the process: elevation is decided at launch.
         IsElevationSupported = _elevationService.IsSupported;
@@ -282,6 +303,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public AppearanceViewModel Appearance { get; }
 
     public DaemonSettingsViewModel DaemonSettings { get; }
+
+    /// <summary>
+    /// The foreground rules watcher: the live rule table, the program in front and the decision
+    /// that is in effect, driven by the window's own poll timer. Built here rather than by the
+    /// rules panel because the target it drives depends on who owns mapping - the engine host
+    /// locally, nothing in daemon mode, where the resident daemon runs its own watcher - which
+    /// is this view model's knowledge. The panel it feeds is created by the view, so a window
+    /// that never opens never builds it.
+    /// </summary>
+    public ForegroundWatcher Foreground { get; }
 
     /// <summary>
     /// What the layer hint overlay shows while a temporary layer is active: the layer's own
@@ -1526,23 +1557,34 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
             if (!string.IsNullOrEmpty(snapshot.ProfileJson))
             {
-                try
+                var profileDeviceId = DaemonProfileDeviceId(snapshot.ProfileJson);
+                if (!string.IsNullOrWhiteSpace(profileDeviceId)
+                    && (snapshot.Devices.Count == 0
+                        || snapshot.Devices.Any(device => device.DeviceId == profileDeviceId)))
                 {
-                    var profileDeviceId = ProfileSerializer.Deserialize(snapshot.ProfileJson).DeviceId;
-                    if (!string.IsNullOrWhiteSpace(profileDeviceId)
-                        && (snapshot.Devices.Count == 0
-                            || snapshot.Devices.Any(device => device.DeviceId == profileDeviceId)))
-                    {
-                        return profileDeviceId;
-                    }
-                }
-                catch (System.Text.Json.JsonException)
-                {
-                    return null;
+                    return profileDeviceId;
                 }
             }
 
             return snapshot.Devices.Count > 0 ? snapshot.Devices[0].DeviceId : null;
+        }
+    }
+
+    /// <summary>
+    /// The device the daemon's profile body names, read leniently. A body this build cannot
+    /// parse whole still names its device in the part that does parse, and losing the id over
+    /// damage that costs nothing would make the profile un-editable - no save, no import, no
+    /// delete - which is the failure this whole path exists to avoid.
+    /// </summary>
+    private static string? DaemonProfileDeviceId(string profileJson)
+    {
+        try
+        {
+            return ProfileSerializer.Load(profileJson).Profile.DeviceId;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
         }
     }
 
@@ -1658,6 +1700,392 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsTransferError = true;
     }
 
+    // ---- Scheme bundle transfer ------------------------------------------------
+
+    /// <summary>
+    /// Raised when the user asks to export a whole scheme. The view owns the file dialog (this
+    /// view model is Avalonia-free), so it answers by calling <see cref="ExportSchemeTo"/> with
+    /// the chosen path, or with null when the dialog was dismissed.
+    /// </summary>
+    public event EventHandler? ExportSchemePathRequested;
+
+    /// <summary>Import counterpart of <see cref="ExportSchemePathRequested"/>; answered by <see cref="ImportSchemeFrom"/>.</summary>
+    public event EventHandler? ImportSchemePathRequested;
+
+    /// <summary>
+    /// Raised when a scheme import preview is ready to show. The view answers by opening the
+    /// preview dialog; the dialog closes itself when <see cref="IsSchemePreviewOpen"/> goes back
+    /// to false, so the view model stays the only owner of the flow's state.
+    /// </summary>
+    public event EventHandler? SchemeImportPreviewRequested;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSchemePreview))]
+    private SchemeImportPreview? _schemePreview;
+
+    /// <summary>True while <see cref="SchemePreview"/> describes an import waiting for a decision.</summary>
+    public bool HasSchemePreview => SchemePreview is not null;
+
+    /// <summary>
+    /// True while the preview dialog is open. The view watches it to show and hide the dialog;
+    /// every path that ends the flow - cancel, a finished undo - clears it.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSchemePreviewOpen;
+
+    /// <summary>
+    /// True once the pending scheme has been applied, so the dialog switches from the
+    /// confirm state to the result state with its undo affordance.
+    /// </summary>
+    [ObservableProperty]
+    private bool _schemeImportApplied;
+
+    /// <summary>True while the last scheme import can still be undone.</summary>
+    [ObservableProperty]
+    private bool _canUndoSchemeImport;
+
+    /// <summary>
+    /// The import that can still be undone: the device it landed on, the slot set it replaced
+    /// and the app-wide slot the device was on. One level only - a second import replaces the
+    /// snapshot rather than stacking, because the second import is itself undoable.
+    /// </summary>
+    private sealed record SchemeUndo(
+        string DeviceId,
+        IReadOnlyDictionary<int, GamepadProfile?> Slots,
+        int ActiveSlot);
+
+    private SchemeUndo? _schemeUndo;
+
+    private SchemeBundle? _pendingScheme;
+
+    private string? _pendingSchemeDeviceId;
+
+    [RelayCommand]
+    private void ExportScheme() => ExportSchemePathRequested?.Invoke(this, EventArgs.Empty);
+
+    [RelayCommand]
+    private void ImportScheme() => ImportSchemePathRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// Imports the first built-in template - the Windows pair - through the same preview,
+    /// atomic apply and undo a file import goes through.
+    /// </summary>
+    [RelayCommand]
+    private void ImportWindowsTemplate() => BeginSchemeImport(BuiltInSchemeTemplates.Windows);
+
+    /// <summary>
+    /// Writes the device's whole scheme to the path the view picked. A null path means the
+    /// dialog was dismissed, which is not an error and says nothing.
+    /// </summary>
+    public void ExportSchemeTo(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (PersistenceDeviceId is not { } deviceId)
+        {
+            SetTransferError("导出失败：没有可导出的方案，请先连接手柄。");
+            return;
+        }
+
+        var slots = _presets.SlotsInUse(deviceId);
+        if (slots.Count == 0)
+        {
+            SetTransferError("导出失败：当前设备没有可导出的预设。");
+            return;
+        }
+
+        var bundle = SchemeBundleFactory.FromDevice(
+            _presets,
+            deviceId,
+            ActiveProfile?.Name ?? "未命名方案",
+            $"导出自 DeziroJoy {SchemeBundleFactory.CurrentAppVersion()}：{slots.Count} 套预设，" +
+            $"{_presets.SpecialKeysInEffect(deviceId).Count} 个全局特殊键。" +
+            "导入后会整体替换目标设备的预设，可在导入确认后撤销一次。",
+            SchemeBundleFactory.CurrentAppVersion());
+
+        Report(ProfileTransferService.ExportScheme(bundle, path));
+    }
+
+    /// <summary>
+    /// Reads the scheme bundle in the file the view picked and opens its import preview. A
+    /// malformed file, a plain profile file or a bundle a newer build wrote is reported and
+    /// changes nothing; a readable bundle is validated against its own slot set before the
+    /// preview opens, so a leader aimed at a slot the bundle does not carry is refused here
+    /// rather than imported broken.
+    /// </summary>
+    public void ImportSchemeFrom(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        var loaded = SchemeBundleCodec.Load(path);
+
+        if (!loaded.Succeeded || loaded.Bundle is null)
+        {
+            SetTransferError(loaded.Message);
+            return;
+        }
+
+        BeginSchemeImport(loaded.Bundle);
+    }
+
+    /// <summary>
+    /// Validates a bundle, normalizes the special-key subset it will install, builds the
+    /// preview of what it replaces and opens the dialog. Nothing is written here - the device
+    /// is touched only by <see cref="ConfirmSchemeImport"/>.
+    /// </summary>
+    private void BeginSchemeImport(SchemeBundle bundle)
+    {
+        if (PersistenceDeviceId is not { } deviceId)
+        {
+            SetTransferError("导入失败：请先连接手柄。");
+            return;
+        }
+
+        if (FirstLeaderOutsideScheme(bundle) is { } outside)
+        {
+            SetTransferError($"导入失败：{outside} 上的 Leader 键指向方案之外的槽位。");
+            return;
+        }
+
+        // The subset the device will end up with: the bundle's own section when it names one,
+        // else the one its presets carry under the same first-occurrence rule a device uses.
+        // Normalized once here, so the preview shows and the apply installs the same set.
+        var normalized = bundle with
+        {
+            SpecialKeys = bundle.SpecialKeys
+                ?? PresetStore.SpecialKeysInEffect(
+                    bundle.Presets.OrderBy(preset => preset.Slot).Select(preset => preset.Profile)),
+        };
+
+        _pendingScheme = normalized;
+        _pendingSchemeDeviceId = deviceId;
+        SchemePreview = SchemeImportPreview.Build(normalized, _presets, deviceId);
+        SchemeImportApplied = false;
+        IsSchemePreviewOpen = true;
+        SchemeImportPreviewRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// The button a leader key sits on when it names a slot the bundle does not carry, or null
+    /// when every leader flips between slots the bundle ships. A leader aimed at nothing is a
+    /// switch that silently does nothing, so it is refused before the import rather than
+    /// installed. A leader sits in one of three places - the mapping's own target, or the
+    /// gesture's two actions - and all three are examined, because the engine executes gesture
+    /// actions exactly as it executes the mapping's own target.
+    /// </summary>
+    private static string? FirstLeaderOutsideScheme(SchemeBundle bundle)
+    {
+        var slots = bundle.Presets.Select(preset => preset.Slot).ToHashSet();
+
+        foreach (var preset in bundle.Presets)
+        {
+            foreach (var mapping in preset.Profile.Mappings)
+            {
+                if (mapping.Source is not ButtonBinding button)
+                {
+                    continue;
+                }
+
+                foreach (var target in LeaderCandidates(mapping))
+                {
+                    if (target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader } leader
+                        && (!slots.Contains(leader.SlotA) || !slots.Contains(leader.SlotB)))
+                    {
+                        return MappingDescriptions.Button(button.Button, button.Code);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Every position one mapping can carry a leader key in.</summary>
+    private static IEnumerable<MappingTarget?> LeaderCandidates(MappingEntry mapping)
+    {
+        yield return mapping.Target;
+
+        if (mapping.Source is ButtonBinding { Gesture: { } gesture })
+        {
+            yield return gesture.DoubleClickAction;
+            yield return gesture.LongPressAction;
+        }
+    }
+
+    /// <summary>
+    /// Applies the pending scheme as one atomic operation: the device's whole slot set is
+    /// replaced, the device-global special keys are fanned out to every slot, and the running
+    /// engine is brought back in step. If any step fails, the captured slot set is restored
+    /// before the user is told, so a failed import leaves the device exactly as it was. On
+    /// success the replaced set is kept as the one-level undo.
+    /// </summary>
+    [RelayCommand]
+    private async Task ConfirmSchemeImport()
+    {
+        if (_pendingScheme is not { } bundle || _pendingSchemeDeviceId is not { } deviceId)
+        {
+            return;
+        }
+
+        var slots = bundle.Presets.ToDictionary(preset => preset.Slot, preset => preset.Profile);
+        var rollback = _presets.CaptureSlots(deviceId);
+        var previousActiveSlot = ActivePresetSlot;
+
+        try
+        {
+            _presets.ReplaceScheme(deviceId, slots);
+            _presets.SyncSpecialKeys(deviceId, bundle.SpecialKeys!);
+
+            if (!await ReloadSchemeSlotsAsync(deviceId, previousActiveSlot, "导入方案"))
+            {
+                _presets.RestoreSlots(deviceId, rollback);
+                await ReloadSchemeSlotsAsync(deviceId, previousActiveSlot, "恢复方案");
+                return;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            _presets.RestoreSlots(deviceId, rollback);
+            await ReloadSchemeSlotsAsync(deviceId, previousActiveSlot, "恢复方案");
+            SetTransferError($"导入失败：{exception.Message}");
+            return;
+        }
+
+        _schemeUndo = new SchemeUndo(deviceId, rollback, previousActiveSlot);
+        CanUndoSchemeImport = true;
+        SchemeImportApplied = true;
+        Report(ProfileTransferResult.SchemeImported(bundle.Name));
+    }
+
+    /// <summary>
+    /// Dismisses the pending import without touching the device.
+    /// </summary>
+    [RelayCommand]
+    private void CancelSchemeImport()
+    {
+        _pendingScheme = null;
+        _pendingSchemeDeviceId = null;
+        SchemePreview = null;
+        SchemeImportApplied = false;
+        IsSchemePreviewOpen = false;
+    }
+
+    /// <summary>
+    /// Restores the slot set the last scheme import replaced, as one atomic operation, and
+    /// brings the running engine back in step with it. The undo is one level: it clears itself
+    /// as it runs, so a second import's snapshot is never undone by mistake.
+    /// </summary>
+    [RelayCommand]
+    private async Task UndoSchemeImport()
+    {
+        if (_schemeUndo is not { } undo)
+        {
+            return;
+        }
+
+        _schemeUndo = null;
+        CanUndoSchemeImport = false;
+
+        try
+        {
+            _presets.RestoreSlots(undo.DeviceId, undo.Slots);
+
+            if (!await ReloadSchemeSlotsAsync(undo.DeviceId, undo.ActiveSlot, "撤销方案导入"))
+            {
+                return;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            SetTransferError($"撤销失败：{exception.Message}");
+            return;
+        }
+
+        _pendingScheme = null;
+        _pendingSchemeDeviceId = null;
+        SchemePreview = null;
+        SchemeImportApplied = false;
+        IsSchemePreviewOpen = false;
+        Report(ProfileTransferResult.SchemeImportUndone());
+    }
+
+    /// <summary>
+    /// Brings the running engine back in step with a device's slot set after a scheme import
+    /// or its undo. The target slot is the preferred one when the store still carries it, else
+    /// the lowest slot it does carry - an import that removed the active slot has to land
+    /// somewhere that exists. Locally the runtime is reloaded here and the in-view state
+    /// follows; in daemon mode the daemon owns the store's runtime, so it is asked to switch
+    /// to the same slot, which reloads its engine and publishes the snapshot this client then
+    /// adopts. Returns false when the reload was refused or failed, so the caller rolls back.
+    /// </summary>
+    private async Task<bool> ReloadSchemeSlotsAsync(string deviceId, int preferredSlot, string operation)
+    {
+        var inUse = _presets.SlotsInUse(deviceId);
+        var targetSlot = inUse.Contains(preferredSlot)
+            ? preferredSlot
+            : inUse.DefaultIfEmpty(PresetStore.MinSlot).Min();
+
+        if (_daemon is null)
+        {
+            var profile = _presets.LoadSlot(deviceId, targetSlot);
+
+            if (ActiveController is { } controller)
+            {
+                if (profile is { } loaded)
+                {
+                    _host.Reload(controller.Descriptor.DeviceId, loaded with { PresetSlot = targetSlot });
+                }
+            }
+
+            if (profile is { } active)
+            {
+                ActiveProfile = active;
+            }
+
+            if (targetSlot != ActivePresetSlot)
+            {
+                ActivePresetSlot = targetSlot;
+            }
+
+            ReconcilePresetSlots(deviceId);
+            MarkActivePresetSlot(ActivePresetSlot);
+            ReloadSensitivityPanels();
+            RefreshMappings();
+            RefreshLayerHint();
+            return true;
+        }
+
+        if (_daemonRequired && !IsDaemonConnected)
+        {
+            SetTransferError($"提权守护进程不可用；{operation}未生效。");
+            return false;
+        }
+
+        try
+        {
+            var result = await _daemon.SwitchPresetSlotAsync(deviceId, targetSlot, _lifetime.Token);
+
+            if (result.Outcome != MutationOutcome.Accepted)
+            {
+                ReportMutationFailure(result, operation);
+                return false;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            ReportDaemonUnavailable(exception.Message);
+            return false;
+        }
+
+        return true;
+    }
+
     /// <summary>Called from the UI thread for every host sample.</summary>
     public void ApplySample(ControllerSampledEventArgs args)
     {
@@ -1671,6 +2099,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Visualizer.Update(args.State);
         Visualizer.SetConnected(true);
+
+        // The sensitivity panels' real-input calibration reads the same samples the visualizer
+        // does: latest sample wins between preview ticks, and a panel that is not calibrating
+        // costs one field copy.
+        MouseSensitivity.ApplySample(args.State);
+        ScrollSensitivity.ApplySample(args.State);
     }
 
     /// <summary>
@@ -1690,6 +2124,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Visualizer.Update(args.State);
         Visualizer.SetConnected(true);
+
+        // The presence poll is a sample like any other, so the calibration sees the pad while
+        // the mapping loop is off exactly as it does while it runs.
+        MouseSensitivity.ApplySample(args.State);
+        ScrollSensitivity.ApplySample(args.State);
     }
 
     private void OnDaemonInputSample(InputSampleMessage sample)
@@ -1711,6 +2150,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Navigate(state, sample.DeviceId);
         Visualizer.Update(state);
         Visualizer.SetConnected(true);
+
+        // The daemon's samples are the only input a render process sees, so the sensitivity
+        // panels' real-input calibration is fed from here exactly as from the host's samples.
+        MouseSensitivity.ApplySample(state);
+        ScrollSensitivity.ApplySample(state);
     }
 
     /// <summary>Selects an element without opening the editor or changing the input lease.</summary>
@@ -2356,15 +2800,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         GamepadProfile? profile = null;
         if (!string.IsNullOrEmpty(snapshot.ProfileJson))
         {
-            try
-            {
-                profile = ProfileSerializer.Deserialize(snapshot.ProfileJson);
-            }
-            catch (System.Text.Json.JsonException exception)
-            {
-                SetTransferError($"守护进程配置无法解析：{exception.Message}");
-                return;
-            }
+            // The daemon's body is the GUI's only view of the mapping table, and it is not
+            // always one this build can read whole - a resident daemon from another version,
+            // or a hand-edited profile, can name a target no type here claims. Refusing the
+            // whole body over the part that does not parse is what left the table empty and
+            // the daemon's mappings undeletable, so what parses is adopted and what does not
+            // is reported: the rows the user can still see are the rows they can delete, and
+            // the next commit writes the readable profile back over the damaged one.
+            var load = ProfileSerializer.Load(snapshot.ProfileJson);
+            ReportProfileDamage(load.Problems);
+            profile = load.Profile;
+        }
+        else
+        {
+            ReportProfileDamage([]);
         }
 
         var profileDeviceId = !string.IsNullOrWhiteSpace(profile?.DeviceId)
@@ -2389,6 +2838,24 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             ActiveProfile = null;
             RefreshMappings();
+        }
+    }
+
+    /// <summary>
+    /// Records what the daemon's profile body could not be read for, and says so. The notice
+    /// is state rather than a one-shot banner: the transfer message is cleared by the next
+    /// accepted mutation, and a body the daemon still holds damaged - the table in view is
+    /// only the part of it that parsed - has to stay explained until the user commits a fix.
+    /// </summary>
+    private void ReportProfileDamage(IReadOnlyList<string> problems)
+    {
+        _profileDamage = problems.Count > 0
+            ? $"守护进程配置部分无法解析，已显示可读取的部分：{string.Join("；", problems)}"
+            : null;
+
+        if (_profileDamage is { } damage)
+        {
+            SetTransferError(damage);
         }
     }
 
@@ -2480,8 +2947,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 }
                 break;
             case MutationOutcome.Accepted when IsTransferError:
-                TransferMessage = string.Empty;
-                IsTransferError = false;
+                // A body the daemon still holds damaged stays explained rather than being
+                // cleared along with the mutation's own error.
+                if (_profileDamage is { } damage)
+                {
+                    SetTransferError(damage);
+                }
+                else
+                {
+                    TransferMessage = string.Empty;
+                    IsTransferError = false;
+                }
+
                 break;
         }
     }
@@ -2534,6 +3011,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _host.SetInjectionSuspended(false);
         }
+
+        // Released before the daemon connection goes, so a pause a foreground rule left behind
+        // is lifted while the engine that holds it is still reachable - and with it the platform
+        // foreground source the watcher opened. In daemon mode the pause was never this window's
+        // to begin with: the daemon's own watcher owns it and lifts it on its own shutdown.
+        Foreground.Dispose();
 
         await DisconnectDaemonAsync();
 

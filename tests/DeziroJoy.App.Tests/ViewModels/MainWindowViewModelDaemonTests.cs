@@ -485,18 +485,19 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
-    public async Task Malformed_Daemon_Profile_Blocks_Save_And_Import_Without_Writing_Any_Slot()
+    public async Task A_Malformed_Daemon_Profile_No_Longer_Blocks_Save_And_Import()
     {
         var context = await CreateDaemonPresetViewModel();
         await using var viewModel = context.ViewModel;
         Assert.NotNull(viewModel.ActiveProfile);
         viewModel.DaemonSnapshot = viewModel.DaemonSnapshot! with { ProfileJson = "{not-json" };
-        var before = context.Presets.SlotsInUse("pad-1")
-            .ToDictionary(
-                slot => slot,
-                slot => ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
+        var untouched = new Dictionary<int, string>
+        {
+            [2] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 2)!),
+            [3] = ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", 3)!),
+        };
         var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-malformed-import-{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, ProfileSerializer.Serialize(viewModel.ActiveProfile with { Name = "Must not import" }));
+        File.WriteAllText(path, ProfileSerializer.Serialize(viewModel.ActiveProfile with { Name = "Repaired by import" }));
 
         try
         {
@@ -508,8 +509,13 @@ public sealed class MainWindowViewModelDaemonTests
             File.Delete(path);
         }
 
-        Assert.True(viewModel.IsTransferError);
-        foreach (var (slot, expected) in before)
+        // The body is unreadable, so the GUI falls back to the device the daemon itself
+        // reports - the same rule the daemon applies to a body whose own device id it cannot
+        // read. A damaged profile must not lock the user out of the save and the import that
+        // repair it, and no slot other than the device's own active one is touched.
+        Assert.False(viewModel.IsTransferError);
+        Assert.Equal("Repaired by import", context.Presets.LoadSlot("pad-1", 1)!.Name);
+        foreach (var (slot, expected) in untouched)
         {
             Assert.Equal(expected, ProfileSerializer.Serialize(context.Presets.LoadSlot("pad-1", slot)!));
         }

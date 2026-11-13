@@ -16,14 +16,25 @@ public sealed record ProfileTransferResult(bool Succeeded, GamepadProfile? Profi
 
     public static ProfileTransferResult Failed(string message)
         => new(false, null, message);
+
+    public static ProfileTransferResult SchemeExported(string path)
+        => new(true, null, $"方案已导出：{System.IO.Path.GetFileName(path)}");
+
+    public static ProfileTransferResult SchemeImported(string name)
+        => new(true, null, $"已导入方案：{name}");
+
+    public static ProfileTransferResult SchemeImportUndone()
+        => new(true, null, "已撤销方案导入，设备已恢复导入前的预设。");
 }
 
 /// <summary>
-/// Import/export of a single profile as a JSON file. The only codec is
-/// <see cref="ProfileSerializer"/>, so an exported file is byte-for-byte what the per-device
-/// store writes and can be dropped straight into the profiles directory. Reading never throws
-/// for bad content: a malformed file comes back as a failed result carrying the reason, so the
-/// caller can report it without unwinding the profile the user is currently editing.
+/// Import/export of profile files: a single profile as a JSON file, or a whole scheme as a
+/// bundle. The only codecs are <see cref="ProfileSerializer"/> and <see cref="SchemeBundleCodec"/>,
+/// so an exported file is byte-for-byte what the per-device store writes and can be dropped
+/// straight into the profiles directory, and an exported bundle carries its profiles in exactly
+/// that shape. Reading never throws for bad content: a malformed file comes back as a failed
+/// result carrying the reason, so the caller can report it without unwinding the profile the
+/// user is currently editing.
 /// </summary>
 public static class ProfileTransferService
 {
@@ -35,6 +46,18 @@ public static class ProfileTransferService
 
     /// <summary>Glob patterns the picker accepts.</summary>
     public static readonly string[] Patterns = ["*.json"];
+
+    /// <summary>
+    /// File extension used for exported schemes. A bundle is JSON too - its profiles are the
+    /// same bytes a profile file holds - so it shares the extension and differs by content.
+    /// </summary>
+    public const string SchemeExtension = ".json";
+
+    /// <summary>Human-readable file type name the picker shows for schemes.</summary>
+    public const string SchemeTypeName = "DeziroJoy 方案包";
+
+    /// <summary>Glob patterns the picker accepts for schemes.</summary>
+    public static readonly string[] SchemePatterns = ["*.json"];
 
     public static ProfileTransferResult Export(GamepadProfile profile, string destinationPath)
     {
@@ -104,5 +127,36 @@ public static class ProfileTransferService
         }
 
         return ProfileTransferResult.Imported(profile);
+    }
+
+    /// <summary>
+    /// Writes a whole scheme - every preset, the device-global special keys, the temporary
+    /// layers, action names, the writing version and usage notes - as one bundle file. The
+    /// extension is normalized the same way the single-profile export normalizes it, and a
+    /// write that fails comes back as a failed result carrying the reason.
+    /// </summary>
+    public static ProfileTransferResult ExportScheme(SchemeBundle bundle, string destinationPath)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+
+        if (string.IsNullOrWhiteSpace(destinationPath))
+        {
+            return ProfileTransferResult.Failed("导出失败：未选择保存位置。");
+        }
+
+        try
+        {
+            var path = destinationPath.EndsWith(SchemeExtension, StringComparison.OrdinalIgnoreCase)
+                ? destinationPath
+                : destinationPath + SchemeExtension;
+
+            File.WriteAllText(path, SchemeBundleCodec.Serialize(bundle));
+
+            return ProfileTransferResult.SchemeExported(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            return ProfileTransferResult.Failed($"导出失败：{ex.Message}");
+        }
     }
 }
