@@ -109,13 +109,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 ; The in-app updater's relaunch, compiled only when the build passes /DDeziroJoyUpdateRun. The
-; updater launches this setup /VERYSILENT and the Restart Manager closes the updater itself
-; mid-install (CloseApplications=yes above), so the relaunch cannot come from the updater - it
-; must come from Setup, once the new files are in place. The CI silent install/uninstall loop
-; and an ordinary release build never pass the define, so they keep exactly the single
-; skipifsilent offer above and never relaunch on their own. This entry deliberately omits
-; skipifsilent so the silent update run performs the relaunch, and omits a Description so it
-; runs without a check box.
+; updater launches this setup /VERYSILENT and then exits immediately, releasing the DeziroJoy.exe
+; / DLL handles it holds (CloseApplications=yes above), so the relaunch cannot come from the
+; updater - it must come from Setup, once the new files are in place. The CI silent
+; install/uninstall loop and an ordinary release build never pass the define, so they keep
+; exactly the single skipifsilent offer above and never relaunch on their own. This entry
+; deliberately omits skipifsilent so the silent update run performs the relaunch, and omits a
+; Description so it runs without a check box.
 #ifdef DeziroJoyUpdateRun
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait postinstall
 #endif
