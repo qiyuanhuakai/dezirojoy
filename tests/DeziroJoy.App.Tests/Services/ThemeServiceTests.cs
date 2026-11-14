@@ -187,6 +187,21 @@ public sealed class ThemeServiceTests : IDisposable
     }
 
     [Fact]
+    public void A_New_Service_Reads_The_Persisted_Preferences_Without_An_Explicit_Load()
+    {
+        // The composition root loads after the view models that read the preferences are
+        // built, so a freshly constructed service must already hold what the file says.
+        var service = Service(_directory);
+        service.SetAutoCheckUpdates(true);
+        service.SetAutoDownloadUpdates(true);
+
+        var fresh = Service(_directory);
+
+        Assert.True(fresh.AutoCheckUpdatesEnabled);
+        Assert.True(fresh.AutoDownloadUpdatesEnabled);
+    }
+
+    [Fact]
     public void The_Layer_Hint_Preferences_Default_To_Shown_Fixed_Bottom_Centre()
     {
         var service = Service(_directory);

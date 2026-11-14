@@ -12,8 +12,10 @@ namespace DeziroJoy.App.Services;
 /// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
 /// choice, gamepad UI ownership, the independent close/minimize tray policies, the
 /// startup release check and the startup auto-download, and the layer hint overlay's
-/// visibility and screen placement. A missing or corrupt file falls back to the
-/// documented defaults rather than throwing.
+/// visibility and screen placement. The file is read as the service is built, so a
+/// consumer that snapshots a preference in its own constructor reads the stored value
+/// rather than the default. A missing or corrupt file falls back to the documented
+/// defaults rather than throwing.
 /// </summary>
 /// <remarks>
 /// The variant is applied from code rather than declared on the Application
@@ -38,6 +40,16 @@ public sealed class ThemeService
     private readonly string _settingsPath;
     private AppSettings _settings = new();
 
+    /// <summary>
+    /// Builds the service over <paramref name="directory"/> - the profile store's root by
+    /// default - and reads the persisted preferences immediately, so every consumer sees
+    /// the stored values from the moment the service exists. That matters because the
+    /// composition root applies the theme only after the view models are built
+    /// (<see cref="ApplyPersisted"/> runs late), and a view model that snapshots a
+    /// preference in its constructor - the update card's two toggles, the layer hint's
+    /// suppression - would otherwise read the defaults no matter what the file says. A
+    /// missing, unreadable or corrupt file leaves the documented defaults in place.
+    /// </summary>
     public ThemeService(string? directory = null)
     {
         var root = directory ?? Path.Combine(
@@ -46,6 +58,8 @@ public sealed class ThemeService
 
         Directory.CreateDirectory(root);
         _settingsPath = Path.Combine(root, SettingsFileName);
+
+        Load();
     }
 
     /// <summary>Absolute path of the persisted preference file.</summary>

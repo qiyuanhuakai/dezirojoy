@@ -174,6 +174,76 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Both_Toggles_Restore_From_The_Persisted_File_Across_A_Restart()
+    {
+        var settings = new ThemeService(_directory);
+        var vm = new UpdateSettingsViewModel(new FakeUpdateService(UpdateCheckResult.UpToDate()), settings);
+
+        vm.AutoCheckEnabled = true;
+        vm.AutoDownloadEnabled = true;
+
+        // A restart builds a fresh service and a fresh card over it. The composition root
+        // loads the file after the view models exist (App.InstallRenderProcess), so the
+        // toggles must already hold the persisted values the moment the service is built -
+        // exactly the order a real launch runs in.
+        var restarted = new UpdateSettingsViewModel(
+            new FakeUpdateService(UpdateCheckResult.UpToDate()),
+            new ThemeService(_directory));
+
+        Assert.True(restarted.AutoCheckEnabled);
+        Assert.True(restarted.AutoDownloadEnabled);
+    }
+
+    [Fact]
+    public void Turning_A_Toggle_Back_Off_Persists_That_Too()
+    {
+        var settings = new ThemeService(_directory);
+        var vm = new UpdateSettingsViewModel(new FakeUpdateService(UpdateCheckResult.UpToDate()), settings);
+
+        vm.AutoCheckEnabled = true;
+        vm.AutoDownloadEnabled = true;
+
+        var restarted = new UpdateSettingsViewModel(
+            new FakeUpdateService(UpdateCheckResult.UpToDate()),
+            new ThemeService(_directory));
+
+        Assert.True(restarted.AutoCheckEnabled);
+        Assert.True(restarted.AutoDownloadEnabled);
+
+        restarted.AutoCheckEnabled = false;
+        restarted.AutoDownloadEnabled = false;
+
+        var restartedAgain = new UpdateSettingsViewModel(
+            new FakeUpdateService(UpdateCheckResult.UpToDate()),
+            new ThemeService(_directory));
+
+        Assert.False(restartedAgain.AutoCheckEnabled);
+        Assert.False(restartedAgain.AutoDownloadEnabled);
+    }
+
+    [Fact]
+    public async Task The_Update_Card_Holds_The_Persisted_Toggles_Under_The_Production_Startup_Order()
+    {
+        var seeded = new ThemeService(_directory);
+        seeded.SetAutoCheckUpdates(true);
+        seeded.SetAutoDownloadUpdates(true);
+
+        // The order App.InstallRenderProcess runs in: the window's view model is built over
+        // a freshly constructed service, and the file is only read afterwards (the load half
+        // of the composition root's late ApplyPersisted). The card snapshots both toggles in
+        // its constructor, so the values have to be there before that late load runs.
+        var themes = new ThemeService(_directory);
+        var window = CreateViewModel(themes, new FakeUpdateService(UpdateCheckResult.UpToDate()));
+        themes.Load();
+
+        Assert.True(window.Update.AutoCheckEnabled);
+        Assert.True(window.Update.AutoDownloadEnabled);
+
+        Assert.NotNull(window.StartupUpdateCheck);
+        await window.StartupUpdateCheck!;
+    }
+
+    [Fact]
     public void The_Running_Version_Is_Shown_From_The_Service()
     {
         var vm = new UpdateSettingsViewModel(new FakeUpdateService(UpdateCheckResult.UpToDate()));
