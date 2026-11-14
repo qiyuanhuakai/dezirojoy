@@ -93,8 +93,13 @@ public sealed class MappingRowKeyboardTests
         var stage = (Panel)viewbox.Parent!;
         var modelTexts = viewbox.GetVisualDescendants().OfType<TextBlock>().ToHashSet();
 
+        // The temporary hijack toggle lives beside the header but is a control, not a header
+        // label; its caption must not count toward the title/subtitle pair.
+        var toggleTexts = window.FindControl<ToggleButton>("GamepadHijackToggle")
+            ?.GetVisualDescendants().OfType<TextBlock>().ToHashSet() ?? [];
+
         var header = stage.GetVisualDescendants().OfType<TextBlock>()
-            .Where(text => !modelTexts.Contains(text))
+            .Where(text => !modelTexts.Contains(text) && !toggleTexts.Contains(text))
             .ToList();
 
         Assert.Equal(2, header.Count);

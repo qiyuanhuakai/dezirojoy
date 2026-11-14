@@ -1,0 +1,248 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+        x:Class="DeziroJoy.App.Views.ScreenKeyboardWindow"
+        x:DataType="vm:ScreenKeyboardViewModel"
+        Title="DeziroJoy 屏幕键盘"
+        ShowActivated="False"
+        Topmost="True"
+        Focusable="False"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowDecorations="None"
+        SizeToContent="WidthAndHeight"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent">
+
+    <!--
+        The floating screen keyboard: an independent window, summoned by a 屏幕键盘 special key,
+        that types into whatever application has focus. It is built exactly like the layer hint
+        overlay it sits beside - topmost, never activated, not focusable - so showing it never
+        takes the target application's keyboard focus, which is the whole point: the characters
+        go to the search box, the rename or the URL bar behind it.
+
+        Unlike the layer hint the surface is NOT click-through: a mouse user can press a cap
+        too. A press on a window that cannot be focused does not move keyboard focus away from
+        the application underneath, so the two do not conflict.
+
+        Every colour rides a theme token, so the keyboard follows the light/dark variant the
+        user picked, and every transition is a brush or an opacity - nothing here may shift
+        the caps under the cursor.
+    -->
+
+    <Window.Styles>
+        <!-- The same key-cap idiom the mapping editor's keyboards use, so a cap reads the same
+             wherever it is: one box in every state, the accent surface for the cursor, and a
+             label weight that rises with it so the selected cap never rests on colour alone.
+             The border thickness never changes, so a cursor move cannot shift a cap. -->
+        <Style Selector="ItemsControl.keyGrid ContentPresenter">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        </Style>
+
+        <Style Selector="Button.textKey">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="MinWidth" Value="46" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Classes="textKeyFrame" Background="{TemplateBinding Background}"
+                            BorderThickness="1" BorderBrush="Transparent"
+                            CornerRadius="{DynamicResource CornerRadiusMd}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="Button.textKey:pointerover Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey:pressed Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <!-- The cursor the gamepad drives: the same key-cap surface washed in the accent
+             tone, so the cap the cursor sits on is the one that reads as selected. -->
+        <Style Selector="Button.textKey.focused Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey TextBlock.textKeyLabel">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+        </Style>
+
+        <Style Selector="Button.textKey.focused TextBlock.textKeyLabel">
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <!-- The page navigator: one segmented row of equal peers, the same surface language as
+             the editor's category navigator, so the pages are found the same way here. -->
+        <Style Selector="RadioButton.keyCategorySegment">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="{DynamicResource CornerRadiusSm}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="RadioButton.keyCategorySegment:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="RadioButton.keyCategorySegment:checked">
+            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style Selector="Border.pickerWell">
+            <Setter Property="Background" Value="{DynamicResource SunkenBrush}" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="Padding" Value="8" />
+        </Style>
+
+        <Style Selector="TextBlock.cardTitle">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        </Style>
+
+        <Style Selector="TextBlock.hint">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style Selector="Button.ghost">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusLg}" />
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+    </Window.Styles>
+
+    <Grid x:Name="KeyboardSurface" Margin="24">
+        <Border Background="{DynamicResource OverlayBackgroundBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                CornerRadius="{DynamicResource CornerRadiusXl}" Padding="16,12">
+            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+
+                <!-- The header: what the window is, and the one button that puts it away.
+                     The dismissal lives here rather than only on a cap, because the window
+                     floats over the target application and a mouse user needs a way out that
+                     does not require finding the 完成 cap. -->
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Classes="cardTitle" Text="屏幕键盘" />
+                        <TextBlock Classes="hint" Margin="0,2,0,0"
+                                   Text="十字键移动光标，A 输入光标处的按键，LB / RB 切换键盘页，B 关闭。输入会直接发送到当前聚焦的应用。" />
+                    </StackPanel>
+                    <Button Grid.Column="1" x:Name="CloseButton" Classes="ghost" Content="返回"
+                            VerticalAlignment="Top" Click="OnCloseClick" />
+                </Grid>
+
+                <!-- What has gone out. The window floats above the target application and its
+                     caret is not visible from here, so this is the only feedback the user gets
+                     that the keyboard is saying what they think it is. -->
+                <Border Grid.Row="1" Classes="pickerWell" Margin="0,10,0,0" MinHeight="30">
+                    <Grid ColumnDefinitions="Auto,*">
+                        <TextBlock Grid.Column="0" Classes="hint" Text="已输入" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" x:Name="TypedText" Margin="8,0,0,0"
+                                   Text="{Binding TypedText}" TextWrapping="Wrap" MaxHeight="44"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" FontSize="13"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </Border>
+
+                <!-- A failure to reach the daemon is said here rather than swallowed: the user
+                     is looking at a keyboard that typed nothing. -->
+                <TextBlock Grid.Row="2" x:Name="StatusText" Classes="hint" Margin="0,6,0,0"
+                           IsVisible="False" Foreground="{DynamicResource DangerBrush}"
+                           Text="{Binding StatusMessage}" />
+
+                <!-- The pages lead as one segmented row, and the grid shows the active page's
+                     keys a row at a time. One ItemsControl per row, so a short row stays short
+                     instead of stretching to the longest one's width. -->
+                <Border Grid.Row="3" Margin="0,10,0,0" HorizontalAlignment="Left">
+                    <ItemsControl x:Name="TextKeyboardPageNav" ItemsSource="{Binding Keyboard.Pages}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:TextKeyboardPage">
+                                <RadioButton Classes="keyCategorySegment" GroupName="TextKeyboardPages"
+                                             Content="{Binding Name}"
+                                             AutomationProperties.Name="{Binding Name}"
+                                             Loaded="OnTextKeyboardTabLoaded"
+                                             Click="OnTextKeyboardPageClick" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+
+                <Border Grid.Row="4" Classes="pickerWell" Margin="0,8,0,0">
+                    <ItemsControl x:Name="TextKeyboardGrid" Classes="keyGrid"
+                                  ItemsSource="{Binding Keyboard.ActivePage.Rows}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ItemsControl Classes="keyGrid" ItemsSource="{Binding}" Margin="0,0,0,4">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <UniformGrid Columns="{Binding Count}" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:TextKeyboardKey">
+                                            <Button Classes="textKey" Click="OnTextKeyboardKeyClick"
+                                                    Loaded="OnTextKeyboardKeyLoaded">
+                                                <TextBlock Classes="textKeyLabel" Text="{Binding Label}" />
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

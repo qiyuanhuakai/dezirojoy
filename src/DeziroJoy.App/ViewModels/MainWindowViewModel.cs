@@ -180,6 +180,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Update = new UpdateSettingsViewModel(_updateService, _settings);
         LayerHint = new LayerHintViewModel();
 
+        // The floating screen keyboard types into the application that has focus, and the
+        // daemon is the sole injection authority, so its two requests are wired here - to the
+        // daemon when one is in play, to this window's own host when it is not - and never to
+        // a sink of its own. A test that constructs this view model without a daemon gets the
+        // local host, which is what makes the whole path testable.
+        ScreenKeyboard = new ScreenKeyboardViewModel(
+            text => InjectScreenKeyboardTextAsync(text),
+            (key, modifiers) => InjectScreenKeyboardKeyAsync(key, modifiers));
+        ScreenKeyboard.CloseRequested += () => SetScreenKeyboardOpen(false);
+
+        // The hint starts dismissed when the persisted preference is off, so a user who turned
+        // it off keeps it hidden from the first frame rather than seeing one flash of it.
+        LayerHint.IsSuppressed = !(_settings?.LayerHintEnabled ?? true);
+
         // The foreground rules run on their own timer against their own target: the engine host
         // while this window owns mapping, nothing at all while the resident daemon does. The
         // daemon runs the same watcher over its own engine host for its whole life, so a window
@@ -215,6 +229,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         _host.PresetSwitchRequested += OnHostPresetSwitchRequested;
+        _host.ScreenKeyboardToggleRequested += OnHostScreenKeyboardToggleRequested;
 
         if (_settings?.LegacyLeaderButton is { } leaderButton)
         {
@@ -322,6 +337,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     public LayerHintViewModel LayerHint { get; }
 
+    /// <summary>
+    /// The floating on-screen keyboard a 屏幕键盘 special key summons: an independent window
+    /// that types into the application that has focus, rather than a card inside the mapping
+    /// editor. Its open flag is the daemon's in daemon mode - the engine's toggle reaches the
+    /// daemon, which publishes it, and this mirrors it - and this window's own host's
+    /// otherwise, so the flag has exactly one owner in either mode. While it is open the input
+    /// lease is taken and the pad drives the keyboard instead of the mapping.
+    /// </summary>
+    public ScreenKeyboardViewModel ScreenKeyboard { get; }
+
     public bool IsDaemonMode => _daemonRequired;
 
     public bool IsDaemonConnected => _daemon?.State == DaemonConnectionState.Connected;
@@ -394,32 +419,30 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public void SetPhysicalInputScope(bool inScope) => IsPhysicalInputInScope = inScope;
 
     /// <summary>
-    /// Whether gamepad presses may drive the UI at all. The setting lives in the persisted
-    /// app preferences and defaults to on, so a view model built without them behaves as
-    /// before.
+    /// Whether gamepad presses may drive the UI at all - the temporary 手柄劫持（临时） switch on
+    /// the mapping surface. It is deliberately session-only, not a persisted preference: it
+    /// governs the hijack lease for the life of the window and resets to off every launch, so a
+    /// mapping session starts with presses following the active mapping until the user opts in.
     /// </summary>
     public bool GamepadNavigationEnabled
     {
-        get => _settings?.GamepadNavigationEnabled ?? _gamepadNavigationEnabled;
+        get => _gamepadHijackEnabled;
         set => SetGamepadNavigationEnabled(value);
     }
 
-    /// <summary>Turns gamepad-driven navigation off or on and persists the choice.</summary>
+    /// <summary>
+    /// Turns the temporary gamepad hijack on or off for this session. Off hands every physical
+    /// press back to the active mapping - the injector is no longer suspended for the UI - and
+    /// ends any armed capture. Nothing is written to the persisted settings.
+    /// </summary>
     public void SetGamepadNavigationEnabled(bool enabled)
     {
-        if (GamepadNavigationEnabled == enabled)
+        if (_gamepadHijackEnabled == enabled)
         {
             return;
         }
 
-        if (_settings is null)
-        {
-            _gamepadNavigationEnabled = enabled;
-        }
-        else
-        {
-            _settings.SetGamepadNavigation(enabled);
-        }
+        _gamepadHijackEnabled = enabled;
 
         if (!enabled)
         {
@@ -432,7 +455,69 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ApplyInputLease();
     }
 
-    private bool _gamepadNavigationEnabled = true;
+    private bool _gamepadHijackEnabled;
+
+    /// <summary>
+    /// Whether the temporary layer hint overlay is shown. A persisted preference the settings
+    /// surface toggles; turning it off dismisses the hint even while a leader is held, which is
+    /// the manual close - the overlay is click-through, so the close lives here rather than on
+    /// the card. The render window and the tray read the same preference, so a dismissal made
+    /// in the window carries into tray-only mode.
+    /// </summary>
+    public bool ShowLayerHint
+    {
+        get => _settings?.LayerHintEnabled ?? true;
+        set
+        {
+            if (ShowLayerHint == value)
+            {
+                return;
+            }
+
+            _settings?.SetLayerHintEnabled(value);
+            LayerHint.IsSuppressed = !value;
+            OnPropertyChanged(nameof(ShowLayerHint));
+        }
+    }
+
+    /// <summary>The overlay's placement mode, read from the persisted preferences.</summary>
+    public LayerHintPositionMode OverlayPositionMode => _settings?.OverlayPositionMode ?? LayerHintPositionMode.Fixed;
+
+    /// <summary>The screen edge or corner the fixed overlay parks at, from the persisted preferences.</summary>
+    public LayerHintAnchor OverlayAnchor => _settings?.OverlayAnchor ?? LayerHintAnchor.BottomCenter;
+
+    /// <summary>
+    /// True while the overlay follows the pointer. The two placement radios in settings bind
+    /// here - one directly, one through the negation converter - so a single setter drives the
+    /// persisted mode, exactly the way the appearance radios share one flag.
+    /// </summary>
+    public bool IsOverlayFollowMouse
+    {
+        get => OverlayPositionMode == LayerHintPositionMode.FollowMouse;
+        set
+        {
+            if (value == IsOverlayFollowMouse)
+            {
+                return;
+            }
+
+            _settings?.SetOverlayPositionMode(
+                value ? LayerHintPositionMode.FollowMouse : LayerHintPositionMode.Fixed);
+            OnPropertyChanged(nameof(IsOverlayFollowMouse));
+        }
+    }
+
+    /// <summary>
+    /// The fixed-anchor picker's selected index, mapped one-to-one onto
+    /// <see cref="LayerHintAnchor"/>. The picker lists the anchors in that same order, so the
+    /// index is the anchor; the overlay resolves the anchor from the persisted preference, so
+    /// only the write needs to cross this seam.
+    /// </summary>
+    public int OverlayAnchorIndex
+    {
+        get => (int)OverlayAnchor;
+        set => _settings?.SetOverlayAnchor((LayerHintAnchor)value);
+    }
 
     /// <summary>Whether closing the render window hands the application to the tray.</summary>
     public bool CloseToTrayEnabled
@@ -1226,13 +1311,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     partial void OnIsElevatedChanged(bool value) => RelaunchElevatedCommand.NotifyCanExecuteChanged();
 
     /// <summary>
-    /// The explicit hijack preference owns this connection's input lease. An open editor
-    /// never pauses injection on its own; when hijack is off every physical press follows
-    /// the active mapping even while a draft is visible.
+    /// The explicit hijack preference owns this connection's input lease, and the floating
+    /// screen keyboard takes it outright while it is open: an open editor never pauses
+    /// injection on its own, and an open keyboard always does, because the pad is what drives
+    /// it. When hijack is off every physical press follows the active mapping even while a
+    /// draft is visible - but not while the keyboard is up, which is a surface the user asked
+    /// for and whose every press must land on a cap rather than in the game behind it.
     /// </summary>
     private void ApplyInputLease()
     {
-        var suspended = GamepadNavigationEnabled && IsPhysicalInputInScope;
+        var suspended = ScreenKeyboard.IsOpen || (GamepadNavigationEnabled && IsPhysicalInputInScope);
 
         if (_daemon is not null)
         {
@@ -1242,6 +1330,133 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             _host.SetInjectionSuspended(suspended);
         }
+    }
+
+    /// <summary>
+    /// Opens or closes the floating screen keyboard at the user's request - the keyboard's
+    /// own 完成 and 返回 keys. The engine's 屏幕键盘 key is the other way in, and it reaches
+    /// the daemon rather than this method, so the flag has one owner in each mode: the daemon
+    /// in daemon mode, this window's host otherwise. A window never flips the flag behind the
+    /// daemon's back, because the next engine toggle would then open a keyboard the user
+    /// already put away.
+    /// </summary>
+    private void SetScreenKeyboardOpen(bool open)
+    {
+        if (ScreenKeyboard.IsOpen == open)
+        {
+            return;
+        }
+
+        if (_daemon is null)
+        {
+            ScreenKeyboard.IsOpen = open;
+            ApplyInputLease();
+            return;
+        }
+
+        if (!IsDaemonConnected)
+        {
+            SetTransferError("提权守护进程不可用；屏幕键盘状态未改变。");
+            return;
+        }
+
+        // The lease follows the intent at once rather than one round trip later: the pad must
+        // stop driving the mapping the moment the keyboard is asked for.
+        _ = SetEditorInjectionSuspended(open || (GamepadNavigationEnabled && IsPhysicalInputInScope));
+        _ = RequestScreenKeyboardAsync(open);
+    }
+
+    private async Task RequestScreenKeyboardAsync(bool open)
+    {
+        if (_daemon is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _daemon.SetScreenKeyboardAsync(open, _lifetime.Token);
+            ReportMutationFailure(result, open ? "打开屏幕键盘" : "关闭屏幕键盘");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            ReportDaemonUnavailable(exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// The engine asked to toggle the floating screen keyboard - a 屏幕键盘 special key, in
+    /// local mode where this window's own host is the mapping authority. The daemon answers
+    /// the same request in daemon mode and publishes the outcome, which is why this path is
+    /// the local one alone.
+    /// </summary>
+    private void OnHostScreenKeyboardToggleRequested()
+    {
+        ScreenKeyboard.IsOpen = !ScreenKeyboard.IsOpen;
+        ApplyInputLease();
+    }
+
+    /// <summary>
+    /// Types one fragment of the floating screen keyboard into whatever has focus. The daemon
+    /// injects in daemon mode; this window's own host injects locally. Neither path throws -
+    /// a failure is reported the way every other daemon mutation is - so a key press never
+    /// turns into an unobserved exception.
+    /// </summary>
+    private async Task InjectScreenKeyboardTextAsync(string text)
+    {
+        if (_daemon is not null)
+        {
+            if (!IsDaemonConnected)
+            {
+                SetTransferError("提权守护进程不可用；屏幕键盘没有输出。");
+                return;
+            }
+
+            try
+            {
+                var result = await _daemon.InjectTextAsync(text, _lifetime.Token);
+                ReportMutationFailure(result, "屏幕键盘输入");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            return;
+        }
+
+        _host.InjectText(text);
+    }
+
+    /// <summary>
+    /// Taps one key of the floating screen keyboard into whatever has focus - 退格 sends a
+    /// Backspace, 清空 sends Ctrl+A and then Delete. Same authority and same error handling
+    /// as <see cref="InjectScreenKeyboardTextAsync"/>.
+    /// </summary>
+    private async Task InjectScreenKeyboardKeyAsync(GamepadKey key, KeyModifiers modifiers)
+    {
+        if (_daemon is not null)
+        {
+            if (!IsDaemonConnected)
+            {
+                SetTransferError("提权守护进程不可用；屏幕键盘没有输出。");
+                return;
+            }
+
+            try
+            {
+                var result = await _daemon.InjectKeyAsync(key, modifiers, _lifetime.Token);
+                ReportMutationFailure(result, "屏幕键盘按键");
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception.Message);
+            }
+
+            return;
+        }
+
+        _host.TapKey(key, modifiers);
     }
 
     internal async Task SetEditorInjectionSuspended(bool suspended)
@@ -2156,9 +2371,21 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// the two never fight over the same press: a press consumed by capture must not also
     /// navigate. Both are scoped to a visible, active mapping tab, so out of scope the sample
     /// only feeds the visualizer.
+    /// <para>
+    /// The floating screen keyboard takes the whole pad while it is open, ahead of both: it is
+    /// a surface the user asked for, it floats above the target application rather than inside
+    /// this window, and injection is suspended for it - so a press spent on a cap must never
+    /// also navigate, capture or reach the mapping behind it.
+    /// </para>
     /// </summary>
     private void Navigate(IGamepadState state, string? deviceId)
     {
+        if (ScreenKeyboard.IsOpen)
+        {
+            NavigateScreenKeyboard(state, deviceId);
+            return;
+        }
+
         // Off means the active mapping owns every press. Even a visible editor must not
         // capture or navigate behind the user's back; highlighting still stays live.
         if (!IsPhysicalInputInScope)
@@ -2209,6 +2436,112 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Editor.IsCapturingButton = true;
         return Editor.CaptureGamepadSample(state);
     }
+
+    /// <summary>
+    /// Routes one sample's press edges to the floating screen keyboard while it is open. The
+    /// same navigation the editor's own keyboard uses - the D-pad moves the cursor, A presses
+    /// the key it is on, the bumpers turn the page - plus the two ways out: B and the button
+    /// the profile's own 屏幕键盘 key sits on both dismiss it, so the key that summoned the
+    /// window is also the key that puts it away. Edges are taken against the same per-device
+    /// baseline every other navigation reads, so a held button fires once rather than per
+    /// sample.
+    /// </summary>
+    private void NavigateScreenKeyboard(IGamepadState state, string? deviceId)
+    {
+        if (deviceId is null)
+        {
+            _navigationBaselines.Clear();
+            return;
+        }
+
+        if (!_navigationBaselines.TryGetValue(deviceId, out var previous))
+        {
+            RememberNavigation(state, deviceId);
+            return;
+        }
+
+        var edges = state.PressedButtons & ~previous.PressedButtons;
+        RememberNavigation(state, deviceId);
+
+        if (edges == GamepadButtonMask.None)
+        {
+            return;
+        }
+
+        // The engine is suspended while the keyboard is open, so the key that summoned it
+        // cannot reach the engine to toggle a second time - the window answers it instead.
+        if (edges.Has(GamepadButton.B) || IsScreenKeyboardKey(edges))
+        {
+            SetScreenKeyboardOpen(false);
+            return;
+        }
+
+        ScreenKeyboard.Navigate(edges);
+    }
+
+    /// <summary>
+    /// The direction one set of press edges names, or null when they name none. The D-pad is
+    /// the keyboard's own cursor control, so this is the whole of what a direction means here.
+    /// </summary>
+    private static InputDirection? DirectionOf(GamepadButtonMask edges)
+    {
+        if (edges.Has(GamepadButton.DPadUp))
+        {
+            return InputDirection.Up;
+        }
+
+        if (edges.Has(GamepadButton.DPadDown))
+        {
+            return InputDirection.Down;
+        }
+
+        if (edges.Has(GamepadButton.DPadLeft))
+        {
+            return InputDirection.Left;
+        }
+
+        if (edges.Has(GamepadButton.DPadRight))
+        {
+            return InputDirection.Right;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// True when one of the newly pressed buttons carries the profile's own 屏幕键盘 key, on
+    /// the click or on either gesture action. The engine is suspended while the keyboard is
+    /// open, so the key cannot reach the engine to toggle a second time - which is why the
+    /// window answers it here instead: the key that summons the keyboard is also the key that
+    /// dismisses it.
+    /// </summary>
+    private bool IsScreenKeyboardKey(GamepadButtonMask edges)
+    {
+        if (ActiveProfile is not { } profile)
+        {
+            return false;
+        }
+
+        foreach (var mapping in profile.Mappings)
+        {
+            if (mapping.Source is not ButtonBinding binding || !edges.Has(binding.Button))
+            {
+                continue;
+            }
+
+            if (CarriesScreenKeyboard(mapping.Target)
+                || binding.Gesture is { } gesture
+                && (CarriesScreenKeyboard(gesture.DoubleClickAction) || CarriesScreenKeyboard(gesture.LongPressAction)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CarriesScreenKeyboard(MappingTarget? target)
+        => target is SpecialKeyTarget { Kind: SpecialKeyKind.Keyboard };
 
     /// <summary>
     /// Handles a newly pressed button or deflected stick while the explicit hijack lease is
@@ -2709,6 +3042,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Visualizer.SetConnected(snapshot.HasController);
         RefreshStatus(wasConnected && !snapshot.HasController);
+
+        // The floating screen keyboard follows the flag the daemon owns: the engine's
+        // screen-keyboard key toggles it there and the snapshot carries it here, which is what
+        // puts the window on screen in whichever process is showing one. The lease moves with
+        // it, and only when the flag actually moved - a snapshot per keystroke would otherwise
+        // re-send the same suspension on every push.
+        if (ScreenKeyboard.IsOpen != snapshot.ScreenKeyboardOpen)
+        {
+            ScreenKeyboard.IsOpen = snapshot.ScreenKeyboardOpen;
+            ApplyInputLease();
+        }
 
         // The layer hint follows the layer the snapshot reports, resolved against the profile
         // it carries: the two arrive together, so the hint is rebuilt once per snapshot.

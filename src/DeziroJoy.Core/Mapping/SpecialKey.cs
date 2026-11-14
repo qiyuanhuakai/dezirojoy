@@ -23,6 +23,20 @@ public enum SpecialKeyKind
     /// as <see cref="Leader"/>.
     /// </summary>
     Layer,
+
+    /// <summary>
+    /// 屏幕键盘: toggles the floating on-screen keyboard the host owns. Like a preset
+    /// switch, the engine only asks - it emits
+    /// <see cref="Engine.ToggleScreenKeyboardCommand"/> on the press edge and
+    /// <see cref="Platform.CommandDispatcher"/> never forwards it to the output sink - so
+    /// the key that summons the window never also types anything. The window is where the
+    /// user types, so the switch mode is meaningless here: every press edge toggles, and a
+    /// release has nothing to end. While the window is open the host suspends mapping
+    /// injection and hands the pad to the window, which is why a second press of this key
+    /// reaches the window rather than the engine - the window's own 完成 and 返回 keys are
+    /// what dismiss it.
+    /// </summary>
+    Keyboard,
 }
 
 /// <summary>
@@ -59,15 +73,16 @@ public enum LeaderAction
 }
 
 /// <summary>
-/// A special key target: precision aiming, or a leader key. Precision keys form the button
-/// set the engine slows sticks for - sourced here, not from
+/// A special key target: precision aiming, a leader key, or the floating screen keyboard.
+/// Precision keys form the button set the engine slows sticks for - sourced here, not from
 /// <see cref="MouseStickSettings.PrecisionButton"/>. A leader key switches what the device
 /// runs: <see cref="LeaderAction.Preset"/> flips between the two slots
 /// <see cref="SlotA"/> and <see cref="SlotB"/> name, and <see cref="LeaderAction.Layer"/>
 /// switches the one temporary layer the profile carries, entering it while the key is held
 /// under <see cref="LeaderSwitchMode.Hold"/> or toggling it on each press edge under
-/// <see cref="LeaderSwitchMode.Press"/>. <see cref="Action"/> is meaningless for the other
-/// kinds, and so are the slot numbers for a layer leader.
+/// <see cref="LeaderSwitchMode.Press"/>. A 屏幕键盘 key toggles the floating on-screen
+/// keyboard the host owns. <see cref="Action"/> is meaningless for the other kinds, and so
+/// are the slot numbers for a layer leader and the switch mode for a screen keyboard.
 /// </summary>
 public sealed record SpecialKeyTarget(
     SpecialKeyKind Kind,

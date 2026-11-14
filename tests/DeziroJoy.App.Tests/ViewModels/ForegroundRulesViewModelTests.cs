@@ -345,6 +345,94 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Picking_A_Window_Clears_The_Rules_Validation_State()
+    {
+        // The reported bug: a rule added empty says its program name is missing, and the line
+        // stays after the program is picked from the window picker - the row's own validation
+        // is derived from the program name, so filling the name has to re-raise it, or the row
+        // keeps reporting a rule that can never match while the rule reads perfectly well.
+        var (viewModel, _, source) = Create();
+        source.Windows = [new ForegroundWindow("game", "游戏窗口")];
+
+        viewModel.AddRuleCommand.Execute(null);
+        var rule = viewModel.Rules[0];
+        var raised = new List<string>();
+        rule.PropertyChanged += (_, args) => raised.Add(args.PropertyName!);
+
+        Assert.False(rule.IsValid);
+        Assert.NotNull(rule.ValidationMessage);
+
+        rule.SelectedWindow = new ForegroundWindow("game", "游戏窗口");
+
+        Assert.Equal("game", rule.ProcessName);
+        Assert.True(rule.IsValid);
+        Assert.Null(rule.ValidationMessage);
+        Assert.Contains(nameof(ForegroundRuleItem.IsValid), raised);
+        Assert.Contains(nameof(ForegroundRuleItem.ValidationMessage), raised);
+
+        // And the other way round: emptying the name again brings the error back, because the
+        // row re-validates on every change rather than only once.
+        raised.Clear();
+        rule.ProcessName = "   ";
+
+        Assert.False(rule.IsValid);
+        Assert.Contains(nameof(ForegroundRuleItem.IsValid), raised);
+    }
+
+    [Fact]
+    public void A_Row_Of_The_Saved_Table_Starts_Collapsed_And_A_New_One_Open()
+    {
+        // The table is read far more often than it is written, so a saved row is a summary
+        // line; the row being written is open, because that is where the user is standing.
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 3 }],
+        });
+
+        Assert.All(viewModel.Rules, rule => Assert.False(rule.IsExpanded));
+
+        // Collapsing is a view state, not an edit: it never touches the table being staged.
+        viewModel.Rules[0].IsExpanded = true;
+        viewModel.Rules[0].IsExpanded = false;
+
+        Assert.False(viewModel.HasUnsavedChanges);
+        Assert.False(viewModel.CanSave);
+
+        viewModel.AddRuleCommand.Execute(null);
+
+        Assert.False(viewModel.Rules[0].IsExpanded, "the rows of the saved table stay collapsed");
+        Assert.True(viewModel.Rules[1].IsExpanded);
+    }
+
+    [Fact]
+    public void The_Summary_Names_The_Program_The_Action_And_The_Priority()
+    {
+        // The collapsed row is the table's whole content at a glance, so the line has to say
+        // what the rule does and what it costs to be considered - the priority above all,
+        // which is the field that decides which rule wins.
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Priority = 10, Slot = 1 }],
+        });
+
+        Assert.Equal("chrome → 预设 1 · 优先级 10", viewModel.Rules[0].Summary);
+
+        viewModel.Rules[0].Slot = 4;
+        viewModel.Rules[0].Priority = 20;
+
+        Assert.Equal("chrome → 预设 4 · 优先级 20", viewModel.Rules[0].Summary);
+
+        viewModel.Rules[0].Action = ForegroundAction.NativeGamepad;
+
+        Assert.Equal("chrome → 原生手柄 · 优先级 20", viewModel.Rules[0].Summary);
+
+        // A row with no program yet says so rather than showing an empty arrow.
+        viewModel.Rules[0].ProcessName = string.Empty;
+
+        Assert.Equal("未命名规则 · 优先级 20", viewModel.Rules[0].Summary);
+    }
+
+    [Fact]
     public void The_Window_List_Names_Each_Program_Once_With_The_Foreground_First()
     {
         // Several windows of one program are one program to a rule, so the list carries each

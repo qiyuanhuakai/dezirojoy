@@ -60,6 +60,9 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(SetNativeGamepadPausedMessage), "set-native-gamepad-paused")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
 [JsonDerivedType(typeof(DeletePresetSlotMessage), "delete-preset-slot")]
+[JsonDerivedType(typeof(SetScreenKeyboardMessage), "set-screen-keyboard")]
+[JsonDerivedType(typeof(InjectTextMessage), "inject-text")]
+[JsonDerivedType(typeof(InjectKeyMessage), "inject-key")]
 [JsonDerivedType(typeof(ShutdownDaemonMessage), "shutdown-daemon")]
 [JsonDerivedType(typeof(MutationAckMessage), "mutation-ack")]
 [JsonDerivedType(typeof(StateChangedMessage), "state-changed")]
@@ -168,6 +171,35 @@ public sealed record DeletePresetSlotMessage(string RequestId, string DeviceId, 
 public sealed record ShutdownDaemonMessage(string RequestId) : IpcMessage;
 
 /// <summary>
+/// GUI to daemon: open or close the floating screen keyboard. The daemon owns the flag every
+/// window reads - it is what the engine's <c>ToggleScreenKeyboardCommand</c> reaches, and what
+/// a snapshot publishes - so a window that dismisses the keyboard itself asks here rather than
+/// hiding a window the daemon still believes is open. The next snapshot carries the new state
+/// and every window follows it, which is what keeps one keyboard and one input lease between
+/// the two. A keyboard no device can inject through is still closed here: the flag is about
+/// the window, not about whether a pad is connected.
+/// </summary>
+public sealed record SetScreenKeyboardMessage(string RequestId, bool Open) : IpcMessage;
+
+/// <summary>
+/// GUI to daemon: type one short string into whatever has keyboard focus, through the
+/// daemon's own output path. This is the floating screen keyboard's output: the daemon is the
+/// sole injection authority, so the window asks and the daemon injects. The string is the
+/// character or fragment one keycap types, bounded by the Core's own text bound, and it is
+/// dispatched as text rather than as key events the local layout may not be able to name.
+/// Refused with an error when the daemon holds no runtime to inject through.
+/// </summary>
+public sealed record InjectTextMessage(string RequestId, string Text) : IpcMessage;
+
+/// <summary>
+/// GUI to daemon: tap one key - press, then release, with the modifiers held around it -
+/// into whatever has keyboard focus, through the daemon's own output path. What the floating
+/// screen keyboard's action keys need: 退格 sends a Backspace, 清空 sends Ctrl+A and then
+/// Delete. Refused with an error when the daemon holds no runtime to inject through.
+/// </summary>
+public sealed record InjectKeyMessage(string RequestId, GamepadKey Key, KeyModifiers Modifiers) : IpcMessage;
+
+/// <summary>
 /// Daemon to GUI: a mutation has been settled. <see cref="RequestId"/> echoes the
 /// request it answers; on refusal <see cref="ErrorCode"/> says why,
 /// <see cref="ErrorMessage"/> is the human-readable form for the UI, and
@@ -269,6 +301,16 @@ public sealed record StateSnapshot(
     /// about what the program in front is being handed.
     /// </summary>
     public bool NativeGamepadPaused { get; init; }
+
+    /// <summary>
+    /// Whether the floating screen keyboard is open. The daemon owns the flag: the engine's
+    /// screen-keyboard key toggles it here, and a window that dismisses the keyboard itself
+    /// asks the daemon to clear it, so the flag is the one state every window agrees on. A
+    /// window that adopts a snapshot with this set shows the keyboard and takes the input
+    /// lease with it; one that adopts it clear hides it and hands the lease back. It is
+    /// session state rather than desired state, so a daemon restart starts closed.
+    /// </summary>
+    public bool ScreenKeyboardOpen { get; init; }
 }
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>

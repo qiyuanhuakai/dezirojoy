@@ -43,8 +43,15 @@ public sealed class LayerHintOverlayTests
             Layers = [new ActiveLayerSnapshot("pad-1", layerId, [new EffectiveMappingSnapshot(profile.Mappings[0].Id, layerId)])],
         };
 
-    private static LayerHintOverlay BuildOverlay(LayerHintViewModel hint)
-        => new(hint, new GamepadVisualizerViewModel());
+    private static LayerHintOverlay BuildOverlay(
+        LayerHintViewModel hint,
+        Func<LayerHintPlacement>? placement = null,
+        Func<PixelPoint?>? cursor = null)
+        => new(
+            hint,
+            new GamepadVisualizerViewModel(),
+            placement ?? (static () => new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.BottomCenter)),
+            cursor);
 
     [AvaloniaFact]
     public void The_Overlay_Never_Takes_Focus_Or_A_Click()
@@ -121,5 +128,91 @@ public sealed class LayerHintOverlayTests
         {
             window.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public void A_Dismissed_Hint_Stays_Hidden_Until_Restored()
+    {
+        var hint = new LayerHintViewModel();
+        var profile = Profile();
+        var window = BuildOverlay(hint);
+        try
+        {
+            // The manual close is the 显示临时层提示 preference, mirrored onto IsSuppressed:
+            // a dismissed hint stays off even while the leader is held.
+            hint.IsSuppressed = true;
+            hint.Update(profile, LayerSnapshot(profile));
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(window.IsVisible, "a dismissed hint must not appear even while the layer is held");
+
+            hint.IsSuppressed = false;
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(window.IsVisible, "restoring the hint brings it back while the layer is still held");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [Fact]
+    public void The_Fixed_Anchor_Parks_The_Hint_At_The_Chosen_Edge()
+    {
+        var screen = new PixelRect(0, 0, 1920, 1080);
+        var window = new Size(400, 200);
+        const double margin = 48;
+
+        PixelPoint At(LayerHintAnchor anchor)
+            => LayerHintOverlay.ResolvePosition(
+                new LayerHintPlacement(LayerHintPositionMode.Fixed, anchor), screen, window, null, margin);
+
+        // Bottom-centre is the default: horizontally centred, one margin above the bottom edge.
+        Assert.Equal(new PixelPoint(760, 832), At(LayerHintAnchor.BottomCenter));
+        Assert.Equal(new PixelPoint(48, 832), At(LayerHintAnchor.BottomLeft));
+        Assert.Equal(new PixelPoint(1472, 832), At(LayerHintAnchor.BottomRight));
+        Assert.Equal(new PixelPoint(760, 48), At(LayerHintAnchor.TopCenter));
+        Assert.Equal(new PixelPoint(1472, 48), At(LayerHintAnchor.TopRight));
+        Assert.Equal(new PixelPoint(48, 440), At(LayerHintAnchor.MiddleLeft));
+        Assert.Equal(new PixelPoint(1472, 440), At(LayerHintAnchor.MiddleRight));
+    }
+
+    [Fact]
+    public void Follow_The_Mouse_Sits_Just_Beside_The_Pointer()
+    {
+        var screen = new PixelRect(0, 0, 1920, 1080);
+        var window = new Size(400, 200);
+        var placement = new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.BottomCenter);
+
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1000, 500), 48);
+
+        // Below-right of the pointer by the cursor offset, well inside the screen.
+        Assert.Equal(new PixelPoint(1016, 516), position);
+    }
+
+    [Fact]
+    public void Follow_The_Mouse_Clamps_The_Hint_Into_The_Screen_Near_An_Edge()
+    {
+        var screen = new PixelRect(0, 0, 1920, 1080);
+        var window = new Size(400, 200);
+        var placement = new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.BottomCenter);
+
+        // A pointer at the bottom-right corner must not push the hint off screen.
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1900, 1060), 48);
+
+        Assert.Equal(new PixelPoint(1520, 880), position);
+    }
+
+    [Fact]
+    public void Follow_The_Mouse_Falls_Back_To_The_Anchor_When_The_Pointer_Is_Unknown()
+    {
+        var screen = new PixelRect(0, 0, 1920, 1080);
+        var window = new Size(400, 200);
+        var placement = new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.TopLeft);
+
+        // No pointer (a Wayland session with no X11 bridge): the hint parks at the anchor
+        // rather than disappearing.
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, null, 48);
+
+        Assert.Equal(new PixelPoint(48, 48), position);
     }
 }

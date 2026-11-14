@@ -130,13 +130,41 @@
                         </StackPanel>
                     </Border>
 
+                    <!--
+                        The temporary layer hint overlay. 显示临时层提示 is the manual dismissal:
+                        the overlay is click-through, so it cannot host a close button without
+                        risking a focus or click steal from the target application - the exact
+                        thing it exists to avoid - and the close therefore lives here instead.
+                        The two placement modes (a fixed screen edge/corner, or beside the
+                        pointer) and the fixed anchor ride the persisted preferences, which the
+                        tray reads too, so a window dismissal carries into tray-only mode.
+                    -->
                     <Border Classes="card">
                         <StackPanel>
-                            <TextBlock Classes="cardTitle" Text="手柄输入" />
-                            <CheckBox x:Name="GamepadNavigationBox" Content="劫持手柄按键" Margin="0,12,0,0"
-                                      IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}" />
-                            <TextBlock Classes="hint" Margin="0,6,0,0"
-                                       Text="开启时手柄按键控制当前正在设置的键（界面导航与编辑器交互）；关闭时手柄按键继续做映射注入，注入不受影响。" />
+                            <TextBlock Classes="cardTitle" Text="临时层提示" />
+                            <CheckBox x:Name="ShowLayerHintBox" Content="显示临时层提示" Margin="0,12,0,0"
+                                      IsChecked="{Binding ShowLayerHint, Mode=TwoWay}" />
+                            <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="按住临时层 Leader 键时，在屏幕上浮出该层每个按键的作用。关闭后即使按住 Leader 也不再显示；浮层为点击穿透、无法直接在上面点击关闭，故在此开关。" />
+                            <TextBlock Classes="fieldLabel" Margin="0,14,0,0" Text="浮层位置" />
+                            <StackPanel Margin="0,6,0,0">
+                                <RadioButton Content="固定位置" IsChecked="{Binding IsOverlayFollowMouse, Converter={StaticResource Not}, Mode=TwoWay}" />
+                                <RadioButton Content="跟随鼠标" Margin="0,8,0,0" IsChecked="{Binding IsOverlayFollowMouse, Mode=TwoWay}" />
+                            </StackPanel>
+                            <ComboBox x:Name="OverlayAnchorCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                      IsVisible="{Binding IsOverlayFollowMouse, Converter={StaticResource Not}}"
+                                      SelectedIndex="{Binding OverlayAnchorIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="底部居中" />
+                                <ComboBoxItem Content="底部左对齐" />
+                                <ComboBoxItem Content="底部右对齐" />
+                                <ComboBoxItem Content="顶部居中" />
+                                <ComboBoxItem Content="顶部左对齐" />
+                                <ComboBoxItem Content="顶部右对齐" />
+                                <ComboBoxItem Content="左侧居中" />
+                                <ComboBoxItem Content="右侧居中" />
+                            </ComboBox>
+                            <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Text="固定位置停靠在所选屏幕边缘或角落；跟随鼠标在按住 Leader 时出现在指针旁（需可读取指针位置，纯 Wayland 会话下回退为固定位置）。" />
                         </StackPanel>
                     </Border>
 

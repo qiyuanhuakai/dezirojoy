@@ -41,6 +41,8 @@ public sealed class PhysicalInputNavigationTests
         var store = new InMemoryProfileStore();
         var host = new EngineHost(provider, sink, store);
         var viewModel = new MainWindowViewModel(host, store);
+        // These tests exercise pad navigation, which the temporary hijack gates; it ships off.
+        viewModel.SetGamepadNavigationEnabled(true);
         var window = new MainWindow(viewModel, host);
         window.Show();
         Dispatcher.UIThread.RunJobs();

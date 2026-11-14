@@ -178,6 +178,17 @@ internal sealed class FakeDaemonHost : IDaemonHost
             throw;
         }
     }
+
+    /// <summary>Every string the screen keyboard asked the daemon to type, in order.</summary>
+    public List<string> InjectedTexts { get; } = [];
+
+    /// <summary>Every key the screen keyboard asked the daemon to tap, in order.</summary>
+    public List<(GamepadKey Key, KeyModifiers Modifiers)> TappedKeys { get; } = [];
+
+    public void InjectText(string text) => InjectedTexts.Add(text);
+
+    public void TapKey(GamepadKey key, KeyModifiers modifiers)
+        => TappedKeys.Add((key, modifiers));
 }
 
 /// <summary>
@@ -2402,5 +2413,106 @@ public class DaemonServerTests
     {
         Assert.Equal("DeziroJoy.Mapping", IpcContract.PipeName);
         Assert.NotEqual(InjectionMutex.DefaultName, IpcContract.PipeName);
+    }
+
+    // ---- The floating screen keyboard ------------------------------------------------
+
+    [Fact]
+    public async Task The_Screen_Keyboard_Flag_Is_Published_And_Can_Be_Cleared_By_The_Window()
+    {
+        // The daemon owns the flag every window reads: a window that dismisses the keyboard
+        // itself asks here, or the next engine toggle would open a keyboard the user put away.
+        var (server, _, _) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        var opened = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetScreenKeyboardMessage("req-open", true)));
+        Assert.True(opened.Accepted);
+        Assert.True(Assert.Single(pushes).Snapshot.ScreenKeyboardOpen);
+
+        var closed = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetScreenKeyboardMessage("req-close", false)));
+        Assert.True(closed.Accepted);
+        Assert.False(Assert.Single(pushes.Skip(1)).Snapshot.ScreenKeyboardOpen);
+    }
+
+    [Fact]
+    public async Task Repeating_The_Same_Screen_Keyboard_State_Publishes_Nothing()
+    {
+        var (server, _, _) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        await server.ProcessAsync(new SetScreenKeyboardMessage("req-1", true));
+        await server.ProcessAsync(new SetScreenKeyboardMessage("req-2", true));
+
+        Assert.Single(pushes);
+    }
+
+    [Fact]
+    public async Task The_Screen_Keyboard_Toggle_Turns_The_Engine_Request_Into_A_Published_Flag()
+    {
+        // The engine's ToggleScreenKeyboardCommand is host-side only, so the tick thread's
+        // request reaches the daemon here - the same hole a leader key's preset switch fills.
+        var (server, _, _) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        server.RequestScreenKeyboardToggle();
+        Assert.True(Assert.Single(pushes).Snapshot.ScreenKeyboardOpen);
+
+        server.RequestScreenKeyboardToggle();
+        Assert.False(Assert.Single(pushes.Skip(1)).Snapshot.ScreenKeyboardOpen);
+    }
+
+    [Fact]
+    public async Task What_The_Screen_Keyboard_Types_Reaches_The_Hosts_Own_Output_Path()
+    {
+        // The daemon is the sole injection authority, so the window asks and the daemon
+        // injects: the string travels as text, not as key events a layout may not name.
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new InjectTextMessage("req-type", "https://")));
+
+        Assert.True(ack.Accepted);
+        Assert.Equal(["https://"], host.InjectedTexts);
+    }
+
+    [Fact]
+    public async Task An_Action_Key_Of_The_Screen_Keyboard_Is_Tapped_With_Its_Modifiers()
+    {
+        var (server, _, host) = CreateRunning();
+        host.AddDevice("pad-1");
+
+        var backspace = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new InjectKeyMessage("req-back", GamepadKey.Backspace, KeyModifiers.None)));
+        var clear = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new InjectKeyMessage("req-clear", GamepadKey.A, KeyModifiers.Ctrl)));
+
+        Assert.True(backspace.Accepted);
+        Assert.True(clear.Accepted);
+        Assert.Equal(
+            [(GamepadKey.Backspace, KeyModifiers.None), (GamepadKey.A, KeyModifiers.Ctrl)],
+            host.TappedKeys);
+    }
+
+    [Fact]
+    public async Task A_Screen_Keyboard_Request_With_Nothing_To_Inject_Through_Is_Refused()
+    {
+        // A silent success would leave the user staring at a keyboard that typed nothing.
+        var (server, _, _) = CreateRunning();
+
+        var empty = await server.ProcessAsync(new InjectTextMessage("req-empty", ""));
+        var oversized = await server.ProcessAsync(new InjectTextMessage("req-big", new string('x', 257)));
+        var noDevice = await server.ProcessAsync(new InjectTextMessage("req-text", "a"));
+        var noDeviceKey = await server.ProcessAsync(new InjectKeyMessage("req-key", GamepadKey.Backspace, KeyModifiers.None));
+
+        Assert.Equal(DaemonErrorCodes.EmptyInjection, Assert.IsType<ErrorMessage>(empty).ErrorCode);
+        Assert.Equal(DaemonErrorCodes.OversizedInjection, Assert.IsType<ErrorMessage>(oversized).ErrorCode);
+        Assert.Equal(DaemonErrorCodes.NoInjectionRuntime, Assert.IsType<ErrorMessage>(noDevice).ErrorCode);
+        Assert.Equal(DaemonErrorCodes.NoInjectionRuntime, Assert.IsType<ErrorMessage>(noDeviceKey).ErrorCode);
     }
 }

@@ -196,4 +196,17 @@ public class CommandDispatcherTests
         Assert.Empty(sink.Calls);
         Assert.False(dispatcher.HasHeldInput);
     }
+
+    [Fact]
+    public void ToggleScreenKeyboardCommand_Is_Never_Forwarded_To_The_Sink()
+    {
+        var (dispatcher, sink) = CreateDispatcher();
+
+        dispatcher.Dispatch(new ToggleScreenKeyboardCommand());
+
+        // The floating keyboard is a window the host owns: summoning it must not type
+        // anything, and nothing is held for a later release to lift.
+        Assert.Empty(sink.Calls);
+        Assert.False(dispatcher.HasHeldInput);
+    }
 }

@@ -1,8 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
@@ -310,6 +312,125 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
         Assert.False(viewModel.HasUnsavedChanges);
         Assert.Contains("已保存", viewModel.StatusMessage);
         Assert.True(panel.FindControl<TextBlock>("RulesStatusText")!.IsEffectivelyVisible);
+    }
+
+    [AvaloniaFact]
+    public void Picking_A_Window_Clears_The_Rules_That_Can_Never_Match_Warning()
+    {
+        // The reported bug: a rule added empty says its program name is missing, and the line
+        // stayed after the program was picked from the window picker - the row's validation is
+        // derived from the program name, so filling the name has to re-raise it. A row that
+        // keeps insisting a perfectly good rule can never match is worse than no line at all.
+        var store = new ForegroundRuleStore(Path.Combine(_directory, ForegroundRuleStore.FileName));
+        var source = new StubForegroundSource(
+            new ForegroundContext("explorer", false),
+            [new ForegroundWindow("game", "游戏窗口")]);
+        var watcher = new ForegroundWatcher(source, new StubForegroundTarget(), store.Load());
+        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store));
+
+        viewModel.AddRuleCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var warning = panel.GetVisualDescendants().OfType<TextBlock>()
+            .Single(text => text.Text == "程序名不能为空；该规则永远不会命中。");
+        Assert.True(warning.IsEffectivelyVisible);
+
+        var picker = panel.GetVisualDescendants().OfType<ComboBox>().Single(box => box.Name == "RuleWindowPicker");
+        picker.SelectedItem = picker.Items.Cast<ForegroundWindow>().Single(window => window.ProcessName == "game");
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("game", viewModel.Rules[0].ProcessName);
+        Assert.False(warning.IsEffectivelyVisible, "the row's error clears the moment the rule can match");
+        Assert.True(panel.FindControl<Button>("SaveRulesButton")!.IsEnabled);
+    }
+
+    [AvaloniaFact]
+    public void A_Saved_Rule_Row_Collapses_To_A_Summary_And_Opens_On_Demand()
+    {
+        // The table is read far more often than it is written, so a rule from the saved table is
+        // one summary line; the editing fields sit under it only while the row is open. The
+        // enable and delete controls stay on the summary line, because neither needs the row
+        // open - a collapsed row is never a dead end.
+        var (window, panel, viewModel) = Show(
+            new ForegroundContext("explorer", false),
+            new ForegroundSettings
+            {
+                Rules = [new ForegroundRule { ProcessName = "chrome", Priority = 10, Slot = 2 }],
+            });
+
+        var rule = viewModel.Rules.Single();
+        var row = panel.GetVisualDescendants().OfType<Border>().Single(border => border.Classes.Contains("ruleRow"));
+        var toggle = panel.GetVisualDescendants().OfType<ToggleButton>().Single(button => button.Name == "RuleExpandButton");
+        var summary = panel.GetVisualDescendants().OfType<TextBlock>().Single(text => text.Name == "RuleSummaryText");
+        var processBox = panel.GetVisualDescendants().OfType<TextBox>().Single(box => box.Name == "RuleProcessBox");
+        var delete = panel.GetVisualDescendants().OfType<Button>().Single(button => button.Name == "RuleDeleteButton");
+        var closedHeight = row.Bounds.Height;
+
+        Assert.False(rule.IsExpanded);
+        Assert.Equal("chrome → 预设 2 · 优先级 10", summary.Text);
+        Assert.False(processBox.IsEffectivelyVisible, "a closed row shows its summary, not its editor");
+        Assert.True(delete.IsEffectivelyVisible, "delete works on a closed row");
+
+        Click(toggle, window);
+
+        Assert.True(rule.IsExpanded);
+        Assert.True(processBox.IsEffectivelyVisible, "an open row shows its editor");
+        // The whole point of the collapse: the row the user reads is one line tall, not the
+        // form it takes to write one.
+        Assert.True(row.Bounds.Height > closedHeight * 2, "an open row carries the editor, so it is far taller than the summary line");
+
+        Click(toggle, window);
+
+        Assert.False(rule.IsExpanded);
+        Assert.False(processBox.IsEffectivelyVisible);
+
+        // The row is keyboard reachable: the twisty takes focus and Space opens the row, which
+        // is what a gamepad or a keyboard user has to be able to do with every row.
+        window.Focus();
+        Assert.True(toggle.Focus());
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(rule.IsExpanded);
+        Assert.True(processBox.IsEffectivelyVisible);
+    }
+
+    [AvaloniaFact]
+    public void The_Number_Box_Keeps_One_Rounded_Well_Around_Field_And_Spinner()
+    {
+        // The square-edged look the user reported: Fluent's number box draws a frame around the
+        // field and a frame around each spinner button, so the up/down pair reads as two boxes
+        // bolted onto a third. The restyle keeps one well, and the pair's buttons carry no
+        // frame of their own to square the corners off again.
+        var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
+
+        Assert.True(
+            Application.Current!.TryFindResource("CornerRadiusMd", out var token),
+            "the corner-radius token has to resolve for the well to be the app's own shape");
+        var radius = Assert.IsType<CornerRadius>(token);
+
+        var box = panel.FindControl<NumericUpDown>("DefaultSlotBox")!;
+        var spinner = box.GetVisualDescendants().OfType<ButtonSpinner>().Single();
+        var buttons = spinner.GetVisualDescendants().OfType<RepeatButton>().ToList();
+
+        Assert.Equal(radius, box.CornerRadius);
+        Assert.Equal(box.CornerRadius, spinner.CornerRadius);
+        Assert.Equal(2, buttons.Count);
+        Assert.All(buttons, button => Assert.Equal(new Thickness(0), button.BorderThickness));
+
+        // And the box still writes the number it shows through the restyled well.
+        box.Value = 5;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(5, viewModel.DefaultSlot);
     }
 
     private static void Click(Control target, Window window)

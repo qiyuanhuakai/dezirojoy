@@ -11,8 +11,9 @@ namespace DeziroJoy.App.Services;
 /// Owns the persisted app preferences in <c>settings.json</c> beside the profile store
 /// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
 /// choice, gamepad UI ownership, the independent close/minimize tray policies, the
-/// startup release check and the startup auto-download. A missing or corrupt file
-/// falls back to the documented defaults rather than throwing.
+/// startup release check and the startup auto-download, and the layer hint overlay's
+/// visibility and screen placement. A missing or corrupt file falls back to the
+/// documented defaults rather than throwing.
 /// </summary>
 /// <remarks>
 /// The variant is applied from code rather than declared on the Application
@@ -26,7 +27,12 @@ public sealed class ThemeService
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = true,
-        Converters = { new ThemeVariantConverter() },
+        Converters =
+        {
+            new ThemeVariantConverter(),
+            new ResilientEnumConverter<LayerHintPositionMode>(),
+            new ResilientEnumConverter<LayerHintAnchor>(),
+        },
     };
 
     private readonly string _settingsPath;
@@ -61,6 +67,22 @@ public sealed class ThemeService
     /// model and feeds the mapping editor; it never navigates and never opens the editor.
     /// </summary>
     public bool GamepadNavigationEnabled => _settings.GamepadNavigationEnabled;
+
+    /// <summary>
+    /// Whether the temporary layer hint overlay is shown at all. Off is the manual dismissal:
+    /// the hint hides even while a layer leader is held and stays hidden until this is turned
+    /// back on. The overlay is click-through, so the close lives here rather than on the card.
+    /// </summary>
+    public bool LayerHintEnabled => _settings.LayerHintEnabled;
+
+    /// <summary>Where the fixed layer hint parks on screen; ignored while following the mouse.</summary>
+    public LayerHintPositionMode OverlayPositionMode => _settings.OverlayPositionMode;
+
+    /// <summary>The screen edge or corner the fixed layer hint parks at.</summary>
+    public LayerHintAnchor OverlayAnchor => _settings.OverlayAnchor;
+
+    /// <summary>The overlay placement read as one value, so both processes place it identically.</summary>
+    public LayerHintPlacement LayerHintPlacement => new(OverlayPositionMode, OverlayAnchor);
 
     /// <summary>Whether closing the window hands the resident role to the tray.</summary>
     public bool CloseToTrayEnabled => _settings.CloseToTrayEnabled;
@@ -147,6 +169,42 @@ public sealed class ThemeService
         _settings = _settings with { GamepadNavigationEnabled = enabled };
         Save();
         GamepadNavigationChanged?.Invoke(enabled);
+    }
+
+    /// <summary>Turns the temporary layer hint overlay on or off and persists it.</summary>
+    public void SetLayerHintEnabled(bool enabled)
+    {
+        if (_settings.LayerHintEnabled == enabled)
+        {
+            return;
+        }
+
+        _settings = _settings with { LayerHintEnabled = enabled };
+        Save();
+    }
+
+    /// <summary>Chooses the fixed or follow-the-mouse overlay placement and persists it.</summary>
+    public void SetOverlayPositionMode(LayerHintPositionMode mode)
+    {
+        if (_settings.OverlayPositionMode == mode)
+        {
+            return;
+        }
+
+        _settings = _settings with { OverlayPositionMode = mode };
+        Save();
+    }
+
+    /// <summary>Chooses the screen edge or corner the fixed overlay parks at and persists it.</summary>
+    public void SetOverlayAnchor(LayerHintAnchor anchor)
+    {
+        if (_settings.OverlayAnchor == anchor)
+        {
+            return;
+        }
+
+        _settings = _settings with { OverlayAnchor = anchor };
+        Save();
     }
 
     public void SetCloseToTrayEnabled(bool enabled)
@@ -264,6 +322,15 @@ public sealed class ThemeService
 
         public bool GamepadNavigationEnabled { get; init; } = true;
 
+        /// <summary>Whether the temporary layer hint overlay is shown at all; on by default.</summary>
+        public bool LayerHintEnabled { get; init; } = true;
+
+        /// <summary>Fixed placement by default, the behaviour the overlay shipped with.</summary>
+        public LayerHintPositionMode OverlayPositionMode { get; init; } = LayerHintPositionMode.Fixed;
+
+        /// <summary>Bottom-centre by default, the position the overlay shipped with.</summary>
+        public LayerHintAnchor OverlayAnchor { get; init; } = LayerHintAnchor.BottomCenter;
+
         public bool CloseToTrayEnabled { get; init; } = true;
 
         public bool MinimizeToTrayEnabled { get; init; } = true;
@@ -314,5 +381,30 @@ public sealed class ThemeService
 
         public override void Write(Utf8JsonWriter writer, ThemeVariant value, JsonSerializerOptions options)
             => writer.WriteStringValue(value == ThemeVariant.Light ? "Light" : "Dark");
+    }
+
+    /// <summary>
+    /// Reads and writes an enum as its name, degrading to the default value when the stored
+    /// name is unknown, missing or a bare number - so a hand-edited or newer settings file
+    /// falls one overlay preference back to its default instead of failing the whole file the
+    /// way an out-of-the-box <c>JsonStringEnumConverter</c> would.
+    /// </summary>
+    private sealed class ResilientEnumConverter<T> : JsonConverter<T> where T : struct, Enum
+    {
+        public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                reader.Skip();
+                return default;
+            }
+
+            return Enum.TryParse(reader.GetString(), ignoreCase: true, out T value)
+                ? value
+                : default;
+        }
+
+        public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value.ToString());
     }
 }

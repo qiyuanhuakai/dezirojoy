@@ -16,6 +16,9 @@ public class MainWindowViewModelTests
         var host = new EngineHost(provider, sink, store);
         var vm = new MainWindowViewModel(host, store);
 
+        // The pad-navigation tests need the temporary hijack armed; it ships off by default.
+        vm.SetGamepadNavigationEnabled(true);
+
         return (vm, host, provider, store);
     }
 

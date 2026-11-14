@@ -12,6 +12,15 @@ public static class DaemonErrorCodes
 
     /// <summary>The submitted profile JSON could not be parsed.</summary>
     public const string InvalidProfile = "invalid-profile";
+
+    /// <summary>The screen keyboard asked to type nothing at all.</summary>
+    public const string EmptyInjection = "empty-injection";
+
+    /// <summary>The screen keyboard asked to type more than the Core's own text bound carries.</summary>
+    public const string OversizedInjection = "oversized-injection";
+
+    /// <summary>No connected device, so the daemon has no output channel to inject through.</summary>
+    public const string NoInjectionRuntime = "no-injection-runtime";
 }
 
 /// <summary>
@@ -77,6 +86,22 @@ public interface IDaemonHost
 
     /// <summary>Atomically moves every supplied runtime to the same app-wide slot.</summary>
     void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles);
+
+    /// <summary>
+    /// Types one short string into whatever has keyboard focus, through the daemon's own
+    /// output path. The floating screen keyboard's way out: the daemon is the sole injection
+    /// authority, so the window asks and the daemon injects. Bounded by the Core's own text
+    /// bound, and refused - rather than silently dropped - when the daemon holds no runtime
+    /// to inject through.
+    /// </summary>
+    void InjectText(string text);
+
+    /// <summary>
+    /// Taps one key - press, then release, modifiers around it - into whatever has keyboard
+    /// focus, through the daemon's own output path. What the screen keyboard's action keys
+    /// need: 退格 sends a Backspace, 清空 sends Ctrl+A and then Delete.
+    /// </summary>
+    void TapKey(GamepadKey key, KeyModifiers modifiers);
 }
 
 public sealed record ConnectedDeviceSnapshot(string DeviceId, string Name, GamepadLayout Layout);

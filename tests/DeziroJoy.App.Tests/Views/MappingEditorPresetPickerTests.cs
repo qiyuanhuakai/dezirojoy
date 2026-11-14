@@ -40,6 +40,8 @@ public sealed class MappingEditorPresetPickerTests
         var store = new InMemoryProfileStore();
         var host = new EngineHost(provider, sink, store);
         var viewModel = new MainWindowViewModel(host, store);
+        // The pad-driven picker tests need the temporary hijack armed; it ships off by default.
+        viewModel.SetGamepadNavigationEnabled(true);
         var window = new MainWindow(viewModel, host);
         window.Show();
         return (window, viewModel, host, provider, store);

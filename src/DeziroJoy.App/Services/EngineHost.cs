@@ -28,7 +28,10 @@ public sealed class ControllerSampledEventArgs : EventArgs
 /// (<see cref="SetMappingEnabled"/>), the GUI's input hijack lease
 /// (<see cref="SetInjectionSuspended"/>), and the foreground rule that hands the pad to the
 /// program in front (<see cref="SetNativeGamepadPaused"/>). None of them lifts another's
-/// pause, and none of them touches the injection mutex.
+/// pause, and none of them touches the injection mutex. They gate what the mapping asks for;
+/// an explicitly requested output - <see cref="InjectText"/> or <see cref="TapKey"/>, what
+/// the floating screen keyboard sends - goes straight through, because suspending injection
+/// for an input lease must not also silence the keyboard that lease was taken for.
 /// </para>
 /// </summary>
 public sealed class EngineHost : IDisposable
@@ -139,10 +142,22 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public event EventHandler<int>? PresetSwitchRequested;
 
+    /// <summary>
+    /// Raised after a tick's command loop when a <see cref="Mapping.SpecialKeyKind.Keyboard"/>
+    /// key asked to toggle the floating screen keyboard. Exactly like
+    /// <see cref="PresetSwitchRequested"/>: <see cref="Platform.CommandDispatcher"/> never
+    /// injects a <see cref="Engine.ToggleScreenKeyboardCommand"/>, so the host - the daemon in
+    /// daemon mode, this window's view model locally - is what opens or closes the window and
+    /// moves the input lease with it. At most one raise per tick, however many keyboard keys
+    /// the tick pressed, because the window is one surface.
+    /// </summary>
+    public event Action? ScreenKeyboardToggleRequested;
+
     /// <summary>Advances every connected controller by one tick.</summary>
     public void TickOnce(TimeSpan delta)
     {
         int? presetSwitch = null;
+        bool screenKeyboardToggle = false;
         bool presenceChanged;
 
         lock (_sync)
@@ -171,6 +186,7 @@ public sealed class EngineHost : IDisposable
                     var commands = runtime.Engine.Tick(state, (float)delta.TotalSeconds);
                     runtime.Dispatcher.DispatchAll(commands);
                     presetSwitch ??= FirstPresetSwitch(commands);
+                    screenKeyboardToggle |= FirstScreenKeyboardToggle(commands);
                 }
 
                 Sampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
@@ -190,6 +206,13 @@ public sealed class EngineHost : IDisposable
         if (presetSwitch is int slot)
         {
             PresetSwitchRequested?.Invoke(this, slot);
+        }
+
+        // Same contract, same reason: opening the floating screen keyboard suspends
+        // injection, which takes the same lock.
+        if (screenKeyboardToggle)
+        {
+            ScreenKeyboardToggleRequested?.Invoke();
         }
     }
 
@@ -449,6 +472,81 @@ public sealed class EngineHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Types one short string into whatever has keyboard focus, through the same output path
+    /// a <see cref="Mapping.TextTarget"/> uses. This is the floating screen keyboard's way
+    /// out: the daemon is the sole injection authority, so the window asks and the host
+    /// injects, and the string travels the text path rather than as a sequence of key events
+    /// the local layout may not be able to name.
+    /// <para>
+    /// It deliberately bypasses the three dispatch gates. A key the user pressed on the
+    /// keyboard is an explicit act, not a mapping: suspending injection for the input lease
+    /// must not also silence the keyboard that lease was taken for. The dispatcher's own
+    /// ownership table is untouched - text is not a held output - so nothing here can lift a
+    /// key a mapping still holds.
+    /// </para>
+    /// <para>
+    /// Every runtime of one host shares a sink and one ownership table, so which dispatcher
+    /// carries it is immaterial: two pads never type the same characters twice. With no
+    /// runtime at all there is no sink to reach, and the call is a no-op - the daemon refuses
+    /// the request instead of pretending it typed.
+    /// </para>
+    /// </summary>
+    public void InjectText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var bounded = text.Length > TextTarget.MaxLength ? text[..TextTarget.MaxLength] : text;
+
+        lock (_sync)
+        {
+            if (FirstRuntime() is { } runtime)
+            {
+                runtime.Dispatcher.Dispatch(new TextCommand(bounded));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Taps one key - press, then release - into whatever has keyboard focus, through the
+    /// same output path a mapping's key uses. What the screen keyboard's action keys need:
+    /// 退格 sends a Backspace, 清空 sends Ctrl+A and then Delete. The modifiers are pressed
+    /// before the key and released after it, exactly as a combo mapping unwinds, and the tap
+    /// owns itself so a later release can never lift a key another owner still holds.
+    /// </summary>
+    public void TapKey(GamepadKey key, KeyModifiers modifiers)
+    {
+        var owner = new OutputOwner(Guid.NewGuid());
+        var command = new KeyDownCommand(key, modifiers, owner);
+
+        lock (_sync)
+        {
+            if (FirstRuntime() is { } runtime)
+            {
+                runtime.Dispatcher.Dispatch(command);
+                runtime.Dispatcher.Dispatch(new KeyUpCommand(key, modifiers, owner));
+            }
+        }
+    }
+
+    /// <summary>
+    /// One runtime of this host, or null with none connected. Every runtime shares the sink
+    /// and the ownership table, so the choice only decides which dispatcher carries an
+    /// explicitly requested output.
+    /// </summary>
+    private ControllerRuntime? FirstRuntime()
+    {
+        foreach (var runtime in _runtimes.Values)
+        {
+            return runtime;
+        }
+
+        return null;
+    }
+
     /// <summary>Persists the active profile of a device.</summary>
     public void SaveProfile(string deviceId)
     {
@@ -641,6 +739,25 @@ public sealed class EngineHost : IDisposable
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// True when a tick's commands ask to toggle the floating screen keyboard. The command
+    /// carries no state of its own - the window's open/closed state is the host's - so the
+    /// verdict is a flag rather than a value, and several keyboard keys pressed in one tick
+    /// collapse into a single toggle rather than an even number of them.
+    /// </summary>
+    private static bool FirstScreenKeyboardToggle(IReadOnlyList<InputCommand> commands)
+    {
+        foreach (var command in commands)
+        {
+            if (command is ToggleScreenKeyboardCommand)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private ControllerRuntime EnsureRuntime(GamepadDescriptor descriptor)

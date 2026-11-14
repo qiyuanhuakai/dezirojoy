@@ -2,10 +2,16 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Reflection;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
+using DeziroJoy.App.ViewModels;
+using DeziroJoy.App.Views;
+using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
+using DeziroJoy.Core.Profiles;
 
 namespace DeziroJoy.App.Hosting;
 
@@ -553,7 +559,11 @@ internal static class TrayHost
             new RenderSupervisor(showLive: ShowLiveRenderProcess),
             GuiActivationServer.ActiveInstance,
             releaseInstance: () => _instance?.ReleaseLease(),
-            reacquireInstance: () => _instance?.TryReacquireLease() ?? false);
+            reacquireInstance: () => _instance?.TryReacquireLease() ?? false,
+            // The overlay observes the daemon the supervisor already owns, so it probes the
+            // mapping pipe and never starts a daemon of its own - a second elevated relaunch
+            // from the tray would be a UAC prompt for a daemon that is already there.
+            overlayController: static () => new DaemonController(new ProbeOnlyDaemonEndpoint()));
 
     internal static TrayService InstallTray(
         Application application,
@@ -568,7 +578,8 @@ internal static class TrayHost
         Func<Task>? pollDelay = null,
         TimeSpan? pollBudget = null,
         Func<bool>? reacquireInstance = null,
-        Func<bool>? isDaemonReachable = null)
+        Func<bool>? isDaemonReachable = null,
+        Func<DaemonController?>? overlayController = null)
     {
         themes.ApplyPersisted();
 
@@ -579,6 +590,16 @@ internal static class TrayHost
         isDaemonReachable ??= static () => DaemonSupervisor.IsDaemonReachable(IpcContract.PipeName);
         var handoverGate = new object();
         Task<bool>? handover = null;
+
+        // The layer hint overlay this tray hosts while no render window is up, or null when the
+        // overlay seam is not wired (the supervisor tests pass none). Held so tray exit can close
+        // it and release its daemon connection.
+        IDisposable? layerHint = null;
+
+        // The floating screen keyboard this tray hosts while no render window is up, or null when
+        // the overlay seam is not wired. Held so tray exit can close it and release its daemon
+        // connection.
+        IDisposable? screenKeyboard = null;
 
         async Task ShowAsync()
         {
@@ -675,13 +696,542 @@ internal static class TrayHost
         lifetime.Exit += (_, _) =>
         {
             tray.Dispose();
+            layerHint?.Dispose();
+            screenKeyboard?.Dispose();
             daemon.Dispose();
             render.Dispose();
         };
 
         daemon.EnsureRunning();
 
+        // The tray owns no window, so it hosts the layer hint overlay itself: the render window
+        // carries its own while it is up, and this one takes over the moment the window closes
+        // to the tray, so a held temporary layer keeps naming its buttons over the target
+        // application. The seam is injectable so the existing supervisor tests spawn nothing.
+        if (overlayController?.Invoke() is { } controller)
+        {
+            layerHint = InstallTrayLayerHint(controller, themes);
+            screenKeyboard = InstallTrayScreenKeyboard(controller);
+        }
+
         return tray;
+    }
+
+    /// <summary>How many times the tray retries the overlay's daemon connect before giving up.</summary>
+    private const int TrayLayerHintConnectAttempts = 6;
+
+    /// <summary>Pause between overlay connect retries, covering the daemon child's pipe startup.</summary>
+    private static readonly TimeSpan TrayLayerHintConnectRetryDelay = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Builds the tray process's layer hint overlay over its own daemon connection: a layer hint
+    /// and a live pad diagram fed from the daemon's snapshots and input samples, bound to a
+    /// click-through overlay whose placement rides the persisted preferences. The connection is
+    /// retried within a bounded budget because the daemon child the supervisor just launched may
+    /// still be opening its pipe; a connection that never lands simply leaves the overlay hidden
+    /// rather than taking the tray down. The returned handle owns the overlay, its feed and the
+    /// connection, and is disposed when the tray exits.
+    /// </summary>
+    internal static IDisposable InstallTrayLayerHint(DaemonController controller, ThemeService themes)
+    {
+        var layerHint = new LayerHintViewModel
+        {
+            IsSuppressed = !themes.LayerHintEnabled,
+        };
+        var visualizer = new GamepadVisualizerViewModel();
+        var overlay = new LayerHintOverlay(
+            layerHint,
+            visualizer,
+            () => themes.LayerHintPlacement,
+            ScreenCursor.TryGetPosition);
+        var feed = new DaemonLayerHintFeed(controller, layerHint, visualizer);
+        var connect = new CancellationTokenSource();
+
+        _ = Task.Run(async () =>
+        {
+            for (var attempt = 1; attempt <= TrayLayerHintConnectAttempts; attempt++)
+            {
+                if (connect.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                try
+                {
+                    await controller.ConnectAsync(connect.Token).ConfigureAwait(false);
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    Trace.WriteLine($"[DeziroJoy] 托图层提示连接第 {attempt} 次失败：{exception.Message}");
+                    if (attempt == TrayLayerHintConnectAttempts)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        await Task.Delay(TrayLayerHintConnectRetryDelay, connect.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                }
+            }
+        }, CancellationToken.None);
+
+        return new TrayLayerHintHandle(overlay, feed, controller, connect);
+    }
+
+    /// <summary>Owns everything the tray's layer hint overlay needs, released on tray exit.</summary>
+    private sealed class TrayLayerHintHandle(
+        LayerHintOverlay overlay,
+        DaemonLayerHintFeed feed,
+        DaemonController controller,
+        CancellationTokenSource connect) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            connect.Cancel();
+            connect.Dispose();
+            overlay.Close();
+            feed.Dispose();
+            _ = controller.DisposeAsync().AsTask();
+        }
+    }
+
+    /// <summary>
+    /// Feeds a layer hint overlay from the daemon in the tray process, mirroring how the render
+    /// window's view model drives its own overlay. The tray owns no window and no view model, so
+    /// this is the smallest seam that turns daemon snapshots and input samples into the two view
+    /// models the overlay binds: the layer hint (rebuilt from every snapshot, so it appears and
+    /// disappears with the temporary layer the daemon reports) and the live pad diagram (fed from
+    /// every input sample, so the held leader lights up on it). Daemon events arrive on the
+    /// controller's receive loop, so they are marshalled onto the UI thread exactly as the render
+    /// path marshals them.
+    /// </summary>
+    internal sealed class DaemonLayerHintFeed : IDisposable
+    {
+        private readonly DaemonController _daemon;
+        private readonly LayerHintViewModel _layerHint;
+        private readonly GamepadVisualizerViewModel _visualizer;
+        private readonly SynchronizationContext? _uiContext;
+
+        public DaemonLayerHintFeed(
+            DaemonController daemon,
+            LayerHintViewModel layerHint,
+            GamepadVisualizerViewModel visualizer)
+        {
+            _daemon = daemon;
+            _layerHint = layerHint;
+            _visualizer = visualizer;
+            _uiContext = SynchronizationContext.Current;
+
+            _daemon.SnapshotChanged += OnSnapshot;
+            _daemon.InputSampled += OnInputSample;
+            _daemon.Disconnected += OnDisconnected;
+
+            if (_daemon.Snapshot is { } snapshot)
+            {
+                OnSnapshot(snapshot);
+            }
+
+            foreach (var sample in _daemon.InputSamples)
+            {
+                OnInputSample(sample);
+            }
+        }
+
+        private void OnSnapshot(StateSnapshot snapshot)
+        {
+            if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+            {
+                _uiContext.Post(_ => OnSnapshot(snapshot), null);
+                return;
+            }
+
+            _layerHint.Update(ParseProfile(snapshot), snapshot);
+            _visualizer.SetConnected(snapshot.HasController);
+        }
+
+        private void OnInputSample(InputSampleMessage sample)
+        {
+            if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+            {
+                _uiContext.Post(_ => OnInputSample(sample), null);
+                return;
+            }
+
+            _visualizer.Update(sample.ToGamepadState());
+            _visualizer.SetConnected(true);
+        }
+
+        private void OnDisconnected()
+        {
+            if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+            {
+                _uiContext.Post(_ => OnDisconnected(), null);
+                return;
+            }
+
+            // No daemon means no active layer: the hint empties and the overlay hides, exactly as
+            // the render window clears its own hint on disconnect.
+            _layerHint.Update(null, null);
+            _visualizer.SetConnected(false);
+        }
+
+        /// <summary>
+        /// The profile the snapshot carries, or null when it is absent or unreadable. The layer
+        /// hint resolves the layer's mapping ids against this body; a body this build cannot parse
+        /// leaves the hint empty, which hides the overlay rather than naming a wrong action.
+        /// </summary>
+        private static GamepadProfile? ParseProfile(StateSnapshot snapshot)
+        {
+            if (string.IsNullOrEmpty(snapshot.ProfileJson))
+            {
+                return null;
+            }
+
+            try
+            {
+                return ProfileSerializer.Load(snapshot.ProfileJson).Profile;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        public void Dispose()
+        {
+            _daemon.SnapshotChanged -= OnSnapshot;
+            _daemon.InputSampled -= OnInputSample;
+            _daemon.Disconnected -= OnDisconnected;
+        }
+    }
+
+    /// <summary>
+    /// Builds the tray process's floating screen keyboard over its own daemon connection: the
+    /// keyboard a 屏幕键盘 special key summons, which types into whatever application has focus.
+    /// The tray owns no window, so - exactly as it does for the layer hint overlay - it hosts the
+    /// window itself, because the resident mode is where the keyboard matters most: the user is
+    /// in the target application with the pad in hand and no editor card in sight.
+    /// <para>
+    /// Everything the keyboard does still goes through the daemon: the flag the engine's toggle
+    /// flips arrives in a snapshot and is mirrored here, every key press is a request the daemon
+    /// answers through its own output path, and the input lease the keyboard takes is the same
+    /// per-connection hijack lease the render window uses. A window that takes over from the tray
+    /// adopts the same flag from the same snapshot, so there is one keyboard and one lease
+    /// between the two processes.
+    /// </para>
+    /// </summary>
+    internal static IDisposable InstallTrayScreenKeyboard(DaemonController controller)
+    {
+        var keyboard = new ScreenKeyboardViewModel();
+        var feed = new DaemonScreenKeyboardFeed(controller, keyboard);
+        var window = new ScreenKeyboardWindow(keyboard);
+        return new TrayScreenKeyboardHandle(window, feed);
+    }
+
+    /// <summary>Owns the tray's screen keyboard window and the feed that drives it.</summary>
+    private sealed class TrayScreenKeyboardHandle(
+        ScreenKeyboardWindow window,
+        DaemonScreenKeyboardFeed feed) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            feed.Dispose();
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// Drives the tray's floating screen keyboard from the daemon: the open flag from the
+    /// snapshots, the cursor and the pages from the input samples, and every output back to the
+    /// daemon as a request. The counterpart of <see cref="DaemonLayerHintFeed"/> for the one
+    /// surface that also talks back - which is why this one owns the input lease as well.
+    /// </summary>
+    internal sealed class DaemonScreenKeyboardFeed : IDisposable
+    {
+        private readonly DaemonController _daemon;
+        private readonly ScreenKeyboardViewModel _keyboard;
+        private readonly SynchronizationContext? _uiContext;
+        private readonly CancellationTokenSource _lifetime = new();
+        private readonly Dictionary<string, GamepadState> _baselines = new(StringComparer.Ordinal);
+
+        /// <summary>The profile the last snapshot carried, for the key that summons the keyboard.</summary>
+        private GamepadProfile? _profile;
+
+        public DaemonScreenKeyboardFeed(DaemonController daemon, ScreenKeyboardViewModel keyboard)
+        {
+            ArgumentNullException.ThrowIfNull(daemon);
+            ArgumentNullException.ThrowIfNull(keyboard);
+
+            _daemon = daemon;
+            _keyboard = keyboard;
+            _uiContext = SynchronizationContext.Current;
+
+            // The daemon is the sole injection authority, so the keyboard asks and the daemon
+            // injects - the same two requests the render window's view model makes, over the
+            // same connection this feed already owns.
+            keyboard.SetOutput(
+                text => InjectTextAsync(text),
+                (key, modifiers) => InjectKeyAsync(key, modifiers));
+            keyboard.CloseRequested += () => _ = CloseAsync();
+
+            _daemon.SnapshotChanged += OnSnapshot;
+            _daemon.InputSampled += OnInputSample;
+            _daemon.Disconnected += OnDisconnected;
+
+            if (_daemon.Snapshot is { } snapshot)
+            {
+                OnSnapshot(snapshot);
+            }
+
+            foreach (var sample in _daemon.InputSamples)
+            {
+                OnInputSample(sample);
+            }
+        }
+
+        private void OnSnapshot(StateSnapshot snapshot)
+        {
+            if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+            {
+                _uiContext.Post(_ => OnSnapshot(snapshot), null);
+                return;
+            }
+
+            _profile = ParseProfile(snapshot);
+            _baselines.Clear();
+
+            // The daemon owns the flag; this only mirrors it, and moves the input lease with it.
+            // The lease is the same per-connection hijack lease the render window takes, so while
+            // the keyboard is open the mapping stops and the pad drives the caps.
+            if (_keyboard.IsOpen != snapshot.ScreenKeyboardOpen)
+            {
+                _keyboard.IsOpen = snapshot.ScreenKeyboardOpen;
+                _ = SetLeaseAsync(snapshot.ScreenKeyboardOpen);
+            }
+        }
+
+        private void OnInputSample(InputSampleMessage sample)
+        {
+            if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+            {
+                _uiContext.Post(_ => OnInputSample(sample), null);
+                return;
+            }
+
+            if (!_keyboard.IsOpen)
+            {
+                return;
+            }
+
+            var state = sample.ToGamepadState();
+            if (!_baselines.TryGetValue(sample.DeviceId, out var previous))
+            {
+                // The first sample of one device establishes its baseline without navigating.
+                _baselines[sample.DeviceId] = state;
+                return;
+            }
+
+            var edges = state.PressedButtons & ~previous.PressedButtons;
+            _baselines[sample.DeviceId] = state;
+
+            if (edges == GamepadButtonMask.None)
+            {
+                return;
+            }
+
+            // The engine is suspended while the keyboard is open, so the key that summoned it
+            // cannot reach the engine to toggle a second time - the window answers it instead.
+            if (edges.Has(GamepadButton.B) || IsScreenKeyboardKey(edges))
+            {
+                _ = CloseAsync();
+                return;
+            }
+
+            _keyboard.Navigate(edges);
+        }
+
+        private void OnDisconnected()
+        {
+            if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+            {
+                _uiContext.Post(_ => OnDisconnected(), null);
+                return;
+            }
+
+            // No daemon means no flag and no output channel: the window goes away rather than
+            // sitting there typing into nothing. A reconnect that still reports the keyboard open
+            // brings it back, because the daemon is the authority.
+            _baselines.Clear();
+            _profile = null;
+            _keyboard.IsOpen = false;
+        }
+
+        /// <summary>
+        /// True when one of the newly pressed buttons carries the profile's own 屏幕键盘 key, on
+        /// the click or on either gesture action.
+        /// </summary>
+        private bool IsScreenKeyboardKey(GamepadButtonMask edges)
+        {
+            if (_profile is not { } profile)
+            {
+                return false;
+            }
+
+            foreach (var mapping in profile.Mappings)
+            {
+                if (mapping.Source is not ButtonBinding binding || !edges.Has(binding.Button))
+                {
+                    continue;
+                }
+
+                if (CarriesScreenKeyboard(mapping.Target)
+                    || binding.Gesture is { } gesture
+                    && (CarriesScreenKeyboard(gesture.DoubleClickAction) || CarriesScreenKeyboard(gesture.LongPressAction)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool CarriesScreenKeyboard(MappingTarget? target)
+            => target is SpecialKeyTarget { Kind: SpecialKeyKind.Keyboard };
+
+        /// <summary>
+        /// Takes or releases this connection's hijack lease for the keyboard. The request is
+        /// fire-and-forget: a lease that could not be taken leaves the mapping running, which is
+        /// the safe direction to fail in, and the daemon's own snapshot says what actually holds.
+        /// </summary>
+        private async Task SetLeaseAsync(bool suspended)
+        {
+            try
+            {
+                await _daemon.SetInjectionSuspendedAsync(suspended, _lifetime.Token).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception
+                is OperationCanceledException or ObjectDisposedException or InvalidOperationException)
+            {
+                // The connection is going away; the daemon releases a disconnected client's lease
+                // on its own, so there is nothing to retry.
+            }
+        }
+
+        private async Task InjectTextAsync(string text)
+        {
+            try
+            {
+                var result = await _daemon.InjectTextAsync(text, _lifetime.Token).ConfigureAwait(false);
+                if (result.Outcome != MutationOutcome.Accepted)
+                {
+                    ReportFailure(result, "屏幕键盘输入");
+                }
+            }
+            catch (Exception exception) when (exception
+                is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception);
+            }
+        }
+
+        private async Task InjectKeyAsync(GamepadKey key, KeyModifiers modifiers)
+        {
+            try
+            {
+                var result = await _daemon.InjectKeyAsync(key, modifiers, _lifetime.Token).ConfigureAwait(false);
+                if (result.Outcome != MutationOutcome.Accepted)
+                {
+                    ReportFailure(result, "屏幕键盘按键");
+                }
+            }
+            catch (Exception exception) when (exception
+                is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception);
+            }
+        }
+
+        /// <summary>Dismisses the keyboard, which means asking the daemon to clear its flag.</summary>
+        private async Task CloseAsync()
+        {
+            try
+            {
+                var result = await _daemon.SetScreenKeyboardAsync(false, _lifetime.Token).ConfigureAwait(false);
+                if (result.Outcome != MutationOutcome.Accepted)
+                {
+                    ReportFailure(result, "关闭屏幕键盘");
+                }
+            }
+            catch (Exception exception) when (exception
+                is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                ReportDaemonUnavailable(exception);
+            }
+        }
+
+        private void ReportFailure(MutationResult result, string operation)
+            => _keyboard.ReportFailure(
+                $"{operation}被拒绝：{result.ErrorMessage ?? result.ErrorCode ?? "守护进程拒绝"}");
+
+        private void ReportDaemonUnavailable(Exception exception)
+            => _keyboard.ReportFailure($"守护进程不可用：{exception.Message}");
+
+        /// <summary>
+        /// The profile the snapshot carries, or null when it is absent or unreadable. The
+        /// summoning key has to be found in it; a body this build cannot parse leaves the window
+        /// answering B alone, which is the safe subset.
+        /// </summary>
+        private static GamepadProfile? ParseProfile(StateSnapshot snapshot)
+        {
+            if (string.IsNullOrEmpty(snapshot.ProfileJson))
+            {
+                return null;
+            }
+
+            try
+            {
+                return ProfileSerializer.Load(snapshot.ProfileJson).Profile;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        public void Dispose()
+        {
+            _daemon.SnapshotChanged -= OnSnapshot;
+            _daemon.InputSampled -= OnInputSample;
+            _daemon.Disconnected -= OnDisconnected;
+            _lifetime.Cancel();
+            _lifetime.Dispose();
+        }
     }
 
     /// <summary>

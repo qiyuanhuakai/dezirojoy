@@ -301,6 +301,7 @@ public class MappingDescriptionsTests
     [Theory]
     [InlineData(SpecialKeyKind.Precision, "精准键")]
     [InlineData(SpecialKeyKind.Leader, "Leader 键")]
+    [InlineData(SpecialKeyKind.Keyboard, "屏幕键盘")]
     public void A_Special_Key_Target_Reads_As_Its_Picker_Name_Not_Record_Text(SpecialKeyKind kind, string expected)
     {
         // The Core record's ToString would read as debug output in a mapping row, and the

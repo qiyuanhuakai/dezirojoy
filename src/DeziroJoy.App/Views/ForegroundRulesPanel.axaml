@@ -16,15 +16,39 @@
         point, so it is the first thing on screen and the last thing to scroll away. The rule
         table follows, and the lock sits beside the state rather than inside the table because it
         is a control, not a rule.
+
+        The rule table is a flat list, not a card per rule: a card inside this panel's card is
+        two frames deep, and a table of five rules read as five boxes reads as five separate
+        surfaces rather than as one list. A rule row is a summary line - what it does and what it
+        costs to be considered - with a hairline under it, and the editing fields sit under that
+        line only while the row is open. The row is read far more often than it is written, so
+        the fields are the thing that collapses; the enable and delete controls do not, because
+        neither needs the row open to be used.
     -->
 
     <UserControl.Resources>
         <conv:BoolNegationConverter x:Key="Not" />
+
+        <!-- The row's twisty. A filled chevron rather than a text glyph, so it keeps the
+             control's ink and stays crisp at the row's small type size; each geometry is drawn
+             in a 7x7 space and the PathIcon's viewbox scales it down to the 8x6 it occupies. -->
+        <StreamGeometry x:Key="RuleRowChevronRight">M1.5,0 L7,3.5 L1.5,7 Z</StreamGeometry>
+        <StreamGeometry x:Key="RuleRowChevronDown">M0,1.5 L7,1.5 L3.5,7 Z</StreamGeometry>
+
+        <!-- The number box's spinner chevrons, the same two shapes Fluent draws, declared here
+             because the theme's own copies are internal to it. -->
+        <StreamGeometry x:Key="RuleSpinnerUpGlyph">M0,9 L10,0 20,9 19,10 10,2 1,10 z</StreamGeometry>
+        <StreamGeometry x:Key="RuleSpinnerDownGlyph">M0,1 L10,10 20,1 19,0 10,8 1,0 z</StreamGeometry>
     </UserControl.Resources>
 
     <UserControl.Styles>
-        <!-- The same form-control chrome the mapping editor gives its interval box, so the two
-             numeric editors in the app read as one thing. -->
+        <!-- The number box. Fluent's NumericUpDown keeps its own chrome, which leaves the
+             up/down pair as two square buttons each with its own frame and a hard divider
+             between them and the field. This template puts the whole control inside one
+             rounded well: the spinner buttons lose their frames and share the well's corner,
+             so the pair reads as part of the input rather than as a second control bolted
+             onto it. The parts keep their Fluent names, so the control's own spin wiring,
+             text sync and validation are untouched. -->
         <Style Selector="NumericUpDown">
             <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
@@ -33,6 +57,130 @@
             <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <DataValidationErrors>
+                        <!-- The well carries the panel's own ink rather than the theme's text
+                             colour, so the pair's chevrons and the field's number both read as
+                             this surface's control foreground. -->
+                        <ButtonSpinner Name="PART_Spinner" Classes="ruleSpinner"
+                                       Background="{TemplateBinding Background}"
+                                       BorderThickness="{TemplateBinding BorderThickness}"
+                                       BorderBrush="{TemplateBinding BorderBrush}"
+                                       CornerRadius="{TemplateBinding CornerRadius}"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       IsTabStop="False"
+                                       Padding="0"
+                                       MinWidth="0"
+                                       HorizontalContentAlignment="Stretch"
+                                       VerticalContentAlignment="Stretch"
+                                       AllowSpin="{TemplateBinding AllowSpin}"
+                                       ShowButtonSpinner="{TemplateBinding ShowButtonSpinner}"
+                                       ButtonSpinnerLocation="{TemplateBinding ButtonSpinnerLocation}">
+                            <TextBox Name="PART_TextBox"
+                                     Background="Transparent"
+                                     BorderBrush="Transparent"
+                                     Padding="{TemplateBinding Padding}"
+                                     MinWidth="0"
+                                     Foreground="{TemplateBinding Foreground}"
+                                     PlaceholderText="{TemplateBinding PlaceholderText}"
+                                     PlaceholderForeground="{TemplateBinding PlaceholderForeground}"
+                                     IsReadOnly="{TemplateBinding IsReadOnly}"
+                                     VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                     HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     Text="{TemplateBinding Text}"
+                                     TextAlignment="{TemplateBinding TextAlignment}"
+                                     AcceptsReturn="False"
+                                     TextWrapping="NoWrap" />
+                        </ButtonSpinner>
+                    </DataValidationErrors>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <!-- The well itself: one rounded border around the field and the spinner pair, clipped
+             so the pair's own corners follow the well's rather than squaring it off. -->
+        <Style Selector="ButtonSpinner.ruleSpinner">
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            ClipToBounds="True"
+                            MinHeight="{TemplateBinding MinHeight}">
+                        <DockPanel>
+                            <Border Name="PART_SpinnerPanel" Classes="ruleSpinnerPanel"
+                                    DockPanel.Dock="Right"
+                                    BorderThickness="1,0,0,0"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    IsVisible="{TemplateBinding ShowButtonSpinner}">
+                                <StackPanel Orientation="Horizontal" TabIndex="2">
+                                    <RepeatButton Name="PART_IncreaseButton" Classes="ruleSpinnerButton"
+                                                  IsTabStop="{TemplateBinding IsTabStop}"
+                                                  VerticalAlignment="Stretch"
+                                                  VerticalContentAlignment="Center"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  MinWidth="30">
+                                        <PathIcon Width="8" Height="6"
+                                                  Data="{StaticResource RuleSpinnerUpGlyph}" />
+                                    </RepeatButton>
+                                    <RepeatButton Name="PART_DecreaseButton" Classes="ruleSpinnerButton"
+                                                  IsTabStop="{TemplateBinding IsTabStop}"
+                                                  VerticalAlignment="Stretch"
+                                                  VerticalContentAlignment="Center"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  MinWidth="30">
+                                        <PathIcon Width="8" Height="6"
+                                                  Data="{StaticResource RuleSpinnerDownGlyph}" />
+                                    </RepeatButton>
+                                </StackPanel>
+                            </Border>
+                            <ContentPresenter Name="PART_ContentPresenter"
+                                              TabIndex="1"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Content="{TemplateBinding Content}"
+                                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Padding="{TemplateBinding Padding}" />
+                        </DockPanel>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <!-- The spinner button has its own template so the default RepeatButton theme's
+             pointer-over wash - which paints the ContentPresenter and so beats a template
+             binding - never squares the pair's hover state off again. -->
+        <Style Selector="RepeatButton.ruleSpinnerButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <ContentPresenter Background="{TemplateBinding Background}"
+                                      Content="{TemplateBinding Content}"
+                                      Padding="{TemplateBinding Padding}"
+                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="RepeatButton.ruleSpinnerButton:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="RepeatButton.ruleSpinnerButton:pressed">
+            <Setter Property="Opacity" Value="0.85" />
+        </Style>
+
+        <!-- A spinner asked for the left side keeps it: the well's own corner is what the pair
+             shares, so moving the pair moves nothing else. -->
+        <Style Selector="ButtonSpinner.ruleSpinner:left /template/ Border#PART_SpinnerPanel">
+            <Setter Property="DockPanel.Dock" Value="Left" />
         </Style>
 
         <Style Selector="TextBox.ruleProcess">
@@ -54,6 +202,57 @@
             <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="8,4" />
+            <!-- The theme sizes a combo box to its content; a form field has to fill the
+                 column it is given, or the three editors of a row end at three different
+                 widths and the row stops reading as one form. -->
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+        </Style>
+
+        <!-- The row's twisty: a quiet square of nothing until it is pointed at, which is what
+             a control that opens and closes a row should be. -->
+        <Style Selector="ToggleButton.ruleTwisty">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusSm}" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="{TemplateBinding CornerRadius}">
+                        <ContentPresenter Content="{TemplateBinding Content}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+
+        <Style Selector="ToggleButton.ruleTwisty:pointerover">
+            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+        </Style>
+
+        <Style Selector="ToggleButton.ruleTwisty:pressed">
+            <Setter Property="Opacity" Value="0.85" />
+        </Style>
+
+        <!-- The row: one line of identity and the two controls that need no editing, with a
+             hairline under it. No card, no background - the list's rhythm is the separator's. -->
+        <Style Selector="Border.ruleRow">
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+            <Setter Property="Padding" Value="0,2,0,10" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+
+        <Style Selector="TextBlock.ruleSummary">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
     </UserControl.Styles>
 
@@ -134,94 +333,146 @@
                     <!-- The picker's own hint, and the honest one where the platform cannot
                          enumerate: an empty drop-down has to say why it is empty. -->
                     <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                               Text="程序名也可以从当前打开的窗口里选：展开规则行的「从当前窗口选择」下拉框，选中即填入该规则的程序名。" />
+                               Text="程序名也可以从当前打开的窗口里选：展开规则行，在「从当前窗口选择」下拉框中选中即填入该规则的程序名。" />
                     <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding HasWindowChoices, Converter={StaticResource Not}}"
                                Text="当前平台无法列出已打开的窗口，请手动输入进程名。" />
+                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Text="规则行默认折叠成一行摘要，点开后才编辑；摘要上的「启用」和「删除」不需要展开就能用。" />
 
                     <ItemsControl x:Name="RulesList" Margin="0,12,0,0" ItemsSource="{Binding Rules}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ForegroundRuleItem">
-                                <Border Classes="card" Margin="0,0,0,8" Padding="12">
+                                <Border Classes="ruleRow">
                                     <StackPanel>
-                                        <Grid ColumnDefinitions="*,Auto">
-                                            <TextBlock Grid.Column="0" Classes="fieldLabel" VerticalAlignment="Center"
-                                                       Text="{Binding Describe}" />
-                                            <Button Grid.Column="1" Classes="ghost" Content="删除" x:Name="RuleDeleteButton"
-                                                    FontSize="10" Padding="8,4"
+                                        <!-- The summary line: the row's identity, its twisty,
+                                             and the two controls that work on a closed row. -->
+                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                                            <ToggleButton Grid.Column="0" Classes="ruleTwisty"
+                                                          x:Name="RuleExpandButton"
+                                                          AutomationProperties.Name="展开或收起规则"
+                                                          IsChecked="{Binding IsExpanded, Mode=TwoWay}">
+                                                <Grid>
+                                                    <PathIcon Width="8" Height="6"
+                                                              Data="{StaticResource RuleRowChevronRight}"
+                                                              IsVisible="{Binding IsExpanded, Converter={StaticResource Not}}" />
+                                                    <PathIcon Width="8" Height="6"
+                                                              Data="{StaticResource RuleRowChevronDown}"
+                                                              IsVisible="{Binding IsExpanded}" />
+                                                </Grid>
+                                            </ToggleButton>
+                                            <TextBlock Grid.Column="1" Classes="ruleSummary"
+                                                       x:Name="RuleSummaryText"
+                                                       Margin="6,0,0,0"
+                                                       Text="{Binding Summary}" />
+                                            <CheckBox Grid.Column="2" Content="启用"
+                                                      VerticalAlignment="Center" Margin="12,0,0,0"
+                                                      IsChecked="{Binding Enabled, Mode=TwoWay}" />
+                                            <Button Grid.Column="3" Classes="ghost" Content="删除"
+                                                    FontSize="10" Padding="8,4" Margin="8,0,0,0"
+                                                    x:Name="RuleDeleteButton"
                                                     Command="{ReflectionBinding DataContext.DeleteRuleCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                     CommandParameter="{Binding}" />
                                         </Grid>
 
-                                        <Grid Margin="0,8,0,0" ColumnDefinitions="150,110,90">
-                                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                                <TextBlock Classes="fieldLabel" Text="程序名" />
-                                                <TextBox Classes="ruleProcess" x:Name="RuleProcessBox"
-                                                         Text="{Binding ProcessName, Mode=TwoWay}" />
-                                                <!-- The picker: the windows the platform reports as
-                                                     open right now, so a rule can name its program
-                                                     by pointing at it. Selection fills the program
-                                                     name and clears, so the placeholder returns
-                                                     and the same window can be picked twice. -->
-                                                <ComboBox Classes="ruleCombo" Margin="0,6,0,0" x:Name="RuleWindowPicker"
-                                                          PlaceholderText="从当前窗口选择…"
-                                                          ItemsSource="{ReflectionBinding DataContext.WindowChoices, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                          SelectedItem="{Binding SelectedWindow, Mode=TwoWay}"
-                                                          DropDownOpened="OnWindowPickerDropDownOpened">
-                                                    <ComboBox.ItemTemplate>
-                                                        <DataTemplate x:DataType="mapping:ForegroundWindow">
-                                                            <TextBlock Text="{Binding Display}" />
-                                                        </DataTemplate>
-                                                    </ComboBox.ItemTemplate>
-                                                </ComboBox>
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Margin="0,0,10,0">
-                                                <TextBlock Classes="fieldLabel" Text="优先级" />
-                                                <NumericUpDown x:Name="RulePriorityBox" Minimum="-99" Maximum="99"
-                                                               Increment="1"
-                                                               Value="{Binding Priority, Mode=TwoWay}" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="2">
-                                                <TextBlock Classes="fieldLabel" Text="动作" />
-                                                <ComboBox Classes="ruleCombo" x:Name="RuleActionCombo"
-                                                          SelectedIndex="{Binding ActionIndex, Mode=TwoWay}">
-                                                    <ComboBoxItem Content="切换配置" />
-                                                    <ComboBoxItem Content="原生手柄" />
-                                                </ComboBox>
-                                            </StackPanel>
-                                        </Grid>
+                                        <!-- The editing fields. Only while the row is open: a
+                                             row that always showed every field made a table of
+                                             five rules taller than the window, and the table is
+                                             read far more often than it is written. -->
+                                        <Grid Margin="0,10,0,0" IsVisible="{Binding IsExpanded}"
+                                              ColumnDefinitions="76,*,64,96">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Classes="fieldLabel"
+                                                       VerticalAlignment="Center" Text="程序名" />
+                                            <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3"
+                                                     Classes="ruleProcess" x:Name="RuleProcessBox"
+                                                     Text="{Binding ProcessName, Mode=TwoWay}" />
 
-                                        <!-- The slot the rule activates. Hidden for a native-gamepad
-                                             rule: mapping is paused there, so which profile would
-                                             run is moot. -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
-                                                    IsVisible="{Binding IsProfileAction}">
-                                            <TextBlock Classes="fieldLabel" Text="切换到预设" Width="150"
-                                                       VerticalAlignment="Center" />
-                                            <NumericUpDown x:Name="RuleSlotBox" Width="110"
+                                            <!-- The picker: the windows the platform reports as
+                                                 open right now, so a rule can name its program
+                                                 by pointing at it. Selection fills the program
+                                                 name and clears, so the placeholder returns
+                                                 and the same window can be picked twice. -->
+                                            <ComboBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3"
+                                                      Classes="ruleCombo" Margin="0,6,0,0"
+                                                      x:Name="RuleWindowPicker"
+                                                      PlaceholderText="从当前窗口选择…"
+                                                      ItemsSource="{ReflectionBinding DataContext.WindowChoices, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                      SelectedItem="{Binding SelectedWindow, Mode=TwoWay}"
+                                                      DropDownOpened="OnWindowPickerDropDownOpened">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="mapping:ForegroundWindow">
+                                                        <TextBlock Text="{Binding Display}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Classes="fieldLabel"
+                                                       VerticalAlignment="Center" Margin="0,10,0,0"
+                                                       Text="优先级" />
+                                            <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,10,10,0"
+                                                           x:Name="RulePriorityBox" MaxWidth="140"
+                                                           Minimum="-99" Maximum="99" Increment="1"
+                                                           Value="{Binding Priority, Mode=TwoWay}" />
+                                            <TextBlock Grid.Row="2" Grid.Column="2" Classes="fieldLabel"
+                                                       VerticalAlignment="Center" Margin="0,10,0,0"
+                                                       Text="动作" />
+                                            <ComboBox Grid.Row="2" Grid.Column="3" Margin="0,10,0,0"
+                                                      Classes="ruleCombo" x:Name="RuleActionCombo"
+                                                      SelectedIndex="{Binding ActionIndex, Mode=TwoWay}">
+                                                <ComboBoxItem Content="切换配置" />
+                                                <ComboBoxItem Content="原生手柄" />
+                                            </ComboBox>
+
+                                            <!-- The slot the rule activates. Hidden for a native-gamepad
+                                                 rule: mapping is paused there, so which profile would
+                                                 run is moot. -->
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Classes="fieldLabel"
+                                                       VerticalAlignment="Center" Margin="0,10,0,0"
+                                                       IsVisible="{Binding IsProfileAction}"
+                                                       Text="切换到预设" />
+                                            <NumericUpDown Grid.Row="3" Grid.Column="1" Margin="0,10,10,0"
+                                                           x:Name="RuleSlotBox" MaxWidth="140"
+                                                           IsVisible="{Binding IsProfileAction}"
                                                            Minimum="1" Maximum="12" Increment="1"
                                                            Value="{Binding Slot, Mode=TwoWay}" />
-                                            <TextBlock Classes="hint" VerticalAlignment="Center" Margin="12,0,0,0"
+                                            <TextBlock Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2"
+                                                       Classes="hint" VerticalAlignment="Center"
+                                                       Margin="0,10,0,0" TextWrapping="Wrap"
+                                                       IsVisible="{Binding IsProfileAction}"
                                                        Text="该程序在前台时使用这个预设。" />
-                                        </StackPanel>
 
-                                        <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
-                                                   IsVisible="{Binding IsNativeGamepadAction}"
-                                                   Text="该程序在前台时暂停键鼠映射，让游戏直接读取手柄；离开后自动恢复。" />
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
+                                                       Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
+                                                       IsVisible="{Binding IsNativeGamepadAction}"
+                                                       Text="该程序在前台时暂停键鼠映射，让游戏直接读取手柄；离开后自动恢复。" />
 
-                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                            <CheckBox Content="启用" IsChecked="{Binding Enabled, Mode=TwoWay}" />
-                                            <CheckBox Content="仅全屏时生效" Margin="16,0,0,0"
-                                                      IsChecked="{Binding FullscreenOnly, Mode=TwoWay}" />
-                                        </StackPanel>
-                                        <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                                   Text="「仅全屏」是辅助条件：平台检测不到是否全屏时规则仍然命中（Wayland 无法读取前台），可随时取消勾选。" />
+                                            <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="4"
+                                                        Orientation="Horizontal" Margin="0,12,0,0">
+                                                <CheckBox Content="仅全屏时生效"
+                                                          IsChecked="{Binding FullscreenOnly, Mode=TwoWay}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="4"
+                                                       Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
+                                                       Text="「仅全屏」是辅助条件：平台检测不到是否全屏时规则仍然命中（Wayland 无法读取前台），可随时取消勾选。" />
 
-                                        <!-- A rule that can never match says so, rather than sitting
-                                             in the table looking like it does something. -->
-                                        <TextBlock Classes="conflictHint" Margin="0,8,0,0" TextWrapping="Wrap"
-                                                   IsVisible="{Binding IsValid, Converter={StaticResource Not}}"
-                                                   Text="{Binding ValidationMessage}" />
+                                            <!-- A rule that can never match says so, rather than sitting
+                                                 in the table looking like it does something. -->
+                                            <TextBlock Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="4"
+                                                       Classes="conflictHint" Margin="0,8,0,0"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding IsValid, Converter={StaticResource Not}}"
+                                                       Text="{Binding ValidationMessage}" />
+                                        </Grid>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

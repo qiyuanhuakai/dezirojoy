@@ -206,64 +206,6 @@
             <Setter Property="MinHeight" Value="32" />
         </Style>
 
-        <!-- A key on the on-screen keyboard: the same focusable cap idiom the key picker
-             uses, so the gamepad cursor and keyboard focus both land on a visible box.
-             Two states wear the accent surface, and neither rests on colour alone: the
-             VM's own cursor (the "focused" class the code-behind mirrors from
-             TextKeyboard.FocusedKey) also raises the label weight, and real keyboard
-             focus rings the border. The border thickness never changes, so neither
-             shifts the cap. -->
-        <Style Selector="Button.textKey">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="2" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="HorizontalAlignment" Value="Stretch" />
-            <Setter Property="VerticalAlignment" Value="Stretch" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="Template">
-                <ControlTemplate>
-                    <Border Classes="textKeyFrame" Background="{TemplateBinding Background}"
-                            BorderThickness="1" BorderBrush="Transparent"
-                            CornerRadius="{DynamicResource CornerRadiusMd}">
-                        <ContentPresenter Content="{TemplateBinding Content}"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
-                </ControlTemplate>
-            </Setter>
-        </Style>
-
-        <Style Selector="Button.textKey:pointerover Border.textKeyFrame">
-            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
-        </Style>
-
-        <Style Selector="Button.textKey:pressed Border.textKeyFrame">
-            <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}" />
-        </Style>
-
-        <Style Selector="Button.textKey:focus Border.textKeyFrame">
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-
-        <!-- The cursor the gamepad drives: the same key-cap surface washed in the accent
-             tone, so the cap the cursor sits on is the one that reads as selected. -->
-        <Style Selector="Button.textKey.focused Border.textKeyFrame">
-            <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
-        </Style>
-
-        <Style Selector="Button.textKey TextBlock.textKeyLabel">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
-        </Style>
-
-        <Style Selector="Button.textKey.focused TextBlock.textKeyLabel">
-            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-
         <!-- The press/release preview: one plain-language line per output, in the order the
              engine emits it. It reads as a list, not as a paragraph, because the order is
              the point. -->
@@ -327,9 +269,18 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Classes="fieldLabel" Text="层" VerticalAlignment="Center" Margin="0" />
+                        <!-- The layer is committed through its own value, never through the
+                             picker row record: SelectedValue over SelectedValueBinding keeps the
+                             draft's layer the single source of truth, so the row the picker
+                             displays and the layer the entry commits can never disagree - the
+                             record-instance sync a SelectedItem binding needs is the one that
+                             once wrote a LeaderModeOption back into an enum property. -->
                         <ComboBox Grid.Column="1" x:Name="LayerCombo" HorizontalAlignment="Stretch"
                                   ItemsSource="{Binding LayerOptions}"
-                                  SelectedItem="{Binding SelectedLayerOption, Mode=TwoWay}">
+                                  SelectedValue="{Binding SelectedLayer, Mode=TwoWay}">
+                            <ComboBox.SelectedValueBinding>
+                                <Binding Path="Value" />
+                            </ComboBox.SelectedValueBinding>
                             <ComboBox.ItemTemplate>
                                 <DataTemplate x:DataType="vm:MappingLayerOption">
                                     <TextBlock Text="{Binding Label}" />
@@ -570,11 +521,12 @@
 
                 <!-- 输入文本. A text target types a short string - a search query, a file
                      name, a URL - on the press edge; it is a tap, so it holds nothing and
-                     repeats nothing. The box is the physical-keyboard way in, the on-screen
-                     keyboard below is the gamepad way in, and the two write the same draft.
-                     The bound is the Core's own, so a paste that runs long is trimmed rather
-                     than refused, and the counter names it instead of leaving the trim to be
-                     discovered. -->
+                     repeats nothing. The box is the physical-keyboard way in; the gamepad way
+                     in is the floating screen keyboard, which is a window of its own rather
+                     than a card here - it types into whatever application has focus, which is
+                     what a search box, a rename or a URL actually needs. The bound is the
+                     Core's own, so a paste that runs long is trimmed rather than refused, and
+                     the counter names it instead of leaving the trim to be discovered. -->
                 <StackPanel x:Name="TextRow" Margin="0,10,0,0" IsEnabled="{Binding ActiveTargetEditable}"
                             IsVisible="{Binding ActiveTargetKind, Converter={StaticResource KindMatch}, ConverterParameter=Text}">
                     <TextBlock Classes="sectionLabel" Text="输入文本" />
@@ -584,76 +536,6 @@
                              AutomationProperties.Name="输入文本" />
                     <TextBlock x:Name="ActiveTextLengthText" Classes="hint" Margin="0,6,0,0"
                                Text="{Binding ActiveTextLength, StringFormat='已输入 {0} / 256 个字符，超出部分会被裁掉'}" />
-                </StackPanel>
-
-                <!-- 屏幕键盘. A basic keyboard that types the draft with the gamepad alone:
-                     the cursor sits on one cap, the direction keys move it and A presses
-                     it. It is deliberately basic - it types the characters its pages
-                     carry and nothing else - so a character no page carries is out of reach
-                     here and the physical-keyboard capture above stays the way to type one.
-                     The pages lead as one segmented row, the same surface language as the
-                     gesture switcher and the key picker's navigator, and the grid shows the
-                     active page's keys a row at a time. -->
-                <StackPanel x:Name="TextKeyboardRow" Margin="0,12,0,0" IsEnabled="{Binding ActiveTargetEditable}"
-                            IsVisible="{Binding ShowTextKeyboard}">
-                    <TextBlock Classes="sectionLabel" Text="屏幕键盘" />
-                    <TextBlock Classes="hint" Margin="0,0,0,8" TextWrapping="Wrap"
-                               Text="键盘：聚焦到某个按键后用方向键移动光标，按空格输入光标处的字符。手柄：方向键移动光标，A 键输入光标处的字符，LB / RB 切换键盘页。上方标签同样切换键盘页，也可以直接用上面的方框键入。" />
-
-                    <Border x:Name="TextKeyboardPages" Background="{DynamicResource SubtleBrush}"
-                            CornerRadius="{DynamicResource CornerRadiusMd}"
-                            Padding="3" Margin="0,0,0,8" HorizontalAlignment="Left">
-                        <ItemsControl x:Name="TextKeyboardPageNav" ItemsSource="{Binding TextKeyboard.Pages}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:TextKeyboardPage">
-                                    <RadioButton Classes="keyCategorySegment" GroupName="TextKeyboardPages"
-                                                 Content="{Binding Name}"
-                                                 AutomationProperties.Name="{Binding Name}"
-                                                 Loaded="OnTextKeyboardTabLoaded"
-                                                 Click="OnTextKeyboardPageClick" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </Border>
-
-                    <Border Classes="pickerWell">
-                        <!-- One ItemsControl per row, so a short row stays short instead of
-                             stretching to the longest one's width: the action row's four
-                             caps line up under the first four letter caps rather than
-                             spreading across the whole card. -->
-                        <ItemsControl x:Name="TextKeyboardGrid" Classes="keyGrid"
-                                      ItemsSource="{Binding TextKeyboard.ActivePage.Rows}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <ItemsControl Classes="keyGrid" ItemsSource="{Binding}" Margin="0,0,0,4">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <UniformGrid Columns="{Binding Count}" />
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:TextKeyboardKey">
-                                                <Button Classes="textKey" Click="OnTextKeyboardKeyClick"
-                                                        Loaded="OnTextKeyboardKeyLoaded">
-                                                    <TextBlock Classes="textKeyLabel" Text="{Binding Label}" />
-                                                </Button>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </Border>
                 </StackPanel>
 
                 <!-- What the slot does beyond a target. 无功能 is explicit for every slot; the
@@ -872,6 +754,13 @@
                     <TextBlock x:Name="SpecialLayerHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
                                IsVisible="{Binding ShowSpecialLayerControls}"
                                Text="{Binding SpecialLayerHint}" />
+                    <!-- What the 屏幕键盘 key does, and how it is put away again: the window
+                         takes the pad over while it is open, so the engine never sees a
+                         second press of the same key - the window's own 完成 / 返回 keys,
+                         the B button and the key that summoned it are what dismiss it. -->
+                    <TextBlock x:Name="SpecialKeyboardHint" Classes="hint" Margin="150,6,0,0" TextWrapping="Wrap"
+                               IsVisible="{Binding ShowSpecialKeyboardControls}"
+                               Text="{Binding SpecialKeyboardHint}" />
                 </StackPanel>
 
                 <!-- 执行策略. The trigger, the execution and the repeat policy are the three

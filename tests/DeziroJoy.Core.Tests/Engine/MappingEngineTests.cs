@@ -174,6 +174,60 @@ public class MappingEngineTests
     }
 
     [Fact]
+    public void A_Screen_Keyboard_Key_Toggles_On_The_Press_Edge_Alone()
+    {
+        var engine = new MappingEngine(Profile(
+            Button(GamepadButton.Back, new SpecialKeyTarget(SpecialKeyKind.Keyboard))));
+
+        var press = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+        var hold = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+        var release = engine.Tick(GamepadState.Neutral, 0.016f);
+
+        // The window the host owns is what holds the state, so the engine asks once per press
+        // edge and never repeats while the key is held or on its release.
+        Assert.Equal(new ToggleScreenKeyboardCommand(), Assert.Single(press));
+        Assert.Empty(hold);
+        Assert.Empty(release);
+    }
+
+    [Fact]
+    public void A_Screen_Keyboard_Key_Toggles_Again_After_The_Button_Comes_Back_Up()
+    {
+        var engine = new MappingEngine(Profile(
+            Button(GamepadButton.Back, new SpecialKeyTarget(SpecialKeyKind.Keyboard, SwitchMode: LeaderSwitchMode.Hold))));
+
+        var first = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+        engine.Tick(GamepadState.Neutral, 0.016f);
+        var second = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0), 0.016f);
+
+        // The switch mode is meaningless for a screen keyboard: every press edge toggles,
+        // whichever mode the profile carries.
+        Assert.Equal(new ToggleScreenKeyboardCommand(), Assert.Single(first));
+        Assert.Equal(new ToggleScreenKeyboardCommand(), Assert.Single(second));
+    }
+
+    [Fact]
+    public void A_Screen_Keyboard_Key_Never_Slows_The_Stick()
+    {
+        var engine = new MappingEngine(Profile(
+            Stick(GamepadStick.Right, new MouseMoveTarget(RawMouse with { PrecisionScale = 0.5f })),
+            Button(GamepadButton.Back, new SpecialKeyTarget(SpecialKeyKind.Keyboard))));
+
+        var free = engine.Tick(GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0), 1f / 64f);
+        var held = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 1, 0), 1f / 64f);
+        var stillHeld = engine.Tick(GamepadState.Create(GamepadButtonMask.Back, 0, 0, 1, 0), 1f / 64f);
+
+        // Only a precision key joins the button set the slowing reads, so the stick keeps its
+        // full speed with the screen-keyboard key held - while the key itself toggles once, on
+        // the press edge alone.
+        Assert.Equal(10, Assert.IsType<MouseMoveCommand>(Assert.Single(free)).Dx);
+        Assert.Contains(new ToggleScreenKeyboardCommand(), held);
+        Assert.Equal(10, Assert.IsType<MouseMoveCommand>(Assert.Single(held.OfType<MouseMoveCommand>())).Dx);
+        Assert.DoesNotContain(new ToggleScreenKeyboardCommand(), stillHeld);
+        Assert.Equal(10, Assert.IsType<MouseMoveCommand>(Assert.Single(stillHeld)).Dx);
+    }
+
+    [Fact]
     public void Precision_Key_From_A_Special_Key_Mapping_Slows_The_Stick()
     {
         var engine = new MappingEngine(Profile(

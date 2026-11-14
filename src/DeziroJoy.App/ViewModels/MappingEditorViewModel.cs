@@ -795,6 +795,7 @@ public partial class MappingEditorViewModel : ObservableObject
     [
         new(SpecialKeyKind.Precision, "精准键"),
         new(SpecialKeyKind.Leader, "Leader 键"),
+        new(SpecialKeyKind.Keyboard, "屏幕键盘"),
     ];
 
     /// <summary>
@@ -852,27 +853,17 @@ public partial class MappingEditorViewModel : ObservableObject
     /// runs, or the one temporary layer that only runs while a Leader 键 whose action
     /// switches the temporary layer has it in effect. The tag travels with the entry on
     /// commit and is restored on reload, so a mapping placed on the temporary layer stays
-    /// there through an edit instead of collapsing back onto the base layer.
+    /// there through an edit instead of collapsing back onto the base layer. It is also the
+    /// one source of truth the 所属层 picker binds to - through the picker row's
+    /// <see cref="MappingLayerOption.Value"/> - so what the picker displays and what the
+    /// entry commits are the same number by construction.
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(SelectedLayerOption))]
     [NotifyPropertyChangedFor(nameof(LayerDescription))]
+    [NotifyPropertyChangedFor(nameof(LayerSummary))]
     private int _selectedLayer;
 
     partial void OnSelectedLayerChanged(int value) => EnforceLayerLeaderPlacement();
-
-    /// <summary>The selected layer picker row, kept in step with <see cref="SelectedLayer"/>.</summary>
-    public MappingLayerOption? SelectedLayerOption
-    {
-        get => LayerOptions.FirstOrDefault(option => option.Value == SelectedLayer);
-        set
-        {
-            if (value is not null)
-            {
-                SelectedLayer = value.Value;
-            }
-        }
-    }
 
     /// <summary>What layer the mapping being edited is on, for the header readout.</summary>
     public string LayerDescription => LayerLabel(SelectedLayer);
@@ -1046,6 +1037,20 @@ public partial class MappingEditorViewModel : ObservableObject
         ? "「切换临时层」切换配置文件里唯一的临时层：按住切换在按住期间进入，松开即回到基础层；按下切换每次按下翻转。临时层期间层内映射覆盖同按钮的基础层映射，未覆盖的继承基础层。"
         : string.Empty;
 
+    /// <summary>True when the special-key editor offers the screen-keyboard explanation.</summary>
+    public bool ShowSpecialKeyboardControls => ActiveTargetKind == MappingTargetKind.SpecialKey
+        && ActiveSpecialKind == SpecialKeyKind.Keyboard;
+
+    /// <summary>
+    /// What a 屏幕键盘 key does, in Chinese: it toggles the floating on-screen keyboard, which
+    /// types into whatever application has focus. The wording has to cover the one thing a
+    /// user cannot guess - how it is put away again - because the window takes the pad over
+    /// while it is open, so the engine never sees a second press of the same key.
+    /// </summary>
+    public string SpecialKeyboardHint => ShowSpecialKeyboardControls
+        ? "「屏幕键盘」按下时开关一个独立浮窗键盘：它会直接在当前聚焦的应用里输入（搜索框、重命名、短网址等），因此不会抢走该应用的键盘焦点。键盘打开期间手柄由键盘接管——十字键移动光标、A 输入、LB / RB 换页、B 关闭，再按一次设了这个键的手柄键同样关闭；完整输入法（IME）暂不支持。"
+        : string.Empty;
+
     /// <summary>True when the special-key editor offers the precision controls.</summary>
     public bool ShowSpecialPrecisionControls => ActiveTargetKind == MappingTargetKind.SpecialKey
         && ActiveSpecialKind == SpecialKeyKind.Precision;
@@ -1154,14 +1159,21 @@ public partial class MappingEditorViewModel : ObservableObject
     // ---- 输入文本键盘: a gamepad-navigable on-screen keyboard --------------------
 
     /// <summary>
-    /// The on-screen keyboard that types the active slot's text. It exists so a short text
+    /// The on-screen keyboard model that types the active slot's text. It exists so a short text
     /// target - a search query, a file name, a URL - can be entered with the gamepad alone;
     /// full IME composition is a follow-up, and the physical-keyboard capture stays the way
     /// to type anything its pages do not carry.
+    /// <para>
+    /// The model is shared with the floating screen keyboard
+    /// (<see cref="MainWindowViewModel.ScreenKeyboard"/>), which is where the caps are now
+    /// drawn: that window types into whatever application has focus, which a card inside this
+    /// editor cannot reach, so the editor card carries the text box alone and this stays the
+    /// draft's own keyboard - the same pages, the same cursor, the same edits.
+    /// </para>
     /// </summary>
     public TextKeyboard TextKeyboard { get; } = new();
 
-    /// <summary>True when the keyboard is offered: the active slot's target is a text target.</summary>
+    /// <summary>True when the keyboard applies: the active slot's target is a text target.</summary>
     public bool ShowTextKeyboard => ActiveTargetKind == MappingTargetKind.Text && !ActiveTargetUnsupported;
 
     /// <summary>

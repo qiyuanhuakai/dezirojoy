@@ -23,6 +23,13 @@ public partial class App : Application
     /// </summary>
     private static LayerHintOverlay? _layerHint;
 
+    /// <summary>
+    /// The floating screen keyboard, held for the life of the process for the same reason as
+    /// the layer hint: created hidden, shown by the 屏幕键盘 special key and hidden again by
+    /// its own 完成 / 返回 keys, with the daemon's flag deciding which of the two it is.
+    /// </summary>
+    private static ScreenKeyboardWindow? _screenKeyboard;
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -105,10 +112,26 @@ public partial class App : Application
 
         // The layer hint floats above every window on screen - the target application
         // included - so it is a window of its own rather than a child of the main window: a
-        // topmost, never-activated, click-through card at the screen edge. It owns no state;
-        // it shows and hides with the temporary layer the daemon's snapshots report, which
-        // is also what keeps the target application's keyboard focus untouched.
-        _layerHint = new LayerHintOverlay(viewModel.LayerHint, viewModel.Visualizer);
+        // topmost, never-activated, click-through card. It owns no state; it shows and hides
+        // with the temporary layer the daemon's snapshots report, which is also what keeps the
+        // target application's keyboard focus untouched. Its placement (a fixed edge/corner or
+        // beside the pointer) rides the persisted preferences, so it lands where the user asked
+        // rather than at one hardcoded spot.
+        _layerHint = new LayerHintOverlay(
+            viewModel.LayerHint,
+            viewModel.Visualizer,
+            () => themes.LayerHintPlacement,
+            ScreenCursor.TryGetPosition);
+
+        // The screen keyboard floats above the target application exactly as the layer hint
+        // does, and for the same reason: showing it must never take that application's
+        // keyboard focus, because the characters it types are meant for the search box, the
+        // rename or the URL bar behind it. It is a window of its own rather than a card inside
+        // the editor - a card cannot float over another application, and the editor card the
+        // old embedded keyboard lived in was the reason filling one in was awkward. It owns no
+        // state: it shows and hides with the daemon's flag, and every key it presses is a
+        // request the daemon answers through its own output path.
+        _screenKeyboard = new ScreenKeyboardWindow(viewModel.ScreenKeyboard);
     }
 }
 

@@ -293,6 +293,7 @@ public sealed class MainWindowViewModelDaemonTests
             await controller.ConnectAsync(TestContext.Current.CancellationToken);
             var presentation = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), new InMemoryProfileStore());
             await using var viewModel = new MainWindowViewModel(presentation, new InMemoryProfileStore(), daemon: controller, daemonRequired: true);
+            viewModel.SetGamepadNavigationEnabled(true);
             await viewModel.ToggleEngineCommand.ExecuteAsync(null);
 
             var suspended = WaitForSuspension(daemonHost, true);
@@ -356,6 +357,7 @@ public sealed class MainWindowViewModelDaemonTests
             await controller.ConnectAsync(TestContext.Current.CancellationToken);
             var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
             await using var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
+            viewModel.SetGamepadNavigationEnabled(true);
             await viewModel.ToggleEngineCommand.ExecuteAsync(null);
             await WaitForSuspension(daemonHost, true);
 
@@ -416,6 +418,7 @@ public sealed class MainWindowViewModelDaemonTests
             await controller.ConnectAsync(TestContext.Current.CancellationToken);
             var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
             await using var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
+            viewModel.SetGamepadNavigationEnabled(true);
             await viewModel.ToggleEngineCommand.ExecuteAsync(null);
             await WaitForSuspension(daemonHost, true);
             Assert.Empty(viewModel.Controllers);
@@ -986,6 +989,8 @@ public sealed class MainWindowViewModelDaemonTests
             store,
             daemon: controller,
             daemonRequired: true);
+        // The navigation/lease tests need the temporary hijack armed; it ships off by default.
+        viewModel.SetGamepadNavigationEnabled(true);
         return (viewModel, daemonHost, channel, server);
     }
 

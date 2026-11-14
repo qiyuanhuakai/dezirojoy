@@ -27,6 +27,10 @@ public sealed class GamepadNavigationTests
         var host = new EngineHost(provider, sink, store);
         var vm = new MainWindowViewModel(host, store, settings: settings);
 
+        // These tests exercise gamepad navigation, which the temporary hijack switch gates. It
+        // ships off by default, so arm it here; the tests that check the off path set it back.
+        vm.SetGamepadNavigationEnabled(true);
+
         return (vm, host, provider, sink);
     }
 

@@ -6,13 +6,46 @@ using DeziroJoy.Core.Mapping;
 
 namespace DeziroJoy.App.ViewModels;
 
-/// <summary>
-/// One line of the layer hint overlay: the gamepad element that triggers it and what the
+/// <summary>One line of the layer hint overlay: the gamepad element that triggers it and what the
 /// layer makes it do - X：复制 rather than X：Ctrl + C. The key is the element's short name,
 /// the action its readable name, so a player holding a layer leader reads what each button
-/// DOES without decoding a key combo mid-fight.
-/// </summary>
+/// DOES without decoding a key combo mid-fight.</summary>
 public sealed record LayerHintRow(string Key, string Action);
+
+/// <summary>
+/// Where the layer hint overlay sits on screen. <see cref="Fixed"/> parks it at a chosen
+/// <see cref="LayerHintAnchor"/>; <see cref="FollowMouse"/> puts it beside the pointer the
+/// moment a layer leader is held, so the hint appears where the user is already looking
+/// instead of at a fixed corner.
+/// </summary>
+public enum LayerHintPositionMode
+{
+    /// <summary>Park the hint at the chosen screen edge or corner.</summary>
+    Fixed,
+
+    /// <summary>Place the hint beside the current pointer when the layer appears.</summary>
+    FollowMouse,
+}
+
+/// <summary>
+/// A screen edge or corner the fixed hint parks at. The three bottom anchors keep the hint
+/// clear of the top of the screen where a game's own HUD usually lives; the side anchors park
+/// it against a vertical edge for a wide target that uses the bottom strip.
+/// </summary>
+public enum LayerHintAnchor
+{
+    BottomCenter,
+    BottomLeft,
+    BottomRight,
+    TopCenter,
+    TopLeft,
+    TopRight,
+    MiddleLeft,
+    MiddleRight,
+}
+
+/// <summary>The overlay's placement, read from the persisted preferences each time it moves.</summary>
+public readonly record struct LayerHintPlacement(LayerHintPositionMode Mode, LayerHintAnchor Anchor);
 
 /// <summary>
 /// What the layer hint overlay shows while a temporary layer is active: the layer's own
@@ -27,6 +60,16 @@ public partial class LayerHintViewModel : ObservableObject
 {
     [ObservableProperty]
     private bool _isActive;
+
+    /// <summary>
+    /// True while the hint is dismissed for this session: the overlay stays hidden even if a
+    /// layer leader is held. The overlay is click-through, so the manual close lives outside it
+    /// as the 显示临时层提示 preference; turning that off raises this flag, turning it back on
+    /// clears it. It is deliberately not derived from the layer - releasing the leader clears
+    /// <see cref="IsActive"/>, never this.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSuppressed;
 
     [ObservableProperty]
     private string _layerTitle = string.Empty;

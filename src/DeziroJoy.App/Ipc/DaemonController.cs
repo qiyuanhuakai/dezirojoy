@@ -1,3 +1,6 @@
+using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
+
 namespace DeziroJoy.App.Ipc;
 
 public enum DaemonConnectionState
@@ -278,6 +281,35 @@ public sealed class DaemonController : IAsyncDisposable
 
     public Task<MutationResult> DeletePresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
         => MutateAsync(requestId => new DeletePresetSlotMessage(requestId, deviceId, slot), cancellationToken);
+
+    /// <summary>
+    /// Opens or closes the floating screen keyboard. The daemon owns the flag every window
+    /// reads, so a window that dismisses the keyboard itself asks here rather than hiding a
+    /// window the daemon still believes is open; the snapshot that follows is what moves
+    /// every window, which keeps one keyboard and one input lease between them. A refused or
+    /// unknown outcome is reported in the result rather than thrown, so the window keeps what
+    /// it has instead of vanishing on a failed request.
+    /// </summary>
+    public Task<MutationResult> SetScreenKeyboardAsync(bool open, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SetScreenKeyboardMessage(requestId, open), cancellationToken);
+
+    /// <summary>
+    /// Types one short string into whatever has keyboard focus, through the daemon's own
+    /// output path - the floating screen keyboard's output. The daemon is the sole injection
+    /// authority, so the window asks and the daemon injects. A refusal (no runtime to inject
+    /// through, an empty or oversized string) is reported in the result rather than thrown,
+    /// so the keyboard can say why nothing arrived.
+    /// </summary>
+    public Task<MutationResult> InjectTextAsync(string text, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new InjectTextMessage(requestId, text), cancellationToken);
+
+    /// <summary>
+    /// Taps one key - press, then release, with the modifiers held around it - into whatever
+    /// has keyboard focus, through the daemon's own output path. What the floating screen
+    /// keyboard's action keys need: 退格 sends a Backspace, 清空 sends Ctrl+A and then Delete.
+    /// </summary>
+    public Task<MutationResult> InjectKeyAsync(GamepadKey key, KeyModifiers modifiers, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new InjectKeyMessage(requestId, key, modifiers), cancellationToken);
 
     public async Task<MutationResult> ShutdownDaemonAsync(CancellationToken cancellationToken)
     {

@@ -207,7 +207,13 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
         {
             ProcessName = string.Empty,
             Priority = Rules.Count == 0 ? 0 : Rules.Max(rule => rule.Priority) + 1,
-        });
+        })
+        {
+            // A rule added here starts open: the user is standing in it with the intent to
+            // fill it in, and a summary line that has nothing to summarise yet would be a
+            // dead end. The rows that come from the saved table stay collapsed on load.
+            IsExpanded = true,
+        };
 
         // Subscribed on the way in: a row that changes without telling this view model leaves
         // the derived state - the save button's enabled state above all - stale.

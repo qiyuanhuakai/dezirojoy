@@ -236,42 +236,37 @@ public sealed class TrayGuiTests : IDisposable
     }
 
     /// <summary>
-    /// The 劫持手柄按键 preference reaches the view model only through the injected
-    /// <see cref="ThemeService"/>: a view model built without one silently ignores the
-    /// setting, because the getter falls back to true and the setter has nothing to persist
-    /// through. This pins that seam - the getter is the service's value and the setter
-    /// persists through it - which is what the App.axaml.cs and CreateRuntime wiring rely
-    /// on; the end-to-end path through the real window is covered by
-    /// SettingsPanelGuiTests.Turning_Gamepad_Hijack_Off_Persists_And_Gates_Navigation.
+    /// The temporary 手柄劫持（临时） switch is session-only: it reaches the view model through a
+    /// plain field and never writes to the injected <see cref="ThemeService"/>, so a restart
+    /// always starts with hijack on. This pins that seam - the toggle lives beside the model in
+    /// the mapping window, gating the same lease the old persisted setting did - which is what
+    /// the App.axaml.cs and CreateRuntime wiring rely on; the end-to-end path through the real
+    /// window is covered by
+    /// SettingsPanelGuiTests.The_Temporary_Hijack_Toggle_Gates_Navigation_Without_Persisting.
     /// </summary>
     [AvaloniaFact]
-    public void The_Gamepad_Navigation_Setting_Reads_And_Writes_Through_The_Injected_ThemeService()
+    public void The_Temporary_Hijack_Switch_Is_Session_Only_And_Never_Persists()
     {
         var settings = new ThemeService(_directory);
         var store = new InMemoryProfileStore();
         var host = new EngineHost(new FakeGamepadProvider(), new NullOutputSink(), store);
         var viewModel = new MainWindowViewModel(host, store, settings: settings);
 
-        Assert.True(viewModel.GamepadNavigationEnabled);
-        Assert.True(settings.GamepadNavigationEnabled);
-
-        viewModel.GamepadNavigationEnabled = false;
-
+        // Off by default: presses follow the active mapping until the user opts in.
         Assert.False(viewModel.GamepadNavigationEnabled);
-        Assert.False(settings.GamepadNavigationEnabled);
-
-        // The choice is persisted, not just held in memory: a fresh service over the same
-        // directory reads it back.
-        var reloaded = new ThemeService(_directory);
-        reloaded.Load();
-        Assert.False(reloaded.GamepadNavigationEnabled);
 
         viewModel.GamepadNavigationEnabled = true;
-
-        var reEnabled = new ThemeService(_directory);
-        reEnabled.Load();
-        Assert.True(reEnabled.GamepadNavigationEnabled);
         Assert.True(viewModel.GamepadNavigationEnabled);
+
+        // Nothing is written through: the persisted preference is untouched (keeps its own default).
+        Assert.True(settings.GamepadNavigationEnabled);
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.True(reloaded.GamepadNavigationEnabled);
+
+        // A fresh view model over the same settings starts with hijack off again (session-only).
+        var fresh = new MainWindowViewModel(host, store, settings: settings);
+        Assert.False(fresh.GamepadNavigationEnabled);
     }
 
     private sealed class TrayFixture : IDisposable

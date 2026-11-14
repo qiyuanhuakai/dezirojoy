@@ -95,3 +95,14 @@ public sealed record MouseUpCommand(MouseButton Button, OutputOwner Owner = defa
 /// to the output sink - the host applies it by swapping the active profile.
 /// </summary>
 public sealed record SwitchPresetCommand(int TargetSlot) : InputCommand;
+
+/// <summary>
+/// Toggles the floating on-screen keyboard. Host-side only, exactly like
+/// <see cref="SwitchPresetCommand"/>: the engine emits it on the press edge of a
+/// <see cref="Mapping.SpecialKeyKind.Keyboard"/> key and
+/// <see cref="Platform.CommandDispatcher"/> never forwards it to the output sink, so the
+/// key that summons the window never also types anything. The host owns the window - it
+/// opens or closes it and moves the input lease with it - which is what keeps the toggle
+/// in one place instead of in every surface that can show a keyboard.
+/// </summary>
+public sealed record ToggleScreenKeyboardCommand : InputCommand;

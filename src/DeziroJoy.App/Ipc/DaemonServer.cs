@@ -28,6 +28,9 @@ public sealed partial class DaemonServer
     private const string PrimaryPresetSlotErrorCode = "primary-preset";
     private const string LastPresetErrorCode = "last-preset";
     private const string LeaderPresetSwitchRequestId = "leader-key";
+    private const string EmptyInjectionErrorCode = DaemonErrorCodes.EmptyInjection;
+    private const string OversizedInjectionErrorCode = DaemonErrorCodes.OversizedInjection;
+    private const string NoInjectionRuntimeErrorCode = DaemonErrorCodes.NoInjectionRuntime;
     private readonly Lock _sync = new();
     private readonly Lock _inputGate = new();
     private readonly Dictionary<string, InputSampleMessage> _lastInputSamples = new(StringComparer.Ordinal);
@@ -45,6 +48,13 @@ public sealed partial class DaemonServer
 
     /// <summary>The one persisted, app-wide preset slot every connected device follows.</summary>
     private int _activePresetSlot = 1;
+
+    /// <summary>
+    /// Whether the floating screen keyboard is open. Session state, never persisted: the
+    /// engine's screen-keyboard key toggles it, a window's dismissal clears it, and every
+    /// snapshot publishes it so the window follows whichever process owns the flag.
+    /// </summary>
+    private bool _screenKeyboardOpen;
 
     /// <summary>
     /// Where a snapshot's <see cref="StateSnapshot.Layers"/> comes from: the wiring that owns
@@ -211,6 +221,15 @@ public sealed partial class DaemonServer
 
             case DeletePresetSlotMessage deleteSlot:
                 return HandleDeletePresetSlot(deleteSlot);
+
+            case SetScreenKeyboardMessage screenKeyboard:
+                return HandleSetScreenKeyboard(screenKeyboard);
+
+            case InjectTextMessage injectText:
+                return HandleInjectText(injectText);
+
+            case InjectKeyMessage injectKey:
+                return HandleInjectKey(injectKey);
 
             case ShutdownDaemonMessage shutdown:
                 return new MutationAckMessage(shutdown.RequestId, true, CurrentRevision(), CurrentSequence());
@@ -642,6 +661,106 @@ public sealed partial class DaemonServer
     internal void RequestPresetSlotSwitch(int slot)
         => Process(new SwitchPresetSlotMessage(LeaderPresetSwitchRequestId, string.Empty, slot), DirectConnectionId);
 
+    /// <summary>
+    /// The daemon-side entry point for a screen-keyboard key.
+    /// <see cref="EngineHost.ScreenKeyboardToggleRequested"/> is raised from the tick thread,
+    /// and the host owns no window, so without a daemon-side subscriber the key would be dead
+    /// in daemon mode - exactly the hole <see cref="RequestPresetSlotSwitch"/> fills for a
+    /// leader key. The flag flips here and the snapshot that follows carries it, which is what
+    /// puts the window on screen in whichever process is showing one. Runs under the same lock
+    /// the tick thread already released, so a toggle costs one publish and no reload.
+    /// </summary>
+    internal void RequestScreenKeyboardToggle()
+    {
+        lock (_sync)
+        {
+            _screenKeyboardOpen = !_screenKeyboardOpen;
+            PublishStateChange();
+        }
+    }
+
+    /// <summary>
+    /// Opens or closes the floating screen keyboard at a window's request. The window owns
+    /// the dismissal - its 完成 and 返回 keys - but the daemon owns the flag, so a dismissal
+    /// has to land here or the next engine toggle would open a window the user already put
+    /// away. A request for the state already in effect is acked without publishing: it is the
+    /// same idempotence every other setter here has, and it keeps a double dismissal from
+    /// costing a snapshot every window has to adopt.
+    /// </summary>
+    private MutationAckMessage HandleSetScreenKeyboard(SetScreenKeyboardMessage request)
+    {
+        lock (_sync)
+        {
+            if (_screenKeyboardOpen != request.Open)
+            {
+                _screenKeyboardOpen = request.Open;
+                PublishStateChange();
+            }
+
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    /// <summary>
+    /// Types one short string into whatever has keyboard focus, on the floating screen
+    /// keyboard's behalf. The daemon is the sole injection authority, so the window asks and
+    /// the daemon injects through its own output path - the same path a
+    /// <see cref="Core.Engine.TextCommand"/> takes. Bounded by the Core's own text bound, and
+    /// refused rather than silently dropped when the daemon holds no runtime to inject
+    /// through: a silent success would leave the user staring at a keyboard that typed
+    /// nothing. Deliberately not gated by the hijack lease - suspending injection for the
+    /// input lease must not also silence the keyboard that lease was taken for.
+    /// </summary>
+    private IpcMessage HandleInjectText(InjectTextMessage request)
+    {
+        if (string.IsNullOrEmpty(request.Text))
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                EmptyInjectionErrorCode,
+                "屏幕键盘没有要输入的文本。");
+        }
+
+        if (request.Text.Length > TextTarget.MaxLength)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                OversizedInjectionErrorCode,
+                $"屏幕键盘单次输入不超过 {TextTarget.MaxLength} 个字符。");
+        }
+
+        if (_host.ConnectedDeviceIds.Count == 0)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                NoInjectionRuntimeErrorCode,
+                "没有已连接的手柄，守护进程没有可用的输出通道。");
+        }
+
+        _host.InjectText(request.Text);
+        return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+    }
+
+    /// <summary>
+    /// Taps one key into whatever has keyboard focus, on the floating screen keyboard's
+    /// behalf - 退格 sends a Backspace, 清空 sends Ctrl+A and then Delete. The same authority
+    /// and the same bounds as <see cref="HandleInjectText"/>: the daemon injects, the window
+    /// only asks.
+    /// </summary>
+    private IpcMessage HandleInjectKey(InjectKeyMessage request)
+    {
+        if (_host.ConnectedDeviceIds.Count == 0)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                NoInjectionRuntimeErrorCode,
+                "没有已连接的手柄，守护进程没有可用的输出通道。");
+        }
+
+        _host.TapKey(request.Key, request.Modifiers);
+        return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+    }
+
     private MutationAckMessage HandleStart(StartMessage start)
     {
         lock (_sync)
@@ -953,6 +1072,7 @@ public sealed partial class DaemonServer
             Devices = _host.ConnectedDevices,
             Layers = LayerStateSource?.Invoke() ?? [],
             NativeGamepadPaused = _host.IsNativeGamepadPaused,
+            ScreenKeyboardOpen = _screenKeyboardOpen,
         };
     }
 }

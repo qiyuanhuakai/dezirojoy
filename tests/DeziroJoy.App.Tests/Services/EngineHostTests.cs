@@ -790,6 +790,22 @@ public class EngineHostTests
             ],
         };
 
+    private static GamepadProfile ScreenKeyboardProfile(params GamepadButton[] buttons)
+        => new()
+        {
+            Name = "screen-keyboard",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                .. buttons.Select(button => new MappingEntry
+                {
+                    Source = new ButtonBinding(button),
+                    Target = new SpecialKeyTarget(SpecialKeyKind.Keyboard),
+                }),
+            ],
+        };
+
     /// <summary>
     /// Wires the host's preset-switch event to apply the switch the way the GUI's local path
     /// and the daemon do - the slot's profile is reloaded into the device - and records every
@@ -839,6 +855,94 @@ public class EngineHostTests
         // The button is still held: no new edge, so no second request.
         host.TickOnce(Tick);
         Assert.Equal([2], requested);
+    }
+
+    [Fact]
+    public void A_Screen_Keyboard_Press_Edge_Raises_The_Toggle_Once_Per_Tick_And_Injects_Nothing()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(ScreenKeyboardProfile(GamepadButton.Back));
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+
+        var toggles = 0;
+        host.ScreenKeyboardToggleRequested += () => toggles++;
+
+        host.TickOnce(Tick);
+        Assert.Equal(0, toggles);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.Back, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+
+        // The command is host-side only: the toggle reaches the host, and the sink sees
+        // nothing at all - the key that summons the window never also types.
+        Assert.Equal(1, toggles);
+        Assert.Empty(sink.Calls);
+
+        // The button is still held: no new edge, so no second toggle.
+        host.TickOnce(Tick);
+        Assert.Equal(1, toggles);
+    }
+
+    [Fact]
+    public void An_Explicitly_Requested_Text_Or_Key_Tap_Goes_Straight_To_The_Sink()
+    {
+        // The floating screen keyboard's output. It deliberately bypasses the dispatch gates:
+        // suspending injection for an input lease must not also silence the keyboard that
+        // lease was taken for.
+        var store = new InMemoryProfileStore();
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        host.SetInjectionSuspended(true);
+        host.SetMappingEnabled(false);
+
+        host.InjectText("https://");
+        host.TapKey(GamepadKey.Backspace, KeyModifiers.None);
+        host.TapKey(GamepadKey.A, KeyModifiers.Ctrl);
+
+        Assert.Equal(
+            [
+                "text:https://",
+                "down:Backspace",
+                "up:Backspace",
+                "down:LeftCtrl",
+                "down:A",
+                "up:A",
+                "up:LeftCtrl",
+            ],
+            sink.Calls);
+    }
+
+    [Fact]
+    public void An_Explicitly_Requested_Text_Is_Bounded_By_The_Cores_Own_Bound()
+    {
+        var store = new InMemoryProfileStore();
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+
+        host.InjectText(new string('y', TextTarget.MaxLength + 10));
+
+        Assert.Equal(TextTarget.MaxLength, Assert.Single(sink.Calls)["text:".Length..].Length);
+    }
+
+    [Fact]
+    public void An_Explicitly_Requested_Text_With_No_Runtime_Goes_Nowhere()
+    {
+        var store = new InMemoryProfileStore();
+        var (host, _, sink) = CreateHost(store);
+
+        // No pad is connected, so there is no dispatcher to carry it - and no sink call to
+        // pretend one arrived.
+        host.InjectText("a");
+        host.TapKey(GamepadKey.Backspace, KeyModifiers.None);
+
+        Assert.Empty(sink.Calls);
     }
 
     [Fact]

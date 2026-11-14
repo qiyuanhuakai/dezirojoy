@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Headless.XUnit;
 using Avalonia.Styling;
 using DeziroJoy.App.Services;
+using DeziroJoy.App.ViewModels;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Services;
@@ -183,6 +184,67 @@ public sealed class ThemeServiceTests : IDisposable
         Assert.Equal(
             Path.Combine(appData, "DeziroJoy", "settings.json"),
             new ThemeService().SettingsPath);
+    }
+
+    [Fact]
+    public void The_Layer_Hint_Preferences_Default_To_Shown_Fixed_Bottom_Centre()
+    {
+        var service = Service(_directory);
+        service.Load();
+
+        Assert.True(service.LayerHintEnabled);
+        Assert.Equal(LayerHintPositionMode.Fixed, service.OverlayPositionMode);
+        Assert.Equal(LayerHintAnchor.BottomCenter, service.OverlayAnchor);
+        Assert.Equal(
+            new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.BottomCenter),
+            service.LayerHintPlacement);
+    }
+
+    [Fact]
+    public void The_Layer_Hint_Preferences_Round_Trip_Together_And_Preserve_The_Theme()
+    {
+        var service = Service(_directory);
+        service.Save(ThemeVariant.Light);
+        service.SetLayerHintEnabled(false);
+        service.SetOverlayPositionMode(LayerHintPositionMode.FollowMouse);
+        service.SetOverlayAnchor(LayerHintAnchor.TopRight);
+
+        var reloaded = Service(_directory);
+        reloaded.Load();
+
+        Assert.False(reloaded.LayerHintEnabled);
+        Assert.Equal(LayerHintPositionMode.FollowMouse, reloaded.OverlayPositionMode);
+        Assert.Equal(LayerHintAnchor.TopRight, reloaded.OverlayAnchor);
+        Assert.Equal(ThemeVariant.Light, reloaded.Load());
+    }
+
+    [Fact]
+    public void A_Corrupt_Settings_File_Falls_The_Overlay_Preferences_Back_To_Their_Defaults()
+    {
+        File.WriteAllText(Path.Combine(_directory, "settings.json"), "{ not json");
+
+        var service = Service(_directory);
+        service.Load();
+
+        Assert.True(service.LayerHintEnabled);
+        Assert.Equal(LayerHintPositionMode.Fixed, service.OverlayPositionMode);
+        Assert.Equal(LayerHintAnchor.BottomCenter, service.OverlayAnchor);
+    }
+
+    [Fact]
+    public void An_Unknown_Overlay_Value_Falls_Back_Without_Failing_The_Whole_File()
+    {
+        // A hand-edited or newer settings file names an overlay value this build does not know:
+        // that one preference degrades to its default, and the rest of the file still reads.
+        File.WriteAllText(
+            Path.Combine(_directory, "settings.json"),
+            """{"Theme":"Light","OverlayAnchor":"BottomMiddleOfNowhere"}""");
+
+        var service = Service(_directory);
+        service.Load();
+
+        Assert.Equal(ThemeVariant.Light, service.Load());
+        Assert.Equal(LayerHintAnchor.BottomCenter, service.OverlayAnchor);
     }
 
     [AvaloniaFact]

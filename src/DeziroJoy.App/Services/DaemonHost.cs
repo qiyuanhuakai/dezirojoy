@@ -111,6 +111,9 @@ public static class DaemonHost
         composition.Host.PresetSwitchRequested += (_, slot) =>
             daemon.RequestPresetSlotSwitch(slot);
 
+        composition.Host.ScreenKeyboardToggleRequested += () =>
+            daemon.RequestScreenKeyboardToggle();
+
         // Materialize the four slots before restoring the one global active slot.
         composition.Host.RefreshPresence();
 
@@ -624,6 +627,11 @@ public static class DaemonHost
 
         public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
             => _composition.Host.SwitchPresetSlot(slot, profiles);
+
+        public void InjectText(string text) => _composition.Host.InjectText(text);
+
+        public void TapKey(GamepadKey key, KeyModifiers modifiers)
+            => _composition.Host.TapKey(key, modifiers);
     }
 
     /// <summary>

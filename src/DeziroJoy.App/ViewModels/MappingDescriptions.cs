@@ -77,7 +77,8 @@ public static class MappingDescriptions
     /// <summary>
     /// What a special key does, named the way its own picker names it: a leader key flips
     /// between the two preset slots it carries or switches the one temporary layer, a
-    /// precision key slows the stick while it is engaged. The Core record has no
+    /// precision key slows the stick while it is engaged, a screen-keyboard key toggles the
+    /// floating on-screen keyboard. The Core record has no
     /// description of its own and its raw <c>ToString</c> would read as debug output in a
     /// mapping row, so the row - like the editor's header - says the kind alone. The slot
     /// pair and the switch mode live in the editor's own pickers, not in the summary the
@@ -89,6 +90,7 @@ public static class MappingDescriptions
         { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer } => "临时层 Leader 键",
         { Kind: SpecialKeyKind.Leader } => "Leader 键",
         { Kind: SpecialKeyKind.Layer } => "临时层键",
+        { Kind: SpecialKeyKind.Keyboard } => "屏幕键盘",
         _ => "精准键",
     };
 

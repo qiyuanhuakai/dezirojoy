@@ -757,10 +757,11 @@ public partial class MainWindow : Window
             : new NullOutputSink();
         var host = new EngineHost(provider, sink, store);
 
-        // The design-time factory feeds the view model a settings service too, so the
-        // 劫持手柄按键 preference behaves here exactly as it does in the running app.
-        // The sink failure travels with it: a NullOutputSink degradation used to be
-        // invisible here, which is how "mapping does nothing" reached users.
+        // The design-time factory feeds the view model a settings service too, so the persisted
+        // preferences it reads (theme, tray policy, layer hint placement) behave here exactly as
+        // they do in the running app. The 手柄劫持（临时） switch is session-only and needs no
+        // settings, so it simply starts on. The sink failure travels with it: a NullOutputSink
+        // degradation used to be invisible here, which is how "mapping does nothing" reached users.
         return (
             new MainWindowViewModel(host, store, settings: new ThemeService(), sinkError: sinkCreated ? null : sinkError),
             host);

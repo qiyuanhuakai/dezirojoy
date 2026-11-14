@@ -502,7 +502,7 @@ public sealed record TextKeyboardPage(string Name, IReadOnlyList<IReadOnlyList<T
 }
 
 /// <summary>
-/// A basic on-screen keyboard for typing a short text target with the gamepad. A cursor sits
+/// A basic on-screen keyboard for typing a short text with the gamepad. A cursor sits
 /// on one key; the D-pad moves it and the A button presses it, so a search box, a file rename
 /// or a short URL can be entered without a physical keyboard.
 /// </summary>
@@ -511,13 +511,15 @@ public sealed record TextKeyboardPage(string Name, IReadOnlyList<IReadOnlyList<T
 /// The keyboard is deliberately basic: it types the characters its pages carry and nothing
 /// else. Full IME integration - focus hand-off to a real input method, its candidate window
 /// and its commit - is a follow-up, so a character no page carries (a non-ASCII letter, an
-/// emoji) is out of reach here and the physical-keyboard capture on the editor stays the way
+/// emoji) is out of reach here and the physical-keyboard capture stays the way
 /// to type one.
 /// </para>
 /// <para>
-/// This type owns the cursor and the pages only. Applying a key to the draft is the editor's
-/// job (see <c>MappingEditorViewModel.ApplyTextKeyboardKey</c>), which is what keeps the
-/// keyboard reusable and unit-testable without a window.
+/// This type owns the cursor and the pages only. Applying a key is the caller's job - the
+/// mapping editor applies one to its text draft, the floating screen keyboard
+/// (<see cref="ScreenKeyboardViewModel"/>) asks the daemon to inject one into whatever
+/// application has focus - which is what keeps the keyboard reusable and unit-testable
+/// without a window.
 /// </para>
 /// </remarks>
 public sealed partial class TextKeyboard : ObservableObject

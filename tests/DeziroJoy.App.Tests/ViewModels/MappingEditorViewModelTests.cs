@@ -2110,10 +2110,31 @@ public class MappingEditorViewModelTests
     {
         var editor = new MappingEditorViewModel();
 
-        Assert.Equal(["精准键", "Leader 键"], editor.SpecialKindOptions.Select(option => option.Label));
+        Assert.Equal(["精准键", "Leader 键", "屏幕键盘"], editor.SpecialKindOptions.Select(option => option.Label));
         Assert.Equal(["切换预设", "切换临时层"], editor.SpecialLeaderActionOptions.Select(option => option.Label));
         Assert.Equal(["按下切换", "按住切换"], editor.SpecialSwitchModeOptions.Select(option => option.Label));
         Assert.Equal([1, 2, 3, 4], editor.SpecialSlotOptions);
+    }
+
+    [Fact]
+    public void A_Screen_Keyboard_Special_Key_Round_Trips_Through_The_Editor()
+    {
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Keyboard;
+
+        // The switch mode and the leader action are the other kinds' own: a screen keyboard
+        // key builds exactly the target a profile written with the defaults carries.
+        var target = Assert.IsType<SpecialKeyTarget>(editor.BuildEntry().Target);
+
+        Assert.Equal(SpecialKeyKind.Keyboard, target.Kind);
+        Assert.Equal(LeaderAction.Preset, target.Action);
+        Assert.Equal(LeaderSwitchMode.Press, target.SwitchMode);
+
+        editor.LoadFrom(editor.BuildEntry());
+        Assert.Equal(SpecialKeyKind.Keyboard, editor.ActiveSpecialKind);
+        Assert.True(editor.ShowSpecialKeyboardControls);
+        Assert.Contains("屏幕键盘", editor.SpecialKeyboardHint);
     }
 
     [Fact]

@@ -974,8 +974,9 @@ public sealed class MappingEngine
 
     /// <summary>
     /// Registers a special-key mapping. Precision keys join the button set
-    /// <see cref="UpdateSpecialPrecisionKeys"/> watches; leader keys need no registration
-    /// beyond validation, because their commands fire from the normal hold/tap edges.
+    /// <see cref="UpdateSpecialPrecisionKeys"/> watches; leader keys and screen-keyboard keys
+    /// need no registration beyond validation, because their commands fire from the normal
+    /// hold/tap edges.
     /// </summary>
     private void RegisterSpecialKey(MappingEntry mapping, SpecialKeyTarget special)
     {
@@ -1863,8 +1864,10 @@ public sealed class MappingEngine
     /// for the duration of the hold; one in Press mode toggles between its two slots on the
     /// press edge. A leader key whose action is <see cref="LeaderAction.Layer"/> switches the
     /// temporary layer instead: Hold enters it for the duration of the hold, Press toggles it
-    /// on each press edge. Precision keys emit nothing here - their engagement is tracked
-    /// separately.
+    /// on each press edge. A screen-keyboard key toggles the floating keyboard the host owns,
+    /// on the press edge alone: the switch mode is meaningless for it, because the window
+    /// takes the pad over while it is open and a release has nothing to end. Precision keys
+    /// emit nothing here - their engagement is tracked separately.
     /// </summary>
     private void BeginHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {
@@ -1884,6 +1887,12 @@ public sealed class MappingEngine
                 // Text is a tap by nature: it goes out on the press edge and a release has
                 // nothing to end, so BeginHold carries the whole activation.
                 commands.Add(new TextCommand(text.Text));
+                break;
+            case SpecialKeyTarget { Kind: SpecialKeyKind.Keyboard }:
+                // Host-side only: the dispatcher drops the toggle, so the key that summons
+                // the window never types anything itself. The host owns the window and the
+                // input lease that goes with it.
+                commands.Add(new ToggleScreenKeyboardCommand());
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer } layer:
                 if (layer.SwitchMode == LeaderSwitchMode.Press)
@@ -1912,7 +1921,9 @@ public sealed class MappingEngine
     /// once the key is released; a leader key holding the temporary layer leaves it, releasing
     /// everything the layer's mappings put in effect - unless another leader still holds it.
     /// A Press-mode layer leader has nothing to end: the layer it toggled stays until the next
-    /// press edge.
+    /// press edge. A screen-keyboard key has nothing to end either: the window it toggled
+    /// stays until the next press edge, which reaches the window rather than the engine while
+    /// injection is suspended for it.
     /// </summary>
     private void EndHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {

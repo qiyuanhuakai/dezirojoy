@@ -18,8 +18,8 @@ namespace DeziroJoy.App.Views;
 /// keyboard-capture entry points, so the mapping editor can be filled from live input without
 /// the window's code-behind taking part. The view model decides whether capture is armed, so
 /// ordinary typing and ordinary gamepad use are untouched. The window's own gamepad scope is
-/// mirrored onto the editor as well, because the on-screen keyboard is the one part of the
-/// editor that answers the pad outside a capture.
+/// mirrored onto the editor as well, because the editor's on-screen keyboard model is the one
+/// part of the editor that answers the pad outside a capture.
 /// </summary>
 public sealed class EditorInputCapture : Control
 {

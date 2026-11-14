@@ -578,11 +578,25 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <StackPanel Grid.Row="0">
-                                <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
-                                <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
-                                           Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
-                            </StackPanel>
+                            <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
+                                    <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
+                                               Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
+                                </StackPanel>
+                                <!-- The temporary gamepad-hijack switch, beside the model it governs.
+                                     It is session-only (never persisted): on, a press drives the UI
+                                     and mapping injection is suspended; off, a press follows the
+                                     active mapping again. It carries the same lease the old
+                                     settings checkbox did, without writing to the preferences. -->
+                                <ToggleButton Grid.Column="1" x:Name="GamepadHijackToggle" Classes="rowToggle"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"
+                                              FontSize="11" Padding="10,6"
+                                              ToolTip.Tip="手柄劫持（临时）：开启时手柄按键用于界面导航与编辑，映射注入暂停；关闭时手柄按键继续映射注入。仅本次会话生效，重启后恢复为关闭。"
+                                              IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}">
+                                    <TextBlock Text="手柄劫持（临时）" />
+                                </ToggleButton>
+                            </Grid>
                             <Viewbox Grid.Row="1" Stretch="Uniform" MaxHeight="380" MaxWidth="620"
                                      HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,24,0,0">
                                 <Viewbox.RenderTransform>

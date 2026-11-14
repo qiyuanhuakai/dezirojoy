@@ -87,6 +87,12 @@ public sealed class CommandDispatcher
                 // Host-side only: a preset switch never reaches the output sink. The host
                 // applies it by swapping the active profile, so the dispatcher drops it.
                 break;
+            case ToggleScreenKeyboardCommand:
+                // Host-side only: the floating screen keyboard is a window the host owns,
+                // not an output, so the dispatcher drops the toggle as it drops a preset
+                // switch. Typing into the focused application is the window's own request,
+                // which arrives as an ordinary TextCommand / key tap.
+                break;
         }
     }
 

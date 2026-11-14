@@ -74,25 +74,33 @@ public sealed class SettingsPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Turning_Gamepad_Hijack_Off_Persists_And_Gates_Navigation()
+    public void The_Temporary_Hijack_Toggle_Gates_Navigation_Without_Persisting()
     {
         var (window, viewModel, host, provider) = BuildWindow();
-        var toggle = window.FindControl<SettingsPanel>("SettingsPanelHost")!
-            .FindControl<CheckBox>("GamepadNavigationBox")!;
+        window.UpdateLayout();
+        var toggle = window.FindControl<ToggleButton>("GamepadHijackToggle")!;
 
-        Assert.True(viewModel.GamepadNavigationEnabled);
-        Assert.True(toggle.IsChecked);
+        // Hijack is off by default: presses follow the active mapping until the user opts in.
+        Assert.False(viewModel.GamepadNavigationEnabled);
+        Assert.False(toggle.IsChecked);
 
-        toggle.IsChecked = false;
+        toggle.IsChecked = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.False(viewModel.GamepadNavigationEnabled);
+        Assert.True(viewModel.GamepadNavigationEnabled);
 
+        // Session-only: the temporary switch is never written to the persisted settings (which
+        // keep their own default), so a restart starts with hijack off again.
         var reloaded = new ThemeService(_directory);
         reloaded.Load();
-        Assert.False(reloaded.GamepadNavigationEnabled);
+        Assert.True(reloaded.GamepadNavigationEnabled, "the persisted preference is untouched by the temporary switch");
 
+        // It still gates navigation exactly as the old settings checkbox did: off, a press
+        // follows the active mapping instead of driving the UI.
+        toggle.IsChecked = false;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
         provider.SetState(DeviceId, GamepadState.Create(GamepadButtonMask.B, 0f, 0f, 0f, 0f));
@@ -135,15 +143,96 @@ public sealed class SettingsPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Gamepad_Hijack_Toggle_Is_Named_For_What_It_Does()
+    public void The_Temporary_Hijack_Toggle_Is_Named_For_What_It_Does()
     {
         var (window, _, _, _) = BuildWindow();
         window.UpdateLayout();
 
-        var toggle = window.FindControl<SettingsPanel>("SettingsPanelHost")!
-            .FindControl<CheckBox>("GamepadNavigationBox")!;
+        var toggle = window.FindControl<ToggleButton>("GamepadHijackToggle")!;
 
-        Assert.Equal("劫持手柄按键", toggle.Content);
+        // The label says 临时 (temporary): this switch beside the model is session-only, not the
+        // persisted setting that used to live in the settings surface.
+        Assert.Contains(
+            toggle.GetVisualDescendants().OfType<TextBlock>(),
+            text => text.Text == "手柄劫持（临时）");
+    }
+
+    [AvaloniaFact]
+    public void The_Temporary_Hijack_Toggle_Sits_To_The_Right_Of_The_Model()
+    {
+        var (window, _, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        var toggle = window.FindControl<ToggleButton>("GamepadHijackToggle")!;
+        var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
+
+        // The switch rides the model's header, on the right-hand side and above the pad, so it
+        // never overlaps the diagram the user is editing.
+        var toggleRect = RectInWindow(toggle, window);
+        var modelRect = RectInWindow(model, window);
+
+        Assert.True(toggle.IsVisible);
+        Assert.True(toggleRect.Top <= modelRect.Top,
+            $"the toggle top {toggleRect.Top} should sit at or above the model top {modelRect.Top}");
+        Assert.True(toggleRect.Left >= modelRect.Center.X,
+            $"the toggle left {toggleRect.Left} should sit right of the model centre {modelRect.Center.X}");
+    }
+
+    [AvaloniaFact]
+    public void The_Settings_Surface_Holds_The_Layer_Hint_Visibility_And_Placement()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+        var panel = PanelOf(window);
+
+        var show = panel.FindControl<CheckBox>("ShowLayerHintBox")!;
+        var anchor = panel.FindControl<ComboBox>("OverlayAnchorCombo")!;
+
+        Assert.True(viewModel.ShowLayerHint);
+        Assert.True(show.IsChecked);
+        Assert.False(viewModel.LayerHint.IsSuppressed);
+
+        // The anchor picker is offered in fixed mode (the default) and bottom-centre is selected.
+        Assert.True(anchor.IsVisible);
+        Assert.Equal(0, anchor.SelectedIndex);
+
+        // Turning the hint off is the manual dismissal, and it persists.
+        show.IsChecked = false;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.ShowLayerHint);
+        Assert.True(viewModel.LayerHint.IsSuppressed);
+
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.False(reloaded.LayerHintEnabled);
+    }
+
+    [AvaloniaFact]
+    public void The_Layer_Hint_Placement_Radios_Switch_The_Persisted_Mode()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        window.UpdateLayout();
+
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+        var panel = PanelOf(window);
+
+        var follow = panel.GetVisualDescendants()
+            .OfType<RadioButton>()
+            .Single(radio => (string?)radio.Content == "跟随鼠标");
+        var anchor = panel.FindControl<ComboBox>("OverlayAnchorCombo")!;
+
+        Click(follow, window);
+
+        Assert.True(viewModel.IsOverlayFollowMouse);
+        Assert.False(anchor.IsVisible, "the fixed anchor is irrelevant while following the mouse");
+
+        var reloaded = new ThemeService(_directory);
+        reloaded.Load();
+        Assert.Equal(LayerHintPositionMode.FollowMouse, reloaded.OverlayPositionMode);
     }
 
     [AvaloniaFact]
@@ -430,8 +519,8 @@ public sealed class SettingsPanelGuiTests : IDisposable
         var panel = PanelOf(window);
 
         // The leader key is retired: it became a preset-slot mapping edited on the mapping
-        // surface, so the settings surface keeps the profile, appearance, input and service
-        // cards only.
+        // surface, so the settings surface keeps the profile, appearance, layer hint and
+        // service cards only.
         Assert.Null(panel.FindControl<ComboBox>("LeaderButtonCombo"));
         Assert.Null(panel.FindControl<ComboBox>("LeaderModeCombo"));
         Assert.Null(panel.FindControl<Button>("LeaderSwitchButton"));
