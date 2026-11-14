@@ -153,12 +153,32 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     public event Action? ScreenKeyboardToggleRequested;
 
+    /// <summary>
+    /// The layer state the last <see cref="ActiveLayersChanged"/> announcement was built from:
+    /// device id to the temporary layer that device was running, for the devices that were
+    /// running one. Compared against the live runtimes after each tick so the daemon can publish
+    /// a snapshot the moment a layer activates or releases.
+    /// </summary>
+    private readonly Dictionary<string, int> _announcedLayers = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Raised after a tick changed the temporary layer any connected device is running: a layer
+    /// activating when its leader is held and releasing when it is let go. This is the state the
+    /// layer hint overlay exists to show, and a layer change is not a configuration change - no
+    /// revision moves, no profile is written - so without this the daemon would publish nothing
+    /// and every connected GUI would keep reporting no layer until some unrelated mutation
+    /// happened to push a snapshot. Raised outside the lock, like
+    /// <see cref="PresetSwitchRequested"/>, because the daemon answers by taking the same lock.
+    /// </summary>
+    public event Action? ActiveLayersChanged;
+
     /// <summary>Advances every connected controller by one tick.</summary>
     public void TickOnce(TimeSpan delta)
     {
         int? presetSwitch = null;
         bool screenKeyboardToggle = false;
         bool presenceChanged;
+        bool layerStateChanged;
 
         lock (_sync)
         {
@@ -194,6 +214,7 @@ public sealed class EngineHost : IDisposable
 
             ReconcileAbsence(present, DeviceAbsenceGraceTicks);
             presenceChanged = initialPresenceVersion != _presenceVersion;
+            layerStateChanged = TakeLayerStateChanged();
         }
 
         if (presenceChanged)
@@ -213,6 +234,13 @@ public sealed class EngineHost : IDisposable
         if (screenKeyboardToggle)
         {
             ScreenKeyboardToggleRequested?.Invoke();
+        }
+
+        // Same contract again: a layer activating or releasing is the state the layer hint
+        // overlay shows, and the daemon publishes it by taking this host's lock.
+        if (layerStateChanged)
+        {
+            ActiveLayersChanged?.Invoke();
         }
     }
 
@@ -795,6 +823,44 @@ public sealed class EngineHost : IDisposable
                 return _runtimes.Values.Select(runtime => runtime.LayerSnapshot).ToList();
             }
         }
+    }
+
+    /// <summary>
+    /// Re-reads the live layer state of every connected device and records it as announced,
+    /// reporting whether it differs from what was announced last. Callers hold <c>_sync</c>.
+    /// <para>
+    /// Only devices actually running a temporary layer are recorded: a pad sitting on its base
+    /// mappings is the state a freshly connected one is already in, so a connect or a disconnect
+    /// is not a layer change - those publish through <see cref="ControllersChanged"/> on their
+    /// own. A device that vanishes mid-layer does change the map, and is announced, because the
+    /// layer it was running is gone.
+    /// </para>
+    /// </summary>
+    private bool TakeLayerStateChanged()
+    {
+        var current = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var runtime in _runtimes.Values)
+        {
+            if (runtime.ActiveLayerId != 0)
+            {
+                current[runtime.Descriptor.DeviceId] = runtime.ActiveLayerId;
+            }
+        }
+
+        if (current.Count == _announcedLayers.Count
+            && current.All(entry => _announcedLayers.TryGetValue(entry.Key, out var announced)
+                && announced == entry.Value))
+        {
+            return false;
+        }
+
+        _announcedLayers.Clear();
+        foreach (var (deviceId, layerId) in current)
+        {
+            _announcedLayers[deviceId] = layerId;
+        }
+
+        return true;
     }
 
     /// <summary>

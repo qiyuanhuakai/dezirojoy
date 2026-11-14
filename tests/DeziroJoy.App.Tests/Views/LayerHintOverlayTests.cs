@@ -155,16 +155,94 @@ public sealed class LayerHintOverlayTests
         }
     }
 
+    [AvaloniaFact]
+    public void The_Window_Lands_At_The_Anchor_The_Preferences_Name()
+    {
+        var hint = new LayerHintViewModel();
+        var profile = Profile();
+        var window = BuildOverlay(
+            hint,
+            static () => new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.TopLeft));
+        try
+        {
+            hint.Update(profile, LayerSnapshot(profile));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            // The window's own measured size is what the anchor math is fed, so the expected
+            // position is resolved from it rather than restated as a number: this is the wiring
+            // under test - the card reaching the edge it was given, in the same pixel space the
+            // screen and the window position are quoted in.
+            var screen = window.Screens.ScreenFromVisual(window)!;
+            var expected = LayerHintOverlay.ResolvePosition(
+                new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.TopLeft),
+                screen.Bounds,
+                new PixelSize(
+                    (int)Math.Round(window.Bounds.Width * screen.Scaling),
+                    (int)Math.Round(window.Bounds.Height * screen.Scaling)),
+                null,
+                48 * screen.Scaling,
+                16 * screen.Scaling);
+
+            Assert.Equal(expected, window.Position);
+            Assert.True(
+                screen.Bounds.Contains(window.Position),
+                "the hint must land on the screen its anchor was resolved against");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Follow_The_Mouse_Puts_The_Window_Beside_The_Pointer()
+    {
+        var hint = new LayerHintViewModel();
+        var profile = Profile();
+        var pointer = new PixelPoint(600, 500);
+        var window = BuildOverlay(
+            hint,
+            static () => new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.BottomCenter),
+            () => pointer);
+        try
+        {
+            hint.Update(profile, LayerSnapshot(profile));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var screen = window.Screens.ScreenFromPoint(pointer)!;
+            var expected = LayerHintOverlay.ResolvePosition(
+                new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.BottomCenter),
+                screen.Bounds,
+                new PixelSize(
+                    (int)Math.Round(window.Bounds.Width * screen.Scaling),
+                    (int)Math.Round(window.Bounds.Height * screen.Scaling)),
+                pointer,
+                48 * screen.Scaling,
+                16 * screen.Scaling);
+
+            Assert.Equal(expected, window.Position);
+            Assert.True(window.Position.X > pointer.X, "the hint sits to the right of the pointer");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [Fact]
     public void The_Fixed_Anchor_Parks_The_Hint_At_The_Chosen_Edge()
     {
         var screen = new PixelRect(0, 0, 1920, 1080);
-        var window = new Size(400, 200);
+        var window = new PixelSize(400, 200);
         const double margin = 48;
 
         PixelPoint At(LayerHintAnchor anchor)
             => LayerHintOverlay.ResolvePosition(
-                new LayerHintPlacement(LayerHintPositionMode.Fixed, anchor), screen, window, null, margin);
+                new LayerHintPlacement(LayerHintPositionMode.Fixed, anchor), screen, window, null, margin, 16);
 
         // Bottom-centre is the default: horizontally centred, one margin above the bottom edge.
         Assert.Equal(new PixelPoint(760, 832), At(LayerHintAnchor.BottomCenter));
@@ -177,13 +255,71 @@ public sealed class LayerHintOverlayTests
     }
 
     [Fact]
+    public void A_Scaled_Screen_Keeps_The_Anchor_In_Physical_Pixels()
+    {
+        // A 150% display: the screen is 2560x1440 physical pixels and a card laid out at
+        // 300x220 device-independent units is 450x330 pixels on it, as is the 72-pixel margin
+        // the 48-unit preference becomes. The anchor is resolved in one space, so the card
+        // lands on the edge it was given instead of a scaling factor away from it.
+        var screen = new PixelRect(0, 0, 2560, 1440);
+        var window = new PixelSize(450, 330);
+
+        var position = LayerHintOverlay.ResolvePosition(
+            new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.BottomCenter),
+            screen,
+            window,
+            null,
+            72,
+            24);
+
+        Assert.Equal(new PixelPoint(1055, 1038), position);
+    }
+
+    [Fact]
+    public void A_Scaled_Screen_Off_The_Origin_Keeps_The_Anchor_Relative_To_Its_Own_Edge()
+    {
+        // A second monitor at 200% to the right of a 1920x1080 primary: its rectangle starts at
+        // x=1920 in virtual-desktop pixels, and the anchor is measured from that rectangle
+        // rather than from the desktop origin.
+        var screen = new PixelRect(1920, 0, 3840, 2160);
+        var window = new PixelSize(600, 400);
+
+        var position = LayerHintOverlay.ResolvePosition(
+            new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.TopRight),
+            screen,
+            window,
+            null,
+            96,
+            32);
+
+        Assert.Equal(new PixelPoint(1920 + 3840 - 600 - 96, 96), position);
+    }
+
+    [Fact]
+    public void An_Anchor_Clamps_A_Card_Larger_Than_Its_Screen_Back_Onto_It()
+    {
+        var screen = new PixelRect(0, 0, 1280, 720);
+        var window = new PixelSize(1600, 900);
+
+        var position = LayerHintOverlay.ResolvePosition(
+            new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.BottomRight),
+            screen,
+            window,
+            null,
+            48,
+            16);
+
+        Assert.Equal(new PixelPoint(0, 0), position);
+    }
+
+    [Fact]
     public void Follow_The_Mouse_Sits_Just_Beside_The_Pointer()
     {
         var screen = new PixelRect(0, 0, 1920, 1080);
-        var window = new Size(400, 200);
+        var window = new PixelSize(400, 200);
         var placement = new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.BottomCenter);
 
-        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1000, 500), 48);
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1000, 500), 48, 16);
 
         // Below-right of the pointer by the cursor offset, well inside the screen.
         Assert.Equal(new PixelPoint(1016, 516), position);
@@ -193,11 +329,11 @@ public sealed class LayerHintOverlayTests
     public void Follow_The_Mouse_Clamps_The_Hint_Into_The_Screen_Near_An_Edge()
     {
         var screen = new PixelRect(0, 0, 1920, 1080);
-        var window = new Size(400, 200);
+        var window = new PixelSize(400, 200);
         var placement = new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.BottomCenter);
 
         // A pointer at the bottom-right corner must not push the hint off screen.
-        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1900, 1060), 48);
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1900, 1060), 48, 16);
 
         Assert.Equal(new PixelPoint(1520, 880), position);
     }
@@ -206,13 +342,28 @@ public sealed class LayerHintOverlayTests
     public void Follow_The_Mouse_Falls_Back_To_The_Anchor_When_The_Pointer_Is_Unknown()
     {
         var screen = new PixelRect(0, 0, 1920, 1080);
-        var window = new Size(400, 200);
+        var window = new PixelSize(400, 200);
         var placement = new LayerHintPlacement(LayerHintPositionMode.FollowMouse, LayerHintAnchor.TopLeft);
 
         // No pointer (a Wayland session with no X11 bridge): the hint parks at the anchor
         // rather than disappearing.
-        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, null, 48);
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, null, 48, 16);
 
         Assert.Equal(new PixelPoint(48, 48), position);
+    }
+
+    [Fact]
+    public void Follow_The_Mouse_Uses_The_Pointer_Even_When_The_Mode_Is_Fixed()
+    {
+        // The pointer is read in both modes so the fixed anchors can pick the screen the user
+        // is working on, but a fixed placement must still park at its anchor and never drift
+        // beside the cursor.
+        var screen = new PixelRect(0, 0, 1920, 1080);
+        var window = new PixelSize(400, 200);
+        var placement = new LayerHintPlacement(LayerHintPositionMode.Fixed, LayerHintAnchor.MiddleLeft);
+
+        var position = LayerHintOverlay.ResolvePosition(placement, screen, window, new PixelPoint(1500, 900), 48, 16);
+
+        Assert.Equal(new PixelPoint(48, 440), position);
     }
 }

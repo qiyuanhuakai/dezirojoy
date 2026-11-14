@@ -521,6 +521,44 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public async Task A_Layer_Activating_Pushes_A_Snapshot_Without_A_Configuration_Revision()
+    {
+        var (server, store, _) = CreateRunning();
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+        var layerMappingId = Guid.NewGuid();
+        server.LayerStateSource = () =>
+        [
+            new ActiveLayerSnapshot("pad-1", 2, [new EffectiveMappingSnapshot(layerMappingId, 2)]),
+        ];
+
+        server.PublishLayerState();
+
+        // The temporary layer is not a configuration change: the sequence moves so every client
+        // treats the push as fresh, the revision stays put, and the desired state on disk is
+        // left alone - a leader held and released all evening must not rewrite what a restart
+        // resumes.
+        var push = Assert.Single(pushes);
+        Assert.Equal(0, push.Snapshot.Revision);
+        Assert.Equal(1, push.Snapshot.Sequence);
+        var layer = Assert.Single(push.Snapshot.Layers);
+        Assert.Equal("pad-1", layer.DeviceId);
+        Assert.Equal(2, layer.LayerId);
+        Assert.Equal(layerMappingId, Assert.Single(layer.Mappings).MappingId);
+        Assert.Null(store.Load());
+
+        // Releasing the layer publishes again, with the layer gone from the snapshot: the
+        // overlay has to be told both ways or it would never come down.
+        server.LayerStateSource = static () => [];
+        server.PublishLayerState();
+
+        Assert.Equal(2, pushes.Count);
+        Assert.Equal(2, pushes[1].Snapshot.Sequence);
+        Assert.Empty(pushes[1].Snapshot.Layers);
+        await server.ProcessAsync(new GetStateMessage("verify"));
+    }
+
+    [Fact]
     public async Task Input_Samples_Publish_Only_Changes_With_A_Monotonic_Independent_Sequence()
     {
         var (server, _, host) = CreateRunning();

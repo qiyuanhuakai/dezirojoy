@@ -3,8 +3,10 @@ using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.Tests.Ipc;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
+using DeziroJoy.Core.Platform;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Hosting;
@@ -18,6 +20,8 @@ namespace DeziroJoy.App.Tests.Hosting;
 /// </summary>
 public sealed class DaemonLayerHintFeedTests
 {
+    private static readonly TimeSpan EngineTick = TimeSpan.FromSeconds(1.0 / 64.0);
+
     private static MappingEntry OnLayer(GamepadButton button, MappingTarget target)
         => new() { Source = new ButtonBinding(button), Target = target, Layer = 2 };
 
@@ -33,6 +37,32 @@ public sealed class DaemonLayerHintFeedTests
 
         Assert.Equal("临时层 2", context.LayerHint.LayerTitle);
         Assert.Contains(new LayerHintRow("X", "复制"), context.LayerHint.Rows);
+    }
+
+    [Fact]
+    public async Task A_Layer_Activating_On_The_Engine_Reaches_The_Tray_Hint_On_Its_Own()
+    {
+        var context = await CreateEngineFeed();
+        using var feed = context.Feed;
+
+        // The leader goes down: the engine's temporary layer activates and nothing else about
+        // the daemon's state changes - no revision, no profile, no device. Before the
+        // layer-state publish the overlay only ever learned the layer was active when some
+        // unrelated mutation happened to push a snapshot, which is why it appeared only rarely.
+        context.Provider.SetState("pad-1", GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        context.Host.TickOnce(EngineTick);
+
+        await WaitForCondition(() => context.LayerHint.IsActive);
+        Assert.Equal("临时层 1", context.LayerHint.LayerTitle);
+        Assert.Contains(new LayerHintRow("X", "B"), context.LayerHint.Rows);
+
+        // The leader comes up: the layer releases, and the hint follows it down without anyone
+        // touching the daemon's configuration.
+        context.Provider.SetState("pad-1", GamepadState.Neutral);
+        context.Host.TickOnce(EngineTick);
+
+        await WaitForCondition(() => !context.LayerHint.IsActive);
+        Assert.Empty(context.LayerHint.Rows);
     }
 
     [Fact]
@@ -68,7 +98,6 @@ public sealed class DaemonLayerHintFeedTests
     /// <summary>The cheapest mutation that makes the daemon broadcast its current layer state.</summary>
     private static Task<MutationResult> BroadcastAsync(DaemonController controller)
         => controller.SetMappingEnabledAsync(false, TestContext.Current.CancellationToken);
-
     private static async Task WaitForCondition(Func<bool> condition)
     {
         for (var attempt = 0; attempt < 200 && !condition(); attempt++)
@@ -121,6 +150,159 @@ public sealed class DaemonLayerHintFeedTests
         var visualizer = new GamepadVisualizerViewModel();
         var feed = new TrayHost.DaemonLayerHintFeed(controller, layerHint, visualizer);
         return new FeedContext(controller, feed, host, layers, profile, channel, layerHint, visualizer);
+    }
+
+    /// <summary>
+    /// The production wiring in miniature: a real engine host behind the daemon's host seam,
+    /// with the layer state source and the layer-change publish the daemon wires up in
+    /// <see cref="DaemonHost.RunOwned"/>. Driving a real tick is what proves the whole chain -
+    /// engine, daemon, controller, feed, hint - rather than each seam on its own.
+    /// </summary>
+    private static async Task<EngineFeedContext> CreateEngineFeed()
+    {
+        var profile = new GamepadProfile
+        {
+            Name = "layer",
+            DeviceId = "pad-1",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.X),
+                    Target = new KeyPressTarget(GamepadKey.B),
+                    Layer = 1,
+                },
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.RightBumper),
+                    Target = new SpecialKeyTarget(
+                        SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold, Action: LeaderAction.Layer),
+                },
+            ],
+        };
+
+        var store = new InMemoryProfileStore();
+        store.Save(profile);
+        var provider = new FakeProvider();
+        provider.Add("pad-1");
+        provider.SetState("pad-1", GamepadState.Neutral);
+        var host = new EngineHost(provider, new NullOutputSink(), store);
+
+        var statePath = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"dezirojoy-tray-engine-feed-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(new EngineHostAdapter(host), store, new DaemonStateStore(statePath));
+        server.LayerStateSource = () => host.ActiveLayers;
+        host.ActiveLayersChanged += () => server.PublishLayerState();
+
+        var channel = new FeedServerChannel(server);
+        server.StateChanged += channel.Push;
+        server.InputSampled += channel.Push;
+        var controller = new DaemonController(new FeedServerEndpoint(channel));
+        await controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+        var layerHint = new LayerHintViewModel();
+        var visualizer = new GamepadVisualizerViewModel();
+        var feed = new TrayHost.DaemonLayerHintFeed(controller, layerHint, visualizer);
+        return new EngineFeedContext(controller, feed, host, provider, layerHint);
+    }
+
+    private sealed record EngineFeedContext(
+        DaemonController Controller,
+        TrayHost.DaemonLayerHintFeed Feed,
+        EngineHost Host,
+        FakeProvider Provider,
+        LayerHintViewModel LayerHint);
+
+    private sealed class FakeProvider : IGamepadProvider
+    {
+        private readonly Dictionary<string, IGamepadState> _states = [];
+
+        public void Add(string deviceId) => _states.TryAdd(deviceId, GamepadState.Neutral);
+
+        public void SetState(string deviceId, IGamepadState state) => _states[deviceId] = state;
+
+        public IReadOnlyList<GamepadDescriptor> GetConnected()
+            => _states.Keys.Select(deviceId => new GamepadDescriptor(deviceId, "Test Pad")).ToList();
+
+        public IGamepadState? Poll(string deviceId) => _states.GetValueOrDefault(deviceId);
+
+        public void Dispose()
+        {
+        }
+    }
+
+    /// <summary>A real engine host behind the daemon's host seam, as <see cref="DaemonHost"/> builds it.</summary>
+    private sealed class EngineHostAdapter(EngineHost host) : IDaemonHost
+    {
+        public bool IsRunning => host.IsRunning;
+
+        public bool IsMappingEnabled => host.IsMappingEnabled;
+
+        public bool IsInjectionSuspended => host.IsInjectionSuspended;
+
+        public bool IsNativeGamepadPaused => host.IsNativeGamepadPaused;
+
+        public bool HasController => host.Controllers.Count > 0;
+
+        public int InjectorPid => 4242;
+
+        public string? InjectorIntegrity => "high";
+
+        public long InjectedEvents => 0;
+
+        public long BlockedEvents => 0;
+
+        public IReadOnlyList<string> ConnectedDeviceIds
+            => host.Controllers.Select(runtime => runtime.Descriptor.DeviceId).ToList();
+
+        public IReadOnlyList<ConnectedDeviceSnapshot> ConnectedDevices
+            => host.Controllers.Select(runtime => new ConnectedDeviceSnapshot(
+                runtime.Descriptor.DeviceId,
+                runtime.Descriptor.Name,
+                runtime.Descriptor.Layout)).ToList();
+
+        public event Action? DevicesChanged
+        {
+            add => host.ControllersChanged += value;
+            remove => host.ControllersChanged -= value;
+        }
+
+        public event Action<string, IGamepadState>? InputSampled
+        {
+            add => _inputSampled += value;
+            remove => _inputSampled -= value;
+        }
+
+        private event Action<string, IGamepadState>? _inputSampled;
+
+        private void OnSampled(object? sender, ControllerSampledEventArgs args)
+            => _inputSampled?.Invoke(args.Runtime.Descriptor.DeviceId, args.State);
+
+        public GamepadProfile? GetProfile(string deviceId)
+            => host.Controllers.SingleOrDefault(
+                runtime => runtime.Descriptor.DeviceId == deviceId)?.Profile;
+
+        public void SamplePresence() => host.SamplePresence();
+
+        public void Start() => host.StartManual();
+
+        public void StopMapping() => host.Stop();
+
+        public void SetMappingEnabled(bool enabled) => host.SetMappingEnabled(enabled);
+
+        public void SetInjectionSuspended(bool suspended) => host.SetInjectionSuspended(suspended);
+
+        public void SetNativeGamepadPaused(bool paused) => host.SetNativeGamepadPaused(paused);
+
+        public void Reload(string deviceId, GamepadProfile profile) => host.Reload(deviceId, profile);
+
+        public void SwitchPresetSlot(int slot, IReadOnlyDictionary<string, GamepadProfile> profiles)
+            => host.SwitchPresetSlot(slot, profiles);
+
+        public void InjectText(string text) => host.InjectText(text);
+
+        public void TapKey(GamepadKey key, KeyModifiers modifiers) => host.TapKey(key, modifiers);
     }
 
     private sealed record FeedContext(

@@ -1617,6 +1617,100 @@ public class EngineHostTests
         Assert.Contains(layer.Mappings, m => m.MappingId == dragId && m.Layer == 0);
     }
 
+    [Fact]
+    public void A_Layer_Activating_And_Releasing_Announces_Itself_Exactly_Once_Each()
+    {
+        var (profile, _, _, _) = LayerProfileWithIds();
+        var store = new InMemoryProfileStore();
+        store.Save(profile);
+
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        var announcements = 0;
+        host.ActiveLayersChanged += () => announcements++;
+
+        // A pad that connects on its base mappings is not a layer change: the daemon already
+        // publishes for the device itself, and a snapshot per connect would be noise.
+        host.TickOnce(Tick);
+        Assert.Equal(0, announcements);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(1, announcements);
+
+        // Holding the leader keeps the layer and says nothing new: the overlay is already up.
+        host.TickOnce(Tick);
+        host.TickOnce(Tick);
+        Assert.Equal(1, announcements);
+
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal(2, announcements);
+    }
+
+    [Fact]
+    public void A_Second_Device_Running_A_Layer_Is_Announced_Separately()
+    {
+        var (profile, _, _, _) = LayerProfileWithIds();
+        var store = new InMemoryProfileStore();
+        store.Save(profile with { DeviceId = "xinput:0" });
+        store.Save(profile with { DeviceId = "xinput:1" });
+
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.Add("xinput:1", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        provider.SetState("xinput:1", GamepadState.Neutral);
+        var announcements = 0;
+        host.ActiveLayersChanged += () => announcements++;
+
+        host.TickOnce(Tick);
+        Assert.Equal(0, announcements);
+
+        provider.SetState("xinput:1", GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(1, announcements);
+
+        // The second pad entering its own layer is a further change; the first staying in its
+        // own is not.
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        host.TickOnce(Tick);
+        Assert.Equal(2, announcements);
+
+        provider.SetState("xinput:1", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal(3, announcements);
+    }
+
+    [Fact]
+    public void A_Device_Leaving_Mid_Layer_Announces_The_Layer_Is_Gone()
+    {
+        var (profile, _, _, _) = LayerProfileWithIds();
+        var store = new InMemoryProfileStore();
+        store.Save(profile);
+
+        var (host, provider, _) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.RightBumper, 0, 0, 0, 0));
+        var announcements = 0;
+        host.ActiveLayersChanged += () => announcements++;
+
+        host.TickOnce(Tick);
+        Assert.Equal(1, announcements);
+
+        // Unplugged past the absence grace: the runtime goes, so the layer it was running goes
+        // with it, and the overlay has to be told rather than naming a layer no device runs.
+        provider.Remove("xinput:0");
+        for (var tick = 0; tick <= EngineHost.DeviceAbsenceGraceTicks; tick++)
+        {
+            host.TickOnce(Tick);
+        }
+
+        Assert.Empty(host.Controllers);
+        Assert.Equal(2, announcements);
+    }
+
     private sealed class BlockingProvider : IGamepadProvider
     {
         private readonly ManualResetEventSlim _release = new(false);

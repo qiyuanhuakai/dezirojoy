@@ -108,6 +108,13 @@ public static class DaemonHost
         // the engine is really running instead of deriving it from the profile body.
         daemon.LayerStateSource = () => composition.Host.ActiveLayers;
 
+        // A temporary layer activating on a tick is not a configuration change, so nothing else
+        // on this path publishes a snapshot: without this the layer hint overlay - the one
+        // surface that exists to name the active layer - would only ever appear when some
+        // unrelated mutation happened to push one. Raised outside the engine's own lock, which
+        // is why the publish takes it on the other side.
+        composition.Host.ActiveLayersChanged += () => daemon.PublishLayerState();
+
         composition.Host.PresetSwitchRequested += (_, slot) =>
             daemon.RequestPresetSlotSwitch(slot);
 

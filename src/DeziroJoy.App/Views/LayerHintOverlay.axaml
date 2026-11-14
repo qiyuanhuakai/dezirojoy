@@ -13,7 +13,8 @@
         WindowDecorations="None"
         SizeToContent="WidthAndHeight"
         Background="Transparent"
-        TransparencyLevelHint="Transparent">
+        TransparencyLevelHint="Transparent"
+        WindowStartupLocation="Manual">
 
     <!--
         The overlay floats over every window on screen - the target application above all -

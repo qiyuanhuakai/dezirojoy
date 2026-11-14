@@ -76,6 +76,27 @@ public sealed partial class DaemonServer
 
     internal void RequestShutdown() => ShutdownRequested?.Invoke();
 
+    /// <summary>
+    /// Publishes the current snapshot because the engine's active temporary layer changed - a
+    /// layer activating when its leader is held and releasing when it is let go. A layer change
+    /// is not a configuration change: no revision moves and nothing is persisted, so without
+    /// this the daemon would publish nothing and every connected GUI would keep reporting no
+    /// layer until some unrelated mutation happened to push a snapshot. That left the layer hint
+    /// overlay - the one surface whose whole purpose is naming the active layer - appearing only
+    /// by accident. Follows <see cref="OnDevicesChanged"/>'s shape: the sequence moves, the
+    /// store is untouched.
+    /// </summary>
+    internal void PublishLayerState()
+    {
+        lock (_sync)
+        {
+            _sequence++;
+            var message = new StateChangedMessage(DaemonInstanceId, BuildSnapshot());
+            StateChanged?.Invoke(message);
+            PublishToConnections(message);
+        }
+    }
+
     /// <summary>Changes on every daemon start, so a GUI can tell a restarted daemon apart.</summary>
     public string DaemonInstanceId { get; }
 
