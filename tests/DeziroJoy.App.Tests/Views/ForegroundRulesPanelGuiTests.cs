@@ -81,7 +81,21 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
         }
 
         var watcher = CreateWatcher(context, store.Load());
-        return Show(new ForegroundRulesViewModel(watcher, store));
+        return Show(new ForegroundRulesViewModel(watcher, store, new StubPresetSlotSource()));
+    }
+
+    /// <summary>
+    /// The slot drop-downs' source: a fixed list, so a test says what the panel offers without
+    /// depending on what the machine it runs on has stored.
+    /// </summary>
+    private sealed class StubPresetSlotSource : IPresetSlotSource
+    {
+        public IReadOnlyList<PresetSlotOption> Slots() =>
+        [
+            new PresetSlotOption(1, "预设 1"),
+            new PresetSlotOption(2, "布局默认"),
+            new PresetSlotOption(3, "预设 3"),
+        ];
     }
 
     [AvaloniaFact]
@@ -169,31 +183,147 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Slot_Editors_Write_The_Numbers_They_Show()
+    public void The_Slot_Drop_Downs_Write_The_Slot_They_Show()
     {
-        // The rule's slot and the desktop default both travel through a NumericUpDown, whose
-        // Value is a decimal: a number the panel shows but never writes back would be a control
-        // that looks like it does something.
+        // Both slot fields used to be number boxes, whose Value is a decimal: a number the panel
+        // showed but never wrote back would be a control that looks like it does something. They
+        // are drop-downs of the store's presets now, and the pick is the edit.
         var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
 
         viewModel.AddRuleCommand.Execute(null);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var ruleSlot = panel.GetVisualDescendants().OfType<NumericUpDown>().Single(box => box.Name == "RuleSlotBox");
-        ruleSlot.Value = 4;
+        var ruleSlot = panel.GetVisualDescendants().OfType<ComboBox>().Single(box => box.Name == "RuleSlotCombo");
+
+        // The editor's rows must not land on top of each other. Avalonia's Grid does not create
+        // implicit rows, so a row left off the RowDefinitions stack every field of the open row
+        // into row 0 - the fields overlap, the click lands on whichever is drawn last, and the
+        // panel looks like it works while nothing can be reached.
+        var processBox = panel.GetVisualDescendants().OfType<TextBox>().Single(box => box.Name == "RuleProcessBox");
+        var picker = panel.GetVisualDescendants().OfType<ComboBox>().Single(box => box.Name == "RuleWindowPicker");
+
+        Assert.True(
+            picker.Bounds.Y >= processBox.Bounds.Bottom,
+            $"the picker sits under the program name, not on it: process={processBox.Bounds} picker={picker.Bounds}");
+        Assert.True(
+            ruleSlot.Bounds.Y >= picker.Bounds.Bottom,
+            $"the slot drop-down sits under the picker, not on it: picker={picker.Bounds} slot={ruleSlot.Bounds}");
+
+        // The drop-down offers what the store holds, named - so the rule names its preset rather
+        // than counting to it.
+        Assert.Equal(
+            ["预设 1", "2 · 布局默认", "预设 3"],
+            ruleSlot.Items.Cast<PresetSlotOption>().Select(option => option.Display));
+
+        ruleSlot.SelectedItem = viewModel.SlotOptions.Single(option => option.Slot == 3);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(4, viewModel.Rules[0].Slot);
+        Assert.Equal(3, viewModel.Rules[0].Slot);
+        Assert.Equal(3, viewModel.Rules[0].SelectedSlotOption!.Slot);
 
-        var defaultSlot = panel.FindControl<NumericUpDown>("DefaultSlotBox")!;
-        defaultSlot.Value = 3;
+        var defaultSlot = panel.FindControl<ComboBox>("DefaultSlotCombo")!;
+        defaultSlot.SelectedItem = viewModel.SlotOptions.Single(option => option.Slot == 2);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(3, viewModel.DefaultSlot);
+        Assert.Equal(2, viewModel.DefaultSlot);
         Assert.True(viewModel.HasUnsavedChanges);
+    }
+
+    [AvaloniaFact]
+    public void The_Priority_Field_Is_A_Plain_Number_Field()
+    {
+        // The reported change: the priority was a number box, so the up/down pair spent a column
+        // on a control nobody spins. It is a plain number field now, and it writes the number it
+        // shows.
+        var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
+
+        viewModel.AddRuleCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(panel.GetVisualDescendants().OfType<NumericUpDown>());
+
+        var priority = panel.GetVisualDescendants().OfType<TextBox>().Single(box => box.Name == "RulePriorityBox");
+        priority.Text = "12";
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(12, viewModel.Rules[0].Priority);
+        Assert.Contains("优先级 12", viewModel.Rules[0].Summary);
+    }
+
+    [AvaloniaFact]
+    public void Every_Button_On_The_Panel_Is_The_Same_Size()
+    {
+        // The reported change: the panel sized its buttons one at a time - 14,8 here, 8,4 there -
+        // so a row of them read as three different controls. One box now: the same height, the
+        // same padding, the same corner and the same type size whatever the button does, and the
+        // only differences left are colours.
+        var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
+
+        viewModel.AddRuleCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(
+            Application.Current!.TryFindResource("CornerRadiusMd", out var token),
+            "the corner-radius token has to resolve for the buttons to be the app's own shape");
+        var radius = Assert.IsType<CornerRadius>(token);
+
+        var buttons = panel.GetVisualDescendants().OfType<Button>()
+            .Where(button => button.Classes.Contains("panelButton"))
+            .ToList();
+
+        Assert.Equal(
+            ["AddRuleButton", "RefreshRulesButton", "RevertRulesButton", "RuleDeleteButton", "SaveRulesButton", "ToggleLockButton"],
+            buttons.Select(button => button.Name!).Order());
+
+        Assert.All(buttons, button =>
+        {
+            Assert.Equal(32, button.MinHeight);
+            Assert.Equal(32d, button.Bounds.Height);
+            Assert.Equal(new Thickness(12, 6), button.Padding);
+            Assert.Equal(12d, button.FontSize);
+            Assert.Equal(radius, button.CornerRadius);
+        });
+
+        // And the fields beside them are the same height, so a form row is one row.
+        var fields = panel.GetVisualDescendants().OfType<Control>()
+            .Where(control => control.Name is
+                "DefaultSlotCombo" or "RuleSlotCombo" or "RuleActionCombo" or "RuleWindowPicker"
+                or "RuleProcessBox" or "RulePriorityBox")
+            .ToList();
+
+        Assert.Equal(6, fields.Count);
+        Assert.All(fields, field => Assert.Equal(32, field.MinHeight));
+    }
+
+    [AvaloniaFact]
+    public void The_Panel_Is_One_Rounded_Surface_Divided_By_Hairlines()
+    {
+        // The reported change: three cards stacked on each other read as three separate surfaces
+        // and the chrome looked dated. One rounded panel now, with hairlines between its sections
+        // - a separation that costs no padding and no second radius.
+        var (window, panel, _) = Show(new ForegroundContext("explorer", false));
+
+        Assert.True(
+            Application.Current!.TryFindResource("CornerRadiusXl", out var token),
+            "the panel radius has to resolve for the surface to be the app's own shape");
+        var radius = Assert.IsType<CornerRadius>(token);
+
+        var card = Assert.Single(
+            panel.GetVisualDescendants().OfType<Border>(),
+            border => border.Classes.Contains("panelCard"));
+        var separators = panel.GetVisualDescendants().OfType<Border>()
+            .Where(border => border.Classes.Contains("sectionSeparator"))
+            .ToList();
+
+        Assert.Equal(radius, card.CornerRadius);
+        Assert.Equal(2, separators.Count);
+        Assert.All(separators, separator => Assert.Equal(1, separator.Height));
     }
 
     [AvaloniaFact]
@@ -215,7 +345,7 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
             new ForegroundContext("explorer", false),
             [new ForegroundWindow("game", "游戏窗口"), new ForegroundWindow("chrome", null)]);
         var watcher = new ForegroundWatcher(source, new StubForegroundTarget(), store.Load());
-        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store));
+        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store, new StubPresetSlotSource()));
 
         viewModel.AddRuleCommand.Execute(null);
         window.UpdateLayout();
@@ -247,7 +377,7 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
         var store = new ForegroundRuleStore(Path.Combine(_directory, ForegroundRuleStore.FileName));
         var source = new StubForegroundSource(new ForegroundContext("explorer", false));
         var watcher = new ForegroundWatcher(source, new StubForegroundTarget(), store.Load());
-        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store));
+        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store, new StubPresetSlotSource()));
 
         viewModel.AddRuleCommand.Execute(null);
         window.UpdateLayout();
@@ -326,7 +456,7 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
             new ForegroundContext("explorer", false),
             [new ForegroundWindow("game", "游戏窗口")]);
         var watcher = new ForegroundWatcher(source, new StubForegroundTarget(), store.Load());
-        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store));
+        var (window, panel, viewModel) = Show(new ForegroundRulesViewModel(watcher, store, new StubPresetSlotSource()));
 
         viewModel.AddRuleCommand.Execute(null);
         window.UpdateLayout();
@@ -403,34 +533,25 @@ public sealed class ForegroundRulesPanelGuiTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void The_Number_Box_Keeps_One_Rounded_Well_Around_Field_And_Spinner()
+    public void The_Desktop_Defaults_Drop_Down_Writes_The_Slot_It_Shows()
     {
-        // The square-edged look the user reported: Fluent's number box draws a frame around the
-        // field and a frame around each spinner button, so the up/down pair reads as two boxes
-        // bolted onto a third. The restyle keeps one well, and the pair's buttons carry no
-        // frame of their own to square the corners off again.
-        var (window, panel, viewModel) = Show(new ForegroundContext("explorer", false));
+        // The desktop default's drop-down is the panel's own slot editor: a pick is the edit, and
+        // it lands on the staged table like any other.
+        var (window, panel, viewModel) = Show(
+            new ForegroundContext("explorer", false),
+            new ForegroundSettings { DefaultSlot = 2 });
 
-        Assert.True(
-            Application.Current!.TryFindResource("CornerRadiusMd", out var token),
-            "the corner-radius token has to resolve for the well to be the app's own shape");
-        var radius = Assert.IsType<CornerRadius>(token);
+        var defaultSlot = panel.FindControl<ComboBox>("DefaultSlotCombo")!;
 
-        var box = panel.FindControl<NumericUpDown>("DefaultSlotBox")!;
-        var spinner = box.GetVisualDescendants().OfType<ButtonSpinner>().Single();
-        var buttons = spinner.GetVisualDescendants().OfType<RepeatButton>().ToList();
+        Assert.Equal("2 · 布局默认", Assert.IsType<PresetSlotOption>(defaultSlot.SelectedItem).Display);
 
-        Assert.Equal(radius, box.CornerRadius);
-        Assert.Equal(box.CornerRadius, spinner.CornerRadius);
-        Assert.Equal(2, buttons.Count);
-        Assert.All(buttons, button => Assert.Equal(new Thickness(0), button.BorderThickness));
-
-        // And the box still writes the number it shows through the restyled well.
-        box.Value = 5;
+        defaultSlot.SelectedItem = viewModel.SlotOptions.Single(option => option.Slot == 3);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(5, viewModel.DefaultSlot);
+        Assert.Equal(3, viewModel.DefaultSlot);
+        Assert.True(viewModel.HasUnsavedChanges);
+        Assert.Equal("预设 3", Assert.IsType<PresetSlotOption>(defaultSlot.SelectedItem).Display);
     }
 
     private static void Click(Control target, Window window)

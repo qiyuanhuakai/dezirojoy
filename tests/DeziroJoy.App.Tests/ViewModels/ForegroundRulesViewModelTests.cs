@@ -35,6 +35,39 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
         public void SetPaused(bool paused) => IsPaused = paused;
     }
 
+    /// <summary>
+    /// The slot drop-downs' source: a fixed list, so a test says exactly what the panel offers
+    /// without depending on what the machine it runs on has stored. Replaceable, so a test can
+    /// open a preset after the panel was built and watch the list re-read it.
+    /// </summary>
+    private sealed class FakePresetSlotSource : IPresetSlotSource
+    {
+        private readonly List<PresetSlotOption> _slots;
+
+        public FakePresetSlotSource()
+            : this(
+            [
+                new PresetSlotOption(1, "预设 1"),
+                new PresetSlotOption(2, "布局默认"),
+                new PresetSlotOption(3, "预设 3"),
+            ])
+        {
+        }
+
+        public FakePresetSlotSource(List<PresetSlotOption> slots) => _slots = slots;
+
+        /// <summary>A store with nothing in it, which is what a device that was never configured looks like.</summary>
+        public static FakePresetSlotSource Empty => new([]);
+
+        public IReadOnlyList<PresetSlotOption> Slots() => _slots;
+
+        public void ReplaceWith(params PresetSlotOption[] slots)
+        {
+            _slots.Clear();
+            _slots.AddRange(slots);
+        }
+    }
+
     private readonly string _directory;
 
     public ForegroundRulesViewModelTests()
@@ -57,7 +90,8 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
     }
 
     private (ForegroundRulesViewModel ViewModel, ForegroundWatcher Watcher, FakeForegroundSource Source) Create(
-        ForegroundSettings? stored = null)
+        ForegroundSettings? stored = null,
+        IPresetSlotSource? presetSlots = null)
     {
         var store = new ForegroundRuleStore(Path.Combine(_directory, ForegroundRuleStore.FileName));
         if (stored is not null)
@@ -67,7 +101,7 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
 
         var source = new FakeForegroundSource();
         var watcher = new ForegroundWatcher(source, new FakeForegroundTarget(), new ForegroundSettings());
-        var viewModel = new ForegroundRulesViewModel(watcher, store);
+        var viewModel = new ForegroundRulesViewModel(watcher, store, presetSlots ?? new FakePresetSlotSource());
 
         return (viewModel, watcher, source);
     }
@@ -290,7 +324,7 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
         File.WriteAllText(store.FilePath, "{ not json");
 
         var watcher = new ForegroundWatcher(new FakeForegroundSource(), new FakeForegroundTarget());
-        var viewModel = new ForegroundRulesViewModel(watcher, store);
+        var viewModel = new ForegroundRulesViewModel(watcher, store, FakePresetSlotSource.Empty);
 
         Assert.Empty(viewModel.Rules);
         Assert.Contains("无法解析", viewModel.StatusMessage);
@@ -550,5 +584,201 @@ public sealed class ForegroundRulesViewModelTests : IDisposable
         viewModel.Rules[0].SelectedWindow = choice;
 
         Assert.Equal("game", viewModel.Rules[0].ProcessName);
+    }
+
+    [Fact]
+    public void The_Slot_Drop_Downs_Offer_The_Presets_The_Store_Holds()
+    {
+        // The reported change: both slot fields were number boxes, so the user counted to a preset
+        // through up/down arrows. They are drop-downs now, and what they offer is the slots the
+        // store holds, named - a rule names its preset rather than a number.
+        var (viewModel, _, _) = Create();
+
+        Assert.Equal([1, 2, 3], viewModel.SlotOptions.Select(option => option.Slot));
+        Assert.Equal("2 · 布局默认", viewModel.SlotOptions[1].Display);
+        Assert.Equal("预设 1", viewModel.SlotOptions[0].Display);
+    }
+
+    [Fact]
+    public void Picking_A_Slot_Option_Writes_The_Rules_Slot()
+    {
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 1 }],
+        });
+
+        var rule = viewModel.Rules.Single();
+        rule.SelectedSlotOption = viewModel.SlotOptions.Single(option => option.Slot == 3);
+
+        Assert.Equal(3, rule.Slot);
+        Assert.Equal(3, rule.SelectedSlotOption!.Slot);
+        Assert.Contains("预设 3", rule.Summary);
+        Assert.True(viewModel.HasUnsavedChanges);
+
+        // And back the other way: the row is pointed at the entry that spells its slot.
+        rule.Slot = 2;
+
+        Assert.Equal(2, rule.SelectedSlotOption!.Slot);
+    }
+
+    [Fact]
+    public void The_Desktop_Defaults_Drop_Down_Selection_Follows_The_Slot()
+    {
+        var (viewModel, _, _) = Create(new ForegroundSettings { DefaultSlot = 2 });
+
+        Assert.Equal(2, viewModel.DefaultSlotOption!.Slot);
+
+        viewModel.DefaultSlotOption = viewModel.SlotOptions.Single(option => option.Slot == 3);
+
+        Assert.Equal(3, viewModel.DefaultSlot);
+        Assert.Equal(3, viewModel.DefaultSlotOption!.Slot);
+        Assert.True(viewModel.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void A_Slot_The_Table_Names_Stays_Offered_When_The_Store_Holds_Nothing_For_It()
+    {
+        // A rule that names a slot the store has no profile for must not turn into a blank
+        // drop-down: the slot is the rule's own value, and the drop-down has to be able to show
+        // the one the rule already names.
+        var (viewModel, _, _) = Create(
+            new ForegroundSettings { Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 7 }] },
+            FakePresetSlotSource.Empty);
+
+        Assert.Equal([1, 2, 3, 4, 7], viewModel.SlotOptions.Select(option => option.Slot));
+        Assert.Equal(7, viewModel.Rules.Single().SelectedSlotOption!.Slot);
+    }
+
+    [Fact]
+    public void An_Empty_Slot_Source_Falls_Back_To_The_Initial_Slots()
+    {
+        // A store with nothing in it still has to offer a choice: an empty drop-down is a control
+        // that looks broken rather than one that has nothing to say yet.
+        var (viewModel, _, _) = Create(presetSlots: FakePresetSlotSource.Empty);
+
+        Assert.Equal([1, 2, 3, 4], viewModel.SlotOptions.Select(option => option.Slot));
+        Assert.All(viewModel.SlotOptions, option => Assert.Equal($"预设 {option.Slot}", option.Display));
+    }
+
+    [Fact]
+    public void Refreshing_The_Slot_Options_Keeps_The_Rows_Pointed_At_Their_Slot()
+    {
+        // The entries are rebuilt - new objects - every time the list is re-read, so a row that
+        // held on to the entry it was given would show a blank drop-down the moment a preset was
+        // added in another tab.
+        var source = new FakePresetSlotSource();
+        var (viewModel, _, _) = Create(
+            new ForegroundSettings { Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 2 }] },
+            source);
+
+        Assert.Equal(2, viewModel.Rules.Single().SelectedSlotOption!.Slot);
+
+        source.ReplaceWith(new PresetSlotOption(1, "预设 1"), new PresetSlotOption(2, "新布局"));
+        viewModel.RefreshSlotOptionsCommand.Execute(null);
+
+        Assert.Equal("2 · 新布局", viewModel.SlotOptions[1].Display);
+        Assert.Equal(2, viewModel.Rules.Single().SelectedSlotOption!.Slot);
+        Assert.Equal(viewModel.DefaultSlot, viewModel.DefaultSlotOption!.Slot);
+    }
+
+    [Fact]
+    public void A_Cleared_Slot_Selection_Does_Not_Take_The_Slot_Away()
+    {
+        // A drop-down that cannot resolve the rule's slot to an offered entry clears its
+        // selection, and that write-back must not empty the rule's slot: the slot is the model
+        // and the option is only how the control reads it.
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 2 }],
+        });
+
+        var rule = viewModel.Rules.Single();
+        rule.SelectedSlotOption = null;
+
+        Assert.Equal(2, rule.Slot);
+    }
+
+    [Fact]
+    public void The_Priority_Field_Takes_The_Number_It_Shows()
+    {
+        // The reported change: the priority was a number box, so typing one meant fighting the
+        // up/down pair. It is a plain number field now, and the number it shows is the number the
+        // rule carries.
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Priority = 4 }],
+        });
+
+        var rule = viewModel.Rules.Single();
+        Assert.Equal("4", rule.PriorityText);
+
+        rule.PriorityText = "12";
+        Assert.Equal(12, rule.Priority);
+        Assert.Equal("12", rule.PriorityText);
+        Assert.Contains("优先级 12", rule.Summary);
+
+        rule.PriorityText = "-3";
+        Assert.Equal(-3, rule.Priority);
+
+        // And the other way round: a rule loaded from the saved table shows the number it was
+        // saved with, without the field having to be touched.
+        rule.LoadFrom(new ForegroundRule { ProcessName = "chrome", Priority = 9 });
+        Assert.Equal("9", rule.PriorityText);
+    }
+
+    [Fact]
+    public void An_Empty_Priority_Field_Falls_Back_To_The_Default()
+    {
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Priority = 4 }],
+        });
+
+        var rule = viewModel.Rules.Single();
+        rule.PriorityText = string.Empty;
+
+        Assert.Equal(ForegroundRuleItem.DefaultPriority, rule.Priority);
+        Assert.Equal("0", rule.PriorityText);
+    }
+
+    [Fact]
+    public void An_Unparseable_Priority_Leaves_The_Last_Good_Value()
+    {
+        // The field must not eat a character mid-edit: what was typed stays in the field, and the
+        // rule keeps the number it last had until a parseable one is typed over it.
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Priority = 5 }],
+        });
+
+        var rule = viewModel.Rules.Single();
+        rule.PriorityText = "1x";
+
+        Assert.Equal(5, rule.Priority);
+        Assert.Equal("1x", rule.PriorityText);
+
+        // And a number typed over the mess is taken as soon as it parses.
+        rule.PriorityText = "18";
+        Assert.Equal(18, rule.Priority);
+        Assert.Equal("18", rule.PriorityText);
+    }
+
+    [Fact]
+    public void The_Priority_Field_Clamps_Rather_Than_Refusing()
+    {
+        var (viewModel, _, _) = Create(new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Priority = 5 }],
+        });
+
+        var rule = viewModel.Rules.Single();
+
+        rule.PriorityText = "400";
+        Assert.Equal(ForegroundRuleItem.MaxPriority, rule.Priority);
+        Assert.Equal("99", rule.PriorityText);
+
+        rule.PriorityText = "-400";
+        Assert.Equal(ForegroundRuleItem.MinPriority, rule.Priority);
+        Assert.Equal("-99", rule.PriorityText);
     }
 }

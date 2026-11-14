@@ -8,6 +8,83 @@ using DeziroJoy.Core.Mapping;
 namespace DeziroJoy.App.ViewModels;
 
 /// <summary>
+/// Where the rules panel's preset-slot drop-downs get their entries. The panel is a view over the
+/// running <see cref="ForegroundWatcher"/>, and the watcher knows nothing about presets - it
+/// switches slots, it does not own them - so the slot names are injected rather than read from
+/// the watcher. The default reads the profile store the app already persists presets into; a host
+/// that knows the active device can pass its own and name the slots exactly.
+/// </summary>
+public interface IPresetSlotSource
+{
+    /// <summary>The slots a drop-down should offer, ascending, named where the store can name them.</summary>
+    IReadOnlyList<PresetSlotOption> Slots();
+}
+
+/// <summary>
+/// The default <see cref="IPresetSlotSource"/>: the slots the profile store holds, named by the
+/// profile stored in each. Slots are per device and the device id is not the panel's to know, so
+/// the slots of every stored device are offered together - a slot number is the same slot on all
+/// of them, and the name is filled in from whichever device has one for that slot.
+/// </summary>
+public sealed class ProfileStorePresetSlotSource : IPresetSlotSource
+{
+    private readonly IProfileStore _store;
+
+    public ProfileStorePresetSlotSource(IProfileStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        _store = store;
+    }
+
+    /// <summary>Reads the app's own profile directory.</summary>
+    public ProfileStorePresetSlotSource()
+        : this(new FileProfileStore())
+    {
+    }
+
+    public IReadOnlyList<PresetSlotOption> Slots()
+    {
+        var names = new SortedDictionary<int, string>();
+
+        foreach (var profile in _store.LoadAll())
+        {
+            if (SlotOf(profile.DeviceId) is { } slot)
+            {
+                names[slot] = string.IsNullOrWhiteSpace(profile.Name) ? $"预设 {slot}" : profile.Name;
+            }
+        }
+
+        return [.. names.Select(pair => new PresetSlotOption(pair.Key, pair.Value))];
+    }
+
+    /// <summary>
+    /// The slot a stored profile's key stands for, or null when the profile is not a preset slot.
+    /// Slot 1 is the bare device id; every later slot is prefixed with its number - the same shape
+    /// <see cref="PresetStore"/> persists, read here without needing the device id to read it.
+    /// </summary>
+    private static int? SlotOf(string? key)
+    {
+        if (string.IsNullOrEmpty(key))
+        {
+            return null;
+        }
+
+        const string prefix = "preset";
+        if (!key.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return PresetStore.MinSlot;
+        }
+
+        var rest = key.Substring(prefix.Length);
+        var colon = rest.IndexOf(':');
+
+        return colon > 0 && int.TryParse(rest.AsSpan(0, colon), out var slot) && slot > PresetStore.MinSlot
+            ? slot
+            : null;
+    }
+}
+
+/// <summary>
 /// The foreground rules surface: which program runs which profile, which programs get the pad
 /// themselves, what the desktop falls back to, and - the part the user actually asks about -
 /// why the profile that is running right now is the one running. Every answer comes from the
@@ -26,14 +103,17 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
     private readonly ForegroundRuleStore _store;
 
+    private IPresetSlotSource? _presetSlots;
+
     private bool _disposed;
 
-    public ForegroundRulesViewModel(ForegroundWatcher watcher, ForegroundRuleStore? store = null)
+    public ForegroundRulesViewModel(ForegroundWatcher watcher, ForegroundRuleStore? store = null, IPresetSlotSource? presetSlots = null)
     {
         ArgumentNullException.ThrowIfNull(watcher);
 
         _watcher = watcher;
         _store = store ?? new ForegroundRuleStore();
+        _presetSlots = presetSlots;
 
         _watcher.StateChanged += OnWatcherStateChanged;
 
@@ -43,6 +123,32 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
     }
 
     public ObservableCollection<ForegroundRuleItem> Rules { get; } = [];
+
+    /// <summary>
+    /// The preset slots the drop-downs offer: the slot number and the name the stored profile
+    /// carries, so a rule names its preset by pointing at it rather than by typing a number.
+    /// Rebuilt from <see cref="IPresetSlotSource"/> whenever the panel asks - a picker opening, a
+    /// rule arriving, a slot the staged table names that the store has no profile for. The rows
+    /// hold this same collection, so its change notification is what points each of them back at
+    /// the entry that spells its slot now.
+    /// </summary>
+    public ObservableCollection<PresetSlotOption> SlotOptions { get; } = [];
+
+    /// <summary>
+    /// The entry the desktop default's drop-down has chosen. A plain selection rather than a
+    /// number: the drop-down is the editor, and the default slot is what the pick writes.
+    /// </summary>
+    public PresetSlotOption? DefaultSlotOption
+    {
+        get => SlotOptions.FirstOrDefault(option => option.Slot == DefaultSlot);
+        set
+        {
+            if (value is not null)
+            {
+                DefaultSlot = value.Slot;
+            }
+        }
+    }
 
     /// <summary>
     /// The windows the picker offers: what the platform enumerates as open right now, one entry
@@ -190,6 +296,77 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Re-reads the preset slots the drop-downs offer, for the same reason the window list is
+    /// re-read when a picker opens: what the panel offers is what the store holds right now, so a
+    /// preset added in another tab shows up rather than the list this view model was built with.
+    /// A slot the staged table already names is kept offered even when the store holds no profile
+    /// under it - a rule reading slot 7 must not turn into an empty drop-down - and a store with
+    /// nothing in it falls back to the initial slots rather than to no choice at all.
+    /// </summary>
+    [RelayCommand]
+    private void RefreshSlotOptions()
+    {
+        var stored = SlotsFromStore();
+        var names = new SortedDictionary<int, string>();
+
+        foreach (var option in stored)
+        {
+            names[option.Slot] = option.Name;
+        }
+
+        // A slot the staged table already names stays offered even when the store holds no profile
+        // under it: a rule reading slot 7 must not turn into a blank drop-down.
+        foreach (var slot in Rules.Select(rule => rule.Slot).Append(DefaultSlot))
+        {
+            names.TryAdd(slot, $"预设 {slot}");
+        }
+
+        // A store with nothing in it still has to offer a choice: an empty drop-down reads as a
+        // broken control rather than as a device that was never configured.
+        if (stored.Count == 0)
+        {
+            for (var slot = PresetStore.MinSlot; slot <= PresetStore.DefaultSlotCount; slot++)
+            {
+                names.TryAdd(slot, $"预设 {slot}");
+            }
+        }
+
+        SlotOptions.Clear();
+
+        foreach (var (slot, name) in names)
+        {
+            SlotOptions.Add(new PresetSlotOption(slot, name));
+        }
+
+        // The rows hold this same collection, so its change notification is what points each of
+        // them back at the entry that spells its slot now.
+        OnPropertyChanged(nameof(DefaultSlotOption));
+    }
+
+    /// <summary>
+    /// The slots the injected source reports. A source is a read of the profile store, so a store
+    /// that cannot be read leaves the drop-downs empty rather than taking the panel down: the
+    /// caller's fallback below still offers the initial slots.
+    /// </summary>
+    private IReadOnlyList<PresetSlotOption> SlotsFromStore()
+    {
+        _presetSlots ??= new ProfileStorePresetSlotSource();
+
+        try
+        {
+            return _presetSlots.Slots();
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
     /// Locks or unlocks the profile in effect. The only control that acts immediately: a user
     /// fighting a rule over the profile should not have to save anything to win.
     /// </summary>
@@ -218,6 +395,7 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
         // Subscribed on the way in: a row that changes without telling this view model leaves
         // the derived state - the save button's enabled state above all - stale.
         Add(rule);
+        RefreshSlotOptions();
         RefreshDerived();
     }
 
@@ -228,11 +406,15 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
         Rules.Remove(rule);
         rule.PropertyChanged -= OnRuleItemPropertyChanged;
+        RefreshSlotOptions();
         RefreshDerived();
     }
 
     private void Add(ForegroundRuleItem rule)
     {
+        // The one option collection, shared with every row: a rebuild reaches them all at once
+        // and no row is ever left pointing at an entry that no longer exists.
+        rule.SlotOptions = SlotOptions;
         rule.PropertyChanged += OnRuleItemPropertyChanged;
         Rules.Add(rule);
     }
@@ -304,6 +486,7 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
         // The stored table is what runs: push it in so a restart resumes the rules the user left.
         _watcher.Update(settings);
+        RefreshSlotOptions();
         RefreshDerived();
     }
 
@@ -381,6 +564,9 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // Rebuilt so the drop-down's selection is never a slot the list does not offer: the slot
+        // the panel stores is the slot the drop-down has to show.
+        RefreshSlotOptions();
         RefreshDerived();
     }
 

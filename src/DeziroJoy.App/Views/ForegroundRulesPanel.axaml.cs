@@ -27,4 +27,18 @@ public partial class ForegroundRulesPanel : UserControl
             viewModel.RefreshWindowListCommand.Execute(null);
         }
     }
+
+    /// <summary>
+    /// Refreshes the preset-slot list as either slot drop-down opens, for the same reason the
+    /// window list is: a preset added in another tab has to show up in the drop-down the user is
+    /// looking at, not in the list the panel was built with. Both the desktop default's drop-down
+    /// and every rule row's raise this.
+    /// </summary>
+    private void OnSlotPickerDropDownOpened(object? sender, EventArgs e)
+    {
+        if (DataContext is ViewModels.ForegroundRulesViewModel viewModel)
+        {
+            viewModel.RefreshSlotOptionsCommand.Execute(null);
+        }
+    }
 }
