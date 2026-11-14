@@ -931,6 +931,39 @@ public class SpecialKeyConflictsTests
     }
 
     [Fact]
+    public void A_Base_Layer_Entry_Beside_A_Temporary_One_Is_No_Conflict()
+    {
+        // The ordinary shape the layer model asks for: one button, one entry per layer.
+        // While the temporary layer is in effect it replaces the base entry on the same
+        // input, and while it is not, only the base entry runs - the two never fire
+        // together, so neither is a sibling of the other.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Layer()),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)) with { Layer = 1 },
+        };
+
+        Assert.Empty(SpecialKeyConflicts.Analyze(mappings));
+    }
+
+    [Fact]
+    public void Two_Entries_On_The_Same_Layer_Of_One_Button_Still_Fire_Beside_Each_Other()
+    {
+        // The other half of the rule: entries that DO run together - two on the base layer,
+        // say - still collide exactly as they did before layers were grouped.
+        var mappings = new[]
+        {
+            Button(GamepadButton.Back, Layer()),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Enter)),
+            Button(GamepadButton.Back, new KeyPressTarget(GamepadKey.Space)) with { Layer = 1 },
+        };
+
+        Assert.Equal(
+            "Back 键上还有另一条映射（单击：Enter）：每次按下触发「临时层 Leader 键」的同时也会触发Enter。",
+            Message(SpecialKeyConflicts.Analyze(mappings)));
+    }
+
+    [Fact]
     public void Key_Of_Reads_The_Target_First_Then_The_Gesture_Actions()
     {
         var click = Button(GamepadButton.Back, Leader());

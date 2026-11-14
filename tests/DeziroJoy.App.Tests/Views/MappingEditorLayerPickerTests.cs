@@ -16,10 +16,13 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// The 所属层 picker in the mapping editor: the ComboBox over the two layers a mapping can sit
-/// on. It has to both display the layer the draft is on and commit the layer the user picks -
-/// a picker that shows 临时层 while the entry commits 基础层 silently moves the mapping back
-/// onto the base layer on the next edit, and the temporary layer quietly stops running.
+/// The 所属层 switcher in the mapping editor: the two segments over the layers one physical
+/// element can be configured on. It has to both display the layer the draft is on and move
+/// the draft to the layer the user picks - a switcher that shows 临时层 while the entry
+/// commits 基础层 silently moves the mapping back onto the base layer on the next edit, and
+/// the temporary layer quietly stops running. It also has to move the DRAFT: one button
+/// carries a base-layer entry and a temporary-layer one side by side, and the switcher is
+/// what edits each of them without the other being lost.
 /// </summary>
 public sealed class MappingEditorLayerPickerTests
 {
@@ -64,17 +67,16 @@ public sealed class MappingEditorLayerPickerTests
     private static MappingEditorPanel EditorPanelOf(Window window)
         => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
 
-    private static ComboBox LayerCombo(Window window)
-        => EditorPanelOf(window).FindControl<ComboBox>("LayerCombo")!;
+    /// <summary>One segment of the layer switcher, by the name the panel gives it.</summary>
+    private static RadioButton LayerTab(Window window, string name)
+        => EditorPanelOf(window).FindControl<RadioButton>(name)!;
 
-    private static MappingLayerOption Option(MainWindowViewModel viewModel, int layer)
-        => viewModel.Editor.LayerOptions.Single(option => option.Value == layer);
-
-    /// <summary>What the closed picker shows as its selection: the label the selected row renders.</summary>
-    private static string ShownLabel(ComboBox combo)
-        => combo.GetVisualDescendants()
+    /// <summary>What the header readout names the layer the draft is on.</summary>
+    private static string HeaderLayerSummary(Window window)
+        => EditorPanelOf(window)
+            .GetLogicalDescendants()
             .OfType<TextBlock>()
-            .FirstOrDefault(text => ReferenceEquals(text.DataContext, combo.SelectedItem))?.Text ?? string.Empty;
+            .First(text => text.Text!.StartsWith("所属层：", StringComparison.Ordinal)).Text!;
 
     private static (MainWindow Window, MainWindowViewModel ViewModel) OpenFreshEditor()
     {
@@ -89,40 +91,41 @@ public sealed class MappingEditorLayerPickerTests
     }
 
     [AvaloniaFact]
-    public void Selecting_The_Temporary_Layer_In_The_Picker_Commits_It()
+    public void Selecting_The_Temporary_Layer_In_The_Switcher_Commits_It()
     {
         var (window, viewModel) = OpenFreshEditor();
 
-        var combo = LayerCombo(window);
-        var baseLayer = Option(viewModel, 0);
-        var temporary = Option(viewModel, 1);
+        var baseTab = LayerTab(window, "LayerBaseTab");
+        var temporaryTab = LayerTab(window, "LayerTemporaryTab");
 
-        // A fresh editor opens on the base layer, and the picker says so.
+        // The two segments are named the way every layer surface names the layers.
+        Assert.Equal("基础层", baseTab.Content);
+        Assert.Equal("临时层", temporaryTab.Content);
+
+        // A fresh editor opens on the base layer, and the switcher says so.
         Assert.Equal(0, viewModel.Editor.SelectedLayer);
-        Assert.Equal(baseLayer, combo.SelectedItem);
-        Assert.Equal("基础层", ShownLabel(combo));
+        Assert.True(baseTab.IsChecked);
+        Assert.False(temporaryTab.IsChecked);
+        Assert.Equal(0, viewModel.Editor.BuildEntry().Layer);
 
-        // The user picks 临时层: the draft, the picker and the committed entry all follow.
-        combo.SelectedItem = temporary;
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+        // The user picks 临时层: the draft, the switcher and the committed entry all follow.
+        Click(temporaryTab, window);
 
         Assert.Equal(1, viewModel.Editor.SelectedLayer);
-        Assert.Equal(temporary, combo.SelectedItem);
-        Assert.Equal("临时层", ShownLabel(combo));
+        Assert.True(temporaryTab.IsChecked);
+        Assert.False(baseTab.IsChecked);
         Assert.Equal(1, viewModel.Editor.BuildEntry().Layer);
 
         // And back down to the base layer, which is the other half of the round trip.
-        combo.SelectedItem = baseLayer;
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+        Click(baseTab, window);
 
         Assert.Equal(0, viewModel.Editor.SelectedLayer);
+        Assert.True(baseTab.IsChecked);
         Assert.Equal(0, viewModel.Editor.BuildEntry().Layer);
     }
 
     [AvaloniaFact]
-    public void Reloading_A_Temporary_Layer_Mapping_Shows_The_Temporary_Layer()
+    public void Reloading_A_Temporary_Layer_Mapping_Checks_The_Temporary_Segment()
     {
         var (window, viewModel, _, _) = BuildWindow();
 
@@ -139,69 +142,39 @@ public sealed class MappingEditorLayerPickerTests
         Dispatcher.UIThread.RunJobs();
 
         // A mapping a user placed on the temporary layer comes back on that layer: the
-        // picker has to display 临时层, and the entry has to commit it unchanged.
-        var combo = LayerCombo(window);
-        Assert.Equal(Option(viewModel, 1), combo.SelectedItem);
-        Assert.Equal("临时层", ShownLabel(combo));
+        // switcher has to check 临时层, and the entry has to commit it unchanged.
+        Assert.True(LayerTab(window, "LayerTemporaryTab").IsChecked);
+        Assert.False(LayerTab(window, "LayerBaseTab").IsChecked);
+        Assert.Equal("所属层：临时层", HeaderLayerSummary(window));
         Assert.Equal(1, viewModel.Editor.BuildEntry().Layer);
     }
 
     [AvaloniaFact]
-    public void Picking_The_Temporary_Layer_In_The_Open_Dropdown_Commits_It()
-    {
-        var (window, viewModel) = OpenFreshEditor();
-
-        var combo = LayerCombo(window);
-        combo.IsDropDownOpen = true;
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
-
-        // The real interaction: the user opens the dropdown and clicks the 临时层 row.
-        var temporaryRow = window.GetVisualDescendants()
-            .OfType<ComboBoxItem>()
-            .Single(item => item.DataContext is MappingLayerOption option && option.Value == 1);
-        Click(temporaryRow, window);
-
-        Assert.Equal(1, viewModel.Editor.SelectedLayer);
-        Assert.Equal(Option(viewModel, 1), combo.SelectedItem);
-        Assert.Equal(1, viewModel.Editor.BuildEntry().Layer);
-    }
-
-    [AvaloniaFact]
-    public void The_Header_Readout_Follows_The_Layer_The_Picker_Names()
+    public void The_Header_Readout_Follows_The_Layer_The_Switcher_Names()
     {
         // The header's 所属层 readout is the layer's second display: it has to move with the
-        // picker the moment the layer changes, or the editor names one layer up top and
+        // switcher the moment the layer changes, or the editor names one layer up top and
         // commits another below.
         var (window, viewModel) = OpenFreshEditor();
 
-        var summary = EditorPanelOf(window)
-            .GetLogicalDescendants()
-            .OfType<TextBlock>()
-            .Single(text => text.Text == "所属层：基础层");
+        Assert.Equal("所属层：基础层", HeaderLayerSummary(window));
 
-        Assert.Equal("所属层：基础层", summary.Text);
-
-        LayerCombo(window).SelectedItem = Option(viewModel, 1);
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+        Click(LayerTab(window, "LayerTemporaryTab"), window);
 
         Assert.Equal(1, viewModel.Editor.SelectedLayer);
-        Assert.Equal("所属层：临时层", summary.Text);
+        Assert.Equal("所属层：临时层", HeaderLayerSummary(window));
         Assert.Equal("临时层", viewModel.Editor.LayerDescription);
     }
 
     [AvaloniaFact]
-    public void A_Layer_Leader_Snaps_The_Picker_Back_To_The_Base_Layer()
+    public void A_Layer_Leader_Snaps_The_Switcher_Back_To_The_Base_Layer()
     {
-        // The enforcement, through the picker itself: a 切换临时层 Leader 键 has to sit on
+        // The enforcement, through the switcher itself: a 切换临时层 Leader 键 has to sit on
         // the base layer, so choosing that target takes the temporary layer back off the
-        // draft - and the picker has to say so rather than keep showing what was picked.
+        // draft - and the switcher has to say so rather than keep showing what was picked.
         var (window, viewModel) = OpenFreshEditor();
 
-        LayerCombo(window).SelectedItem = Option(viewModel, 1);
-        window.UpdateLayout();
-        Dispatcher.UIThread.RunJobs();
+        Click(LayerTab(window, "LayerTemporaryTab"), window);
         Assert.Equal(1, viewModel.Editor.SelectedLayer);
 
         var panel = EditorPanelOf(window);
@@ -217,12 +190,105 @@ public sealed class MappingEditorLayerPickerTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var combo = LayerCombo(window);
         Assert.True(viewModel.Editor.LayerLeaderRequiresBaseLayer);
         Assert.Equal(0, viewModel.Editor.SelectedLayer);
-        Assert.Equal(Option(viewModel, 0), combo.SelectedItem);
-        Assert.Equal("基础层", ShownLabel(combo));
+        Assert.True(LayerTab(window, "LayerBaseTab").IsChecked);
+        Assert.False(LayerTab(window, "LayerTemporaryTab").IsChecked);
         Assert.Equal(0, viewModel.Editor.BuildEntry().Layer);
         Assert.Contains("必须放在基础层", viewModel.Editor.LayerHint);
+    }
+
+    [AvaloniaFact]
+    public void A_Button_With_Both_Layers_Keeps_Each_Layers_Target_Through_The_Switcher()
+    {
+        // The whole point of the switcher: one button, one entry per layer, edited in turn
+        // from one editor. The default profile carries X -> Ctrl + C on the base layer; the
+        // temporary layer is configured on top of it and neither loses the other.
+        var (window, viewModel, host, provider) = BuildWindow();
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var xRow = viewModel.Mappings.Single(
+            row => row.Entry.Source == new ButtonBinding(GamepadButton.X));
+        viewModel.EditMappingCommand.Execute(xRow);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The leader first: the temporary layer only runs while one has it in effect, and
+        // the editor refuses a commit that would configure a layer nothing switches.
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.Back));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        var leaderPanel = EditorPanelOf(window);
+        leaderPanel.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.SpecialKey;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        leaderPanel.FindControl<ComboBox>("SpecialKindCombo")!.SelectedItem =
+            viewModel.Editor.SpecialKindOptions.Single(option => option.Value == SpecialKeyKind.Leader);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        leaderPanel.FindControl<ComboBox>("SpecialLeaderActionCombo")!.SelectedItem =
+            viewModel.Editor.SpecialLeaderActionOptions.Single(option => option.Value == LeaderAction.Layer);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Click(leaderPanel.FindControl<Button>("CommitButton")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.EditMappingCommand.Execute(xRow);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var panel = EditorPanelOf(window);
+        var temporaryTab = LayerTab(window, "LayerTemporaryTab");
+        var baseTab = LayerTab(window, "LayerBaseTab");
+
+        // The base layer is the mapping the profile already carries.
+        Assert.True(baseTab.IsChecked);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), viewModel.Editor.BuildTarget());
+
+        // The temporary layer is configured from the same editor.
+        Click(temporaryTab, window);
+        panel.FindControl<ComboBox>("TargetKindCombo")!.SelectedItem = MappingTargetKind.KeyCombo;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        panel.FindControl<CheckBox>("ModifierAltBox")!.IsChecked = true;
+        viewModel.Editor.SelectedKey = GamepadKey.V;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V), viewModel.Editor.BuildTarget());
+
+        // Switching back shows the base layer's own target, untouched.
+        Click(baseTab, window);
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), viewModel.Editor.BuildTarget());
+
+        // The layer not in view is still legible: the readout beside the switcher names it.
+        Click(temporaryTab, window);
+
+        Assert.Equal("基础层：Ctrl + C", viewModel.Editor.OtherLayerSummary);
+
+        Click(panel.FindControl<Button>("CommitButton")!, window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.False(viewModel.IsEditing);
+
+        var entries = viewModel.ActiveProfile!.Mappings
+            .Where(mapping => mapping.Source is ButtonBinding { Button: GamepadButton.X })
+            .ToArray();
+
+        Assert.Equal(2, entries.Length);
+        Assert.Contains(entries, entry => entry.Layer == 0
+            && entry.Target == new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C));
+        Assert.Contains(entries, entry => entry.Layer == 1
+            && entry.Target == new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V));
+
+        // The list shows one row per entry, so both layers of the button are listed.
+        Assert.Equal(2, viewModel.Mappings.Count(
+            row => row.Entry.Source is ButtonBinding { Button: GamepadButton.X }));
     }
 }

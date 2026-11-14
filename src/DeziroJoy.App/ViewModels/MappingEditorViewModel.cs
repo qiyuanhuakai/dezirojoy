@@ -28,11 +28,17 @@ public sealed record LeaderSwitchModeOption(LeaderSwitchMode Value, string Label
 public sealed record LeaderActionOption(LeaderAction Value, string Label);
 
 /// <summary>
-/// One layer as the layer picker shows it: 基础层, which every mapping already runs, or the
-/// one 临时层 above it, which only runs while a Leader 键 whose action switches the
-/// temporary layer has it in effect.
+/// One entry a commit writes, and the id of the profile entry it replaces - null when the
+/// entry is new. A button can carry a base-layer action and a temporary-layer one side by
+/// side, so a commit is a small set of writes rather than one: the layer being edited, and
+/// the other layer when this session left an edit on it.
 /// </summary>
-public sealed record MappingLayerOption(int Value, string Label);
+/// <param name="Entry">The entry to write into the profile.</param>
+/// <param name="ReplacesId">
+/// The id of the entry it replaces, or null when the entry is new and is added beside the
+/// others.
+/// </param>
+public sealed record MappingCommit(MappingEntry Entry, Guid? ReplacesId);
 
 /// <summary>
 /// One place where a global special key - a 精准键 or a Leader 键 (which switches 预设 or
@@ -107,18 +113,22 @@ public enum SpecialKeyTrigger
 public static class SpecialKeyConflicts
 {
     /// <summary>
-    /// Every collision in one mapping list. Mappings are grouped by physical button - the
-    /// button plus the raw code that tells one extra button from another - because a gesture
-    /// or a direction is configuration ON an element, not a second element. A disabled
-    /// mapping never runs, so it never collides; a stick has no gestures, so only buttons
-    /// are examined.
+    /// Every collision in one mapping list. Mappings are grouped by physical button AND by
+    /// layer - the button plus the raw code that tells one extra button from another, and
+    /// the layer the mapping sits on - because a gesture or a direction is configuration ON
+    /// an element, not a second element, and because two mappings on the same button only
+    /// ever fire together when they sit on the same layer: while the temporary layer is in
+    /// effect it replaces the base mapping on the same input, and while it is not, only the
+    /// base mapping runs. A base-layer entry beside a temporary-layer one is therefore the
+    /// ordinary shape the layer model asks for, never a collision. A disabled mapping never
+    /// runs, so it never collides; a stick has no gestures, so only buttons are examined.
     /// </summary>
     public static IReadOnlyList<SpecialKeyConflict> Analyze(IReadOnlyList<MappingEntry> mappings)
     {
         ArgumentNullException.ThrowIfNull(mappings);
 
         var conflicts = new List<SpecialKeyConflict>();
-        var buttons = new Dictionary<(GamepadButton Button, int Code), List<MappingEntry>>();
+        var buttons = new Dictionary<(GamepadButton Button, int Code, int Layer), List<MappingEntry>>();
 
         foreach (var mapping in mappings)
         {
@@ -127,7 +137,8 @@ public static class SpecialKeyConflicts
                 continue;
             }
 
-            var key = (binding.Button, binding.Code);
+            // Any non-zero layer is the one temporary layer, exactly as the engine reads it.
+            var key = (binding.Button, binding.Code, mapping.Layer == 0 ? 0 : 1);
             if (!buttons.TryGetValue(key, out var group))
             {
                 group = [];
@@ -139,7 +150,7 @@ public static class SpecialKeyConflicts
 
         foreach (var (key, entries) in buttons)
         {
-            var (button, code) = key;
+            var (button, code, _) = key;
             var label = MappingDescriptions.Button(button, code);
 
             foreach (var entry in entries)
@@ -610,6 +621,65 @@ public partial class MappingEditorViewModel : ObservableObject
     private InputDirection? _loadedDirection;
     private GamepadButtonMask _previousCaptureButtons;
 
+    /// <summary>
+    /// One layer of the physical element being edited: the entry the profile carries there,
+    /// the entry this session's edit would write, and - when the layer carries nothing -
+    /// what an untouched draft on it builds, the baseline an edit is measured against.
+    /// </summary>
+    private sealed class LayerSlot
+    {
+        /// <summary>The entry the profile carries on this layer, or null when it carries none.</summary>
+        public MappingEntry? Loaded { get; set; }
+
+        /// <summary>
+        /// The entry this session's edit on this layer would write, or null when the layer
+        /// was not edited. Its <see cref="MappingEntry.Id"/> is the loaded entry's id when
+        /// the layer already had one, and a fresh id otherwise.
+        /// </summary>
+        public MappingEntry? Edited { get; set; }
+
+        /// <summary>
+        /// What an untouched draft on this layer builds: the baseline
+        /// <see cref="MappingEditorViewModel.CaptureCurrentLayer"/> measures an edit against,
+        /// captured the moment the layer was found empty.
+        /// </summary>
+        public MappingEntry? Pristine { get; set; }
+    }
+
+    /// <summary>
+    /// The two layers of the element being edited, indexed by layer: 0 is the base layer,
+    /// 1 the one temporary layer. The draft is a view over one of them at a time, so
+    /// switching layers saves the draft into its slot and loads the other's.
+    /// </summary>
+    private readonly LayerSlot[] _slots = [new(), new()];
+
+    /// <summary>The layer the draft is currently loaded on, always folded onto 0 or 1.</summary>
+    private int _loadedLayer;
+
+    /// <summary>
+    /// True while the editor itself is loading a draft, so a layer write that comes from
+    /// the load is not read as the user moving the switcher.
+    /// </summary>
+    private bool _loading;
+
+    /// <summary>
+    /// The layer a fresh arming wrote its default draft onto - 0 for the base layer - or
+    /// null when this session opened an existing mapping instead of arming a new one. The
+    /// 新增 mapping button and a click on an element that carries no mapping arm a new one,
+    /// and confirming writes the default draft they armed even when nothing was edited:
+    /// that default IS the mapping the user asked for. A layer the switcher merely opened
+    /// writes nothing until it is configured, so looking at the temporary layer never
+    /// conjures an entry for it.
+    /// </summary>
+    private int? _armedLayer;
+
+    /// <summary>
+    /// The conflict scope exactly as the window handed it in: every mapping of the profile
+    /// except the entry the editor was opened on. The layer switcher re-cuts it - see
+    /// <see cref="ConflictScope"/> - so this stays the untouched original.
+    /// </summary>
+    private IReadOnlyList<MappingEntry> _windowScope = [];
+
     /// <summary>The row that turns the gesture off: it never resolves, so the press fires at once.</summary>
     public static readonly GestureActionOption GestureOffOption = new("已关闭", null);
 
@@ -664,6 +734,10 @@ public partial class MappingEditorViewModel : ObservableObject
         // than on an empty selection.
         SyncDoubleClickOption();
         SyncLongPressOption();
+
+        // The base layer's baseline: what this pristine draft builds, so a later layer
+        // switch can tell an untouched draft from an edited one.
+        _slots[0].Pristine = BuildEntry();
     }
 
     [ObservableProperty]
@@ -836,34 +910,110 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>
     /// The layers a mapping can sit on: 基础层, which always runs, and the one 临时层 above
     /// it, which runs only while a Leader 键 whose action switches the temporary layer has
-    /// it in effect. There is exactly one temporary layer, so the picker carries two rows.
-    /// </summary>
-    [ObservableProperty]
-    private IReadOnlyList<MappingLayerOption> _layerOptions =
-    [
-        new(0, LayerLabel(0)),
-        new(1, LayerLabel(1)),
-    ];
-
-    /// <summary>What a layer is called, the way every layer picker names it.</summary>
-    public static string LayerLabel(int layer) => layer <= 0 ? "基础层" : "临时层";
-
-    /// <summary>
-    /// Which layer the mapping being edited belongs to: 0 for the base layer, which always
-    /// runs, or the one temporary layer that only runs while a Leader 键 whose action
-    /// switches the temporary layer has it in effect. The tag travels with the entry on
-    /// commit and is restored on reload, so a mapping placed on the temporary layer stays
-    /// there through an edit instead of collapsing back onto the base layer. It is also the
-    /// one source of truth the 所属层 picker binds to - through the picker row's
-    /// <see cref="MappingLayerOption.Value"/> - so what the picker displays and what the
-    /// entry commits are the same number by construction.
+    /// it in effect. There is exactly one temporary layer, so the switcher carries two
+    /// segments.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LayerDescription))]
     [NotifyPropertyChangedFor(nameof(LayerSummary))]
+    [NotifyPropertyChangedFor(nameof(IsBaseLayerSelected))]
+    [NotifyPropertyChangedFor(nameof(IsTemporaryLayerSelected))]
+    [NotifyPropertyChangedFor(nameof(ShowTemporaryLayerGuidance))]
+    [NotifyPropertyChangedFor(nameof(OtherLayerSummary))]
     private int _selectedLayer;
 
-    partial void OnSelectedLayerChanged(int value) => EnforceLayerLeaderPlacement();
+    /// <summary>
+    /// Which layer the switcher has selected: 0 for the base layer, which always runs, or
+    /// the one temporary layer that only runs while a Leader 键 whose action switches the
+    /// temporary layer has it in effect.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The value is a switcher over the two layers of ONE physical element, not a property
+    /// of a single entry: moving it saves the draft into the layer it was loaded on and
+    /// loads the draft the other layer carries, so a button can be configured on both
+    /// layers from one editor - see <see cref="LoadFrom"/> and <see cref="BuildCommit"/>.
+    /// </para>
+    /// <para>
+    /// The layer travels with the entry on commit and is restored on reload, so a mapping
+    /// placed on the temporary layer stays there through an edit instead of collapsing
+    /// back onto the base layer. It is also the one source of truth the switcher binds to
+    /// - through the segments' <see cref="IsBaseLayerSelected"/> and
+    /// <see cref="IsTemporaryLayerSelected"/> - so what the switcher displays and what the
+    /// entry commits are the same number by construction.
+    /// </para>
+    /// <para>
+    /// A layer-switching Leader 键 has to sit on the base layer: a temporary layer is
+    /// entered from there only, and the engine refuses a profile that names one from inside
+    /// another. The switcher therefore never leaves a leader draft on the temporary layer -
+    /// choosing the action moves the draft onto the base layer, and a layer that loads one
+    /// is repaired the same way - and <see cref="LayerHint"/> says why.
+    /// </para>
+    /// </remarks>
+    partial void OnSelectedLayerChanging(int value)
+    {
+        // The switcher moves between the two layers, so the draft is captured into the
+        // layer it was loaded on before the move - the other layer's entry must never be
+        // measured against, or overwritten by, the draft that is leaving it.
+        if (_loading || value == _loadedLayer)
+        {
+            return;
+        }
+
+        CaptureCurrentLayer();
+    }
+
+    partial void OnSelectedLayerChanged(int value)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        if (value != _loadedLayer)
+        {
+            LoadLayer(value);
+        }
+
+        // A layer leader has to sit on the base layer, so a layer that loads one - a
+        // hand-edited profile's - is repaired onto the base layer the moment it loads,
+        // exactly as picking the leader action repairs the draft.
+        EnforceLayerLeaderPlacement();
+        OnPropertyChanged(nameof(ShowTemporaryLayerGuidance));
+        OnPropertyChanged(nameof(OtherLayerSummary));
+    }
+
+    /// <summary>The switcher segment for the base layer, kept in step with <see cref="SelectedLayer"/>.</summary>
+    public bool IsBaseLayerSelected
+    {
+        get => SelectedLayer == 0;
+        set
+        {
+            if (value)
+            {
+                SelectedLayer = 0;
+            }
+        }
+    }
+
+    /// <summary>The switcher segment for the one temporary layer, kept in step with <see cref="SelectedLayer"/>.</summary>
+    public bool IsTemporaryLayerSelected
+    {
+        get => SelectedLayer != 0;
+        set
+        {
+            if (value)
+            {
+                SelectedLayer = 1;
+            }
+        }
+    }
+
+    /// <summary>What a layer is called, the way every layer surface names it.</summary>
+    public static string LayerLabel(int layer) => layer <= 0 ? "基础层" : "临时层";
+
+    /// <summary>The layer a value names, folded onto the one that remains: anything above 0 is the single temporary layer.</summary>
+    private static int LayerOf(int layer) => layer == 0 ? 0 : 1;
 
     /// <summary>What layer the mapping being edited is on, for the header readout.</summary>
     public string LayerDescription => LayerLabel(SelectedLayer);
@@ -875,32 +1025,281 @@ public partial class MappingEditorViewModel : ObservableObject
     public string LayerSummary => $"所属层：{LayerDescription}";
 
     /// <summary>
+    /// True when the profile configures a Leader 键 whose action switches the temporary
+    /// layer. The temporary layer only runs while such a leader has it in effect, so
+    /// configuring a layer mapping without one is allowed - the engine is the judge - but
+    /// the editor says so rather than letting the user configure a layer that never runs.
+    /// </summary>
+    public bool ProfileHasLayerLeader => KnownProfile().Any(mapping => mapping.Enabled && IsLayerLeader(mapping));
+
+    /// <summary>
+    /// True while the temporary layer is in scope but nothing switches it yet: the guidance
+    /// below the switcher names the Leader 键 that would. A layer leader being configured
+    /// right now counts, so the guidance never argues with the draft.
+    /// </summary>
+    public bool ShowTemporaryLayerGuidance => SelectedLayer != 0
+        && !ProfileHasLayerLeader
+        && !LayerLeaderRequiresBaseLayer;
+
+    /// <summary>
+    /// What the layer switcher means for the mapping being edited: the inheritance rule for
+    /// an ordinary mapping, or why a layer-switching Leader 键 has to sit on the base layer.
+    /// </summary>
+    public string LayerHint => LayerLeaderRequiresBaseLayer
+        ? "「切换临时层」的 Leader 键本身必须放在基础层：临时层只能从基础层进入，引擎会拒绝从其他层切换层的配置，因此该映射的所属层固定为基础层。"
+        : "基础层的映射始终生效；临时层只在「切换临时层」的 Leader 键生效期间运行（按住切换：按住期间；按下切换：每次按下翻转），并覆盖同按钮的基础层映射，未覆盖的继承基础层。";
+
+    /// <summary>
+    /// Why the commit is refused because the temporary layer this draft configures could
+    /// never behave, in Chinese, or null when it could. The engine is the judge of both
+    /// rules and refuses the whole profile rather than the one mapping: a layer that carries
+    /// mappings no leader names never runs at all, and a layer mapping that listens on the
+    /// leader's own input would take the leader out of effect the moment the layer
+    /// activates - nothing would ever leave the layer again. The editor says so at the
+    /// draft instead of letting the commit fail the profile at the next reload.
+    /// </summary>
+    public string? TemporaryLayerDefect { get; private set; }
+
+    /// <summary>True while the temporary layer this draft configures could never behave, so the hint has something to say.</summary>
+    public bool HasTemporaryLayerDefect => TemporaryLayerDefect is not null;
+
+    /// <summary>
     /// True while the mapping's own target is a Leader 键 whose action switches the
     /// temporary layer. Such a leader has to sit on the base layer: a temporary layer is
     /// entered from the base layer only, and the engine refuses a profile that names one
     /// from inside another - a refusal that would fail the whole profile rather than the
-    /// one mapping. The editor snaps the layer back to 基础层 instead, and
+    /// one mapping. The editor moves the draft onto the base layer instead, and
     /// <see cref="LayerHint"/> says why.
     /// </summary>
     public bool LayerLeaderRequiresBaseLayer => ClickSlot.TargetKind == MappingTargetKind.SpecialKey
         && ClickSlot.SpecialKind == SpecialKeyKind.Leader
         && ClickSlot.SpecialLeaderAction == LeaderAction.Layer;
 
-    /// <summary>
-    /// What the layer picker means for the mapping being edited: the inheritance rule for an
-    /// ordinary mapping, or why a layer-switching Leader 键 has to sit on the base layer.
-    /// </summary>
-    public string LayerHint => LayerLeaderRequiresBaseLayer
-        ? "「切换临时层」的 Leader 键本身必须放在基础层：临时层只能从基础层进入，引擎会拒绝从其他层切换层的配置，因此该映射的所属层固定为基础层。"
-        : "基础层的映射始终生效；临时层只在「切换临时层」的 Leader 键生效期间运行（按住切换：按住期间；按下切换：每次按下翻转），并覆盖同按钮的基础层映射，未覆盖的继承基础层。";
-
     private void EnforceLayerLeaderPlacement()
     {
-        if (LayerLeaderRequiresBaseLayer && SelectedLayer != 0)
+        if (!LayerLeaderRequiresBaseLayer || _loadedLayer == 0)
         {
-            SelectedLayer = 0;
+            return;
+        }
+
+        // The draft moves onto the base layer: a temporary layer is entered from there
+        // only, so a leader that switches it cannot sit inside it. The temporary slot keeps
+        // whatever it held - the other layer's entry is never touched by this - and the
+        // leader takes the base slot's place, exactly as the one-entry editor moved the
+        // mapping it was editing onto the base layer.
+        _slots[0].Edited = BuildEntry() with { Layer = 0, Id = _slots[0].Loaded?.Id ?? Guid.NewGuid() };
+        _loadedLayer = 0;
+        SelectedLayer = 0;
+    }
+
+    /// <summary>
+    /// Saves the draft into the slot of the layer it is loaded on, when the session left an
+    /// edit there: the entry the draft builds, tagged with that layer and carrying the
+    /// loaded entry's id so a commit replaces it rather than adding a second one. An
+    /// untouched layer captures nothing, so a layer the user only looked at never gains an
+    /// entry of its own.
+    /// </summary>
+    private void CaptureCurrentLayer()
+    {
+        var slot = _slots[_loadedLayer];
+        var built = BuildEntry() with { Layer = _loadedLayer };
+        var baseline = slot.Loaded ?? slot.Pristine;
+
+        if (baseline is not null && SameEntry(built, baseline))
+        {
+            return;
+        }
+
+        slot.Edited = built with { Id = slot.Loaded?.Id ?? Guid.NewGuid() };
+    }
+
+    /// <summary>Two entries are the same mapping when everything but the id agrees.</summary>
+    private static bool SameEntry(MappingEntry left, MappingEntry right)
+        => left with { Id = right.Id } == right;
+
+    /// <summary>
+    /// Loads the draft the selected layer carries: the entry this session left on it, the
+    /// entry the profile carries there, or - when the layer has neither - a fresh draft over
+    /// the same source, whose baseline is what an untouched draft builds. The layer a fresh
+    /// draft starts on is the source the other layer's mapping sits on, because the two
+    /// layers are two configurations of one physical element.
+    /// </summary>
+    private void LoadLayer(int layer)
+    {
+        var slot = _slots[LayerOf(layer)];
+
+        _loading = true;
+        try
+        {
+            if (slot.Edited is { } edited)
+            {
+                LoadDraft(edited);
+            }
+            else if (slot.Loaded is { } loaded)
+            {
+                LoadDraft(loaded);
+            }
+            else
+            {
+                ResetDraft();
+                slot.Pristine = BuildEntry() with { Layer = LayerOf(layer) };
+            }
+
+            _loadedLayer = LayerOf(layer);
+
+            // A layer leader has to sit on the base layer, so a profile that carries one on
+            // the temporary layer - a hand-edited one - is repaired the moment it loads,
+            // exactly as picking the leader action repairs the draft.
+            EnforceLayerLeaderPlacement();
+            RefreshTemporaryLayerDefect();
+            OnPropertyChanged(nameof(OtherLayerSummary));
+        }
+        finally
+        {
+            _loading = false;
         }
     }
+
+    /// <summary>
+    /// Every entry a commit writes. The layer being edited leads; the other layer follows
+    /// when this session left an edit on it, carrying the id its own entry replaces. A
+    /// button can therefore gain a temporary-layer mapping beside its base one - or the
+    /// other way round - and neither entry ever overwrites the other. A layer the session
+    /// only looked at writes nothing at all, so confirming after a look leaves the profile
+    /// exactly as it was.
+    /// </summary>
+    public IReadOnlyList<MappingCommit> BuildCommit()
+    {
+        var current = _slots[_loadedLayer];
+        var other = _slots[1 - _loadedLayer];
+        var built = BuildEntry() with { Layer = _loadedLayer };
+
+        // The layer being edited is written when it carries an entry - opening a mapping
+        // and confirming replaces it, exactly as it always did - when this session
+        // configured something on it, or when the session armed a new mapping on it, which
+        // is what the 新增 mapping button and a click on an unmapped element do.
+        var untouched = current.Pristine is { } pristine && SameEntry(built, pristine);
+        var armed = _armedLayer == _loadedLayer;
+        var commits = new List<MappingCommit>(2);
+
+        if (current.Loaded is not null || current.Edited is not null || !untouched || armed)
+        {
+            commits.Add(new MappingCommit(built, current.Loaded?.Id));
+        }
+
+        if (other.Edited is { } entry)
+        {
+            // The other layer's edit replaces the entry it was loaded from when the profile
+            // carried one there, and is added beside the others when it did not.
+            commits.Add(new MappingCommit(entry, other.Loaded?.Id));
+        }
+
+        return commits;
+    }
+
+    /// <summary>
+    /// Every mapping of the profile the editor knows about: the scope the window handed in,
+    /// with the two entries the layers were loaded from put back - the window's scope leaves
+    /// out the entry the editor was opened on, and that entry is one of the two.
+    /// </summary>
+    private List<MappingEntry> KnownProfile()
+    {
+        var known = new List<MappingEntry>(_windowScope);
+        foreach (var slot in _slots)
+        {
+            if (slot.Loaded is { } loaded && known.All(mapping => mapping.Id != loaded.Id))
+            {
+                known.Add(loaded);
+            }
+        }
+
+        return known;
+    }
+
+    /// <summary>
+    /// The mapping list a commit of this draft would write: every mapping in scope, with
+    /// this session's edits on the two layers applied. The layer rules are judged on the
+    /// result rather than on the draft alone, because whether the temporary layer behaves
+    /// depends on the whole profile - the leader that names it lives on another button.
+    /// </summary>
+    private List<MappingEntry> CommittedProfile()
+    {
+        var committed = KnownProfile();
+
+        foreach (var commit in BuildCommit())
+        {
+            var index = commit.ReplacesId is { } id
+                ? committed.FindIndex(mapping => mapping.Id == id)
+                : -1;
+
+            if (index >= 0)
+            {
+                committed[index] = commit.Entry;
+            }
+            else
+            {
+                committed.Add(commit.Entry);
+            }
+        }
+
+        return committed;
+    }
+
+    private void RefreshTemporaryLayerDefect()
+    {
+        var defect = LayerDefect(CommittedProfile());
+        if (defect == TemporaryLayerDefect)
+        {
+            return;
+        }
+
+        TemporaryLayerDefect = defect;
+        OnPropertyChanged(nameof(TemporaryLayerDefect));
+        OnPropertyChanged(nameof(HasTemporaryLayerDefect));
+    }
+
+    /// <summary>
+    /// Why the engine would refuse this mapping list's temporary layer, in Chinese, or null
+    /// when it would not. The rules are the engine's own: a layer that carries mappings no
+    /// leader names never runs, and a layer mapping on the leader's own input would take
+    /// the leader out of effect the moment the layer activates. Disabled entries are left
+    /// out, exactly as the engine leaves them out.
+    /// </summary>
+    private static string? LayerDefect(IReadOnlyList<MappingEntry> mappings)
+    {
+        var leaders = mappings.Where(mapping => mapping.Enabled && IsLayerLeader(mapping)).ToArray();
+        var layerEntries = mappings.Where(mapping => mapping.Enabled && mapping.Layer != 0).ToArray();
+
+        if (layerEntries.Length == 0)
+        {
+            return null;
+        }
+
+        if (leaders.Length == 0)
+        {
+            return "临时层里配了映射，但整个配置没有「切换临时层」的 Leader 键：临时层永远不会被切入，这些映射也就不会生效。请先在基础层配置一个 Leader 键（切换内容选「切换临时层」），或把这些映射移回基础层。";
+        }
+
+        return layerEntries.Any(entry => leaders.Any(leader => SameInput(leader.Source, entry.Source)))
+            ? "临时层里有一条映射与「切换临时层」的 Leader 键按在同一个按键上：切入临时层时该 Leader 键会被这条映射顶掉，之后就再没有任何按键能退出临时层。请把这条映射改到其他按键。"
+            : null;
+    }
+
+    /// <summary>True when a mapping's own target switches the temporary layer, the one shape the engine registers.</summary>
+    private static bool IsLayerLeader(MappingEntry entry)
+        => entry.Target is SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer };
+
+    /// <summary>
+    /// True when two bindings name the same physical input, the way the engine's layer
+    /// override does: a gesture is configuration ON the input, so a double-click does not
+    /// make it another one, while a direction is part of what the mapping listens on.
+    /// </summary>
+    private static bool SameInput(InputBinding left, InputBinding right) => (left, right) switch
+    {
+        (ButtonBinding a, ButtonBinding b) => a.Button == b.Button && a.Code == b.Code && a.Direction == b.Direction,
+        (StickBinding a, StickBinding b) => a.Stick == b.Stick && a.Direction == b.Direction,
+        _ => false,
+    };
 
     /// <summary>The active slot's special-key sub-kind.</summary>
     public SpecialKeyKind ActiveSpecialKind
@@ -1074,6 +1473,58 @@ public partial class MappingEditorViewModel : ObservableObject
     private IReadOnlyList<MappingEntry> _otherMappings = [];
 
     /// <summary>
+    /// The entry the other layer of the same physical element carries, or null when that
+    /// layer has none. It is what the layer switcher reaches, so a button that carries a
+    /// base-layer mapping and a temporary-layer one can be edited on both without either
+    /// being lost.
+    /// </summary>
+    public MappingEntry? OtherLayerEntry => _slots[1 - _loadedLayer].Loaded ?? _slots[1 - _loadedLayer].Edited;
+
+    /// <summary>
+    /// What the other layer of this element does, named the way every picker names a
+    /// target, or 未配置 when it carries nothing. The switcher hides the layer not in view,
+    /// so this readout is what keeps it legible: a user configuring the temporary layer can
+    /// still read what the base one does without leaving it.
+    /// </summary>
+    public string OtherLayerDescription => OtherLayerEntry switch
+    {
+        null => "未配置",
+        var entry => MappingDescriptions.Target(entry.Target),
+    };
+
+    /// <summary>The other layer as the readout beside the switcher names it: 基础层：Ctrl + C.</summary>
+    public string OtherLayerSummary => $"{LayerLabel(1 - _loadedLayer)}：{OtherLayerDescription}";
+
+    /// <summary>
+    /// The mappings the draft is measured against for conflicts: the window's scope, re-cut
+    /// for the layer being edited. Editing the layer the editor was opened on needs no
+    /// re-cut - the scope already leaves exactly that entry out and keeps the other layer's
+    /// - while any other layer is measured against the entry the editor was opened on,
+    /// which the window's scope leaves out, and never against the entry it replaces.
+    /// </summary>
+    private IReadOnlyList<MappingEntry> ConflictScope()
+    {
+        var current = _slots[_loadedLayer].Loaded;
+        var other = _slots[1 - _loadedLayer].Loaded;
+
+        if (current is null && other is null)
+        {
+            return _windowScope;
+        }
+
+        var scope = current is null
+            ? _windowScope.ToList()
+            : _windowScope.Where(mapping => mapping.Id != current.Id).ToList();
+
+        if (other is not null && scope.All(mapping => mapping.Id != other.Id))
+        {
+            scope.Add(other);
+        }
+
+        return scope;
+    }
+
+    /// <summary>
     /// Every collision the current draft has with the profile's other mappings on the same
     /// button - its own gestures delaying or repeating a leader switch, another mapping
     /// firing beside the global key, a precision key the engine would never engage.
@@ -1103,19 +1554,23 @@ public partial class MappingEditorViewModel : ObservableObject
     private void RefreshSpecialKeyConflicts()
     {
         var draft = BuildEntry();
-        var measured = new List<MappingEntry>(OtherMappings.Count + 1) { draft };
-        measured.AddRange(OtherMappings);
+        var scope = ConflictScope();
+        var measured = new List<MappingEntry>(scope.Count + 1) { draft };
+        measured.AddRange(scope);
 
         var conflicts = SpecialKeyConflicts.Analyze(measured);
-        if (conflicts.SequenceEqual(DraftSpecialKeyConflicts))
+        if (!conflicts.SequenceEqual(DraftSpecialKeyConflicts))
         {
-            return;
+            DraftSpecialKeyConflicts = conflicts;
+            OnPropertyChanged(nameof(DraftSpecialKeyConflicts));
+            OnPropertyChanged(nameof(HasSpecialKeyConflict));
+            OnPropertyChanged(nameof(SpecialKeyConflictHint));
         }
 
-        DraftSpecialKeyConflicts = conflicts;
-        OnPropertyChanged(nameof(DraftSpecialKeyConflicts));
-        OnPropertyChanged(nameof(HasSpecialKeyConflict));
-        OnPropertyChanged(nameof(SpecialKeyConflictHint));
+        // The layer rules ride the same chokepoint: every draft edit re-measures the
+        // profile the commit would write, because whether the temporary layer behaves
+        // depends on the whole profile rather than on the draft alone.
+        RefreshTemporaryLayerDefect();
     }
 
     /// <summary>The active slot's stick-to-wheel settings.</summary>
@@ -2427,7 +2882,47 @@ public partial class MappingEditorViewModel : ObservableObject
         Layer = SelectedLayer,
     };
 
-    public void LoadFrom(MappingEntry entry)
+    /// <summary>
+    /// Loads one entry for editing, together with the entry the other layer of the same
+    /// physical element carries - the sibling the layer switcher reaches. A button can hold
+    /// a base-layer action and a temporary-layer one side by side, so opening either hands
+    /// the other in: the switcher then moves between them, and a commit writes the layer
+    /// being edited while the other layer's entry stays exactly as it was.
+    /// </summary>
+    /// <param name="entry">The entry to load into the draft.</param>
+    /// <param name="sibling">
+    /// The entry the other layer of the same physical element carries, or null when that
+    /// layer has none. A sibling on the entry's own layer - a hand-edited profile may carry
+    /// two entries on one layer - is not the other layer's entry and is left out.
+    /// </param>
+    public void LoadFrom(MappingEntry entry, MappingEntry? sibling = null)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var layer = LayerOf(entry.Layer);
+        if (sibling is not null && LayerOf(sibling.Layer) == layer)
+        {
+            sibling = null;
+        }
+
+        _slots[layer] = new LayerSlot { Loaded = entry };
+        _slots[1 - layer] = new LayerSlot { Loaded = sibling };
+
+        // Opening an existing mapping is an edit, not an arming: the layer it was opened on
+        // is written because it carries the entry, and the other one only once configured.
+        _armedLayer = null;
+
+        LoadLayer(layer);
+    }
+
+    /// <summary>
+    /// Loads one entry into the draft. The layer is part of the entry: a mapping placed on
+    /// the temporary layer has to come back on that layer, or the edit would move it to the
+    /// base layer. A profile written before the single-layer model may carry a higher
+    /// number - the engine reads any non-zero value as the temporary layer - so the loaded
+    /// layer is folded onto the one that remains.
+    /// </summary>
+    private void LoadDraft(MappingEntry entry)
     {
         // The editor is reused across edits, and the previous edit may have left the
         // long-press draft running a complex shortcut - a state whose guards refuse click
@@ -2515,12 +3010,9 @@ public partial class MappingEditorViewModel : ObservableObject
         // the compact surface rather than wherever the previous edit left the list.
         KeyPickerExpanded = false;
 
-        // The layer the mapping sits on is part of the entry: a mapping placed on the
-        // temporary layer has to come back on that layer, or the edit would move it to the
-        // base layer. A profile written before the single-layer model may carry a higher
-        // number - the engine reads any non-zero value as the temporary layer - so the
-        // loaded layer is folded onto the one that remains.
-        SelectedLayer = entry.Layer == 0 ? 0 : 1;
+        // The layer a load lands on is part of the entry, folded onto the one that remains:
+        // a mapping placed on the temporary layer has to come back on that layer.
+        SelectedLayer = LayerOf(entry.Layer);
 
         // A load lands the whole draft at once, so the conflict hints are re-measured once
         // here rather than left to whatever the individual setters happened to raise.
@@ -2529,18 +3021,51 @@ public partial class MappingEditorViewModel : ObservableObject
 
     public void Reset()
     {
+        _loading = true;
+        try
+        {
+            IsCapturingButton = false;
+            IsCapturingKey = false;
+            _previousCaptureButtons = GamepadButtonMask.None;
+            _previousCaptureExtra.Clear();
+            _loadedDirection = null;
+            SourceIsStick = false;
+            SelectedButton = GamepadButton.A;
+            SelectedExtraCode = 0;
+            SelectedStick = GamepadStick.Right;
+            ResetDraft();
+
+            // A reset editor is a fresh base-layer editor: the layer is put back first, so
+            // the base layer's baseline is what the pristine draft builds on the layer it
+            // will be measured against, and both layers start empty.
+            _loadedLayer = 0;
+            SelectedLayer = 0;
+            _armedLayer = 0;
+            _slots[0] = new LayerSlot { Pristine = BuildEntry() };
+            _slots[1] = new LayerSlot();
+            OnPropertyChanged(nameof(OtherLayerSummary));
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>
+    /// The draft back to pristine - every target and gesture field - with the source left
+    /// where it is: the layer switcher moves between the two layers of ONE physical
+    /// element, so a layer found empty starts on the button the other layer's mapping sits
+    /// on rather than on a default one.
+    /// </summary>
+    private void ResetDraft()
+    {
         IsCapturingButton = false;
         IsCapturingKey = false;
         _previousCaptureButtons = GamepadButtonMask.None;
         _previousCaptureExtra.Clear();
         _loadedDirection = null;
-        SourceIsStick = false;
-        SelectedButton = GamepadButton.A;
-        SelectedExtraCode = 0;
-        SelectedStick = GamepadStick.Right;
         SelectedDirection = InputDirection.Up;
         SelectedGestureKind = GestureKind.Click;
-        SelectedLayer = 0;
         KeyPickerExpanded = false;
 
         // The drafts go back to pristine first; the gesture flags and actions follow, so a
@@ -2594,6 +3119,10 @@ public partial class MappingEditorViewModel : ObservableObject
                 TargetKind = MappingTargetKind.MouseMove;
                 break;
         }
+
+        // The freshly armed editor has nothing configured on either layer, so the base
+        // layer's baseline is what its untouched draft builds now that the source is known.
+        _slots[0].Pristine = BuildEntry();
     }
 
     /// <summary>
@@ -2769,7 +3298,13 @@ public partial class MappingEditorViewModel : ObservableObject
     [RelayCommand]
     private void ToggleCaptureKey() => IsCapturingKey = !IsCapturingKey;
 
-    partial void OnOtherMappingsChanged(IReadOnlyList<MappingEntry> value) => RefreshSpecialKeyConflicts();
+    partial void OnOtherMappingsChanged(IReadOnlyList<MappingEntry> value)
+    {
+        _windowScope = value;
+        OnPropertyChanged(nameof(ProfileHasLayerLeader));
+        OnPropertyChanged(nameof(LayerHint));
+        RefreshSpecialKeyConflicts();
+    }
 
     partial void OnSourceIsStickChanged(bool value)
     {

@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -170,6 +171,68 @@ public sealed class MappingRowKeyboardTests
     }
 
     // ---- A row is a keyboard activation target --------------------------------
+
+    // ---- A row says which layer its mapping sits on ---------------------------
+
+    [AvaloniaFact]
+    public async Task A_Row_On_The_Temporary_Layer_Says_So_And_A_Base_One_Does_Not()
+    {
+        // A button can carry a base-layer mapping and a temporary-layer one side by side, so
+        // the two rows that share a source have to read differently: the temporary layer's
+        // row wears its layer beside the source, and the base layer's row stays bare, since
+        // the base layer is what every row is unless it says otherwise.
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The leader first: without one the temporary layer would never run.
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.Back));
+        viewModel.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        viewModel.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        viewModel.Editor.ActiveSpecialLeaderAction = LeaderAction.Layer;
+        await viewModel.CommitEditorCommand.ExecuteAsync(null);
+
+        // B keeps its default Enter mapping on the base layer and gains a temporary-layer
+        // one beside it, configured from the same editor.
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.B));
+        viewModel.Editor.SelectedLayer = 1;
+        viewModel.Editor.TargetKind = MappingTargetKind.KeyPress;
+        viewModel.Editor.SelectedKey = GamepadKey.Space;
+        await viewModel.CommitEditorCommand.ExecuteAsync(null);
+
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var rows = viewModel.Mappings
+            .Where(row => row.Entry.Source is ButtonBinding { Button: GamepadButton.B })
+            .ToArray();
+
+        Assert.Equal(2, rows.Length);
+
+        var baseRow = rows.Single(row => row.Entry.Layer == 0);
+
+        Assert.False(baseRow.OnTemporaryLayer);
+        Assert.Equal(string.Empty, baseRow.LayerText);
+        Assert.DoesNotContain("临时层", RowFor(window, baseRow).GetLogicalDescendants().OfType<TextBlock>().Select(text => text.Text));
+
+        var temporaryRow = rows.Single(row => row.Entry.Layer == 1);
+
+        Assert.True(temporaryRow.OnTemporaryLayer);
+        Assert.Equal("临时层", temporaryRow.LayerText);
+
+        // The badge is the row's own, so the list shows it beside the shared source.
+        var badge = RowFor(window, temporaryRow)
+            .GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .Single(text => text.Text == "临时层");
+
+        Assert.True(badge.IsVisible);
+    }
+
+    // ---- A mapping row is an activation target --------------------------------
 
     [AvaloniaFact]
     public void A_Mapping_Row_Takes_Keyboard_Focus_And_Rings_In_The_Accent()

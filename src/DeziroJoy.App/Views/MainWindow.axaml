@@ -91,9 +91,19 @@
                         </Border.IsVisible>
                     </Border>
                     <Grid ColumnDefinitions="*,Auto,Auto" Margin="14,9,12,9">
+                        <!-- The layer badge: a button can carry a base-layer mapping and a
+                             temporary-layer one side by side, so the row that sits on the
+                             temporary layer says which of the two it is rather than reading
+                             as a second copy of the same source. -->
                         <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="30,*">
-                            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="{Binding SourceText}" FontSize="12"
-                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnDefinitions="Auto,Auto">
+                                <TextBlock Grid.Column="0" Text="{Binding SourceText}" FontSize="12"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Grid.Column="1" Text="{Binding LayerText}" FontSize="11"
+                                           Margin="8,1,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           IsVisible="{Binding OnTemporaryLayer}" />
+                            </Grid>
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="单击" Classes="gestureLabel" />
                             <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClickText}" Classes="gestureValue" />
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="双击" Classes="gestureLabel" />

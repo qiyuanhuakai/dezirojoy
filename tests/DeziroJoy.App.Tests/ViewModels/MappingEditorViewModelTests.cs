@@ -11,6 +11,16 @@ namespace DeziroJoy.App.Tests.ViewModels;
 
 public class MappingEditorViewModelTests
 {
+    private static (MainWindowViewModel Vm, EngineHost Host, FakeGamepadProvider Provider, InMemoryProfileStore Store) CreateHost()
+    {
+        var provider = new FakeGamepadProvider();
+        var store = new InMemoryProfileStore();
+        var host = new EngineHost(provider, new RecordingOutputSink(), store);
+        var vm = new MainWindowViewModel(host, store);
+
+        return (vm, host, provider, store);
+    }
+
     [Fact]
     public void Defaults_Target_A_Key_Press()
     {
@@ -2193,18 +2203,18 @@ public class MappingEditorViewModelTests
     // ---- The Leader temporary layer ------------------------------------------
 
     [Fact]
-    public void The_Layer_Options_Name_The_Base_Layer_And_The_Temporary_One()
+    public void The_Two_Layers_Are_Named_The_Way_Every_Layer_Surface_Names_Them()
     {
         var editor = new MappingEditorViewModel();
 
-        Assert.Equal([0, 1], editor.LayerOptions.Select(option => option.Value));
-        Assert.Equal(
-            ["基础层", "临时层"],
-            editor.LayerOptions.Select(option => option.Label));
+        Assert.Equal("基础层", MappingEditorViewModel.LayerLabel(0));
+        Assert.Equal("临时层", MappingEditorViewModel.LayerLabel(1));
 
         Assert.Equal(0, editor.SelectedLayer);
         Assert.Equal("基础层", editor.LayerDescription);
         Assert.Equal("所属层：基础层", editor.LayerSummary);
+        Assert.True(editor.IsBaseLayerSelected);
+        Assert.False(editor.IsTemporaryLayerSelected);
     }
 
     [Fact]
@@ -2271,7 +2281,7 @@ public class MappingEditorViewModelTests
         var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.Back };
         editor.SelectedLayer = 1;
 
-        // Choosing the layer-switching action moves the mapping onto the base layer: a
+        // Choosing the layer-switching action moves the draft onto the base layer: a
         // temporary layer is entered from there, and the engine refuses the other shape.
         editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
         editor.ActiveSpecialKind = SpecialKeyKind.Leader;
@@ -2280,22 +2290,33 @@ public class MappingEditorViewModelTests
         Assert.True(editor.LayerLeaderRequiresBaseLayer);
         Assert.Equal(0, editor.SelectedLayer);
         Assert.Contains("必须放在基础层", editor.LayerHint);
+        Assert.Equal(0, editor.BuildEntry().Layer);
 
-        // Asking for the temporary layer while the leader switches it is refused the same way.
+        // The leader is safe on the base layer, so the temporary layer stays reachable: the
+        // switcher opens it on a fresh draft, and the leader waits on the base one.
         editor.SelectedLayer = 1;
 
-        Assert.Equal(0, editor.SelectedLayer);
+        Assert.Equal(1, editor.SelectedLayer);
+        Assert.Equal(1, editor.BuildEntry().Layer);
+
+        editor.SelectedLayer = 0;
+
+        var leader = Assert.IsType<SpecialKeyTarget>(editor.BuildEntry().Target);
+
+        Assert.Equal(LeaderAction.Layer, leader.Action);
         Assert.Equal(0, editor.BuildEntry().Layer);
 
         // A preset leader is an ordinary mapping: it may sit on the temporary layer.
-        editor.ActiveSpecialLeaderAction = LeaderAction.Preset;
         editor.SelectedLayer = 1;
+        editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        editor.ActiveSpecialLeaderAction = LeaderAction.Preset;
 
         Assert.False(editor.LayerLeaderRequiresBaseLayer);
         Assert.Equal(1, editor.SelectedLayer);
         Assert.Equal(1, editor.BuildEntry().Layer);
 
-        // Switching what it switches to the temporary layer snaps the mapping back onto the
+        // Switching what it switches to the temporary layer snaps the draft back onto the
         // base layer: the engine refuses a profile that switches the layer from inside it.
         editor.ActiveSpecialLeaderAction = LeaderAction.Layer;
 
@@ -2452,6 +2473,392 @@ public class MappingEditorViewModelTests
 
             return GamepadState.Create(mask, 0f, 0f, 0f, 0f);
         }
+    }
+
+    // ---- One button, both layers ----------------------------------------------
+
+    [Fact]
+    public void The_Layer_Switcher_Keeps_One_Draft_Per_Layer()
+    {
+        // The bug this closes: a button used to carry a single entry, so putting it on the
+        // temporary layer REPLACED its base mapping and only one of the two could exist.
+        // The editor now holds one entry per layer and the switcher moves between them,
+        // so the same button can be configured on both layers in one editor.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.X };
+
+        editor.TargetKind = MappingTargetKind.KeyCombo;
+        editor.ModifierCtrl = true;
+        editor.SelectedKey = GamepadKey.C;
+
+        editor.SelectedLayer = 1;
+
+        editor.TargetKind = MappingTargetKind.KeyCombo;
+        editor.ModifierAlt = true;
+        editor.SelectedKey = GamepadKey.V;
+
+        // Each layer keeps its own draft: moving between them loses nothing, exactly as
+        // the gesture switcher keeps one draft per gesture.
+        editor.SelectedLayer = 0;
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), editor.BuildTarget());
+        Assert.Equal(0, editor.BuildEntry().Layer);
+
+        editor.SelectedLayer = 1;
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V), editor.BuildTarget());
+        Assert.Equal(1, editor.BuildEntry().Layer);
+    }
+
+    [Fact]
+    public void The_Layer_Switcher_Loads_The_Entry_Each_Layer_Carries()
+    {
+        var baseEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C),
+        };
+        var tempEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V),
+            Layer = 1,
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(baseEntry, tempEntry);
+
+        // The base layer leads, and the switcher reaches the temporary one.
+        Assert.Equal(0, editor.SelectedLayer);
+        Assert.Equal(baseEntry.Target, editor.BuildTarget());
+
+        editor.SelectedLayer = 1;
+
+        Assert.Equal(1, editor.SelectedLayer);
+        Assert.Equal(tempEntry.Target, editor.BuildTarget());
+        Assert.Equal(1, editor.BuildEntry().Layer);
+
+        editor.SelectedLayer = 0;
+
+        Assert.Equal(baseEntry.Target, editor.BuildTarget());
+    }
+
+    [Fact]
+    public void A_Layer_The_Switcher_Opens_Without_An_Entry_Starts_A_Fresh_Draft()
+    {
+        // A button that carries only a base mapping still reaches the temporary layer: the
+        // switcher opens it on a fresh draft over the same source, so configuring it adds
+        // an entry rather than replacing the base one.
+        var baseEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyPressTarget(GamepadKey.C),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(baseEntry);
+
+        editor.SelectedLayer = 1;
+
+        Assert.Equal(GamepadButton.X, editor.SelectedButton);
+        Assert.Equal(MappingTargetKind.KeyPress, editor.TargetKind);
+        Assert.Equal(GamepadKey.Enter, editor.SelectedKey);
+        Assert.Equal(1, editor.BuildEntry().Layer);
+
+        // The base layer's entry is the one the switcher reaches, and the temporary layer
+        // contributes nothing until something is configured on it: looking at a layer never
+        // conjures an entry for it.
+        Assert.Equal(baseEntry, editor.OtherLayerEntry);
+        Assert.Equal("基础层：C", editor.OtherLayerSummary);
+        Assert.Empty(editor.BuildCommit());
+
+        editor.SelectedLayer = 0;
+
+        Assert.Equal(baseEntry.Target, editor.BuildTarget());
+    }
+
+    [Fact]
+    public void Committing_Writes_The_Layer_Being_Edited_And_Leaves_The_Other_Intact()
+    {
+        var baseEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C),
+        };
+        var tempEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V),
+            Layer = 1,
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(baseEntry, tempEntry);
+
+        // The temporary layer is edited: the commit writes that one entry, replacing the
+        // entry it was loaded from, and the base layer contributes nothing at all.
+        editor.SelectedLayer = 1;
+        editor.TargetKind = MappingTargetKind.KeyCombo;
+        editor.ModifierAlt = true;
+        editor.SelectedKey = GamepadKey.B;
+
+        var commits = editor.BuildCommit();
+
+        Assert.Single(commits);
+        Assert.DoesNotContain(commits, commit => commit.Entry.Layer == 0);
+        Assert.Equal(tempEntry.Id, commits[0].ReplacesId);
+        Assert.Equal(1, commits[0].Entry.Layer);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Alt, GamepadKey.B), commits[0].Entry.Target);
+    }
+
+    [Fact]
+    public void Committing_After_Editing_Both_Layers_Writes_Both()
+    {
+        var baseEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyPressTarget(GamepadKey.C),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(baseEntry);
+
+        // The base layer is edited first, then the temporary one: the commit carries both,
+        // so neither edit is lost by having moved the switcher.
+        editor.SelectedKey = GamepadKey.D;
+
+        editor.SelectedLayer = 1;
+        editor.TargetKind = MappingTargetKind.KeyCombo;
+        editor.ModifierAlt = true;
+        editor.SelectedKey = GamepadKey.V;
+
+        var commits = editor.BuildCommit();
+
+        Assert.Equal(2, commits.Count);
+
+        // The layer being edited leads, and it had no entry yet: it is added beside the
+        // base one.
+        Assert.Equal(1, commits[0].Entry.Layer);
+        Assert.Null(commits[0].ReplacesId);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V), commits[0].Entry.Target);
+
+        // The base layer follows, replacing the entry it was loaded from.
+        Assert.Equal(0, commits[1].Entry.Layer);
+        Assert.Equal(baseEntry.Id, commits[1].ReplacesId);
+        Assert.Equal(new KeyPressTarget(GamepadKey.D), commits[1].Entry.Target);
+    }
+
+    [Fact]
+    public void A_Layer_The_User_Only_Looked_At_Gains_No_Entry()
+    {
+        // Opening the temporary layer and coming back must not conjure an entry for it:
+        // a layer contributes only what the session configured on it.
+        var baseEntry = new MappingEntry
+        {
+            Source = new ButtonBinding(GamepadButton.X),
+            Target = new KeyPressTarget(GamepadKey.C),
+        };
+
+        var editor = new MappingEditorViewModel();
+        editor.LoadFrom(baseEntry);
+
+        editor.SelectedLayer = 1;
+        editor.SelectedLayer = 0;
+
+        var commits = editor.BuildCommit();
+
+        Assert.Single(commits);
+        Assert.Equal(baseEntry.Id, commits[0].ReplacesId);
+        Assert.Equal(baseEntry.Target, commits[0].Entry.Target);
+    }
+
+    [Fact]
+    public async Task A_Button_Can_Carry_A_Base_Action_And_A_Temporary_One()
+    {
+        // The user's own scenario, end to end: X is Ctrl + C normally and Alt + V while the
+        // layer leader is held. Both entries survive every edit, save and reopen.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        // The leader first: without one the temporary layer would never run.
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.Back));
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        vm.Editor.ActiveSpecialLeaderAction = LeaderAction.Layer;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        // The base layer: the default profile already carries X -> Ctrl + C, so the editor
+        // reopens it rather than arming a second entry for the same button.
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.X));
+
+        Assert.Equal(0, vm.Editor.SelectedLayer);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), vm.Editor.BuildTarget());
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        // The temporary layer: the same button, configured from inside the same editor.
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.X));
+        vm.Editor.SelectedLayer = 1;
+        vm.Editor.TargetKind = MappingTargetKind.KeyCombo;
+        vm.Editor.ModifierAlt = true;
+        vm.Editor.SelectedKey = GamepadKey.V;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        var entries = vm.ActiveProfile!.Mappings
+            .Where(mapping => mapping.Source is ButtonBinding { Button: GamepadButton.X })
+            .ToArray();
+
+        Assert.Equal(2, entries.Length);
+        Assert.Contains(entries, entry => entry.Layer == 0
+            && entry.Target == new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C));
+        Assert.Contains(entries, entry => entry.Layer == 1
+            && entry.Target == new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V));
+
+        // Reopening the button still shows the base layer, and the switcher reaches the
+        // temporary one with its own target intact.
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.X));
+
+        Assert.Equal(0, vm.Editor.SelectedLayer);
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Ctrl, GamepadKey.C), vm.Editor.BuildTarget());
+
+        vm.Editor.SelectedLayer = 1;
+
+        Assert.Equal(new KeyComboTarget(KeyModifiers.Alt, GamepadKey.V), vm.Editor.BuildTarget());
+    }
+
+    [Fact]
+    public async Task Committing_From_The_Base_Layer_Writes_The_Temporary_One_Too()
+    {
+        // The user configures the temporary layer, switches back to the base layer to check
+        // something, and confirms: both layers land, because the temporary layer's edit was
+        // captured when the switcher moved off it.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.Back));
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        vm.Editor.ActiveSpecialLeaderAction = LeaderAction.Layer;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        var xRow = vm.Mappings.Single(
+            row => row.Entry.Source == new ButtonBinding(GamepadButton.X));
+        vm.EditMappingCommand.Execute(xRow);
+
+        vm.Editor.SelectedLayer = 1;
+        vm.Editor.TargetKind = MappingTargetKind.KeyCombo;
+        vm.Editor.ModifierAlt = true;
+        vm.Editor.SelectedKey = GamepadKey.V;
+
+        vm.Editor.SelectedLayer = 0;
+
+        Assert.Equal(2, vm.Editor.BuildCommit().Count);
+
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        Assert.Equal(2, vm.ActiveProfile!.Mappings.Count(
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.X }));
+    }
+
+    [Fact]
+    public async Task A_Temporary_Layer_No_Leader_Names_Is_Refused_With_A_Reason()
+    {
+        // The engine refuses a profile whose temporary layer no leader names, so the commit
+        // would fail the whole profile at the next reload. The editor refuses it instead
+        // and names the fix.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.X));
+        vm.Editor.SelectedLayer = 1;
+        vm.Editor.TargetKind = MappingTargetKind.KeyCombo;
+        vm.Editor.ModifierAlt = true;
+        vm.Editor.SelectedKey = GamepadKey.V;
+
+        Assert.NotNull(vm.Editor.TemporaryLayerDefect);
+        Assert.Contains("Leader 键", vm.Editor.TemporaryLayerDefect);
+
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        Assert.True(vm.IsEditing);
+        Assert.Single(
+            vm.ActiveProfile!.Mappings,
+            mapping => mapping.Source is ButtonBinding { Button: GamepadButton.X });
+    }
+
+    [Fact]
+    public async Task A_Temporary_Mapping_On_The_Leaders_Own_Button_Is_Refused()
+    {
+        // The engine also refuses a layer mapping that listens on the leader's own input:
+        // activating the layer would take the leader out of effect and nothing would ever
+        // leave the layer again.
+        var (vm, host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.Back));
+        vm.Editor.ActiveTargetKind = MappingTargetKind.SpecialKey;
+        vm.Editor.ActiveSpecialKind = SpecialKeyKind.Leader;
+        vm.Editor.ActiveSpecialLeaderAction = LeaderAction.Layer;
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        vm.OpenEditorForSource(new ButtonBinding(GamepadButton.Back));
+        vm.Editor.SelectedLayer = 1;
+        vm.Editor.SelectedKey = GamepadKey.Space;
+
+        Assert.NotNull(vm.Editor.TemporaryLayerDefect);
+        Assert.Contains("同一个按键", vm.Editor.TemporaryLayerDefect);
+
+        await vm.CommitEditorCommand.ExecuteAsync(null);
+
+        Assert.True(vm.IsEditing);
+    }
+
+    [Fact]
+    public void The_Temporary_Layer_Switcher_Says_When_Nothing_Switches_The_Layer_Yet()
+    {
+        // Configuring the temporary layer is allowed whatever the profile carries - the
+        // engine is the judge - but the editor says when nothing switches it yet.
+        var editor = new MappingEditorViewModel { SelectedButton = GamepadButton.X };
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.A),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+        ];
+
+        Assert.False(editor.ProfileHasLayerLeader);
+        Assert.False(editor.ShowTemporaryLayerGuidance);
+
+        editor.SelectedLayer = 1;
+
+        Assert.True(editor.ShowTemporaryLayerGuidance);
+
+        // A layer leader anywhere in the profile is enough for the layer to run.
+        editor.OtherMappings =
+        [
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.A),
+                Target = new KeyPressTarget(GamepadKey.Enter),
+            },
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.Back),
+                Target = new SpecialKeyTarget(
+                    SpecialKeyKind.Leader, SwitchMode: LeaderSwitchMode.Hold, Action: LeaderAction.Layer),
+            },
+        ];
+
+        Assert.True(editor.ProfileHasLayerLeader);
+        Assert.False(editor.ShowTemporaryLayerGuidance);
     }
 
     [Fact]

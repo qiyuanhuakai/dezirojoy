@@ -117,8 +117,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private readonly string? _sinkError;
 
-    private MappingEntry? _editingEntry;
-
     /// <summary>
     /// Per-axis deflection at which a stick counts as pushed for navigation. Half travel
     /// matches the engine's own digital threshold: a resting stick never reaches it and a
@@ -1592,8 +1590,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void AddMapping()
     {
         Editor.OtherMappings = ActiveProfile?.Mappings.ToArray() ?? [];
+
+        // A fresh editor arms the base layer of the element the user is about to pick: the
+        // 所属层 switcher reaches the temporary layer from there, and the entry the commit
+        // writes is added beside whatever the profile already carries.
         Editor.Reset();
-        _editingEntry = null;
         IsEditing = true;
     }
 
@@ -1606,9 +1607,33 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Editor.OtherMappings = ActiveProfile?.Mappings
             .Where(mapping => mapping.Id != row.Entry.Id)
             .ToArray() ?? [];
-        Editor.LoadFrom(row.Entry);
-        _editingEntry = row.Entry;
+
+        // A button can carry a base-layer mapping and a temporary-layer one side by side,
+        // so the entry the other layer of the same element carries is handed in as well:
+        // the editor's 所属层 switcher is what moves between the two, and a commit writes
+        // the layer being edited while the other layer's entry stays where it is.
+        Editor.LoadFrom(row.Entry, SiblingEntryFor(row.Entry));
         IsEditing = true;
+    }
+
+    /// <summary>
+    /// The entry the other layer of the same physical element carries, or null when that
+    /// layer has none. When one layer carries several entries - a hand-edited profile may -
+    /// the first in profile order is the one, so the choice never depends on hash order.
+    /// </summary>
+    private MappingEntry? SiblingEntryFor(MappingEntry entry)
+    {
+        if (ActiveProfile is not { } profile)
+        {
+            return null;
+        }
+
+        var layer = entry.Layer == 0 ? 0 : 1;
+
+        return profile.Mappings.FirstOrDefault(mapping =>
+            mapping.Id != entry.Id
+            && (mapping.Layer == 0 ? 0 : 1) != layer
+            && SamePhysicalSource(mapping.Source, entry.Source));
     }
 
     /// <summary>
@@ -1649,26 +1674,38 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var entry = Editor.BuildEntry();
+        // A temporary layer that could never behave is refused for the same reason: the
+        // engine rejects the whole profile for it, so the commit would fail at the next
+        // reload rather than on the one mapping. The editor's own hint names the fix.
+        if (Editor.TemporaryLayerDefect is not null)
+        {
+            return;
+        }
+
         var mappings = ActiveProfile.Mappings.ToList();
 
-        if (_editingEntry is null)
+        // One write per layer the session touched: the layer being edited always, and the
+        // other layer when this session left an edit on it. A button can therefore carry a
+        // base-layer action and a temporary-layer one side by side, and neither ever
+        // overwrites the other.
+        foreach (var commit in Editor.BuildCommit())
         {
-            mappings.Add(entry);
-        }
-        else
-        {
-            var index = mappings.FindIndex(m => m.Id == _editingEntry.Id);
+            if (commit.ReplacesId is not { } id)
+            {
+                mappings.Add(commit.Entry);
+                continue;
+            }
+
+            var index = mappings.FindIndex(m => m.Id == id);
             if (index >= 0)
             {
-                mappings[index] = entry with { Id = _editingEntry.Id };
+                mappings[index] = commit.Entry with { Id = id };
             }
         }
 
         if (await ApplyProfile(ActiveProfile with { Mappings = mappings }))
         {
             IsEditing = false;
-            _editingEntry = null;
         }
     }
 
@@ -1676,7 +1713,6 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private void CancelEditor()
     {
         IsEditing = false;
-        _editingEntry = null;
         if (_daemon is not null && DaemonSnapshot is { } snapshot)
         {
             AdoptDaemonProfile(snapshot);
@@ -2306,10 +2342,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     /// Opens the mapping settings for one source, exactly as clicking that element on the model
-    /// does: an element that already has a mapping loads it (so confirming replaces it instead
-    /// of adding a second entry for the same element), and a fresh one is armed anew. Identity
-    /// is physical - see <see cref="SamePhysicalSource"/> - so an element reopens its mapping
-    /// after a gesture or a direction was configured on it. The matching row is selected so
+    /// does: an element that already has a mapping loads it (so confirming replaces that
+    /// layer's entry instead of adding a second one for it), and a fresh one is armed anew.
+    /// Identity is physical - see <see cref="SamePhysicalSource"/> - so an element reopens its
+    /// mapping after a gesture or a direction was configured on it, and an element that carries
+    /// both a base-layer and a temporary-layer mapping opens on the base one with the other
+    /// reachable through the editor's 所属层 switcher. The matching row is selected so
     /// the list side of the link highlights too; an element with no mapping selects nothing.
     /// </summary>
     public void OpenEditorForSource(InputBinding source)
@@ -2335,8 +2373,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// <summary>
     /// The mapping a click on one physical element reopens, or null when that element has no
     /// mapping yet. When one element carries several mappings - a stick with a direction per
-    /// mapping - the row the user already selected wins; otherwise the first in profile order
-    /// does, so the choice never depends on hash or dictionary order.
+    /// mapping, a button with a layer per mapping - the row the user already selected wins;
+    /// otherwise the base layer's mapping does, because that is the layer a fresh editor
+    /// opens on and the one the 所属层 switcher moves up from; and failing both the first in
+    /// profile order does, so the choice never depends on hash or dictionary order.
     /// </summary>
     private MappingEntry? ExistingMappingFor(InputBinding source, MappingRowViewModel? selected)
     {
@@ -2350,6 +2390,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             .ToList();
 
         return matches.FirstOrDefault(mapping => selected is not null && mapping.Id == selected.Entry.Id)
+            ?? matches.FirstOrDefault(mapping => mapping.Layer == 0)
             ?? matches.FirstOrDefault();
     }
 
