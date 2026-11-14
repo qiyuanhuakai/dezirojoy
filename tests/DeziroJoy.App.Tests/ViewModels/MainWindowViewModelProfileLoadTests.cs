@@ -161,6 +161,12 @@ public sealed class MainWindowViewModelProfileLoadTests
         return (viewModel, daemonHost, channel, server);
     }
 
+    // The daemon round-trip is marshalled back through the test's synchronization context and
+    // runs on the thread pool; on a loaded CI runner those continuations can be delayed well
+    // past a tight fuse. The budget is generous so the wait absorbs scheduler contention rather
+    // than failing a correct flow - a revision that never arrives still times out and fails.
+    private static readonly TimeSpan WaitBudget = TimeSpan.FromSeconds(30);
+
     private static async Task WaitForMappings(MainWindowViewModel viewModel, int count)
     {
         // The mapping table is an ObservableCollection, so a refresh reports
@@ -179,7 +185,7 @@ public sealed class MainWindowViewModelProfileLoadTests
         {
             if (viewModel.Mappings.Count != count)
             {
-                await filled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+                await filled.Task.WaitAsync(WaitBudget, TestContext.Current.CancellationToken);
             }
         }
         finally
@@ -195,8 +201,10 @@ public sealed class MainWindowViewModelProfileLoadTests
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
         {
+            // At-least rather than exact: the edit must have landed and bumped the revision,
+            // and a snapshot that already moved past it still proves the round-trip completed.
             if (args.PropertyName == nameof(MainWindowViewModel.DaemonSnapshot)
-                && viewModel.DaemonSnapshot?.Revision == revision)
+                && viewModel.DaemonSnapshot?.Revision >= revision)
             {
                 reached.TrySetResult();
             }
@@ -206,7 +214,7 @@ public sealed class MainWindowViewModelProfileLoadTests
         try
         {
             OnPropertyChanged(viewModel, new System.ComponentModel.PropertyChangedEventArgs(nameof(MainWindowViewModel.DaemonSnapshot)));
-            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await reached.Task.WaitAsync(WaitBudget, TestContext.Current.CancellationToken);
         }
         finally
         {

@@ -56,12 +56,29 @@ public sealed class GamepadModelEditorTests
         window.Focus();
         Dispatcher.UIThread.RunJobs();
 
-        window.UpdateLayout();
-        // The editor card's body scrolls, so a control below the fold must be scrolled into
-        // view first - what a user does before clicking it.
-        target.BringIntoView();
-        window.UpdateLayout();
-        var point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
+        // The shoulder buttons overlap the triggers behind them, so a click only lands on the
+        // intended element once layout has fully settled and that element is the topmost hit at
+        // its own centre. BringIntoView can leave a scroll/arrange pass pending, so settle and
+        // confirm the hit before pressing rather than clicking through a transition - retrying
+        // the settle is what keeps this deterministic on a slow runner. A genuinely unclickable
+        // element still fails: the retries exhaust and the assertion below catches it.
+        var point = default(Point);
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            window.UpdateLayout();
+            // The editor card's body scrolls, so a control below the fold must be scrolled into
+            // view first - what a user does before clicking it.
+            target.BringIntoView();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
+            if (window.InputHitTest(point) is Visual hit
+                && (ReferenceEquals(hit, target) || target.GetVisualDescendants().Contains(hit)))
+            {
+                break;
+            }
+        }
+
         window.MouseDown(point, Avalonia.Input.MouseButton.Left);
         window.MouseUp(point, Avalonia.Input.MouseButton.Left);
         window.UpdateLayout();
