@@ -51,7 +51,7 @@ Default-valued fields are omitted on write and may be omitted when authoring.
 - **ResponseCurve**: `Linear Precise Aggressive Responsive`
 - **PrecisionMode**: `Hold Toggle`
 - **LeaderSwitchMode**: `Press Hold`
-- **SpecialKeyKind**: `Precision Leader` (`Layer` is deprecated → migrates to Leader+Action=Layer)
+- **SpecialKeyKind**: `Precision Leader Keyboard` (`Layer` is deprecated → migrates to Leader+Action=Layer)
 - **LeaderAction**: `Preset Layer`
 - **GamepadLayout**: `Xbox DualShock Generic`
 - **ForegroundAction**: `Profile NativeGamepad`
@@ -77,7 +77,7 @@ BrowserFavorites LaunchMail LaunchApp1 LaunchApp2 Sleep PrintScreen`.
 | `mouseButton` | `Button: MouseButton` | down on press, up on release |
 | `mouseMove` | `Settings: MouseStickSettings` | stick → pointer |
 | `wheel` | `Settings: ScrollStickSettings` | stick → scroll |
-| `specialKey` | see below | precision / Leader |
+| `specialKey` | see below | precision / Leader / screen keyboard |
 | `text` | `Text: string` (≤256) | type string on press edge (tap) |
 | `complexShortcut` | `Script: string`, `Trigger`, `Execution`, `Repeat` | DSL program |
 | `none` | — | do nothing (无功能) |
@@ -85,7 +85,7 @@ BrowserFavorites LaunchMail LaunchApp1 LaunchApp2 Sleep PrintScreen`.
 ### SpecialKeyTarget (`$type: "specialKey"`)
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `Kind` | SpecialKeyKind | — | `Precision` or `Leader` |
+| `Kind` | SpecialKeyKind | — | `Precision`, `Leader` or `Keyboard` |
 | `PrecisionMode` | PrecisionMode | `Toggle` | Precision only: `Hold`/`Toggle` |
 | `SwitchMode` | LeaderSwitchMode | `Press` | Leader only: `Press`/`Hold` |
 | `SlotA` | int | 1 | Leader+Preset: primary slot |
@@ -95,6 +95,11 @@ BrowserFavorites LaunchMail LaunchApp1 LaunchApp2 Sleep PrintScreen`.
 Rules: Precision must be the mapping's own single-click target. Leader/Layer on base layer.
 Layer leader: Press or Hold; single temporary layer. A layer mapping must not sit on its own
 leader's input. Special keys are device-global (sync across presets).
+Keyboard: toggles the floating on-screen keyboard (render process only; tray-only shows no
+window). Every press edge toggles, so SwitchMode is meaningless for it; the engine emits a
+host-side command that never reaches the output sink. While the keyboard is open the pad drives
+it and mapping injection is suspended, so the key that summoned it is answered by the window
+(B / 完成 / the key itself), not by a second engine press.
 
 ## ButtonGesture
 

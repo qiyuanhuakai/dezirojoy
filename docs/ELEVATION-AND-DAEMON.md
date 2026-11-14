@@ -221,6 +221,10 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 守护进程内；`EngineComposition` 退居库/测试能力，生产组合根不再构造它。显式“劫持手柄按键”
 开启且窗口输入在作用域内时，GUI 通过 `SetInjectionSuspended` 取得按连接划分的输入租约；
 关闭劫持、失焦、离开映射页或关窗都会释放租约。编辑器是否打开不再隐式决定注入是否暂停。
+浮窗屏幕键盘打开时同样取同一份租约（它与劫持租约取或，不互相顶掉）：键盘是手柄在驱动，
+此时映射注入必须停下，而键盘自己要求输入的字符仍照常经 daemon 送出。渲染进程与托盘进程
+各自持有一个键盘浮窗（托盘没有窗口，却正是键盘最该存在的形态），两者经各自的
+`DaemonController` 镜像 daemon 的同一个开关，因此一套键盘、一份租约。
 
 ### 4.3 两个不同的内核对象
 
@@ -262,6 +266,9 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `SetMappingEnabled` | GUI → daemon | 请求 ID、启用状态 | 暂停或恢复分发，不停止引擎 |
 | `SetInjectionSuspended` | GUI/tray → daemon | 请求 ID、挂起状态 | 显式劫持生效期间按连接暂停注入 |
 | `SwitchPresetSlot` | GUI → daemon | 请求 ID、目标槽位（`DeviceId` 保留线上传输但服务端忽略） | 切换整体级活动预设槽 |
+| `SetScreenKeyboard` | GUI → daemon | 请求 ID、开/关 | 开关浮窗屏幕键盘（引擎的屏幕键盘键在 daemon 内部驱动同一开关） |
+| `InjectText` | GUI → daemon | 请求 ID、要输入的文本 | 把浮窗键盘的一个键帽经 daemon 自己的输出通道输入到当前聚焦应用 |
+| `InjectKey` | GUI → daemon | 请求 ID、键、修饰键 | 点按一个键（退格 / Ctrl+A + Delete），同样经 daemon 的输出通道 |
 | `ShutdownDaemon` | GUI/tray → daemon | 请求 ID | 释放输入并优雅退出常驻进程 |
 | `MutationAck` | daemon → GUI | 请求 ID、结果、新修订号、新序号 | 变更已被受理 |
 | `StateChanged` | daemon → GUI | 全量快照 | 状态推送 |
@@ -297,6 +304,16 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   发现不一致就拒绝该请求并回 `MutationAck(Accepted=false, ErrorCode="revision-mismatch")`，
   同时携带当前修订号；GUI 的编辑草稿固定其基线修订，冲突后必须重新读取权威 profile 或明确合并，
   **不得只更新修订号后提交旧草稿，也不自动重放**。
+- **浮窗屏幕键盘由 daemon 持有开关，窗口只镜像**：引擎的 `ToggleScreenKeyboardCommand`
+  与 Leader 键的 `SwitchPresetCommand` 一样不进入输出 sink，由
+  `EngineHost.ScreenKeyboardToggleRequested` 在 tick 线程交给 daemon（`DaemonServer.RequestScreenKeyboardToggle`），
+  daemon 翻转自己的开关并推送快照，快照的 `ScreenKeyboardOpen` 就是窗口显示/隐藏的唯一依据；
+  窗口自己关闭（完成 / 返回 / B 键）时发 `SetScreenKeyboard` 把同一开关清掉，否则下一次引擎切换
+  会把用户已经收起的键盘又打开。该开关是会话状态、不落 `DaemonState`，daemon 重启即为关闭。
+  键盘的输出一律经 daemon：`InjectText` 走 `TextCommand`（文本通道，不按本地布局拆键），
+  `InjectKey` 走一次修饰键-按键-释放的点按（退格、清空的 Ctrl+A 与 Delete）。两者都以"已连接设备数 > 0"
+  为前提，没有可用输出通道时明确回 `Error`，不假装输入成功；也都**不受挂起租约门控**——为输入租约
+  暂停注入不能顺便让用户正看着的键盘失声。长度以 Core 自己的文本上界为准，超出即拒。
 - **整体级预设槽**：`SwitchPresetSlot` 切换的是整个应用唯一且持久化的活动槽标量，不属于任何设备，
   daemon 重启后恢复同一槽。所有可切换设备在同一宿主锁内重载；任一设备失败会回滚已经重载的设备，
   活动槽与 revision 保持原值，不能半切换。消息中的 `DeviceId` 保留在线上但服务端忽略，属于软兼容，
@@ -322,6 +339,8 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `ApplyConfiguration` | 运行中**直接换 profile，不停引擎**；未运行则只更新待用配置 | 配置已生效后 |
 | `SetMappingEnabled` | 暂停或恢复分发；引擎与互斥体保持运行 | 分发状态已改变后 |
 | `SetInjectionSuspended` | 按连接持有显式劫持租约；多个客户端叠加，断开自动释放自己的租约 | 聚合挂起状态已改变后 |
+| `SetScreenKeyboard` | 翻转 daemon 持有的浮窗键盘开关；幂等，重复同一状态不推送 | 开关已改变后 |
+| `InjectText` / `InjectKey` | 经 daemon 自己的输出通道输入一个键帽；不持有任何输出、不受三个暂停门控 | 输入已发出后 |
 | `ShutdownDaemon` | 停止映射、释放所有按键与互斥体，然后退出 daemon | **退出开始前**先写完 ack |
 | GUI 关闭 / 断开 | 不停引擎、不释放注入互斥体，只断开管道并撤销该连接的劫持租约 | — |
 
@@ -338,7 +357,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `CurrentUserOnly`；同一用户的普通 GUI 与提权守护进程均可连接，其他用户不可写。
 - **同会话验证**：任何控制消息之前必须完成握手，拒绝后立即断开；Windows 上通过
   `GetNamedPipeClientProcessId` 取得真实对端 PID/SessionId，不信任客户端自报的会话字段。
-- **最小攻击面**：管道只暴露 4.4 节那 14 条映射控制消息，不提供任意代码执行、文件读写或
+- **最小攻击面**：管道只暴露 4.4 节那 17 条映射控制消息，不提供任意代码执行、文件读写或
   进程启动能力。`ShutdownDaemon` 只能请求本 daemon 按既定清理路径退出，不接受命令行或任意 PID。
 
 ### 4.7 第二个守护进程
