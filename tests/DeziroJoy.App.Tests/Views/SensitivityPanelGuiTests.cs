@@ -322,22 +322,39 @@ public sealed class SensitivityPanelGuiTests
         var sensitivity = viewModel.MouseSensitivity;
         sensitivity.IsRealInputMode = true;
 
+        var start = panel.FindControl<Button>("StartDriftButton")!;
+        var stop = panel.FindControl<Button>("StopDriftButton")!;
         var apply = panel.FindControl<Button>("ApplyDeadZoneButton")!;
+
+        // One primary action at a time: arming the collection swaps 开始采集 for 停止采集.
+        Assert.True(start.IsVisible);
+        Assert.False(stop.IsVisible);
         Assert.False(apply.IsEnabled, "nothing measured yet, so there is nothing to confirm");
 
-        panel.FindControl<Button>("StartDriftButton")!.Command!.Execute(null);
-        Assert.True(sensitivity.IsMeasuringDrift);
+        start.Command!.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
 
+        Assert.True(sensitivity.IsMeasuringDrift);
+        Assert.False(start.IsVisible);
+        Assert.True(stop.IsVisible);
+
+        // The collection rides the preview clock: a stick held still - reported once and
+        // then never again, exactly as a pad at rest behaves - still fills the
+        // distribution, so the suggestion needs no second sample to arrive.
+        sensitivity.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
         for (var i = 0; i < 40; i++)
         {
-            sensitivity.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+            sensitivity.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         }
 
-        panel.FindControl<Button>("StopDriftButton")!.Command!.Execute(null);
+        stop.Command!.Execute(null);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
         Assert.False(sensitivity.IsMeasuringDrift);
+        Assert.True(start.IsVisible);
+        Assert.False(stop.IsVisible);
         Assert.True(apply.IsEnabled);
         Assert.Contains("已采集", panel.FindControl<TextBlock>("DriftStatusText")!.Text);
 
@@ -345,6 +362,38 @@ public sealed class SensitivityPanelGuiTests
         apply.Command!.Execute(null);
 
         Assert.Equal(sensitivity.SuggestedDeadZone!.Value, sensitivity.DeadZone, 3);
+    }
+
+    [AvaloniaFact]
+    public void The_Mouse_Panel_Drift_Status_Counts_Samples_While_Collecting()
+    {
+        var (window, viewModel, _, _) = BuildWindow();
+        var panel = MouseSensitivityPanelOf(window);
+        var sensitivity = viewModel.MouseSensitivity;
+        sensitivity.IsRealInputMode = true;
+
+        panel.FindControl<Button>("StartDriftButton")!.Command!.Execute(null);
+        Assert.Contains("采集中… 已记录 0 个样本", panel.FindControl<TextBlock>("DriftStatusText")!.Text);
+
+        sensitivity.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+        for (var i = 0; i < 5; i++)
+        {
+            sensitivity.Advance(MouseSensitivityViewModel.DriftSampleInterval);
+        }
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        // The window's own preview timer ticks the collection as well, so the count is at
+        // least what these ticks contributed - the clock, not the pad, is what fills it.
+        Assert.True(sensitivity.DriftSampleCount >= 5,
+            $"expected the preview ticks to fill the collection, got {sensitivity.DriftSampleCount}");
+        Assert.Contains("已记录", panel.FindControl<TextBlock>("DriftStatusText")!.Text);
+
+        // The suggestion stays a suggestion: the readout shows it, the deadzone does not
+        // move until the user confirms.
+        Assert.True(sensitivity.SuggestedDeadZone is null);
+        Assert.Equal("—", panel.FindControl<TextBlock>("SuggestedDeadZoneText")!.Text);
+        Assert.Equal(0.15f, sensitivity.DeadZone);
     }
 
     [AvaloniaFact]
@@ -381,9 +430,10 @@ public sealed class SensitivityPanelGuiTests
 
         var apply = panel.FindControl<Button>("ScrollApplyDeadZoneButton")!;
         panel.FindControl<Button>("ScrollStartDriftButton")!.Command!.Execute(null);
+        sensitivity.ApplySample(GamepadState.Create(default, 0f, 0.04f, 0f, 0f));
         for (var i = 0; i < 40; i++)
         {
-            sensitivity.ApplySample(GamepadState.Create(default, 0f, 0.04f, 0f, 0f));
+            sensitivity.Advance(ScrollSensitivityViewModel.DriftSampleInterval);
         }
 
         panel.FindControl<Button>("ScrollStopDriftButton")!.Command!.Execute(null);

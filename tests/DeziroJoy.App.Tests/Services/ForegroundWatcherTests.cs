@@ -250,7 +250,7 @@ public sealed class ForegroundWatcherTests
     }
 
     [Fact]
-    public void A_Manual_Preset_Switch_Is_Brought_Back_In_Line_On_The_Next_Poll()
+    public void A_Manual_Preset_Switch_Is_Respected_While_The_Decision_Is_Unchanged()
     {
         var (watcher, source, target) = Create(new ForegroundSettings
         {
@@ -261,9 +261,61 @@ public sealed class ForegroundWatcherTests
         watcher.Refresh();
         Assert.Equal(3, target.ActiveSlot);
 
-        // The user picks another preset while the rule is still in charge.
+        // The user picks another preset while the rule is still in charge. The decision
+        // has not changed - same kind, same slot, same rule - so there is nothing new to
+        // enforce, and the pick survives every poll that follows.
         target.SwitchProfile(5);
         watcher.Refresh();
+        watcher.Refresh();
+
+        Assert.Equal(5, target.ActiveSlot);
+        Assert.Equal(["switch:3", "switch:5"], target.Calls);
+    }
+
+    [Fact]
+    public void A_Changed_Foreground_Still_Applies_Over_A_Manual_Switch()
+    {
+        var (watcher, source, target) = Create(new ForegroundSettings
+        {
+            Rules = [Rule("chrome", slot: 3), Rule("firefox", slot: 4)],
+            DefaultSlot = 1,
+        });
+
+        source.Context = new ForegroundContext("chrome", false);
+        watcher.Refresh();
+        Assert.Equal(3, target.ActiveSlot);
+
+        // The manual switch survives an unchanged decision...
+        target.SwitchProfile(5);
+        watcher.Refresh();
+        Assert.Equal(5, target.ActiveSlot);
+
+        // ...but a genuine change - another program in front, another rule deciding -
+        // still lands on the very next poll.
+        source.Context = new ForegroundContext("firefox", false);
+        watcher.Refresh();
+
+        Assert.Equal(4, target.ActiveSlot);
+        Assert.Equal(["switch:3", "switch:5", "switch:4"], target.Calls);
+    }
+
+    [Fact]
+    public void An_Edited_Rule_Applies_Its_New_Outcome_Over_A_Manual_Switch()
+    {
+        // An edited table is a deliberate change, so its outcome lands even where a
+        // manual switch would otherwise survive: the rule that decides is a different
+        // one now, which is a different effective outcome.
+        var (watcher, source, target) = Create(new ForegroundSettings
+        {
+            Rules = [Rule("chrome", slot: 3)],
+        });
+
+        source.Context = new ForegroundContext("chrome", false);
+        watcher.Refresh();
+        Assert.Equal(3, target.ActiveSlot);
+
+        target.SwitchProfile(5);
+        watcher.Update(new ForegroundSettings { Rules = [Rule("chrome", slot: 3, priority: 2)] });
 
         Assert.Equal(3, target.ActiveSlot);
         Assert.Equal(["switch:3", "switch:5", "switch:3"], target.Calls);
@@ -321,8 +373,42 @@ public sealed class ForegroundWatcherTests
     }
 
     [Fact]
-    public void Turning_The_Table_Off_Leaves_The_Desktop_Default_In_Charge()
+    public void Turning_The_Table_Off_Applies_Nothing_And_Leaves_The_Profile_Alone()
     {
+        var (watcher, source, target) = Create(new ForegroundSettings
+        {
+            Rules = [Rule("chrome", slot: 3)],
+            DefaultSlot = 2,
+        });
+
+        // Enabled first, so the watcher has an applied decision to stand down from.
+        source.Context = new ForegroundContext("chrome", false);
+        watcher.Refresh();
+        Assert.Equal(3, target.ActiveSlot);
+
+        // The user picks another preset and then turns the table off: neither the pick
+        // nor the profile is touched - disabled rules apply nothing at all, so the
+        // desktop default is never forced onto a user who switched the feature off.
+        target.SwitchProfile(5);
+        watcher.Update(new ForegroundSettings
+        {
+            Rules = [Rule("chrome", slot: 3)],
+            DefaultSlot = 2,
+            Enabled = false,
+        });
+        watcher.Refresh();
+
+        Assert.Equal(["switch:3", "switch:5"], target.Calls);
+        Assert.Equal(5, target.ActiveSlot);
+        Assert.Equal(ForegroundDecisionKind.Default, watcher.LastDecision!.Kind);
+        Assert.Contains("停用", watcher.LastDecision!.Reason);
+    }
+
+    [Fact]
+    public void A_Table_That_Starts_Disabled_Applies_Nothing()
+    {
+        // The state a user returns to by turning the feature off: the very first poll
+        // applies nothing, so the profile the host already carries is left in charge.
         var (watcher, source, target) = Create(new ForegroundSettings
         {
             Rules = [Rule("chrome", slot: 3)],
@@ -332,9 +418,44 @@ public sealed class ForegroundWatcherTests
 
         source.Context = new ForegroundContext("chrome", false);
         watcher.Refresh();
+        watcher.Refresh();
 
-        Assert.Equal(["switch:2"], target.Calls);
+        Assert.Empty(target.Calls);
+        Assert.Equal(1, target.ActiveSlot);
         Assert.Equal(ForegroundDecisionKind.Default, watcher.LastDecision!.Kind);
+    }
+
+    [Fact]
+    public void Turning_The_Table_Off_Lifts_The_Pause_A_Rule_Left_Behind()
+    {
+        var (watcher, source, target) = Create(new ForegroundSettings
+        {
+            Rules = [Rule("game", action: ForegroundAction.NativeGamepad)],
+        });
+
+        source.Context = new ForegroundContext("game", false);
+        watcher.Refresh();
+        Assert.True(target.IsPaused);
+
+        // The pause belongs to the rule, not to the user: with the table off there is no
+        // rule left to re-apply it, so it is lifted and mapping runs again.
+        watcher.Update(new ForegroundSettings
+        {
+            Rules = [Rule("game", action: ForegroundAction.NativeGamepad)],
+            Enabled = false,
+        });
+
+        Assert.False(target.IsPaused);
+        Assert.Equal(["pause", "resume"], target.Calls);
+
+        // And enabling the table again puts it straight back: the game is still in front.
+        watcher.Update(new ForegroundSettings
+        {
+            Rules = [Rule("game", action: ForegroundAction.NativeGamepad)],
+        });
+
+        Assert.True(target.IsPaused);
+        Assert.Equal(["pause", "resume", "pause"], target.Calls);
     }
 
     [Fact]

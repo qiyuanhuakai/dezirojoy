@@ -46,6 +46,16 @@ public partial class MouseSensitivityViewModel : ObservableObject
     /// </summary>
     private const double DriftSafetyFactor = 1.25;
 
+    /// <summary>
+    /// How often the at-rest drift collection takes a sample while it runs. The collection
+    /// rides the preview clock rather than the input stream on purpose: a pad reports a
+    /// sample when its state changes and then goes quiet - which is exactly the at-rest case
+    /// the drift measurement exists to capture - so a collection driven by the samples
+    /// themselves would record a single sample for a stick held still and could never
+    /// describe the noise it is meant to measure.
+    /// </summary>
+    public static readonly TimeSpan DriftSampleInterval = TimeSpan.FromSeconds(1.0 / 64.0);
+
     /// <summary>The suggestion is rounded up to this step, the deadzone slider's own tick.</summary>
     private const double DriftSuggestionStep = 0.01;
 
@@ -57,6 +67,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
     private float _realStickX;
     private float _realStickY;
     private double _driftMagnitudeSum;
+    private double _driftSampleDebt;
 
     public MouseSensitivityViewModel()
     {
@@ -147,6 +158,12 @@ public partial class MouseSensitivityViewModel : ObservableObject
     /// <see cref="GamepadVisualizerViewModel.Update"/> receives them: called on the UI thread
     /// for every sample, latest sample wins between preview ticks. Only the right stick - the
     /// stick the mouse mapping reads - and the precision button are consumed.
+    /// <para>
+    /// The at-rest drift collection is NOT driven from here: a sample arrives when the pad's
+    /// state changes, so a stick held still would contribute exactly one sample and the
+    /// distribution would be a single point. The collection runs on the preview clock instead
+    /// - see <see cref="DriftSampleInterval"/> - and reads the stick values this method keeps.
+    /// </para>
     /// </summary>
     public void ApplySample(IGamepadState state)
     {
@@ -158,11 +175,6 @@ public partial class MouseSensitivityViewModel : ObservableObject
         // A hand-edited profile could name Extra as the precision key; it carries no mask
         // bit, so asking the mask for it would throw on every single sample.
         PrecisionActive = PrecisionButton != GamepadButton.Extra && state.PressedButtons.Has(PrecisionButton);
-
-        if (IsMeasuringDrift)
-        {
-            RecordDriftSample(Math.Sqrt((_realStickX * _realStickX) + (_realStickY * _realStickY)));
-        }
 
         if (IsRealInputMode)
         {
@@ -266,6 +278,7 @@ public partial class MouseSensitivityViewModel : ObservableObject
         DriftSampleCount = 0;
         DriftMeanMagnitude = 0;
         DriftMaxMagnitude = 0;
+        _driftSampleDebt = 0;
         SetSuggestedDeadZone(null);
         IsMeasuringDrift = true;
         OnPropertyChanged(nameof(DriftStatus));
@@ -342,8 +355,27 @@ public partial class MouseSensitivityViewModel : ObservableObject
         DriftSampleCount = 0;
         DriftMeanMagnitude = 0;
         DriftMaxMagnitude = 0;
+        _driftSampleDebt = 0;
         SetSuggestedDeadZone(null);
         OnPropertyChanged(nameof(DriftStatus));
+    }
+
+    /// <summary>
+    /// Takes the drift samples the elapsed time owes, from the stick values the latest
+    /// sample left behind. Debt accumulation keeps the rate exact whichever length the tick
+    /// happens to be, so a stick held still - which reports once and then nothing - fills
+    /// the distribution the suggestion is built from, and a stick that jitters is sampled
+    /// at whatever its latest value happens to be.
+    /// </summary>
+    private void CollectDriftSamples(float deltaSeconds)
+    {
+        _driftSampleDebt += deltaSeconds;
+
+        while (_driftSampleDebt >= DriftSampleInterval.TotalSeconds)
+        {
+            _driftSampleDebt -= DriftSampleInterval.TotalSeconds;
+            RecordDriftSample(Math.Sqrt((_realStickX * _realStickX) + (_realStickY * _realStickY)));
+        }
     }
 
     /// <summary>
@@ -518,10 +550,19 @@ public partial class MouseSensitivityViewModel : ObservableObject
     /// the latest real sample (calibration); without live input the preview decays to rest.
     /// The tick cadence is the window's preview timer - samples arrive on the host's own
     /// cadence through <see cref="ApplySample"/> and are held until the next tick.
+    /// <para>
+    /// The at-rest drift collection runs on this clock rather than on the sample stream: see
+    /// <see cref="DriftSampleInterval"/>.
+    /// </para>
     /// </summary>
     public void Advance(TimeSpan delta)
     {
         var dt = (float)delta.TotalSeconds;
+
+        if (IsMeasuringDrift)
+        {
+            CollectDriftSamples(dt);
+        }
 
         if (!IsLive)
         {

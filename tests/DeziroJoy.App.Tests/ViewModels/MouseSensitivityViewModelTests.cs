@@ -549,6 +549,62 @@ public class MouseSensitivityViewModelTests
     }
 
     [Fact]
+    public void Holding_The_Stick_Still_Accumulates_Drift_Samples_On_A_Time_Basis()
+    {
+        // The regression this fixes: a pad reports a sample when its state changes and then
+        // goes quiet - the daemon forwards nothing at all while the stick is still - so a
+        // collection driven by the input stream captured exactly one sample and could never
+        // suggest a deadzone. The collection now rides the preview clock, so holding the
+        // stick still fills the distribution the suggestion is built from.
+        var vm = new MouseSensitivityViewModel { IsRealInputMode = true, IsLive = true };
+
+        // One sample only: a stick resting at (0.04, 0.01), which then changes no more.
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+
+        for (var i = 0; i < 40; i++)
+        {
+            vm.Advance(MouseSensitivityViewModel.DriftSampleInterval);
+        }
+
+        Assert.True(vm.IsMeasuringDrift);
+        Assert.Equal(40, vm.DriftSampleCount);
+        Assert.Equal(0.0412, vm.DriftMeanMagnitude, 3);
+        Assert.Equal(0.0412, vm.DriftMaxMagnitude, 3);
+
+        vm.StopDriftMeasurementCommand.Execute(null);
+
+        // The suggestion clears the observed peak with headroom, rounded up to a step the
+        // deadzone slider can actually represent - and it waits for confirmation.
+        Assert.Equal(0.06, vm.SuggestedDeadZone!.Value, 3);
+        Assert.Equal("0.06", vm.SuggestedDeadZoneText);
+        Assert.True(vm.CanApplySuggestion);
+    }
+
+    [Fact]
+    public void Stopping_The_Drift_Measurement_Stops_The_Samples()
+    {
+        var vm = new MouseSensitivityViewModel { IsRealInputMode = true, IsLive = true };
+
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+        vm.StartDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 10; i++)
+        {
+            vm.Advance(MouseSensitivityViewModel.DriftSampleInterval);
+        }
+
+        vm.StopDriftMeasurementCommand.Execute(null);
+        for (var i = 0; i < 30; i++)
+        {
+            vm.Advance(MouseSensitivityViewModel.DriftSampleInterval);
+        }
+
+        Assert.Equal(10, vm.DriftSampleCount);
+        Assert.Null(vm.SuggestedDeadZone);
+    }
+
+    [Fact]
     public void Drift_Measurement_Suggests_A_Deadzone_Above_The_Observed_Rest_Drift()
     {
         var vm = new MouseSensitivityViewModel { IsRealInputMode = true };
@@ -557,9 +613,11 @@ public class MouseSensitivityViewModelTests
         Assert.True(vm.IsMeasuringDrift);
 
         // A stick resting with noise: the magnitudes hover around 0.05 with a 0.054 peak.
+        // The noise arrives as samples; the collection samples it on the preview clock.
         for (var i = 0; i < 40; i++)
         {
             vm.ApplySample(GamepadState.Create(default, 0f, 0f, i % 2 == 0 ? 0.05f : 0.03f, i % 2 == 0 ? 0.02f : -0.04f));
+            vm.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         }
 
         vm.StopDriftMeasurementCommand.Execute(null);
@@ -590,6 +648,7 @@ public class MouseSensitivityViewModelTests
         for (var i = 0; i < 30; i++)
         {
             vm.ApplySample(GamepadState.Neutral);
+            vm.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         }
 
         vm.StopDriftMeasurementCommand.Execute(null);
@@ -612,11 +671,12 @@ public class MouseSensitivityViewModelTests
         for (var i = 0; i < 19; i++)
         {
             few.ApplySample(GamepadState.Create(default, 0f, 0f, 0.05f, 0f));
+            few.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         }
 
         Assert.Null(few.SuggestedDeadZone);
 
-        few.ApplySample(GamepadState.Create(default, 0f, 0f, 0.05f, 0f));
+        few.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         Assert.Equal(0.07, few.SuggestedDeadZone!.Value, 3);
 
         // A wildly drifting pad must still suggest a deadzone the slider can reach.
@@ -625,6 +685,7 @@ public class MouseSensitivityViewModelTests
         for (var i = 0; i < 30; i++)
         {
             wild.ApplySample(GamepadState.Create(default, 0f, 0f, 1f, 0f));
+            wild.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         }
 
         Assert.Equal(0.6, wild.SuggestedDeadZone!.Value, 3);
@@ -640,6 +701,7 @@ public class MouseSensitivityViewModelTests
         for (var i = 0; i < 30; i++)
         {
             vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.04f, 0.01f));
+            vm.Advance(MouseSensitivityViewModel.DriftSampleInterval);
         }
 
         Assert.True(vm.SuggestedDeadZone is not null);

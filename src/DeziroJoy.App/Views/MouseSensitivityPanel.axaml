@@ -282,25 +282,50 @@
                                    Text="{Binding PrecisionSpeed, StringFormat='{}{0:F0} px/s'}" />
                     </Grid>
 
-                    <TextBlock Classes="cardTitle" Text="静差采集" Margin="0,8,0,8" />
-                    <TextBlock Classes="hint" Margin="0,0,0,8" Text="{Binding DriftHint}" />
-                    <TextBlock x:Name="DriftStatusText" Classes="hint" Margin="0,0,0,8" Text="{Binding DriftStatus}" />
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="90" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Classes="fieldLabel" Text="建议死区" VerticalAlignment="Center" Margin="0" />
-                        <TextBlock Grid.Column="1" x:Name="SuggestedDeadZoneText" Classes="readout" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Text="{Binding SuggestedDeadZoneText}" />
-                    </Grid>
-                    <WrapPanel>
-                        <Button x:Name="StartDriftButton" Content="开始采集" Command="{Binding StartDriftMeasurementCommand}" />
-                        <Button x:Name="StopDriftButton" Content="停止采集" Margin="8,0,0,0"
-                                Command="{Binding StopDriftMeasurementCommand}" />
-                        <Button x:Name="ApplyDeadZoneButton" Content="采用建议死区" Margin="8,0,0,0"
-                                IsEnabled="{Binding CanApplySuggestion}" Command="{Binding ApplySuggestedDeadZoneCommand}" />
-                    </WrapPanel>
+                    <!-- 静差采集. The measurement rides the preview clock, so holding the
+                         stick still fills the distribution: the status line reports the sample
+                         count while collecting and the mean/peak once there is enough data,
+                         and the deadzone the distribution suggests stays a suggestion until
+                         it is confirmed with the button below. -->
+                    <StackPanel x:Name="DriftCard" Margin="0,18,0,0">
+                        <TextBlock Classes="cardTitle" Text="静差采集" Margin="0,0,0,8" />
+                        <TextBlock Classes="hint" Margin="0,0,0,10" TextWrapping="Wrap"
+                                   Text="{Binding DriftHint}" />
+
+                        <Border Background="{DynamicResource SubtleBrush}"
+                                CornerRadius="{DynamicResource CornerRadiusMd}"
+                                Padding="12,10" Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" x:Name="DriftStatusText" Classes="hint"
+                                           VerticalAlignment="Center" Margin="0" TextWrapping="Wrap"
+                                           Text="{Binding DriftStatus}" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
+                                    <TextBlock Classes="fieldLabel" Text="建议死区" HorizontalAlignment="Right" Margin="0" />
+                                    <TextBlock x:Name="SuggestedDeadZoneText" Classes="readout" HorizontalAlignment="Right"
+                                               Text="{Binding SuggestedDeadZoneText}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- One primary action at a time - 开始采集 arms the collection,
+                             停止采集 ends it and leaves the suggestion to confirm - and the
+                             apply stays disabled until there is something to confirm. -->
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="StartDriftButton" Classes="primary" Content="开始采集" MinHeight="32"
+                                    IsVisible="{Binding IsMeasuringDrift, Converter={StaticResource Not}}"
+                                    Command="{Binding StartDriftMeasurementCommand}" />
+                            <Button x:Name="StopDriftButton" Classes="primary" Content="停止采集" MinHeight="32"
+                                    IsVisible="{Binding IsMeasuringDrift}"
+                                    Command="{Binding StopDriftMeasurementCommand}" />
+                            <Button x:Name="ApplyDeadZoneButton" Classes="ghost" Content="采用建议死区" MinHeight="32"
+                                    Margin="8,0,0,0" IsEnabled="{Binding CanApplySuggestion}"
+                                    Command="{Binding ApplySuggestedDeadZoneCommand}" />
+                        </StackPanel>
+                    </StackPanel>
                 </StackPanel>
 
                 <TextBlock Classes="cardTitle" Text="响应曲线" Margin="0,22,0,12" />

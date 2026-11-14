@@ -292,8 +292,10 @@ public class ScrollSensitivityViewModelTests
         vm.StartDriftMeasurementCommand.Execute(null);
         for (var i = 0; i < 40; i++)
         {
-            // The wheel reads the left stick, so the drift rides the left axes.
+            // The wheel reads the left stick, so the drift rides the left axes. Collection runs
+            // on the preview clock, so each sample is followed by a tick that records it.
             vm.ApplySample(GamepadState.Create(default, i % 2 == 0 ? 0.05f : 0.03f, i % 2 == 0 ? 0.02f : -0.04f, 0f, 0f));
+            vm.Advance(ScrollSensitivityViewModel.DriftSampleInterval);
         }
 
         vm.StopDriftMeasurementCommand.Execute(null);
@@ -315,9 +317,10 @@ public class ScrollSensitivityViewModelTests
         var vm = new ScrollSensitivityViewModel { IsRealInputMode = true };
 
         vm.StartDriftMeasurementCommand.Execute(null);
+        vm.ApplySample(GamepadState.Neutral);
         for (var i = 0; i < 30; i++)
         {
-            vm.ApplySample(GamepadState.Neutral);
+            vm.Advance(ScrollSensitivityViewModel.DriftSampleInterval);
         }
 
         vm.StopDriftMeasurementCommand.Execute(null);
@@ -340,6 +343,7 @@ public class ScrollSensitivityViewModelTests
         for (var i = 0; i < 30; i++)
         {
             vm.ApplySample(GamepadState.Create(default, 0.04f, 0.01f, 0f, 0f));
+            vm.Advance(ScrollSensitivityViewModel.DriftSampleInterval);
         }
 
         Assert.True(vm.SuggestedDeadZone is not null);

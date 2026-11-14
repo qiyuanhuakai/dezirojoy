@@ -25,6 +25,13 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     public const int MinDriftSamples = 20;
 
     /// <summary>
+    /// The cadence the at-rest drift collection samples at, on the preview clock rather than the
+    /// sample stream: a stick held still reports once and then nothing, so collecting per-sample
+    /// would capture a single point. Sampling on this interval fills the distribution regardless.
+    /// </summary>
+    public static readonly TimeSpan DriftSampleInterval = TimeSpan.FromSeconds(1.0 / 64.0);
+
+    /// <summary>
     /// Headroom the suggested deadzone keeps over the observed drift peak: a pad that only
     /// just clears its own noise still gives up a sliver of the center, which is the trade
     /// the suggestion makes so a resting stick never scrolls the wheel.
@@ -42,6 +49,7 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     private float _realStickX;
     private float _realStickY;
     private double _driftMagnitudeSum;
+    private double _driftSampleDebt;
 
     public ScrollSensitivityViewModel()
     {
@@ -94,11 +102,6 @@ public partial class ScrollSensitivityViewModel : ObservableObject
 
         _realStickX = state.LeftStickX;
         _realStickY = state.LeftStickY;
-
-        if (IsMeasuringDrift)
-        {
-            RecordDriftSample(Math.Sqrt((_realStickX * _realStickX) + (_realStickY * _realStickY)));
-        }
 
         if (IsRealInputMode)
         {
@@ -191,6 +194,7 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     private void StartDriftMeasurement()
     {
         _driftMagnitudeSum = 0;
+        _driftSampleDebt = 0;
         DriftSampleCount = 0;
         DriftMeanMagnitude = 0;
         DriftMaxMagnitude = 0;
@@ -218,6 +222,23 @@ public partial class ScrollSensitivityViewModel : ObservableObject
 
     private static string MagnitudeText(double magnitude)
         => magnitude.ToString("F2", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Collects drift samples on the preview clock at <see cref="DriftSampleInterval"/>, reading
+    /// the latest stick values <see cref="ApplySample"/> keeps. A stick held still reports once
+    /// and then nothing, so sampling per-sample would capture a single point; this fills the
+    /// distribution the deadzone suggestion is built from regardless.
+    /// </summary>
+    private void CollectDriftSamples(float deltaSeconds)
+    {
+        _driftSampleDebt += deltaSeconds;
+
+        while (_driftSampleDebt >= DriftSampleInterval.TotalSeconds)
+        {
+            _driftSampleDebt -= DriftSampleInterval.TotalSeconds;
+            RecordDriftSample(Math.Sqrt((_realStickX * _realStickX) + (_realStickY * _realStickY)));
+        }
+    }
 
     private void RecordDriftSample(double magnitude)
     {
@@ -267,6 +288,7 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     private void ResetDriftMeasurement()
     {
         _driftMagnitudeSum = 0;
+        _driftSampleDebt = 0;
         DriftSampleCount = 0;
         DriftMeanMagnitude = 0;
         DriftMaxMagnitude = 0;
@@ -405,6 +427,11 @@ public partial class ScrollSensitivityViewModel : ObservableObject
     public void Advance(TimeSpan delta)
     {
         var dt = (float)delta.TotalSeconds;
+
+        if (IsMeasuringDrift)
+        {
+            CollectDriftSamples(dt);
+        }
 
         if (!IsLive)
         {

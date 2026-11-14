@@ -96,10 +96,10 @@ public sealed class EngineHostForegroundTarget : IForegroundTarget
 /// program in front, the rule that matches it and the decision it resolves to, all read off
 /// the same shared table the daemon is running.
 /// <para>
-/// Mirroring the applied slot and pause is what keeps the watcher idempotent against this
-/// target, so an unchanged foreground costs one window read exactly as it does against a live
-/// engine - and a poll that resolves to what is already displayed calls the target with
-/// nothing, which is what makes the display cheap to keep current while the window is closed
+/// Mirroring the applied slot and pause is what keeps the watcher's own no-op checks truthful
+/// against this target - a decision that is already in effect finds the slot and the pause it
+/// names - so an unchanged foreground costs one window read exactly as it does against a live
+/// engine, which is what makes the display cheap to keep current while the window is closed
 /// to the tray.
 /// </para>
 /// </summary>
@@ -125,10 +125,12 @@ public sealed class NullForegroundTarget : IForegroundTarget
 /// the engine's, so this never runs on the mapping loop and never touches the injection mutex.
 /// <para>
 /// Driven from one thread - the UI's timer, the resident daemon's own poll loop, or a test - and
-/// idempotent: a poll that resolves to what is already in effect calls the target with nothing,
-/// so an unchanged foreground costs one window read and no reload. That idempotence is also the
-/// self-healing path: a device that reconnects, or a manual preset switch the user made, is
-/// brought back in line on the next poll.
+/// idempotent: a poll whose decision resolves to the outcome already in effect calls the target
+/// with nothing, so an unchanged foreground costs one window read and no reload. That same
+/// idempotence is what lets a manual preset switch survive: while the rules keep deciding what
+/// they already decided, there is nothing new to enforce, and the profile the user picked stays
+/// where it is. A genuine change - another program in front, an edited rule, a new default -
+/// still lands on the next poll.
 /// </para>
 /// </summary>
 public sealed class ForegroundWatcher : IDisposable
@@ -198,9 +200,11 @@ public sealed class ForegroundWatcher : IDisposable
 
     /// <summary>
     /// What is actually in effect: the last decision that was applied, or the last one evaluated
-    /// while nothing has been applied yet. The two differ only while the profile is locked - the
-    /// rules keep saying what they want, and this keeps saying what is running - which is what
-    /// lets the panel explain the lock instead of quoting a rule that is not in charge.
+    /// while nothing has been applied yet - which is also the state a switched-off table leaves
+    /// behind, since disabled rules apply nothing at all. The two differ only while the profile
+    /// is locked - the rules keep saying what they want, and this keeps saying what is running -
+    /// which is what lets the panel explain the lock instead of quoting a rule that is not in
+    /// charge.
     /// </summary>
     public ForegroundDecision? AppliedDecision => _applied ?? _decision;
 
@@ -234,16 +238,55 @@ public sealed class ForegroundWatcher : IDisposable
         _context = _source.Read();
         _decision = ForegroundRules.Evaluate(_settings, _context);
 
-        // Locked is the one state that applies nothing: the profile in effect is the user's
-        // choice, and the rules stand down until it is unlocked again.
-        if (!_locked)
+        if (!_settings.Enabled)
         {
-            Apply(_decision);
-            _applied = _decision;
+            // The table is off, so the watcher stands down entirely: nothing is applied and
+            // the profile the user chose is left exactly as it is. Forcing the desktop
+            // default here would take the profile away from a user who switched the feature
+            // off - the opposite of what turning it off asks for.
+            //
+            // The pause is a foreground rule's, not the user's: leaving it behind would keep
+            // mapping off in a program that no longer has the foreground, and with the table
+            // off there is no rule to re-apply it, so it goes for good.
+            if (_target.IsPaused)
+            {
+                _target.SetPaused(false);
+            }
+
+            // Nothing the rules decided is in effect any more, so there is no applied
+            // decision to report either: the panel falls back to the evaluated one, which is
+            // the table's own answer for the switched-off state.
+            _applied = null;
+        }
+        else if (!_locked)
+        {
+            // Locked is the one state that applies nothing: the profile in effect is the
+            // user's choice, and the rules stand down until it is unlocked again.
+            //
+            // An unchanged outcome applies nothing either. The rules keep deciding the same
+            // thing, so there is nothing new to enforce - which is what lets a manual preset
+            // switch the user made survive every poll, while a changed foreground or an
+            // edited rule still lands on the next one.
+            if (_applied is null || !SameOutcome(_applied, _decision))
+            {
+                Apply(_decision);
+                _applied = _decision;
+            }
         }
 
         StateChanged?.Invoke();
     }
+
+    /// <summary>
+    /// Whether two decisions resolve to the same effective outcome: the same kind, the same
+    /// slot and the same deciding rule. The rule's identity - not its contents - is what
+    /// counts, so a table the user edited counts as a new outcome even where it names the
+    /// same slot, while an untouched table never re-applies over a manual switch.
+    /// </summary>
+    private static bool SameOutcome(ForegroundDecision applied, ForegroundDecision decided)
+        => applied.Kind == decided.Kind
+            && applied.Slot == decided.Slot
+            && applied.Rule?.Id == decided.Rule?.Id;
 
     /// <summary>
     /// Locks or unlocks the profile in effect. Locking does not change what runs - it stops the
