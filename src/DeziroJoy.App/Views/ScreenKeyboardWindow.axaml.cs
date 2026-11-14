@@ -27,6 +27,13 @@ namespace DeziroJoy.App.Views;
 /// caps, exactly as the editor panel used to mirror it onto the embedded grid. Every write goes
 /// through the view model, which asks the daemon to inject.
 /// </para>
+/// <para>
+/// It places itself: bottom-centre on the screen it is on, one margin above the bottom edge,
+/// clamped so no part of it ever leaves that screen. The placement is re-resolved whenever the
+/// window's footprint changes - a wider page, a screen scaling change, a monitor going away -
+/// because a keyboard that has drifted off the visible screen is a keyboard that has stopped
+/// being usable. See <see cref="ResolvePosition"/> for the placement itself.
+/// </para>
 /// </summary>
 public partial class ScreenKeyboardWindow : Window
 {
@@ -43,6 +50,9 @@ public partial class ScreenKeyboardWindow : Window
     private ItemsControl? _keyGrid;
 
     private ItemsControl? KeyGrid => _keyGrid ??= this.FindControl<ItemsControl>("TextKeyboardGrid");
+
+    /// <summary>The screens the window last subscribed to, so the handler can be taken off again.</summary>
+    private Screens? _watchedScreens;
 
     /// <summary>
     /// The runtime-loader constructor: a window bound to a view model of its own, which no
@@ -72,21 +82,42 @@ public partial class ScreenKeyboardWindow : Window
     {
         base.OnOpened(e);
 
-        if (!TryPosition())
+        // Every appearance re-reads the screen, so the keyboard lands where the user is
+        // looking rather than where it last was.
+        TryPosition();
+
+        // The window sizes itself to its content, so its footprint is not settled once and
+        // for all: a wider page, a scaling change or a monitor going away all move the edges
+        // the placement has to clamp against. The placement is therefore re-resolved on every
+        // layout pass and whenever the screens change - both idempotent, because a pass that
+        // resolves the position the keyboard already sits at writes nothing.
+        LayoutUpdated += OnLayoutUpdated;
+
+        if (Screens is { } screens)
         {
-            // The window has not measured its content yet: the first layout pass that gives it
-            // a size repositions it, then unhooks itself.
-            LayoutUpdated += OnLayoutUpdated;
+            _watchedScreens = screens;
+            screens.Changed += OnScreensChanged;
         }
     }
 
-    private void OnLayoutUpdated(object? sender, EventArgs e)
+    protected override void OnClosed(EventArgs e)
     {
-        if (TryPosition())
+        // Unsubscribed before the base closes the platform handle: a closed window has no
+        // screens left to ask for.
+        LayoutUpdated -= OnLayoutUpdated;
+
+        if (_watchedScreens is { } screens)
         {
-            LayoutUpdated -= OnLayoutUpdated;
+            screens.Changed -= OnScreensChanged;
+            _watchedScreens = null;
         }
+
+        base.OnClosed(e);
     }
+
+    private void OnLayoutUpdated(object? sender, EventArgs e) => TryPosition();
+
+    private void OnScreensChanged(object? sender, EventArgs e) => TryPosition();
 
     private void OnKeyboardPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -132,8 +163,9 @@ public partial class ScreenKeyboardWindow : Window
     /// a bottom-anchored card rather than a centred one because the target application's own
     /// content - a search box, a rename field, a URL bar - usually lives above the bottom edge,
     /// and a keyboard that covers the field it is filling is worse than one that sits under it.
-    /// Returns false when the platform reports no screens or the window has not been measured
-    /// yet, leaving the window where the platform put it.
+    /// A window left outside every screen comes back to the primary one. Returns false when
+    /// the platform reports no screens at all or the window has not been measured yet, leaving
+    /// the window where the platform put it.
     /// </summary>
     private bool TryPosition()
     {
@@ -142,28 +174,64 @@ public partial class ScreenKeyboardWindow : Window
             return false;
         }
 
-        if (Screens.ScreenFromVisual(this) is not { } screen)
+        // A window the platform has left outside every screen - a monitor unplugged from
+        // under it - has no screen of its own to anchor to, so it comes back to the primary
+        // one rather than staying wherever it was abandoned.
+        var screen = Screens.ScreenFromVisual(this) ?? Screens.Primary;
+        if (screen is null)
         {
             return false;
         }
 
-        Position = ResolvePosition(screen.Bounds, Bounds.Size);
+        // The window's measured size is layout units, but both the position being written and
+        // the screen it is written into are device pixels - so the footprint the screen sees
+        // is the measured size scaled by that screen, and it is that footprint which has to
+        // fit. Leaving the scaling out is what put the keyboard off-screen: on a 150% screen a
+        // keyboard measured 600x320 occupies 900x480 pixels, and centring and clamping the
+        // 600x320 hung a third of it past the right and bottom edges.
+        var position = ResolvePosition(screen.Bounds, Bounds.Size, screen.Scaling);
+
+        // Already exactly where the placement wants it, so the pass writes nothing - and a
+        // window the platform has moved somewhere else is not: the next pass brings it back.
+        if (position == Position)
+        {
+            return true;
+        }
+
+        Position = position;
         return true;
     }
 
     /// <summary>
     /// The pixel position the keyboard takes, resolved purely from its inputs so the placement
     /// is unit-testable without a window: horizontally centred, one margin above the bottom
-    /// edge, and never off the top of a screen shorter than the keyboard itself.
+    /// edge, and clamped on both axes so no part of the keyboard ever leaves the screen - not
+    /// even a keyboard wider or taller than the screen itself, which parks at the screen's
+    /// top-left corner instead of disappearing.
+    /// <para>
+    /// The window size is the size the keyboard occupies on the screen: its measured layout
+    /// size times the screen's scaling. The margin is a layout-space constant too, so it
+    /// scales with the screen - 48 units clear a taskbar at 100% and at 200% alike.
+    /// </para>
     /// </summary>
-    internal static PixelPoint ResolvePosition(PixelRect screen, Size window, double edgeMargin = EdgeMargin)
+    internal static PixelPoint ResolvePosition(
+        PixelRect screen,
+        Size window,
+        double scaling = 1,
+        double edgeMargin = EdgeMargin)
     {
-        var x = screen.X + (screen.Width - window.Width) / 2.0;
-        var y = screen.Y + screen.Height - window.Height - edgeMargin;
+        var width = window.Width * scaling;
+        var height = window.Height * scaling;
+        var margin = edgeMargin * scaling;
 
+        var x = screen.X + (screen.Width - width) / 2.0;
+        var y = screen.Y + screen.Height - height - margin;
+
+        // A keyboard bigger than the screen has nowhere to go: the clamp collapses onto the
+        // screen's own origin, which parks it at the top-left corner rather than off-screen.
         return new PixelPoint(
-            (int)Math.Round(Math.Clamp(x, screen.X, Math.Max(screen.X, screen.X + screen.Width - window.Width))),
-            (int)Math.Round(Math.Max(y, screen.Y)));
+            (int)Math.Round(Math.Clamp(x, screen.X, Math.Max(screen.X, screen.X + screen.Width - width))),
+            (int)Math.Round(Math.Clamp(y, screen.Y, Math.Max(screen.Y, screen.Y + screen.Height - height))));
     }
 
     private void RefreshStatus()
@@ -203,11 +271,16 @@ public partial class ScreenKeyboardWindow : Window
         _keyboard.Activate();
     }
 
-    /// <summary>A cap entered the tree, so it wears the cursor the keyboard already holds.</summary>
+    /// <summary>
+    /// A cap entered the tree, so it wears the state the keyboard already holds: the cursor
+    /// where it is, and the function-key surface for a cap that edits or dismisses rather
+    /// than types a character.
+    /// </summary>
     private void OnTextKeyboardKeyLoaded(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { DataContext: TextKeyboardKey key } button)
         {
+            button.Classes.Set("action", key.Action != TextKeyboardAction.Insert);
             button.Classes.Set("focused", IsFocusedKey(key));
         }
     }
@@ -224,8 +297,8 @@ public partial class ScreenKeyboardWindow : Window
     /// <summary>
     /// Marks the cap the keyboard's cursor sits on. The cursor is view-model state, not real
     /// focus - the window is not focusable, so no cap can hold keyboard focus anyway - so this
-    /// is what makes a cursor move visible: the cap wears the accent surface and its label
-    /// weight rises with it, and neither state rests on colour alone.
+    /// is what makes a cursor move visible: the cap wears the accent surface inside an accent
+    /// ring and its label weight rises with it, and none of that rests on colour alone.
     /// </summary>
     private void RefreshTextKeyboardFocus()
     {

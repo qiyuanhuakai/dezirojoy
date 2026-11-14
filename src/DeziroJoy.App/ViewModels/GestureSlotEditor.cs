@@ -508,6 +508,13 @@ public sealed record TextKeyboardPage(string Name, IReadOnlyList<IReadOnlyList<T
 /// </summary>
 /// <remarks>
 /// <para>
+/// The pages are laid out for a D-pad rather than for a typewriter: few keys to a row, rows
+/// of equal length within a page so a push down lands on a key rather than past the end of a
+/// short one, and the action row - 退格, 空格, 清空, 完成 - closing every page so the four
+/// keys that edit and dismiss are always in the same four places. The caps stretch to the
+/// width of their row, so the narrower a page the larger its caps.
+/// </para>
+/// <para>
 /// The keyboard is deliberately basic: it types the characters its pages carry and nothing
 /// else. Full IME integration - focus hand-off to a real input method, its candidate window
 /// and its commit - is a follow-up, so a character no page carries (a non-ASCII letter, an
@@ -524,7 +531,11 @@ public sealed record TextKeyboardPage(string Name, IReadOnlyList<IReadOnlyList<T
 /// </remarks>
 public sealed partial class TextKeyboard : ObservableObject
 {
-    /// <summary>The action row every page ends with: 退格, 空格, 清空 and 完成.</summary>
+    /// <summary>
+    /// The action row every page ends with: 退格, 空格, 清空 and 完成. It closes every page on
+    /// purpose: the four keys a gamepad keyboard must never make the user hunt for are always
+    /// the same four keys in the same four places, one clamp away from wherever the cursor sits.
+    /// </summary>
     private static readonly TextKeyboardKey[] ActionRow =
     [
         new("退格", null, TextKeyboardAction.Backspace),
@@ -538,6 +549,8 @@ public sealed partial class TextKeyboard : ObservableObject
 
     private static readonly TextKeyboardPage[] PagesField =
     [
+        // The alphabet is the one page that cannot be fewer than 26 keys, so it takes the
+        // widest rows the keyboard has - and it is the page a fresh keyboard opens on.
         new("小写", [
             Keys("abcdefghi"),
             Keys("jklmnopqr"),
@@ -551,27 +564,34 @@ public sealed partial class TextKeyboard : ObservableObject
             ActionRow,
         ]),
         new("数字", [
-            Keys("1234567890"),
-            Keys("-[];',./`\\"),
-            Keys("=<>?:_+*"),
+            Keys("1234567"),
+            Keys("890-.,:"),
+            Keys(";/\\'`[]"),
+            Keys("=+*<>?_"),
             ActionRow,
         ]),
         new("符号", [
-            Keys("!@#$%^&*()"),
-            Keys("{}|\"~"),
+            Keys("!@#$%^&"),
+            Keys("(){}|\"~"),
             Keys("§°¥€£•…"),
             ActionRow,
         ]),
+        // Whole fragments rather than characters - a scheme, a host, a suffix, a search - four
+        // to a row, so one press types what would otherwise be a dozen cursor moves.
         new("常用", [
             [
                 new("https://", "https://"),
                 new("http://", "http://"),
                 new("www.", "www."),
                 new(".com", ".com"),
-                new(".cn", ".cn"),
             ],
             [
+                new(".cn", ".cn"),
+                new(".net", ".net"),
+                new(".org", ".org"),
                 new("搜索", "search "),
+            ],
+            [
                 new("@", "@"),
                 new("#", "#"),
                 new("_", "_"),
@@ -581,7 +601,7 @@ public sealed partial class TextKeyboard : ObservableObject
         ]),
     ];
 
-    /// <summary>Every page, in the order the keyboard offers them.</summary>
+    /// <summary>Every page, in the order the keyboard offers them - the order the bumpers walk.</summary>
     public IReadOnlyList<TextKeyboardPage> Pages { get; } = PagesField;
 
     [ObservableProperty]

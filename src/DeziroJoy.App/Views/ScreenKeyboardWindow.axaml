@@ -26,15 +26,24 @@
         the application underneath, so the two do not conflict.
 
         Every colour rides a theme token, so the keyboard follows the light/dark variant the
-        user picked, and every transition is a brush or an opacity - nothing here may shift
-        the caps under the cursor.
+        user picked, and nothing here animates a size, a margin or a position - a cursor move
+        can never shift a cap under the cursor. The caps change state the moment the cursor
+        arrives rather than easing towards it: a gamepad cursor is tracked continuously, and a
+        cap that fades into selection lags the push that asked for it.
+
+        The window sizes itself to its content and parks itself along the bottom of the screen
+        it is on; the placement itself lives in ScreenKeyboardWindow.axaml.cs, which clamps it
+        into the screen's visible bounds at the screen's own scaling.
     -->
 
     <Window.Styles>
         <!-- The same key-cap idiom the mapping editor's keyboards use, so a cap reads the same
              wherever it is: one box in every state, the accent surface for the cursor, and a
              label weight that rises with it so the selected cap never rests on colour alone.
-             The border thickness never changes, so a cursor move cannot shift a cap. -->
+             The caps are sized for a gamepad rather than for a mouse: a target that reads from
+             across the room, with room between neighbours so a mis-push lands on nothing.
+             Nothing in a cap's layout ever changes state - the focus ring is always present and
+             only its opacity moves - so a cursor move can never shift a cap under the cursor. -->
         <Style Selector="ItemsControl.keyGrid ContentPresenter">
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="VerticalContentAlignment" Value="Stretch" />
@@ -44,24 +53,42 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="2" />
-            <Setter Property="MinWidth" Value="46" />
-            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="Margin" Value="3" />
+            <Setter Property="MinWidth" Value="64" />
+            <Setter Property="MinHeight" Value="48" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="VerticalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontSize" Value="16" />
             <Setter Property="Template">
                 <ControlTemplate>
                     <Border Classes="textKeyFrame" Background="{TemplateBinding Background}"
                             BorderThickness="1" BorderBrush="Transparent"
                             CornerRadius="{DynamicResource CornerRadiusMd}">
-                        <ContentPresenter Content="{TemplateBinding Content}"
-                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Grid>
+                            <!-- The focus ring: laid out on every cap in every state, so the
+                                 cursor arriving only ever lights a brush and an opacity up -
+                                 never a size, never a margin, never a position. It changes
+                                 with the cursor rather than easing towards it: a gamepad
+                                 cursor is tracked continuously, and a cap that fades into
+                                 selection lags the push that asked for it. -->
+                            <Border Classes="textKeyRing" BorderThickness="2"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    CornerRadius="{DynamicResource CornerRadiusSm}"
+                                    IsHitTestVisible="False" />
+                            <ContentPresenter Content="{TemplateBinding Content}"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
                     </Border>
                 </ControlTemplate>
             </Setter>
+        </Style>
+
+        <!-- The action row - 退格 / 空格 / 清空 / 完成 - reads as function keys rather than as
+             characters, so the keys that edit and dismiss are found by shape, not by label. -->
+        <Style Selector="Button.textKey.action Border.textKeyFrame">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
         </Style>
 
         <Style Selector="Button.textKey:pointerover Border.textKeyFrame">
@@ -73,31 +100,42 @@
         </Style>
 
         <!-- The cursor the gamepad drives: the same key-cap surface washed in the accent
-             tone, so the cap the cursor sits on is the one that reads as selected. -->
+             tone and ringed in it, so the cap the cursor sits on is the one that reads as
+             selected from across the room. -->
         <Style Selector="Button.textKey.focused Border.textKeyFrame">
             <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
         </Style>
 
+        <Style Selector="Border.textKeyRing">
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+
+        <Style Selector="Button.textKey.focused Border.textKeyRing">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+
         <Style Selector="Button.textKey TextBlock.textKeyLabel">
-            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontSize" Value="16" />
             <Setter Property="Foreground" Value="{DynamicResource ControlForegroundBrush}" />
         </Style>
 
         <Style Selector="Button.textKey.focused TextBlock.textKeyLabel">
             <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
-            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontWeight" Value="Bold" />
         </Style>
 
         <!-- The page navigator: one segmented row of equal peers, the same surface language as
-             the editor's category navigator, so the pages are found the same way here. -->
+             the editor's category navigator, so the pages are found the same way here. The
+             bumpers walk the same five pages without leaving the cursor, so the row is a
+             mouse affordance rather than the only way through. -->
         <Style Selector="RadioButton.keyCategorySegment">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Padding" Value="14,8" />
             <Setter Property="Margin" Value="0,0,6,6" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontSize" Value="13" />
             <Setter Property="HorizontalAlignment" Value="Left" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
@@ -166,7 +204,7 @@
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <TextBlock Classes="cardTitle" Text="屏幕键盘" />
                         <TextBlock Classes="hint" Margin="0,2,0,0"
-                                   Text="十字键移动光标，A 输入光标处的按键，LB / RB 切换键盘页，B 关闭。输入会直接发送到当前聚焦的应用。" />
+                                   Text="十字键移动光标，A 输入光标处的按键，LB / RB 切换键盘页，B 关闭。每页最下面一行固定是 退格 / 空格 / 清空 / 完成。输入会直接发送到当前聚焦的应用。" />
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="CloseButton" Classes="ghost" Content="返回"
                             VerticalAlignment="Top" Click="OnCloseClick" />
@@ -193,7 +231,8 @@
 
                 <!-- The pages lead as one segmented row, and the grid shows the active page's
                      keys a row at a time. One ItemsControl per row, so a short row stays short
-                     instead of stretching to the longest one's width. -->
+                     instead of stretching to the longest one's width - which is also what makes
+                     a narrow page a page of larger caps: the caps fill the width of their row. -->
                 <Border Grid.Row="3" Margin="0,10,0,0" HorizontalAlignment="Left">
                     <ItemsControl x:Name="TextKeyboardPageNav" ItemsSource="{Binding Keyboard.Pages}">
                         <ItemsControl.ItemsPanel>
@@ -223,7 +262,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <ItemsControl Classes="keyGrid" ItemsSource="{Binding}" Margin="0,0,0,4">
+                                <ItemsControl Classes="keyGrid" ItemsSource="{Binding}" Margin="0,0,0,6">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
                                             <UniformGrid Columns="{Binding Count}" />

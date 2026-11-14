@@ -174,4 +174,103 @@ public sealed class ScreenKeyboardViewModelTests
 
         Assert.Equal(TextTarget.MaxLength, keyboard.TypedText.Length);
     }
+
+    [Fact]
+    public void Every_Page_Ends_With_The_Same_Action_Row()
+    {
+        var keyboard = Build(out _, out _);
+
+        // The one thing a gamepad keyboard must never make the user hunt for: the four keys
+        // that edit and dismiss sit in the same four places at the bottom of every page, so
+        // 退格 is one push down and one clamp away from wherever the cursor sits.
+        foreach (var page in keyboard.Keyboard.Pages)
+        {
+            var last = page.Rows[^1];
+            Assert.Equal(["退格", "空格", "清空", "完成"], last.Select(key => key.Label));
+        }
+    }
+
+    [Fact]
+    public void The_Letter_Pages_Carry_The_Whole_Alphabet()
+    {
+        var keyboard = Build(out _, out _);
+        var lower = PageText(keyboard, "小写");
+        var upper = PageText(keyboard, "大写");
+
+        Assert.Equal("abcdefghijklmnopqrstuvwxyz", string.Concat(lower));
+        Assert.Equal("ABCDEFGHIJKLMNOPQRSTUVWXYZ", string.Concat(upper));
+    }
+
+    [Fact]
+    public void The_Punctuation_Pages_Carry_Every_Symbol_The_Keyboard_Had()
+    {
+        var keyboard = Build(out _, out _);
+
+        // The redesign re-laid the punctuation pages out; it dropped nothing. Every digit and
+        // every symbol the old 数字 and 符号 pages carried is still on one of the two.
+        var carried = string
+            .Concat(PageText(keyboard, "数字").Concat(PageText(keyboard, "符号")))
+            .ToHashSet();
+
+        Assert.Equal(
+            "0123456789-[];',./`\\=<>?:_+*!@#$%^&*(){}|\"~§°¥€£•…".ToHashSet(),
+            carried);
+    }
+
+    [Fact]
+    public void A_Page_Of_Even_Rows_Lands_The_Cursor_On_A_Key_When_Pushed_Down()
+    {
+        var keyboard = Build(out _, out _);
+        keyboard.Keyboard.ShowPage(PageNamed(keyboard, "数字"));
+
+        // The punctuation pages are laid out at one row length, so a push down keeps the
+        // column instead of landing past the end of a short row: the cursor walks straight
+        // down the last column, and only the action row - four keys wide - pulls it back.
+        Assert.Equal("1", keyboard.Keyboard.FocusedKey!.Label);
+
+        for (var i = 0; i < 6; i++)
+        {
+            keyboard.Navigate(GamepadButtonMask.DPadRight);
+        }
+
+        Assert.Equal("7", keyboard.Keyboard.FocusedKey!.Label);
+
+        for (var i = 0; i < 3; i++)
+        {
+            keyboard.Navigate(GamepadButtonMask.DPadDown);
+        }
+
+        Assert.Equal("_", keyboard.Keyboard.FocusedKey!.Label);
+
+        keyboard.Navigate(GamepadButtonMask.DPadDown);
+        Assert.Equal("完成", keyboard.Keyboard.FocusedKey!.Label);
+    }
+
+    [Fact]
+    public void The_Fragment_Page_Types_A_URL_Prefix_Without_Walking_The_Alphabet()
+    {
+        var keyboard = Build(out var typed, out _);
+
+        // A whole URL prefix is one press per fragment: the page is narrow, so its caps are
+        // more than twice a letter cap's width, and the fragments sit in the order a URL is
+        // typed - scheme, host, suffix.
+        keyboard.Navigate(GamepadButtonMask.LeftBumper);
+        keyboard.Navigate(GamepadButtonMask.A);
+        keyboard.Navigate(GamepadButtonMask.DPadRight);
+        keyboard.Navigate(GamepadButtonMask.DPadRight);
+        keyboard.Navigate(GamepadButtonMask.A);
+
+        Assert.Equal(["https://", "www."], typed);
+        Assert.Equal("https://www.", keyboard.TypedText);
+    }
+
+    private static TextKeyboardPage PageNamed(ScreenKeyboardViewModel keyboard, string name)
+        => keyboard.Keyboard.Pages.First(page => page.Name == name);
+
+    /// <summary>The insert texts a page carries, in the order its rows lay them out.</summary>
+    private static IEnumerable<string> PageText(ScreenKeyboardViewModel keyboard, string name)
+        => PageNamed(keyboard, name)
+            .Rows.SelectMany(row => row)
+            .Where(key => key.Action == TextKeyboardAction.Insert)
+            .Select(key => key.Text!);
 }
