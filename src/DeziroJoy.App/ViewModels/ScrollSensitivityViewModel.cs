@@ -53,6 +53,7 @@ public partial class ScrollSensitivityViewModel : ObservableObject
 
     public ScrollSensitivityViewModel()
     {
+        RebuildCurvePoints();
     }
 
     [ObservableProperty]

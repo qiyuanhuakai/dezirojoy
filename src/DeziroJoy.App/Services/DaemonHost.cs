@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
+using System.Threading.Channels;
 using System.Security.Principal;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.Core.Mapping;
@@ -122,8 +123,9 @@ public static class DaemonHost
         // is why the publish takes it on the other side.
         composition.Host.ActiveLayersChanged += () => daemon.PublishLayerState();
 
+        using var presetSwitches = new DaemonPresetSwitchQueue(daemon);
         composition.Host.PresetSwitchRequested += (_, slot) =>
-            daemon.RequestPresetSlotSwitch(slot);
+            presetSwitches.Enqueue(slot);
 
         composition.Host.ScreenKeyboardToggleRequested += () =>
             daemon.RequestScreenKeyboardToggle();
@@ -830,5 +832,45 @@ public static class DaemonHost
     private static void OnTickFailed(object? sender, TickFailedEventArgs args)
     {
         Console.WriteLine(BuildTickFailureNote(args.Exception));
+    }
+}
+
+internal sealed class DaemonPresetSwitchQueue : IDisposable
+{
+    private readonly Channel<int> _requests = Channel.CreateUnbounded<int>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Task _worker;
+
+    public DaemonPresetSwitchQueue(DaemonServer daemon)
+    {
+        ArgumentNullException.ThrowIfNull(daemon);
+        _worker = Task.Run(async () =>
+        {
+            await foreach (var slot in _requests.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                try
+                {
+                    daemon.RequestPresetSlotSwitch(slot);
+                }
+                catch (Exception exception)
+                {
+                    Console.WriteLine($"[DeziroJoy] preset switch failed: {exception.Message}");
+                }
+            }
+        });
+    }
+
+    public void Enqueue(int slot) => _requests.Writer.TryWrite(slot);
+
+    public void Dispose()
+    {
+        _requests.Writer.TryComplete();
+        try
+        {
+            _worker.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException)
+        {
+        }
     }
 }

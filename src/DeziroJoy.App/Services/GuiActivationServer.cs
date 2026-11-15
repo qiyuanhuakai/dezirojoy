@@ -23,13 +23,26 @@ public static class GuiActivationContract
 }
 
 /// <summary>
-/// The runtime identity of one GUI: the instance lock and the activation channel that belong to
-/// the same user/session. Windows scopes both to the logon session (a second RDP logon is a
-/// separate instance by design); Linux scopes both to the user.
+/// The instance lock and activation channel of one process role in a user/session. Render and
+/// presentation identities have separate paths, so they can coexist without a role handover.
 /// </summary>
 public sealed record GuiInstanceIdentity(string LockPath, string PipeName)
 {
-    public static GuiInstanceIdentity ForCurrentProcess()
+    public static GuiInstanceIdentity ForCurrentProcess() => ForCurrentProcess(GuiInstanceRole.Tray);
+
+    public static GuiInstanceIdentity ForCurrentProcess(GuiInstanceRole role)
+    {
+        var identity = ForCurrentProcessCore();
+        return role == GuiInstanceRole.Tray
+            ? identity
+            : identity with
+            {
+                LockPath = identity.LockPath + ".render",
+                PipeName = identity.PipeName + ".Render",
+            };
+    }
+
+    private static GuiInstanceIdentity ForCurrentProcessCore()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -79,6 +92,8 @@ public enum GuiActivationRequestKind
     Show,
     Probe,
     Exit,
+    RenderStarted,
+    RenderStopped,
 }
 
 /// <summary>
@@ -90,7 +105,8 @@ public enum GuiActivationRequestKind
 public sealed record GuiShowRequest(
     int Version,
     GuiActivationRequestKind Kind = GuiActivationRequestKind.Show,
-    GuiInstanceRole? RequiredRole = null);
+    GuiInstanceRole? RequiredRole = null,
+    int? ProcessId = null);
 
 /// <summary>
 /// GUI to GUI: the answer to a <see cref="GuiShowRequest"/>. <see cref="Accepted"/> is false
@@ -206,19 +222,13 @@ internal interface IActivationPortal
 /// </summary>
 /// <remarks>
 /// <para>
-/// Windows listens on the well-known named pipe (<see cref="GuiInstanceIdentity.PipeName"/>):
-/// named pipes are kernel objects, so a retiring holder's exit never disturbs a successor that
-/// binds the same name.
+/// Windows listens on a role-specific well-known named pipe
+/// (<see cref="GuiInstanceIdentity.PipeName"/>), keeping render and presentation activation apart.
 /// </para>
 /// <para>
-/// Linux cannot share one Unix socket path across the handover: .NET maps a named pipe to a
-/// filesystem socket at a fixed path and unlinks it on dispose, so a retiring holder would
-/// delete the very socket its successor just bound (a fresh launch then waits out the whole
-/// connect budget). Linux therefore listens on a <b>per-instance abstract socket</b> - the
-/// kernel frees an abstract name the moment its last descriptor closes, so there is no file to
-/// unlink and no stale entry to accumulate - and publishes that endpoint through a small
-/// discovery file. A launch reads the discovery file to reach the current holder; the holder's
-/// own exit removes only its own descriptor and can never touch the successor's.
+/// Linux listens on a <b>per-instance abstract socket</b>: the kernel frees the name when its last
+/// descriptor closes, and a role-specific discovery file tells the next launch where to connect.
+/// This avoids filesystem-socket unlink races and lets each process role restart independently.
 /// </para>
 /// </remarks>
 public sealed class GuiActivationServer : IDisposable
@@ -298,6 +308,10 @@ public sealed class GuiActivationServer : IDisposable
     /// completes, so a peer that is told "accepted" can rely on the exit being under way.
     /// </summary>
     public event Func<Task>? ExitRequested;
+
+    public event Func<int, Task>? RenderStarted;
+
+    public event Func<Task>? RenderStopped;
 
     internal static GuiActivationServer StartActive(
         GuiInstanceIdentity identity,
@@ -556,6 +570,28 @@ public sealed class GuiActivationServer : IDisposable
             }
         }
 
+        if (request.Kind == GuiActivationRequestKind.RenderStarted)
+        {
+            if (request.ProcessId is not > 0 || RenderStarted is not { } started)
+            {
+                return (false, "this peer cannot track a render process");
+            }
+
+            await started(request.ProcessId.Value).WaitAsync(_options.AckTimeout, cancellationToken).ConfigureAwait(false);
+            return (true, null);
+        }
+
+        if (request.Kind == GuiActivationRequestKind.RenderStopped)
+        {
+            if (RenderStopped is not { } stopped)
+            {
+                return (false, "this peer cannot track a render process");
+            }
+
+            await stopped().WaitAsync(_options.AckTimeout, cancellationToken).ConfigureAwait(false);
+            return (true, null);
+        }
+
         if (request.Kind != GuiActivationRequestKind.Show)
         {
             return (false, $"unsupported activation request kind {request.Kind}");
@@ -583,9 +619,8 @@ public sealed class GuiActivationServer : IDisposable
     }
 
     /// <summary>
-    /// The endpoint this process listens on. Windows reuses the well-known pipe name (named pipes
-    /// are per-kernel-object and survive a handover); Linux mints a per-instance abstract name so
-    /// a retiring holder can never unlink its successor.
+    /// The endpoint this process listens on. Windows uses the role-specific well-known pipe;
+    /// Linux mints a per-instance abstract name so a retired process leaves no socket file behind.
     /// </summary>
     private static string ServerEndpoint(GuiInstanceIdentity identity)
         => OperatingSystem.IsWindows()
@@ -650,23 +685,6 @@ public sealed class GuiActivationServer : IDisposable
         {
             return null;
         }
-    }
-
-    /// <summary>
-    /// Re-asserts this server's endpoint in the discovery file. Called when a holder that lost the
-    /// lease during a handover reclaims it after the successor died or was rolled back: discovery
-    /// must name the surviving holder again, not the dead successor. A no-op unless this server is
-    /// actually serving (Linux only; Windows has no discovery).
-    /// </summary>
-    internal void RepublishEndpoint()
-    {
-        var endpoint = _endpoint;
-        if (_disposed || endpoint is null)
-        {
-            return;
-        }
-
-        PublishEndpoint(_identity, endpoint);
     }
 
     internal static byte[] Serialize<T>(T message)
@@ -850,6 +868,33 @@ internal static class GuiActivationClient
             identity,
             options,
             new GuiShowRequest(GuiActivationContract.ProtocolVersion, GuiActivationRequestKind.Exit, GuiInstanceRole.Tray),
+            GuiInstanceRole.Tray,
+            cancellationToken);
+
+    public static Task<bool> NotifyRenderStartedAsync(
+        GuiInstanceIdentity identity,
+        int processId,
+        GuiActivationOptions options,
+        CancellationToken cancellationToken = default)
+        => TryExchangeAsync(
+            identity,
+            options,
+            new GuiShowRequest(
+                GuiActivationContract.ProtocolVersion,
+                GuiActivationRequestKind.RenderStarted,
+                GuiInstanceRole.Tray,
+                processId),
+            GuiInstanceRole.Tray,
+            cancellationToken);
+
+    public static Task<bool> NotifyRenderStoppedAsync(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions options,
+        CancellationToken cancellationToken = default)
+        => TryExchangeAsync(
+            identity,
+            options,
+            new GuiShowRequest(GuiActivationContract.ProtocolVersion, GuiActivationRequestKind.RenderStopped, GuiInstanceRole.Tray),
             GuiInstanceRole.Tray,
             cancellationToken);
 

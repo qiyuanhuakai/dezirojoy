@@ -142,6 +142,19 @@ public sealed class TrayGuiTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void Tray_Visibility_Can_Follow_The_Render_Without_Removing_The_Icon()
+    {
+        var fixture = BuildTray();
+
+        fixture.Tray.SetVisible(false);
+        Assert.False(fixture.Tray.IsVisible);
+        Assert.NotNull(TrayIcon.GetIcons(_application));
+
+        fixture.Tray.SetVisible(true);
+        Assert.True(fixture.Tray.IsVisible);
+    }
+
+    [AvaloniaFact]
     public void The_Tray_Menu_Offers_Show_Theme_And_Exit_With_A_Separator()
     {
         BuildTray();

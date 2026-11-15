@@ -37,6 +37,21 @@ public sealed class ThemeServiceTests : IDisposable
     private static ThemeService Service(string directory) => new(directory);
 
     [Fact]
+    public async Task The_Resident_Presentation_Host_Is_Notified_Of_External_Preference_Edits()
+    {
+        var resident = Service(_directory);
+        using var watcher = resident.WatchForExternalChanges();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        resident.ExternalChanged += changed.SetResult;
+
+        Service(_directory).SetLayerHintEnabled(false);
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        resident.Load();
+
+        Assert.False(resident.LayerHintEnabled);
+    }
+
+    [Fact]
     public void A_Missing_Settings_File_Falls_Back_To_Dark()
     {
         Assert.Equal(ThemeVariant.Dark, Service(_directory).Load());

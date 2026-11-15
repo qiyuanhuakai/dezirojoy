@@ -739,6 +739,62 @@ public class EvdevGamepadStateTrackerTests
     }
 
     [Fact]
+    public void Centered_Z_And_Rz_Without_Rx_Ry_Form_The_Right_Stick()
+    {
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsZ] = new EvdevAxisRange(-32768, 32767, Rest: 0),
+            [EvdevCodes.AbsRz] = new EvdevAxisRange(-32768, 32767, Rest: 0),
+        });
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 32767));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRz, -32768));
+
+        var state = tracker.Snapshot();
+        Assert.Equal(1f, state.RightStickX);
+        Assert.Equal(1f, state.RightStickY);
+        Assert.False(state.IsPressed(GamepadButton.LeftTrigger));
+        Assert.False(state.IsPressed(GamepadButton.RightTrigger));
+    }
+
+    [Fact]
+    public void Unsigned_Centered_Z_And_Rz_Also_Form_The_Right_Stick()
+    {
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsZ] = new EvdevAxisRange(0, 255, Rest: 128),
+            [EvdevCodes.AbsRz] = new EvdevAxisRange(0, 255, Rest: 128),
+        });
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 255));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRz, 255));
+
+        var state = tracker.Snapshot();
+        Assert.Equal(1f, state.RightStickX);
+        Assert.Equal(-1f, state.RightStickY);
+        Assert.Equal(GamepadButtonMask.None, state.PressedButtons);
+    }
+
+    [Fact]
+    public void Endpoint_Resting_Z_And_Rz_Remain_Triggers_Without_A_Right_Stick()
+    {
+        var tracker = new EvdevGamepadStateTracker(new Dictionary<ushort, EvdevAxisRange>
+        {
+            [EvdevCodes.AbsZ] = new EvdevAxisRange(0, 255, Rest: 0),
+            [EvdevCodes.AbsRz] = new EvdevAxisRange(0, 255, Rest: 0),
+        });
+
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsZ, 255));
+        tracker.Apply(new EvdevEvent(EvdevCodes.EvAbs, EvdevCodes.AbsRz, 255));
+
+        var state = tracker.Snapshot();
+        Assert.True(state.IsPressed(GamepadButton.LeftTrigger));
+        Assert.True(state.IsPressed(GamepadButton.RightTrigger));
+        Assert.Equal(0f, state.RightStickX);
+        Assert.Equal(0f, state.RightStickY);
+    }
+
+    [Fact]
     public void Reset_Clears_The_State_But_Keeps_The_Trigger_Orientation()
     {
         // Orientation is device calibration, not runtime state, so a Reset must not forget

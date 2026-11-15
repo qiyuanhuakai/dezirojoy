@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Windows.Elevation;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -43,9 +44,8 @@ internal static class Program
             return UninstallAutostart();
         }
 
-        // The default entry is the render process: the window comes first, it owns the instance
-        // lock and the activation channel, and it starts the daemon. --tray is the handover
-        // entry a closing render process uses to wake the resident tray.
+        // The default entry is the render process. The independent --tray host stays resident
+        // for overlays and shows its icon only while no render window is up.
         if (HasFlag(args, "--tray"))
         {
             return TrayHost.Run();
@@ -275,7 +275,7 @@ internal static class DesktopLauncher
 
     public static int Launch(string[] args)
     {
-        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        var identity = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Render);
         var arbitration = GuiInstanceGuard
             .ArbitrateAsync(identity, null, CancellationToken.None)
             .GetAwaiter()
@@ -315,6 +315,7 @@ internal static class DesktopLauncher
         var daemon = new DaemonSupervisor();
         Daemon = daemon;
         daemon.EnsureRunning();
+        EnsureTrayRunning();
 
         try
         {
@@ -331,9 +332,55 @@ internal static class DesktopLauncher
         }
     }
 
-    internal static void ReleaseInstanceLease() => _instance?.ReleaseLease();
+    internal static bool EnsureTrayRunning()
+    {
+        var identity = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray);
+        var probeOptions = new GuiActivationOptions(
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(250));
+        try
+        {
+            if (GuiActivationClient.TryProbeAsync(identity, GuiInstanceRole.Tray, probeOptions, CancellationToken.None)
+                .GetAwaiter().GetResult())
+            {
+                return true;
+            }
 
-    internal static bool TryReacquireInstanceLease() => _instance?.TryReacquireLease() ?? false;
+            using var tray = ProcessLauncher.Start(ProcessLauncher.TrayStartInfo());
+            return tray is not null;
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[DeziroJoy] presentation host launch failed: {exception.Message}");
+            return false;
+        }
+    }
+
+    internal static async Task<bool> RequestTrayExitAsync()
+    {
+        var identity = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray);
+        var probeOptions = new GuiActivationOptions(
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(250));
+        if (!await GuiActivationClient.TryProbeAsync(
+                identity, GuiInstanceRole.Tray, probeOptions, CancellationToken.None).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        return await GuiActivationClient.TryExitAsync(
+            identity,
+            new GuiActivationOptions(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)),
+            CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal static void NotifyRenderStopped()
+    {
+        _ = GuiActivationClient.NotifyRenderStoppedAsync(
+            GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray),
+            new GuiActivationOptions(TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(250)),
+            CancellationToken.None).GetAwaiter().GetResult();
+    }
 
     /// <summary>
     /// Called once the render window is on screen: serving starts only then, so a Show arriving
@@ -345,6 +392,14 @@ internal static class DesktopLauncher
         {
             _serving = true;
             _activation?.BeginServing();
+            if (_activation is not null)
+            {
+                _ = Task.Run(() => GuiActivationClient.NotifyRenderStartedAsync(
+                    GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray),
+                    Environment.ProcessId,
+                    new GuiActivationOptions(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1)),
+                    CancellationToken.None));
+            }
         }
     }
 }

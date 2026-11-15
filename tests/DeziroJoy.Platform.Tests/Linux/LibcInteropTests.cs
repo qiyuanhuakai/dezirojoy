@@ -30,6 +30,30 @@ public class LibcInteropTests
     }
 
     [Fact]
+    public void Evdev_EventFd_Wakes_Poll_Without_Busy_Polling()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "libc interop only exists on Linux");
+
+        var fd = EvdevNative.EventFd(0, EvdevNative.EventFdNonBlock | EvdevNative.EventFdCloseOnExec);
+        Assert.True(fd >= 0, "eventfd must be available on the Linux input path");
+
+        try
+        {
+            var descriptor = new PollFd { Fd = fd, Events = EvdevNative.PollIn };
+            Assert.Equal(0, EvdevNative.PollOne(ref descriptor, 0));
+
+            EvdevNative.SignalEventFd(fd);
+            descriptor.ReturnedEvents = 0;
+            Assert.Equal(1, EvdevNative.PollOne(ref descriptor, 1000));
+            Assert.True((descriptor.ReturnedEvents & EvdevNative.PollIn) != 0);
+        }
+        finally
+        {
+            EvdevNative.Close(fd);
+        }
+    }
+
+    [Fact]
     public void UInput_Open_Resolves_Libc_And_Fails_Without_Permission()
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "libc interop only exists on Linux");

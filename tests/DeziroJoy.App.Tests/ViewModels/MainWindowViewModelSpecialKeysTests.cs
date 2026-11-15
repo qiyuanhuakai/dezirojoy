@@ -7,9 +7,8 @@ using Xunit;
 namespace DeziroJoy.App.Tests.ViewModels;
 
 /// <summary>
-/// The 全局特殊键 area at the top of the 按键配置 page: the 精准键 and Leader 键 lead the
-/// page because they are device-level configuration - every preset of the device shares
-/// them - so they are listed by kind instead of hunted for inside one preset's rows. The
+/// The 全局特殊键 area at the top of the 按键配置 page: 精准键, Leader 键 and the
+/// 屏幕键盘 shortcut are listed by kind instead of hunted for inside one preset's rows. The
 /// area reports and navigates; editing stays in the mapping editor, reached through the
 /// row's 编辑 affordance. Every refresh path that re-lists the mappings re-lists these
 /// too: a commit, a preset switch, a shared-key fan-out.
@@ -67,16 +66,18 @@ public class MainWindowViewModelSpecialKeysTests
     }
 
     [Fact]
-    public void The_Area_Lists_Precision_First_Then_Leader()
+    public void The_Area_Lists_Precision_Leader_And_Screen_Keyboard()
     {
         var (vm, host, provider, _) = CreateHost();
         Connect(vm, host, provider);
 
-        Assert.Equal(2, vm.SpecialKeys.Count);
+        Assert.Equal(3, vm.SpecialKeys.Count);
         Assert.Equal("精准键", vm.SpecialKeys[0].Title);
         Assert.Equal(SpecialKeyKind.Precision, vm.SpecialKeys[0].Kind);
         Assert.Equal("Leader 键", vm.SpecialKeys[1].Title);
         Assert.Equal(SpecialKeyKind.Leader, vm.SpecialKeys[1].Kind);
+        Assert.Equal("屏幕键盘键", vm.SpecialKeys[2].Title);
+        Assert.Equal(SpecialKeyKind.Keyboard, vm.SpecialKeys[2].Kind);
     }
 
     [Fact]
@@ -128,6 +129,20 @@ public class MainWindowViewModelSpecialKeysTests
         Assert.Contains("左摇杆按下", precision.Summary);
         Assert.Contains("一直按住才触发", precision.Summary);
         Assert.False(precision.HasConflicts);
+    }
+
+    [Fact]
+    public async Task A_Committed_Screen_Keyboard_Key_Names_Its_Button_And_Action()
+    {
+        var (vm, host, provider, _) = CreateHost();
+        Connect(vm, host, provider);
+
+        await CommitSpecialKey(vm, GamepadButton.Guide, SpecialKeyKind.Keyboard);
+
+        var keyboard = vm.SpecialKeys[2];
+        Assert.True(keyboard.IsConfigured);
+        Assert.Contains("Guide 键", keyboard.Summary);
+        Assert.Contains("切换屏幕键盘", keyboard.Summary);
     }
 
     [Fact]

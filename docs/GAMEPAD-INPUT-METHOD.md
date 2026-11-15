@@ -181,8 +181,8 @@ Guide，不受影响。因此输入法的呼出/导航若拟绑定 Guide 键，W
 按键；GUI 会在右侧按键配置区和 Guide 映射编辑器中直接说明此限制。确需 Guide 的唯一路径是
 Raw Input 解析 HID 报告中的 Guide 键位（需第二条完整输入通道，成本高，列入远期
 backlog，详见 `docs/QA-CHECKLIST.md`「已知限制」）。Game Bar 缺失导致的
-`ms-gamebar` 系统弹窗由右侧按键配置区的独立按钮处理：用户点击后仅关闭当前 Windows 用户的
-“允许控制器打开 Game Bar”开关，不会把 Guide 变成可读输入。
+`ms-gamebar` 系统弹窗在设置页的「Windows 手柄兼容性」卡片处理：写入当前 Windows 用户的
+“允许控制器打开 Game Bar”关闭值后会重新读取核验，也可直接打开系统游戏设置；不会把 Guide 变成可读输入。
 
 ## 参考链接
 

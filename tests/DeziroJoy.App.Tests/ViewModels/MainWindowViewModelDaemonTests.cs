@@ -56,8 +56,8 @@ public sealed class MainWindowViewModelDaemonTests
         {
             Assert.Contains("4242", viewModel.InjectorDescription);
             Assert.DoesNotContain("提权", viewModel.InjectorDescription);
-            Assert.Contains("同用户模型", viewModel.InjectorStatusText);
-            Assert.Contains("设备访问权", viewModel.InjectorStatusText);
+            Assert.Contains("同用户", viewModel.InjectorStatusText);
+            Assert.Contains("无需提权", viewModel.InjectorStatusText);
             Assert.DoesNotContain("未提权", viewModel.InjectorStatusText);
             Assert.DoesNotContain("拦截", viewModel.InjectorStatusText);
             Assert.Contains("守护进程", viewModel.MappingOwnerDescription);

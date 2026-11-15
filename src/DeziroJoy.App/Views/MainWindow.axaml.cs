@@ -380,7 +380,7 @@ public partial class MainWindow : Window
     /// Releases everything this window attached: both timers, both host sampling
     /// subscriptions, the view-model listener, the visualizer and the key handler. Daemon
     /// shutdown is deliberately decided before this event by the render lifetime coordinator:
-    /// a tray handover keeps it running, while a full exit has already stopped it.
+    /// closing to the tray keeps the daemon running, while a full exit has already stopped it.
     /// </summary>
     private void OnClosed(object? sender, EventArgs e)
     {

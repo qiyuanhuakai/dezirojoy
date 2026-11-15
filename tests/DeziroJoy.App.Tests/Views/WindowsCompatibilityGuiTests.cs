@@ -17,7 +17,7 @@ namespace DeziroJoy.App.Tests.Views;
 public sealed class WindowsCompatibilityGuiTests
 {
     [AvaloniaFact]
-    public void Windows_Shows_The_Guide_Limitation_And_GameBar_Control()
+    public void Windows_Keeps_The_Guide_Note_On_Mapping_And_GameBar_Control_In_Settings()
     {
         var guard = new FakeGameBarPopupGuard();
         var provider = new FakeGamepadProvider();
@@ -33,14 +33,21 @@ public sealed class WindowsCompatibilityGuiTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.True(window.FindControl<TextBlock>("GuidePlatformNote")!.IsVisible);
-        var button = window.FindControl<Button>("DisableGameBarControllerLaunchButton")!;
+        Assert.DoesNotContain(
+            window.FindControl<Border>("RightPanel")!.GetVisualDescendants().OfType<Button>(),
+            control => control.Name == "DisableGameBarControllerLaunchButton");
+
+        vm.OpenSettingsCommand.Execute(null);
+        window.UpdateLayout();
+        var settings = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        var button = settings.FindControl<Button>("DisableGameBarControllerLaunchButton")!;
         Assert.True(button.IsVisible);
 
         Click(button, window);
 
         Assert.Equal(1, guard.DisableCalls);
         Assert.False(button.IsVisible);
-        Assert.Contains("已关闭", window.FindControl<TextBlock>("GameBarPopupHint")!.Text);
+        Assert.Contains("已写入并核验", settings.FindControl<TextBlock>("GameBarPopupHint")!.Text);
         window.Close();
     }
 
@@ -124,10 +131,14 @@ public sealed class WindowsCompatibilityGuiTests
 
         public int DisableCalls { get; private set; }
 
+        public int OpenSettingsCalls { get; private set; }
+
         public void DisableControllerLaunch()
         {
             DisableCalls++;
             IsControllerLaunchDisabled = true;
         }
+
+        public void OpenSystemSettings() => OpenSettingsCalls++;
     }
 }

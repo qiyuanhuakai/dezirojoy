@@ -41,6 +41,15 @@ public sealed class X11ForegroundSource : IForegroundSource, IDisposable
 
     private bool _disposed;
 
+    public static bool IsWaylandSession => IsWaylandEnvironment();
+
+    internal static bool IsWaylandEnvironment(Func<string, string?>? environmentVariable = null)
+    {
+        var environment = environmentVariable ?? Environment.GetEnvironmentVariable;
+        return string.Equals(environment("XDG_SESSION_TYPE"), "wayland", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(environment("WAYLAND_DISPLAY"));
+    }
+
     public ForegroundContext Read()
     {
         var connection = EnsureConnection();

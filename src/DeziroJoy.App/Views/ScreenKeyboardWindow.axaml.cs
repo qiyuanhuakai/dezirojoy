@@ -56,7 +56,7 @@ public partial class ScreenKeyboardWindow : Window
 
     /// <summary>
     /// The runtime-loader constructor: a window bound to a view model of its own, which no
-    /// production path uses - the render process builds one over the live model - but which
+    /// production path uses - the resident presentation host builds one over the live model - but which
     /// keeps the XAML resource loadable and the control previewable.
     /// </summary>
     public ScreenKeyboardWindow()

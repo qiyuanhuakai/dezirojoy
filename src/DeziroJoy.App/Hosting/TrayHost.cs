@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
@@ -492,6 +493,8 @@ internal sealed class RenderSupervisor : IDisposable
     private IProcessHandle? _render;
     private bool _disposed;
 
+    public event Action? Exited;
+
     public RenderSupervisor(ProcessLaunch? launch = null, Action? showLive = null)
     {
         _launcher = launch ?? ProcessLauncher.Start;
@@ -599,70 +602,29 @@ internal sealed class RenderSupervisor : IDisposable
         {
             _render = null;
             State = RenderSupervisionState.Stopped;
+            Exited?.Invoke();
         }
     }
 }
 
 /// <summary>
-/// The tray process: a resident Avalonia application with no window. It owns the instance lease,
-/// activation channel, persisted theme, tray icon and process supervisors while no render is up.
+/// The resident presentation host: tray, overlays, settings mirror and process supervisors.
+/// Its icon is hidden while a render window is up, but the process and overlays stay alive.
 /// </summary>
 internal static class TrayHost
 {
     /// <summary>True once this process is the tray rather than a render process.</summary>
     internal static bool IsTrayProcess { get; private set; }
 
-    /// <summary>
-    /// Pause between render-answer polls while the show route waits for the window. Kept short
-    /// (well under the daemon probe's own cadence) so a tray wake feels immediate without adding
-    /// load: the per-probe connect still honours the shrinking handover budget.
-    /// </summary>
-    private static readonly TimeSpan ShowPollPause = TimeSpan.FromMilliseconds(40);
-
-    private static readonly TimeSpan ShowPollBudget = TimeSpan.FromSeconds(10);
-
     private static GuiInstanceOwner? _instance;
-
-    /// <summary>
-    /// The default entry point. The tray wins the instance lock, so a second launch reaches it
-    /// over the activation pipe instead of starting a second tray.
-    /// </summary>
-    internal static GuiArbitration ArbitrateWithRetry(
-        GuiInstanceIdentity identity,
-        Func<GuiInstanceIdentity, CancellationToken, Task<GuiArbitration>>? arbitrate = null,
-        Func<CancellationToken, Task>? retryDelay = null,
-        int maxAttempts = 300)
-    {
-        arbitrate ??= static (id, ct) => GuiInstanceGuard.ArbitrateAsync(id, null, ct);
-        retryDelay ??= static ct => Task.Delay(100, ct);
-
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            var arbitration = arbitrate(identity, CancellationToken.None).GetAwaiter().GetResult();
-            if (arbitration.IsWinner)
-            {
-                return arbitration;
-            }
-
-            if (attempt == maxAttempts - 1)
-            {
-                return arbitration;
-            }
-
-            retryDelay(CancellationToken.None).GetAwaiter().GetResult();
-        }
-
-        return GuiArbitration.Exit(1);
-    }
 
     public static int Run()
     {
         IsTrayProcess = true;
 
-        var identity = GuiInstanceIdentity.ForCurrentProcess();
-        // This tray is spawned by a render process that is closing its window, so the lock is
-        // still held for a moment: waiting for the release is the contract, not an exit.
-        var arbitration = ArbitrateWithRetry(identity);
+        var identity = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray);
+        var arbitration = GuiInstanceGuard.ArbitrateAsync(identity, null, CancellationToken.None)
+            .GetAwaiter().GetResult();
         if (!arbitration.IsWinner)
         {
             return arbitration.ExitCode;
@@ -694,8 +656,6 @@ internal static class TrayHost
             new DaemonSupervisor(),
             new RenderSupervisor(showLive: ShowLiveRenderProcess),
             GuiActivationServer.ActiveInstance,
-            releaseInstance: () => _instance?.ReleaseLease(),
-            reacquireInstance: () => _instance?.TryReacquireLease() ?? false,
             // The overlay observes the daemon the supervisor already owns, so it probes the
             // mapping pipe and never starts a daemon of its own - a second elevated relaunch
             // from the tray would be a UAC prompt for a daemon that is already there.
@@ -709,71 +669,34 @@ internal static class TrayHost
         RenderSupervisor render,
         GuiActivationServer? activation = null,
         Action? shutdown = null,
-        Action? releaseInstance = null,
-        Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>>? showPoll = null,
-        Func<Task>? pollDelay = null,
-        TimeSpan? pollBudget = null,
-        Func<bool>? reacquireInstance = null,
         Func<bool>? isDaemonReachable = null,
         Func<DaemonController?>? overlayController = null)
     {
         themes.ApplyPersisted();
 
-        showPoll ??= static (identity, options, cancellationToken)
-            => GuiActivationClient.TryProbeAsync(identity, GuiInstanceRole.Render, options, cancellationToken);
-        pollDelay ??= static () => Task.Delay(ShowPollPause);
-        var budget = pollBudget ?? ShowPollBudget;
         isDaemonReachable ??= static () => DaemonSupervisor.IsDaemonReachable(IpcContract.PipeName);
-        var handoverGate = new object();
-        Task<bool>? handover = null;
+        Process? observedRender = null;
+        IDisposable? settingsWatcher = null;
 
-        // The layer hint overlay this tray hosts while no render window is up, or null when the
-        // overlay seam is not wired (the supervisor tests pass none). Held so tray exit can close
-        // it and release its daemon connection.
-        IDisposable? layerHint = null;
+        // The resident host owns the layer hint whether or not a GUI is open.
+        TrayLayerHintHandle? layerHint = null;
 
-        // The floating screen keyboard this tray hosts while no render window is up, or null when
-        // the overlay seam is not wired. Held so tray exit can close it and release its daemon
-        // connection.
+        // The same resident connection also drives the floating screen keyboard.
         IDisposable? screenKeyboard = null;
 
-        async Task ShowAsync()
+        Task ShowAsync()
         {
-            Task<bool> current;
-            lock (handoverGate)
-            {
-                current = handover ??= HandOverToRenderAsync(
-                    daemon,
-                    render,
-                    releaseInstance,
-                    showPoll,
-                    pollDelay,
-                    budget,
-                    shutdown,
-                    lifetime,
-                    reacquireInstance);
-            }
-
-            var handedOver = false;
             try
             {
-                handedOver = await current;
+                daemon.EnsureRunning();
+                render.Show();
             }
             catch (Exception exception)
             {
-                Trace.WriteLine($"[DeziroJoy] render handover failed: {exception.Message}");
+                Trace.WriteLine($"[DeziroJoy] render launch failed: {exception.Message}");
             }
 
-            if (!handedOver)
-            {
-                lock (handoverGate)
-                {
-                    if (ReferenceEquals(handover, current))
-                    {
-                        handover = null;
-                    }
-                }
-            }
+            return Task.CompletedTask;
         }
 
         // The menu exit and the update flow's Exit request share one path. The difference is
@@ -805,13 +728,67 @@ internal static class TrayHost
             application,
             lifetime,
             themes,
-            showMainWindow: async void () => await ShowAsync(),
+            showMainWindow: () => _ = ShowAsync(),
             exit: () => ExitTray(daemonAlreadyStopped: false));
 
         tray.Install();
 
+        void RenderExited()
+        {
+            Dispatcher.UIThread.Post(() => tray.SetVisible(true));
+        }
+
+        void RenderStarted(int processId)
+        {
+            observedRender?.Dispose();
+            observedRender = null;
+            try
+            {
+                var process = Process.GetProcessById(processId);
+                observedRender = process;
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) =>
+                {
+                    if (ReferenceEquals(observedRender, process))
+                    {
+                        observedRender.Dispose();
+                        observedRender = null;
+                        RenderExited();
+                    }
+                };
+                if (process.HasExited)
+                {
+                    process.Dispose();
+                    observedRender = null;
+                    RenderExited();
+                    return;
+                }
+            }
+            catch (ArgumentException)
+            {
+                RenderExited();
+                return;
+            }
+
+            Dispatcher.UIThread.Post(() => tray.SetVisible(false));
+        }
+
+        render.Exited += RenderExited;
+
         if (activation is not null)
         {
+            activation.RenderStarted += processId =>
+            {
+                RenderStarted(processId);
+                return Task.CompletedTask;
+            };
+            activation.RenderStopped += () =>
+            {
+                observedRender?.Dispose();
+                observedRender = null;
+                RenderExited();
+                return Task.CompletedTask;
+            };
             activation.ShowRequested += ShowAsync;
             activation.ExitRequested += () =>
             {
@@ -829,8 +806,22 @@ internal static class TrayHost
             activation.BeginServing();
         }
 
+        void PreferencesChanged()
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                themes.ApplyPersisted();
+                layerHint?.ApplyPreferences(themes);
+            });
+        }
+
         lifetime.Exit += (_, _) =>
         {
+            themes.ExternalChanged -= PreferencesChanged;
+            settingsWatcher?.Dispose();
+            render.Exited -= RenderExited;
+            observedRender?.Dispose();
+            observedRender = null;
             tray.Dispose();
             layerHint?.Dispose();
             screenKeyboard?.Dispose();
@@ -840,15 +831,15 @@ internal static class TrayHost
 
         daemon.EnsureRunning();
 
-        // The tray owns no window, so it hosts the layer hint overlay itself: the render window
-        // carries its own while it is up, and this one takes over the moment the window closes
-        // to the tray, so a held temporary layer keeps naming its buttons over the target
-        // application. The seam is injectable so the existing supervisor tests spawn nothing.
+        // Both overlays stay in this process across GUI exits; the seam keeps process tests headless.
         if (overlayController?.Invoke() is { } controller)
         {
             layerHint = InstallTrayLayerHint(controller, themes);
             screenKeyboard = InstallTrayScreenKeyboard(controller);
         }
+
+        themes.ExternalChanged += PreferencesChanged;
+        settingsWatcher = themes.WatchForExternalChanges();
 
         return tray;
     }
@@ -868,7 +859,7 @@ internal static class TrayHost
     /// rather than taking the tray down. The returned handle owns the overlay, its feed and the
     /// connection, and is disposed when the tray exits.
     /// </summary>
-    internal static IDisposable InstallTrayLayerHint(DaemonController controller, ThemeService themes)
+    internal static TrayLayerHintHandle InstallTrayLayerHint(DaemonController controller, ThemeService themes)
     {
         var layerHint = new LayerHintViewModel
         {
@@ -921,17 +912,21 @@ internal static class TrayHost
             }
         }, CancellationToken.None);
 
-        return new TrayLayerHintHandle(overlay, feed, controller, connect);
+        return new TrayLayerHintHandle(layerHint, overlay, feed, controller, connect);
     }
 
     /// <summary>Owns everything the tray's layer hint overlay needs, released on tray exit.</summary>
-    private sealed class TrayLayerHintHandle(
+    internal sealed class TrayLayerHintHandle(
+        LayerHintViewModel layerHint,
         LayerHintOverlay overlay,
         DaemonLayerHintFeed feed,
         DaemonController controller,
         CancellationTokenSource connect) : IDisposable
     {
         private bool _disposed;
+
+        public void ApplyPreferences(ThemeService themes)
+            => layerHint.IsSuppressed = !themes.LayerHintEnabled;
 
         public void Dispose()
         {
@@ -1068,10 +1063,8 @@ internal static class TrayHost
     /// <para>
     /// Everything the keyboard does still goes through the daemon: the flag the engine's toggle
     /// flips arrives in a snapshot and is mirrored here, every key press is a request the daemon
-    /// answers through its own output path, and the input lease the keyboard takes is the same
-    /// per-connection hijack lease the render window uses. A window that takes over from the tray
-    /// adopts the same flag from the same snapshot, so there is one keyboard and one lease
-    /// between the two processes.
+    /// answers through its own output path. The keyboard keeps its own connection and lease for
+    /// its whole life, independently of whether a render window is open.
     /// </para>
     /// </summary>
     internal static IDisposable InstallTrayScreenKeyboard(DaemonController controller)
@@ -1370,101 +1363,9 @@ internal static class TrayHost
         }
     }
 
-    /// <summary>
-    /// A live window owns the instance lock, so the tray retires itself once it has handed the
-    /// window over: the user's ruling is that no tray process exists while a GUI window does.
-    /// </summary>
+    /// <summary>Ends the presentation host only for an explicit full exit or update.</summary>
     private static void Retire(Action? shutdown, IClassicDesktopStyleApplicationLifetime lifetime)
         => (shutdown ?? (() => lifetime.Shutdown()))();
-
-    /// <summary>
-    /// Releases only the instance lease before spawning the render. The tray's activation server
-    /// stays up until a render-role readiness probe proves that the new window is serving. Any
-    /// failure kills the incomplete successor and reclaims the lease, leaving this tray resident.
-    /// </summary>
-    internal static async Task<bool> HandOverToRenderAsync(
-        DaemonSupervisor daemon,
-        RenderSupervisor render,
-        Action? releaseInstance,
-        Func<GuiInstanceIdentity, GuiActivationOptions, CancellationToken, Task<bool>> showPoll,
-        Func<Task> pollDelay,
-        TimeSpan budget,
-        Action? shutdown,
-        IClassicDesktopStyleApplicationLifetime lifetime,
-        Func<bool>? reacquireInstance = null)
-    {
-        var identity = GuiInstanceIdentity.ForCurrentProcess();
-        var elapsed = Stopwatch.StartNew();
-        var handedOver = false;
-
-        try
-        {
-            daemon.EnsureRunning();
-            releaseInstance?.Invoke();
-            render.Show();
-
-            while (render.IsAlive)
-            {
-                var remaining = budget - elapsed.Elapsed;
-                var probeBudget = remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1);
-                var options = new GuiActivationOptions(
-                    probeBudget < TimeSpan.FromMilliseconds(250) ? probeBudget : TimeSpan.FromMilliseconds(250),
-                    probeBudget < TimeSpan.FromSeconds(1) ? probeBudget : TimeSpan.FromSeconds(1));
-
-                if (await showPoll(identity, options, CancellationToken.None))
-                {
-                    handedOver = true;
-                    break;
-                }
-
-                if (elapsed.Elapsed >= budget)
-                {
-                    break;
-                }
-
-                await pollDelay();
-            }
-        }
-        catch (Exception exception)
-        {
-            Trace.WriteLine($"[DeziroJoy] render handover failed: {exception.Message}");
-        }
-
-        if (handedOver)
-        {
-            Retire(shutdown, lifetime);
-            return true;
-        }
-
-        try
-        {
-            render.Stop();
-        }
-        catch (Exception exception)
-        {
-            Trace.WriteLine($"[DeziroJoy] render handover cleanup failed: {exception.Message}");
-        }
-
-        var reclaimed = false;
-        try
-        {
-            reclaimed = reacquireInstance?.Invoke() ?? true;
-        }
-        catch (Exception exception)
-        {
-            Trace.WriteLine($"[DeziroJoy] render handover lease rollback failed: {exception.Message}");
-        }
-
-        if (reclaimed)
-        {
-            // The tray is the live holder again: re-assert its endpoint in discovery so a second
-            // launch reaches the surviving tray, not the render successor that just failed.
-            GuiActivationServer.ActiveInstance?.RepublishEndpoint();
-        }
-
-        Trace.WriteLine($"[DeziroJoy] render handover rolled back; instance lease reclaimed: {reclaimed}");
-        return false;
-    }
 
     /// <summary>
     /// Sends a Show for a render process that is already alive. The tray owns the activation
@@ -1473,7 +1374,7 @@ internal static class TrayHost
     /// </summary>
     private static void ShowLiveRenderProcess()
     {
-        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        var identity = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Render);
 
         _ = GuiActivationClient.TryShowAsync(identity, GuiActivationOptions.Default, CancellationToken.None);
     }

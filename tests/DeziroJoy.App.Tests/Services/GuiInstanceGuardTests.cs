@@ -25,6 +25,17 @@ public sealed class GuiInstanceGuardTests
         TimeSpan.FromSeconds(5));
 
     [Fact]
+    public void Render_And_Presentation_Host_Have_Independent_Instance_Resources()
+    {
+        var render = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Render);
+        var tray = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray);
+
+        Assert.NotEqual(render.LockPath, tray.LockPath);
+        Assert.NotEqual(render.PipeName, tray.PipeName);
+        Assert.NotEqual(render.DiscoveryPath, tray.DiscoveryPath);
+    }
+
+    [Fact]
     public async Task The_First_Launch_Wins_The_Instance_Lease()
     {
         var identity = NewIdentity();
@@ -99,22 +110,4 @@ public sealed class GuiInstanceGuardTests
         Assert.Null(GuiInstanceLease.TryAcquire(identity));
     }
 
-    [Fact]
-    public void The_Instance_Owner_Can_Roll_Back_A_Failed_Handover()
-    {
-        var identity = NewIdentity();
-        var lease = GuiInstanceLease.TryAcquire(identity);
-        Assert.NotNull(lease);
-        using var owner = new GuiInstanceOwner(identity, lease, new GuiActivationServer(identity));
-
-        owner.ReleaseLease();
-        using (var successor = GuiInstanceLease.TryAcquire(identity))
-        {
-            Assert.NotNull(successor);
-            Assert.False(owner.TryReacquireLease());
-        }
-
-        Assert.True(owner.TryReacquireLease());
-        Assert.Null(GuiInstanceLease.TryAcquire(identity));
-    }
 }

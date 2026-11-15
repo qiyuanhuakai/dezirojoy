@@ -56,7 +56,20 @@ public sealed class WindowsCompatibilityTests
         Assert.Equal(1, guard.DisableCalls);
         Assert.True(vm.IsGameBarControllerLaunchDisabled);
         Assert.False(vm.CanDisableGameBarControllerLaunch);
-        Assert.Contains("已关闭", vm.GameBarPopupHint);
+        Assert.Contains("已写入并核验", vm.GameBarPopupHint);
+        Assert.False(vm.HasGameBarPopupError);
+    }
+
+    [Fact]
+    public void Windows_Compatibility_Can_Open_The_System_Settings()
+    {
+        var guard = new FakeGameBarPopupGuard();
+        using var host = CreateHost(out var store);
+        var vm = new MainWindowViewModel(host, store, gameBarPopupGuard: guard);
+
+        vm.OpenGameBarSettingsCommand.Execute(null);
+
+        Assert.Equal(1, guard.OpenSettingsCalls);
         Assert.False(vm.HasGameBarPopupError);
     }
 
@@ -122,6 +135,8 @@ public sealed class WindowsCompatibilityTests
 
         public int DisableCalls { get; private set; }
 
+        public int OpenSettingsCalls { get; private set; }
+
         public Exception? Failure { get; init; }
 
         public Exception? ReadFailure { get; init; }
@@ -136,5 +151,7 @@ public sealed class WindowsCompatibilityTests
 
             _isControllerLaunchDisabled = true;
         }
+
+        public void OpenSystemSettings() => OpenSettingsCalls++;
     }
 }

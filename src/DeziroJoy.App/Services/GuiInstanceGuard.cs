@@ -64,15 +64,11 @@ public static class GuiInstanceGuard
 }
 
 /// <summary>
-/// Owns the two instance resources separately during a process handover. The lease moves first
-/// so the successor can start, while the current activation server stays available until the
-/// successor has acknowledged its own role. A failed handover can therefore reclaim the lease
-/// without ever having taken the current UI's activation channel offline.
+/// Owns one process role's instance lease and activation server for its whole life.
 /// </summary>
 internal sealed class GuiInstanceOwner : IDisposable
 {
     private readonly object _gate = new();
-    private readonly GuiInstanceIdentity _identity;
     private readonly GuiActivationServer _activation;
     private GuiInstanceLease? _lease;
     private bool _disposed;
@@ -82,32 +78,8 @@ internal sealed class GuiInstanceOwner : IDisposable
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(lease);
         ArgumentNullException.ThrowIfNull(activation);
-        _identity = identity;
         _lease = lease;
         _activation = activation;
-    }
-
-    internal void ReleaseLease()
-    {
-        lock (_gate)
-        {
-            _lease?.Dispose();
-            _lease = null;
-        }
-    }
-
-    internal bool TryReacquireLease()
-    {
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            _lease ??= GuiInstanceLease.TryAcquire(_identity);
-            return _lease is not null;
-        }
     }
 
     public void Dispose()

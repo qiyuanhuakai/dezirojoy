@@ -36,13 +36,19 @@
                  and its tooltip states what it changes (/etc/udev/rules.d + input group, with a
                  re-login) before they take it. Without a polkit agent the fix degrades to the
                  same commands as copyable text, and the tooltip says why. -->
-            <StackPanel IsVisible="{Binding IsSameUserModel}" x:Name="DeviceAccessFixRow" Margin="0,12,0,0">
-                <Button Classes="ghost" Margin="0,0,8,8" Content="修复设备访问权限"
+            <StackPanel IsVisible="{Binding IsSameUserModel}" x:Name="DeviceAccessFixRow" Margin="0,10,0,0">
+                <TextBlock Classes="hint" TextWrapping="Wrap" x:Name="DeviceAccessStatusText"
+                           Text="{Binding DeviceAccessStatusText}" />
+                <TextBlock Classes="hint" Margin="0,3,0,0" TextWrapping="Wrap"
+                           x:Name="DeviceAccessConfigurationText" Text="{Binding DeviceAccessConfigurationText}" />
+                <TextBlock Classes="hint" Margin="0,3,0,0" TextWrapping="Wrap"
+                           Text="{Binding DeviceAccessMethodText}" />
+                <Button Classes="ghost" Margin="0,8,0,0" Content="{Binding DeviceAccessFixButtonText}"
                         x:Name="FixDeviceAccessButton"
                         IsEnabled="{Binding CanFixDeviceAccess}"
                         ToolTip.Tip="{Binding DeviceAccessFixTooltip}"
                         Command="{Binding FixDeviceAccessCommand}" />
-                <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                            x:Name="DeviceAccessFixStatus"
                            IsVisible="{Binding HasDeviceAccessFixStatus}"
                            Text="{Binding DeviceAccessFixStatus}" />

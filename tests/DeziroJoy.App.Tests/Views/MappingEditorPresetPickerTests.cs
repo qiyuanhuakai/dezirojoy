@@ -578,6 +578,8 @@ public sealed class MappingEditorPresetPickerTests
         // Guide enters the strip, parking the pad focus on the active card.
         PadStep(host, provider, window, GamepadState.Neutral);
         PadStep(host, provider, window, GamepadState.Create(GamepadButtonMask.Guide, 0, 0, 0, 0));
+        Assert.Equal(4, viewModel.PresetSlots.Count);
+        Assert.Equal(0, viewModel.PresetStripFocusIndex);
         Assert.Equal((PresetStripAction.Switch, 1), viewModel.PresetStripActionAt(viewModel.PresetStripFocusIndex));
 
         // D-pad right twice reaches slot 2's delete badge (Switch1, Switch2, Delete2).

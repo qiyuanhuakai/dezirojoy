@@ -419,6 +419,49 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void Unchanged_Input_Does_Not_Flood_Sample_Subscribers()
+    {
+        var (host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        var samples = new List<IGamepadState>();
+        host.Sampled += (_, args) => samples.Add(args.State);
+
+        for (var i = 0; i < 100; i++)
+        {
+            host.TickOnce(TimeSpan.FromMilliseconds(2));
+        }
+
+        Assert.Single(samples);
+    }
+
+    [Fact]
+    public void Analog_Samples_Are_Frame_Limited_While_Button_Edges_Stay_Immediate()
+    {
+        var (host, provider, _) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        var samples = new List<IGamepadState>();
+        host.Sampled += (_, args) => samples.Add(args.State);
+
+        for (var i = 1; i <= 25; i++)
+        {
+            provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.None, Math.Min(i, 20) / 20f, 0, 0, 0));
+            host.TickOnce(TimeSpan.FromMilliseconds(2));
+        }
+
+        Assert.InRange(samples.Count, 2, 4);
+        Assert.Equal(1f, samples[^1].LeftStickX);
+
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.A, 1f, 0, 0, 0));
+        host.TickOnce(TimeSpan.FromMilliseconds(2));
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.None, 1f, 0, 0, 0));
+        host.TickOnce(TimeSpan.FromMilliseconds(2));
+
+        Assert.Equal(GamepadButtonMask.A, samples[^2].PressedButtons);
+        Assert.Equal(GamepadButtonMask.None, samples[^1].PressedButtons);
+    }
+
+    [Fact]
     public void SamplePresence_Raises_PresenceSampled_Without_Ticking_Or_Injecting()
     {
         var (host, provider, sink) = CreateHost();

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace DeziroJoy.Platform.Windows.Gaming;
@@ -10,11 +11,13 @@ public interface IGameBarPopupGuard
     bool IsControllerLaunchDisabled { get; }
 
     void DisableControllerLaunch();
+
+    void OpenSystemSettings();
 }
 
 /// <summary>
-/// Prevents the shell from launching ms-gamebar from a controller. This does not disable
-/// Win+G, recording, or any other Game Bar feature, and never registers a protocol handler.
+/// Writes and verifies the current user's controller-launch setting and offers the matching
+/// Windows settings page. This does not disable Win+G or register a protocol handler.
 /// </summary>
 public sealed class GameBarPopupGuard : IGameBarPopupGuard
 {
@@ -49,6 +52,20 @@ public sealed class GameBarPopupGuard : IGameBarPopupGuard
         }
 
         _disable();
+        if (_readValue() != 0)
+        {
+            throw new InvalidOperationException("注册表写入后仍未读到关闭状态，请改用 Windows 系统设置。");
+        }
+    }
+
+    public void OpenSystemSettings()
+    {
+        if (!IsSupported)
+        {
+            throw new PlatformNotSupportedException("Game Bar settings are available only on Windows.");
+        }
+
+        Process.Start(new ProcessStartInfo("ms-settings:gaming-gamebar") { UseShellExecute = true });
     }
 
     private static int? ReadRegistryValue()

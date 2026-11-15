@@ -74,6 +74,11 @@ public sealed class EngineHost : IDisposable
     /// </summary>
     private readonly Dictionary<string, IGamepadState> _lastStates = new(StringComparer.Ordinal);
 
+    private static readonly TimeSpan AnalogSampleInterval = TimeSpan.FromMilliseconds(15);
+    private readonly Dictionary<string, IGamepadState> _publishedSamples = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TimeSpan> _lastAnalogSamples = new(StringComparer.Ordinal);
+    private TimeSpan _sampleClock;
+
     private readonly Lock _sync = new();
     private readonly string _injectionMutexName;
     private Thread? _thread;
@@ -152,7 +157,27 @@ public sealed class EngineHost : IDisposable
         }
     }
 
-    public event EventHandler<ControllerSampledEventArgs>? Sampled;
+    private EventHandler<ControllerSampledEventArgs>? _sampled;
+
+    public event EventHandler<ControllerSampledEventArgs>? Sampled
+    {
+        add
+        {
+            lock (_sync)
+            {
+                _sampled += value;
+                _publishedSamples.Clear();
+            }
+        }
+        remove
+        {
+            lock (_sync)
+            {
+                _sampled -= value;
+                _publishedSamples.Clear();
+            }
+        }
+    }
 
     /// <summary>
     /// Raised by <see cref="SamplePresence"/> for every connected controller. The stopped-state
@@ -160,7 +185,27 @@ public sealed class EngineHost : IDisposable
     /// engine or dispatching any command, so the UI can highlight the pad and navigate by
     /// physical button while the mapping loop is off.
     /// </summary>
-    public event EventHandler<ControllerSampledEventArgs>? PresenceSampled;
+    private EventHandler<ControllerSampledEventArgs>? _presenceSampled;
+
+    public event EventHandler<ControllerSampledEventArgs>? PresenceSampled
+    {
+        add
+        {
+            lock (_sync)
+            {
+                _presenceSampled += value;
+                _publishedSamples.Clear();
+            }
+        }
+        remove
+        {
+            lock (_sync)
+            {
+                _presenceSampled -= value;
+                _publishedSamples.Clear();
+            }
+        }
+    }
 
     /// <summary>
     /// Raised after a tick's command loop when the engine asked to switch preset slot,
@@ -222,6 +267,7 @@ public sealed class EngineHost : IDisposable
 
         lock (_sync)
         {
+            _sampleClock += delta;
             var initialPresenceVersion = _presenceVersion;
             var connected = _provider.GetConnected();
             var present = new HashSet<string>(StringComparer.Ordinal);
@@ -249,7 +295,10 @@ public sealed class EngineHost : IDisposable
                     screenKeyboardToggle |= FirstScreenKeyboardToggle(commands);
                 }
 
-                Sampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
+                if (ShouldPublishSample(descriptor.DeviceId, state))
+                {
+                    _sampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
+                }
             }
 
             ReconcileAbsence(present, DeviceAbsenceGraceTicks);
@@ -425,6 +474,7 @@ public sealed class EngineHost : IDisposable
         bool presenceChanged;
         lock (_sync)
         {
+            _sampleClock += AnalogSampleInterval;
             var initialPresenceVersion = _presenceVersion;
             var connected = _provider.GetConnected();
             var present = new HashSet<string>(StringComparer.Ordinal);
@@ -444,7 +494,10 @@ public sealed class EngineHost : IDisposable
 
                 _lastStates[descriptor.DeviceId] = state;
 
-                PresenceSampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
+                if (ShouldPublishSample(descriptor.DeviceId, state))
+                {
+                    _presenceSampled?.Invoke(this, new ControllerSampledEventArgs(runtime, state));
+                }
             }
 
             ReconcileAbsence(present, graceTicks: 0);
@@ -874,6 +927,43 @@ public sealed class EngineHost : IDisposable
         return false;
     }
 
+    private bool ShouldPublishSample(string deviceId, IGamepadState state)
+    {
+        if (!_publishedSamples.TryGetValue(deviceId, out var previous))
+        {
+            PublishSample(deviceId, state);
+            return true;
+        }
+
+        var digitalChanged = previous.PressedButtons != state.PressedButtons
+            || !previous.ExtraButtons.SequenceEqual(state.ExtraButtons);
+        var analogChanged = previous.LeftStickX != state.LeftStickX
+            || previous.LeftStickY != state.LeftStickY
+            || previous.RightStickX != state.RightStickX
+            || previous.RightStickY != state.RightStickY;
+
+        if (!digitalChanged && !analogChanged)
+        {
+            return false;
+        }
+
+        if (!digitalChanged
+            && _lastAnalogSamples.TryGetValue(deviceId, out var last)
+            && _sampleClock - last < AnalogSampleInterval)
+        {
+            return false;
+        }
+
+        PublishSample(deviceId, state);
+        return true;
+    }
+
+    private void PublishSample(string deviceId, IGamepadState state)
+    {
+        _publishedSamples[deviceId] = state;
+        _lastAnalogSamples[deviceId] = _sampleClock;
+    }
+
     private ControllerRuntime EnsureRuntime(GamepadDescriptor descriptor)
     {
         lock (_sync)
@@ -998,6 +1088,8 @@ public sealed class EngineHost : IDisposable
                 runtime.Engine.Reset();
                 runtime.Dispatcher.ReleaseAll();
                 _lastStates.Remove(deviceId);
+                _publishedSamples.Remove(deviceId);
+                _lastAnalogSamples.Remove(deviceId);
                 _presenceVersion++;
             }
         }

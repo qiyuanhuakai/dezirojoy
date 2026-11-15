@@ -14,8 +14,11 @@ namespace DeziroJoy.App.Tests.ViewModels;
 [Collection("DeziroJoy.LinuxAutostart")]
 public class DaemonSettingsViewModelLinuxTests
 {
-    private static DaemonSettingsViewModel LinuxCard(FakeLinuxDaemonService service, IDeviceAccessFixer? fixer = null)
-        => new(service, fixer);
+    private static DaemonSettingsViewModel LinuxCard(
+        FakeLinuxDaemonService service,
+        IDeviceAccessFixer? fixer = null,
+        IDeviceAccessProbe? probe = null)
+        => new(service, fixer, probe ?? new FakeDeviceAccessProbe());
 
     [Fact]
     public void The_Card_Is_Supported_And_Operable_On_Linux()
@@ -104,20 +107,49 @@ public class DaemonSettingsViewModelLinuxTests
     }
 
     [Fact]
-    public void The_Elevation_Text_Explains_The_Same_User_Design_And_The_Device_Permissions()
+    public void The_Elevation_Text_Is_Concise_And_Points_To_The_Live_Permission_Probe()
     {
         var vm = LinuxCard(new FakeLinuxDaemonService());
 
         var text = vm.ElevationText;
 
         Assert.Contains("同用户", text);
-        Assert.Contains("uinput", text);
-        Assert.Contains("UIPI", text);
-        Assert.Contains("无需提权", text);
+        Assert.Contains("无需管理员权限", text);
+        Assert.Contains("检测", text);
+        Assert.DoesNotContain(LinuxDeviceAccess.InputGroupCommand, text);
+        Assert.Contains("设备权限：正常", vm.DeviceAccessStatusText);
+        Assert.Contains("udev 规则已安装", vm.DeviceAccessConfigurationText);
+        Assert.Equal("自动修复权限", vm.DeviceAccessFixButtonText);
+    }
 
-        // The permission fix is the shared wording, not a second copy that can drift.
-        Assert.Contains(LinuxDeviceAccess.InputGroupCommand, text);
-        Assert.Contains(LinuxDeviceAccess.UdevRulesPath, text);
+    [Fact]
+    public void Permission_Status_Names_Gaps_Pending_ReLogin_And_Manual_Fallback()
+    {
+        var probe = new FakeDeviceAccessProbe
+        {
+            Snapshot = new DeviceAccessSnapshot(0, 2, "denied", false, true, false, false),
+        };
+        var vm = LinuxCard(new FakeLinuxDaemonService(), probe: probe);
+
+        Assert.Contains("2 个输入节点不可读", vm.DeviceAccessStatusText);
+        Assert.Contains("uinput 不可用", vm.DeviceAccessStatusText);
+        Assert.Contains("需重新登录", vm.DeviceAccessConfigurationText);
+        Assert.Equal("查看手动修复方法", vm.DeviceAccessFixButtonText);
+        Assert.Contains("手动命令", vm.DeviceAccessMethodText);
+    }
+
+    [Fact]
+    public void Refresh_ReReads_The_Permission_Status()
+    {
+        var probe = new FakeDeviceAccessProbe();
+        var vm = LinuxCard(new FakeLinuxDaemonService(), probe: probe);
+        probe.Snapshot = probe.Snapshot with { DeniedNodeCount = 1, CanFixAutomatically = false };
+
+        vm.RefreshCommand.Execute(null);
+
+        Assert.True(probe.Calls >= 2);
+        Assert.Contains("1 个输入节点不可读", vm.DeviceAccessStatusText);
+        Assert.Equal("查看手动修复方法", vm.DeviceAccessFixButtonText);
     }
 
     [Fact]
@@ -574,6 +606,19 @@ public class DaemonSettingsViewModelLinuxTests
     /// fixing state can be observed mid-run without a real pkexec dialog. The production fixer
     /// itself is covered by <see cref="Services.DeviceAccessFixerTests"/>.
     /// </summary>
+    internal sealed class FakeDeviceAccessProbe : IDeviceAccessProbe
+    {
+        public DeviceAccessSnapshot Snapshot { get; set; } = new(1, 0, null, true, true, true, true);
+
+        public int Calls { get; private set; }
+
+        public DeviceAccessSnapshot Probe()
+        {
+            Calls++;
+            return Snapshot;
+        }
+    }
+
     internal sealed class FakeDeviceAccessFixer : IDeviceAccessFixer
     {
         public DeviceAccessFixResult Result { get; set; } =

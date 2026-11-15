@@ -74,6 +74,11 @@ public sealed class ThemeService
     /// <summary>Raised whenever the gamepad-navigation preference changes.</summary>
     public event Action<bool>? GamepadNavigationChanged;
 
+    public event Action? ExternalChanged;
+
+    public IDisposable WatchForExternalChanges()
+        => new ExternalSettingsWatcher(_settingsPath, () => ExternalChanged?.Invoke());
+
     public bool IsLight => Current == ThemeVariant.Light;
 
     /// <summary>
@@ -328,6 +333,45 @@ public sealed class ThemeService
 
         Apply(next);
         Save(next);
+    }
+
+    private sealed class ExternalSettingsWatcher : IDisposable
+    {
+        private readonly FileSystemWatcher _watcher;
+        private readonly Timer _debounce;
+        private int _disposed;
+
+        public ExternalSettingsWatcher(string path, Action changed)
+        {
+            _debounce = new Timer(_ => changed(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path))
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+            };
+            _watcher.Changed += OnChanged;
+            _watcher.Created += OnChanged;
+            _watcher.Renamed += OnChanged;
+            _watcher.EnableRaisingEvents = true;
+        }
+
+        private void OnChanged(object sender, FileSystemEventArgs args)
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                _debounce.Change(TimeSpan.FromMilliseconds(50), Timeout.InfiniteTimeSpan);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            _watcher.Dispose();
+            _debounce.Dispose();
+        }
     }
 
     private sealed record AppSettings

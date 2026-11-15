@@ -13,6 +13,31 @@ namespace DeziroJoy.Platform.Tests.Linux;
 public sealed class X11ForegroundSourceTests
 {
     [Fact]
+    public void Wayland_Is_Recognized_Even_When_XWayland_Also_Publishes_A_Display()
+    {
+        var environment = new Dictionary<string, string?>
+        {
+            ["XDG_SESSION_TYPE"] = "wayland",
+            ["WAYLAND_DISPLAY"] = "wayland-0",
+            ["DISPLAY"] = ":0",
+        };
+
+        Assert.True(X11ForegroundSource.IsWaylandEnvironment(name => environment.GetValueOrDefault(name)));
+    }
+
+    [Fact]
+    public void X11_Without_Wayland_Variables_Is_Not_Reported_As_Wayland()
+    {
+        var environment = new Dictionary<string, string?>
+        {
+            ["XDG_SESSION_TYPE"] = "x11",
+            ["DISPLAY"] = ":0",
+        };
+
+        Assert.False(X11ForegroundSource.IsWaylandEnvironment(name => environment.GetValueOrDefault(name)));
+    }
+
+    [Fact]
     public void An_Unreachable_Display_Reports_No_Foreground_Program()
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the XCB query only exists on Linux");

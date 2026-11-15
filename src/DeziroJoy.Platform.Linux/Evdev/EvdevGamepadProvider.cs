@@ -15,8 +15,11 @@ namespace DeziroJoy.Platform.Linux.Evdev;
 /// </summary>
 public sealed class EvdevGamepadProvider : IGamepadProvider
 {
+    private static readonly TimeSpan RescanInterval = TimeSpan.FromMilliseconds(250);
+
     private readonly Lock _sync = new();
     private readonly List<Device> _devices = [];
+    private long _nextScanTimestamp;
 
     /// <summary>
     /// What the most recent scan found, and why it found it. Null until the first scan. A zero
@@ -31,7 +34,13 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
     {
         lock (_sync)
         {
-            Scan();
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (now >= _nextScanTimestamp)
+            {
+                Scan();
+                _nextScanTimestamp = now + (long)(RescanInterval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+            }
+
             return _devices.Select(d => new GamepadDescriptor(d.Path, d.Name) { ButtonCount = d.ButtonCount }).ToList();
         }
     }
@@ -468,6 +477,7 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
 
     private void StartReader(Device device)
     {
+        device.StopFd = EvdevNative.EventFd(0, EvdevNative.EventFdNonBlock | EvdevNative.EventFdCloseOnExec);
         device.Running = true;
         device.Reader = new Thread(() => ReadLoop(device))
         {
@@ -480,35 +490,88 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
     private unsafe void ReadLoop(Device device)
     {
         Span<byte> buffer = stackalloc byte[EvdevNative.EventSize * 32];
+        Span<PollFd> descriptors = stackalloc PollFd[2];
 
-        while (device.Running)
+        try
         {
-            nint read;
-            fixed (byte* pointer = buffer)
+            while (device.Running)
             {
-                read = EvdevNative.Read(device.Fd, pointer, (nuint)buffer.Length);
-            }
+                descriptors[0] = new PollFd { Fd = device.Fd, Events = EvdevNative.PollIn };
+                descriptors[1] = new PollFd
+                {
+                    Fd = device.StopFd,
+                    Events = EvdevNative.PollIn,
+                };
+                var count = device.StopFd >= 0 ? 2u : 1u;
+                int ready;
+                fixed (PollFd* pollDescriptors = descriptors)
+                {
+                    ready = EvdevNative.Poll(pollDescriptors, count, device.StopFd >= 0 ? -1 : 250);
+                }
 
-            if (read == 0)
-            {
+                if (!device.Running)
+                {
+                    return;
+                }
+
+                if (ready < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == EvdevNative.ErrnoInterrupted)
+                    {
+                        continue;
+                    }
+
+                    Remove(device);
+                    return;
+                }
+
+                if ((descriptors[0].ReturnedEvents & (EvdevNative.PollError | EvdevNative.PollHangUp | EvdevNative.PollInvalid)) != 0)
+                {
+                    Remove(device);
+                    return;
+                }
+
+                if ((descriptors[0].ReturnedEvents & EvdevNative.PollIn) == 0)
+                {
+                    continue;
+                }
+
+                nint read;
+                fixed (byte* pointer = buffer)
+                {
+                    read = EvdevNative.Read(device.Fd, pointer, (nuint)buffer.Length);
+                }
+
+                if (read > 0)
+                {
+                    var events = (int)read / EvdevNative.EventSize;
+                    lock (_sync)
+                    {
+                        for (var i = 0; i < events; i++)
+                        {
+                            device.Tracker.Apply(EvdevEventReader.Read(buffer, i));
+                        }
+                    }
+
+                    continue;
+                }
+
+                var error = Marshal.GetLastPInvokeError();
+                if (read < 0 && error is EvdevNative.ErrnoInterrupted or EvdevNative.ErrnoTryAgain)
+                {
+                    continue;
+                }
+
                 Remove(device);
                 return;
             }
-
-            if (read < 0)
+        }
+        finally
+        {
+            if (device.StopFd >= 0)
             {
-                Thread.Sleep(2);
-                continue;
-            }
-
-            var events = (int)read / EvdevNative.EventSize;
-
-            lock (_sync)
-            {
-                for (var i = 0; i < events; i++)
-                {
-                    device.Tracker.Apply(EvdevEventReader.Read(buffer, i));
-                }
+                EvdevNative.Close(device.StopFd);
+                device.StopFd = -1;
             }
         }
     }
@@ -522,9 +585,14 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         }
     }
 
-    private static void Stop(Device device)
+    private static unsafe void Stop(Device device)
     {
         device.Running = false;
+
+        if (device.StopFd >= 0)
+        {
+            EvdevNative.SignalEventFd(device.StopFd);
+        }
 
         if (device.Fd >= 0)
         {
@@ -547,6 +615,8 @@ public sealed class EvdevGamepadProvider : IGamepadProvider
         public required IReadOnlyList<EvdevUnhandledAxis> UnhandledAxes { get; init; }
 
         public int Fd { get; set; }
+
+        public int StopFd { get; set; } = -1;
 
         public volatile bool Running;
 

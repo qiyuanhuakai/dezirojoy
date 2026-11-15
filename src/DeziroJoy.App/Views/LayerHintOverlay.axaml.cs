@@ -48,7 +48,7 @@ public partial class LayerHintOverlay : Window
 
     /// <summary>
     /// The runtime-loader constructor: an overlay bound to view models of its own, which no
-    /// production path uses - the render process and the tray build one over live models -
+    /// production path uses - the resident presentation host builds one over live models -
     /// but which keeps the XAML resource loadable and the control previewable.
     /// </summary>
     public LayerHintOverlay()

@@ -12,7 +12,8 @@ namespace DeziroJoy.Platform.Linux.Evdev;
 /// logical position are kept as raw codes so they stay mappable. The analog triggers run
 /// through a Schmitt trigger, so a trigger resting near half travel holds one pressed state
 /// instead of chattering; every tracker instance carries its own trigger state, keeping
-/// devices independent.
+/// devices independent. Pads without ABS_RX/RY that report both ABS_Z and ABS_RZ resting near
+/// their midpoints use those axes as the right stick; endpoint-resting Z/RZ remain triggers.
 /// </summary>
 public sealed class EvdevGamepadStateTracker
 {
@@ -27,6 +28,7 @@ public sealed class EvdevGamepadStateTracker
     private const float TriggerReleasePoint = 115f / 255f;
 
     private readonly IReadOnlyDictionary<ushort, EvdevAxisRange> _axisRanges;
+    private readonly bool _useZRzForRightStick;
     private readonly SortedSet<int> _extraButtons = [];
     private GamepadButtonMask _buttons;
     private float _leftStickX;
@@ -40,7 +42,32 @@ public sealed class EvdevGamepadStateTracker
     public EvdevGamepadStateTracker(IReadOnlyDictionary<ushort, EvdevAxisRange>? axisRanges = null)
     {
         _axisRanges = axisRanges ?? DefaultAxisRanges;
+        _useZRzForRightStick = UsesZRzForRightStick(_axisRanges);
         SeedAxisStates();
+    }
+
+    private static bool UsesZRzForRightStick(IReadOnlyDictionary<ushort, EvdevAxisRange> ranges)
+    {
+        if (ranges.ContainsKey(EvdevCodes.AbsRx) || ranges.ContainsKey(EvdevCodes.AbsRy)
+            || !ranges.TryGetValue(EvdevCodes.AbsZ, out var z)
+            || !ranges.TryGetValue(EvdevCodes.AbsRz, out var rz))
+        {
+            return false;
+        }
+
+        return RestsNearCenter(z) && RestsNearCenter(rz);
+    }
+
+    private static bool RestsNearCenter(EvdevAxisRange range)
+    {
+        var span = (long)range.Max - range.Min;
+        if (span <= 0)
+        {
+            return false;
+        }
+
+        var offset = (long)range.Rest - range.Min;
+        return offset >= span / 4 && offset <= (span * 3) / 4;
     }
 
     public static IReadOnlyDictionary<ushort, EvdevAxisRange> DefaultAxisRanges { get; } =
@@ -166,6 +193,12 @@ public sealed class EvdevGamepadStateTracker
             case EvdevCodes.AbsHat0Y:
                 SetDpad(value < 0, value > 0, GamepadButton.DPadUp, GamepadButton.DPadDown);
                 break;
+            case EvdevCodes.AbsZ when _useZRzForRightStick:
+                _rightStickX = Normalize(value, EvdevCodes.AbsZ);
+                break;
+            case EvdevCodes.AbsRz when _useZRzForRightStick:
+                _rightStickY = NormalizeStickY(value, EvdevCodes.AbsRz);
+                break;
             case EvdevCodes.AbsZ:
                 SetTrigger(value, EvdevCodes.AbsZ, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
                 break;
@@ -219,7 +252,14 @@ public sealed class EvdevGamepadStateTracker
 
         if (_axisRanges.TryGetValue(EvdevCodes.AbsZ, out var z))
         {
-            SetTrigger(z.Rest, EvdevCodes.AbsZ, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
+            if (_useZRzForRightStick)
+            {
+                _rightStickX = Normalize(z.Rest, EvdevCodes.AbsZ);
+            }
+            else
+            {
+                SetTrigger(z.Rest, EvdevCodes.AbsZ, GamepadButton.LeftTrigger, ref _leftTriggerPressed);
+            }
         }
 
         if (_axisRanges.TryGetValue(EvdevCodes.AbsBrake, out var brake))
@@ -229,7 +269,14 @@ public sealed class EvdevGamepadStateTracker
 
         if (_axisRanges.TryGetValue(EvdevCodes.AbsRz, out var rz))
         {
-            SetTrigger(rz.Rest, EvdevCodes.AbsRz, GamepadButton.RightTrigger, ref _rightTriggerPressed);
+            if (_useZRzForRightStick)
+            {
+                _rightStickY = NormalizeStickY(rz.Rest, EvdevCodes.AbsRz);
+            }
+            else
+            {
+                SetTrigger(rz.Rest, EvdevCodes.AbsRz, GamepadButton.RightTrigger, ref _rightTriggerPressed);
+            }
         }
 
         if (_axisRanges.TryGetValue(EvdevCodes.AbsGas, out var gas))

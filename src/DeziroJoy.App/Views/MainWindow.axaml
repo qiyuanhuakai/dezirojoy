@@ -687,65 +687,36 @@
                                    Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
                     </StackPanel>
 
-                    <Border Grid.Row="1" Classes="card" Padding="12" Margin="0,12,0,0"
+                    <Border Grid.Row="1" Classes="card" Padding="10" Margin="0,8,0,0"
                             IsVisible="{Binding ShowGuidePlatformNote}">
-                        <StackPanel>
-                            <TextBlock x:Name="GuidePlatformNote" Classes="hint"
-                                       TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
-                                       Text="{Binding GuidePlatformNote}" />
-                            <StackPanel IsVisible="{Binding ShowGameBarPopupGuard}">
-                                <TextBlock x:Name="GameBarPopupHint" Classes="hint" Margin="0,6,0,0"
-                                           TextWrapping="Wrap" Text="{Binding GameBarPopupHint}" />
-                                <Button x:Name="DisableGameBarControllerLaunchButton" Classes="ghost"
-                                        Content="关闭手柄唤起 Game Bar" MinHeight="30" FontSize="11"
-                                        HorizontalAlignment="Left" Margin="0,8,0,0"
-                                        IsVisible="{Binding CanDisableGameBarControllerLaunch}"
-                                        Command="{Binding DisableGameBarControllerLaunchCommand}" />
-                                <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                                           Foreground="{DynamicResource DangerBrush}"
-                                           IsVisible="{Binding HasGameBarPopupError}" Text="{Binding GameBarPopupError}" />
-                            </StackPanel>
-                        </StackPanel>
+                        <TextBlock x:Name="GuidePlatformNote" Classes="hint"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                                   Text="{Binding GuidePlatformNote}" />
                     </Border>
 
-                    <!-- 全局特殊键. 精准键与 Leader 键 are device-level configuration: every
-                         preset of the device shares them, so they are not one preset's
-                         mapping and do not belong to a row hunt. They lead the page instead,
-                         each naming the button that triggers it and how it engages - 未配置
-                         with the way to configure one when the device carries none - with
-                         every collision on their buttons stated beside them. Editing stays
-                         exactly where it was: the mapping editor, reached through the row's
-                         编辑 affordance or through the mapping's own row below. -->
-                    <Border Grid.Row="2" Classes="card" Margin="0,12,0,0">
+                    <Border Grid.Row="2" Classes="card" Padding="10" Margin="0,8,0,0">
                         <StackPanel>
                             <TextBlock Classes="cardTitle" Text="全局特殊键" />
-                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                                       Text="精准键与 Leader 键对整个设备生效（所有预设共享），因此置于映射列表之上；冲突提示只报告，不会自动改动配置。" />
-                            <ItemsControl x:Name="SpecialKeysList" Margin="0,10,0,0" ItemsSource="{Binding SpecialKeys}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
+                            <ItemsControl x:Name="SpecialKeysList" Margin="0,6,0,0" ItemsSource="{Binding SpecialKeys}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:GlobalSpecialKeyItem">
-                                        <StackPanel Margin="0,0,0,10">
-                                            <Grid ColumnDefinitions="*,Auto">
+                                        <StackPanel Margin="0,0,0,7">
+                                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
                                                 <TextBlock Grid.Column="0" Classes="fieldLabel" Margin="0"
                                                            VerticalAlignment="Center" Text="{Binding Title}" />
-                                                <Button Grid.Column="1" Classes="ghost" Content="编辑"
-                                                        FontSize="10" Padding="8,4" MinHeight="26"
+                                                <TextBlock Grid.Column="1" Margin="0" FontSize="11" TextWrapping="Wrap"
+                                                           VerticalAlignment="Center" Foreground="{DynamicResource TextPrimaryBrush}"
+                                                           Text="{Binding Summary}" />
+                                                <Button Grid.Column="2" Classes="ghost" Content="编辑"
+                                                        FontSize="10" Padding="7,2" MinHeight="24"
                                                         IsVisible="{Binding IsConfigured}"
                                                         Command="{ReflectionBinding DataContext.EditSpecialKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}" />
                                             </Grid>
-                                            <TextBlock Margin="0,2,0,0" FontSize="12" TextWrapping="Wrap"
-                                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                                       Text="{Binding Summary}" />
-                                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                            <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
                                                        IsVisible="{Binding IsConfigured, Converter={StaticResource Not}}"
-                                                       Text="{Binding Guide}" />
-                                            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                                       Text="可在映射编辑器中添加" />
+                                            <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
                                                        Foreground="{DynamicResource DangerBrush}"
                                                        IsVisible="{Binding HasConflicts}"
                                                        Text="{Binding ConflictHint}" />

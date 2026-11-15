@@ -61,6 +61,16 @@ public sealed class TrayService : IDisposable
     /// <summary>True while an exit is in progress or after the host accepts it.</summary>
     public bool IsExiting => _exiting;
 
+    public bool IsVisible => _trayIcon?.IsVisible ?? false;
+
+    public void SetVisible(bool visible)
+    {
+        if (_trayIcon is not null)
+        {
+            _trayIcon.IsVisible = visible;
+        }
+    }
+
     /// <summary>
     /// Builds the tray icon and its menu. Idempotent: the icon is constructed exactly once no
     /// matter how many times this is called.

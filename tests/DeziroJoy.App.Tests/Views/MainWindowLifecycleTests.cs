@@ -76,7 +76,9 @@ public sealed class MainWindowLifecycleTests : IDisposable
     {
         for (var type = source.GetType(); type is not null; type = type.BaseType)
         {
-            var field = type.GetField(eventName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            var field = type.GetField(eventName, flags)
+                ?? type.GetField("_" + char.ToLowerInvariant(eventName[0]) + eventName[1..], flags);
             if (field is null)
             {
                 continue;
@@ -190,7 +192,7 @@ public sealed class MainWindowLifecycleTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Closing_With_Close_To_Tray_Acknowledges_The_Tray_Before_Ending_The_Render_Process()
+    public void Closing_To_Tray_Checks_The_Resident_Host_And_Exits_The_Render_Process()
     {
         var themes = new ThemeService(_directory);
         var fixture = BuildRender(themes);
@@ -199,10 +201,9 @@ public sealed class MainWindowLifecycleTests : IDisposable
         fixture.Window.Close();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(["spawn", "release", "probe", "shutdown"], fixture.Events);
-        Assert.Contains("--tray", Assert.Single(fixture.Spawned).Arguments, StringComparison.Ordinal);
+        Assert.Equal(["ensure-tray", "render-stopped", "shutdown"], fixture.Events);
+        Assert.Empty(fixture.Spawned);
         Assert.False(fixture.Window.IsVisible);
-        Assert.Equal(0, fixture.Tray.KillCalls);
     }
 
     [AvaloniaFact]
@@ -215,7 +216,7 @@ public sealed class MainWindowLifecycleTests : IDisposable
         fixture.Window.Close();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(["stop-daemon", "shutdown"], fixture.Events);
+        Assert.Equal(["stop-daemon", "exit-tray", "render-stopped", "shutdown"], fixture.Events);
         Assert.Empty(fixture.Spawned);
         Assert.False(fixture.Window.IsVisible);
     }
@@ -237,18 +238,17 @@ public sealed class MainWindowLifecycleTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void A_Failed_Minimize_Handover_Restores_And_Keeps_The_Window()
+    public void A_Failed_Minimize_Presentation_Check_Restores_And_Keeps_The_Window()
     {
         var themes = new ThemeService(_directory);
-        var fixture = BuildRender(themes, probe: () => Task.FromResult(false));
+        var fixture = BuildRender(themes, ensureTray: () => false);
 
         fixture.Window.RequestMinimize();
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(WindowState.Normal, fixture.Window.WindowState);
         Assert.True(fixture.Window.IsVisible);
-        Assert.Equal(1, fixture.Tray.KillCalls);
-        Assert.Equal(["spawn", "release", "probe", "reacquire"], fixture.Events);
+        Assert.Equal(["ensure-tray"], fixture.Events);
         Assert.Empty(fixture.Shutdowns);
     }
 
@@ -262,149 +262,39 @@ public sealed class MainWindowLifecycleTests : IDisposable
         fixture.Window.RequestMinimize();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(["spawn", "release", "probe", "shutdown"], fixture.Events);
+        Assert.Equal(["ensure-tray", "render-stopped", "shutdown"], fixture.Events);
         Assert.DoesNotContain("stop-daemon", fixture.Events);
         Assert.False(fixture.Window.IsVisible);
     }
 
     [AvaloniaFact]
-    public void A_Failed_Tray_Handover_Rolls_Back_And_Keeps_The_Window()
+    public void A_Failed_Presentation_Check_Keeps_The_Window()
     {
         var themes = new ThemeService(_directory);
-        var fixture = BuildRender(themes, probe: () => Task.FromResult(false));
+        var fixture = BuildRender(themes, ensureTray: () => false);
 
         fixture.Window.Close();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(1, fixture.Tray.KillCalls);
-        Assert.Equal(["spawn", "release", "probe", "reacquire"], fixture.Events);
+        Assert.Equal(["ensure-tray"], fixture.Events);
         Assert.True(fixture.Window.IsVisible);
         Assert.Empty(fixture.Shutdowns);
     }
 
     [AvaloniaFact]
-    public void A_Rolled_Back_Tray_Handover_Republishes_The_Surviving_Render()
-    {
-        // The discovery file is a Linux-only channel; on Windows the well-known named pipe is
-        // always current, so there is nothing to republish.
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
-        var themes = new ThemeService(_directory);
-        var identity = new GuiInstanceIdentity(
-            Path.Combine(_directory, "republish.lock"),
-            "DeziroJoy.Test.Republish." + Guid.NewGuid().ToString("N"));
-
-        // The render's activation server is the active instance, as the launcher sets it.
-        var activation = GuiActivationServer.StartActive(identity);
-        try
-        {
-            activation.ShowRequested += () => Task.CompletedTask;
-            activation.BeginServing();
-            var published = File.ReadAllText(identity.DiscoveryPath).Trim();
-
-            // A successor took over discovery and then died before this render retired.
-            File.WriteAllText(identity.DiscoveryPath, "DeziroJoy.Dead.Successor.Endpoint");
-
-            var fixture = BuildRender(themes, probe: () => Task.FromResult(false));
-            fixture.Window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            Assert.True(fixture.Window.IsVisible);
-            Assert.Equal(
-                published,
-                File.ReadAllText(identity.DiscoveryPath).Trim());
-        }
-        finally
-        {
-            activation.Dispose();
-        }
-    }
-
-    [AvaloniaFact]
-    public void Closing_After_A_Third_Party_Takes_The_Lease_Retires_Only_The_Unlocked_Render()
+    public void A_Failed_Tray_Exit_Keeps_The_Window_Open_For_Retry()
     {
         var themes = new ThemeService(_directory);
-        var identity = new GuiInstanceIdentity(Path.Combine(_directory, "handover-race.lock"), "unused");
-        using var oldRenderLease = GuiInstanceLease.TryAcquire(identity)!;
-        GuiInstanceLease? newRenderLease = null;
-        RenderFixture? fixture = null;
-        fixture = BuildRender(
-            themes,
-            probe: () =>
-            {
-                // Once this lease moves, the third-party render is free to build its window.
-                newRenderLease = GuiInstanceLease.TryAcquire(identity);
-                fixture!.Events.Add("third-party-render-window");
-                return Task.FromResult(false);
-            },
-            releaseInstance: oldRenderLease.Dispose,
-            reacquireInstance: () =>
-            {
-                var reclaimed = GuiInstanceLease.TryAcquire(identity);
-                reclaimed?.Dispose();
-                return reclaimed is not null;
-            });
-
-        try
-        {
-            fixture.Window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            Assert.NotNull(newRenderLease);
-            Assert.Equal(1, fixture.Tray.KillCalls);
-            Assert.False(fixture.Window.IsVisible);
-            Assert.Single(fixture.Shutdowns);
-            Assert.DoesNotContain("stop-daemon", fixture.Events);
-            Assert.Equal(
-                ["spawn", "release", "probe", "third-party-render-window", "reacquire", "shutdown"],
-                fixture.Events);
-        }
-        finally
-        {
-            newRenderLease?.Dispose();
-        }
-    }
-
-    [AvaloniaFact]
-    public void Minimize_After_A_Third_Party_Takes_The_Lease_Also_Retires_The_Unlocked_Render()
-    {
-        var themes = new ThemeService(_directory);
-        var fixture = BuildRender(
-            themes,
-            probe: () => Task.FromResult(false),
-            reacquireInstance: () => false);
-
-        fixture.Window.RequestMinimize();
-        Dispatcher.UIThread.RunJobs();
-
-        Assert.False(fixture.Window.IsVisible);
-        Assert.Single(fixture.Shutdowns);
-        Assert.DoesNotContain("stop-daemon", fixture.Events);
-        Assert.Equal(["spawn", "release", "probe", "reacquire", "shutdown"], fixture.Events);
-    }
-
-    [AvaloniaFact]
-    public void Concurrent_Close_And_Minimize_Share_One_Tray_Handover()
-    {
-        var themes = new ThemeService(_directory);
-        var probe = new TaskCompletionSource<bool>();
-        var fixture = BuildRender(themes, probe: () => probe.Task);
+        themes.SetCloseToTrayEnabled(false);
+        var fixture = BuildRender(themes, exitTray: () => Task.FromResult(false));
 
         fixture.Window.Close();
-        fixture.Window.RequestMinimize();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Single(fixture.Spawned);
-        Assert.Equal(1, fixture.Events.Count(entry => entry == "probe"));
-
-        probe.SetResult(true);
-        Dispatcher.UIThread.RunJobs();
-
-        Assert.Single(fixture.Shutdowns);
-        Assert.Single(fixture.Spawned);
+        Assert.True(fixture.Window.IsVisible);
+        Assert.Empty(fixture.Shutdowns);
+        Assert.Equal(["stop-daemon", "exit-tray"], fixture.Events);
+        Assert.Contains("托盘", ((MainWindowViewModel)fixture.Window.DataContext!).StatusMessage);
     }
 
     [AvaloniaFact]
@@ -428,15 +318,14 @@ public sealed class MainWindowLifecycleTests : IDisposable
 
         Assert.False(fixture.Window.IsVisible);
         Assert.Single(fixture.Shutdowns);
-        Assert.Equal(["stop-daemon", "stop-daemon", "shutdown"], fixture.Events);
+        Assert.Equal(["stop-daemon", "stop-daemon", "exit-tray", "render-stopped", "shutdown"], fixture.Events);
     }
 
     private static RenderFixture BuildRender(
         ThemeService themes,
-        Func<Task<bool>>? probe = null,
         Func<Task<bool>>? stopDaemon = null,
-        Action? releaseInstance = null,
-        Func<bool>? reacquireInstance = null)
+        Func<bool>? ensureTray = null,
+        Func<Task<bool>>? exitTray = null)
     {
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var (_, viewModel, host, _) = BuildWindow();
@@ -448,38 +337,26 @@ public sealed class MainWindowLifecycleTests : IDisposable
             viewModel,
             host,
             themes,
-            spawnTray: info =>
-            {
-                fixture.Spawned.Add(info);
-                fixture.Events.Add("spawn");
-                return tray;
-            },
             shutdown: () =>
             {
                 fixture.Shutdowns.Add(1);
                 fixture.Events.Add("shutdown");
             },
-            releaseInstance: () =>
+            ensureTray: () =>
             {
-                fixture.Events.Add("release");
-                releaseInstance?.Invoke();
+                fixture.Events.Add("ensure-tray");
+                return ensureTray?.Invoke() ?? true;
             },
-            reacquireInstance: () =>
-            {
-                fixture.Events.Add("reacquire");
-                return reacquireInstance?.Invoke() ?? true;
-            },
-            probe: (_, _, _, _) =>
-            {
-                fixture.Events.Add("probe");
-                return probe?.Invoke() ?? Task.FromResult(true);
-            },
-            pollDelay: static () => Task.CompletedTask,
-            handoverBudget: TimeSpan.Zero,
+            renderStopped: () => fixture.Events.Add("render-stopped"),
             stopDaemon: () =>
             {
                 fixture.Events.Add("stop-daemon");
                 return stopDaemon?.Invoke() ?? Task.FromResult(true);
+            },
+            exitTray: () =>
+            {
+                fixture.Events.Add("exit-tray");
+                return exitTray?.Invoke() ?? Task.FromResult(true);
             });
         fixture.Window = window;
         return fixture;

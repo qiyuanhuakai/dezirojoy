@@ -177,9 +177,11 @@ public sealed class ForegroundWatcher : IDisposable
     public string SourceNote => _source switch
     {
         WindowsForegroundSource => "前台检测：Windows（GetForegroundWindow + 进程名），实时读取当前前台窗口所属进程。",
+        X11ForegroundSource when X11ForegroundSource.IsWaylandSession =>
+            "前台检测：Wayland 不提供通用的全局前台窗口、窗口列表或全屏状态查询；规则无法可靠命中，读取不到时使用桌面默认配置。",
         X11ForegroundSource =>
             "前台检测：Linux X11（最佳努力，依赖窗口管理器的 _NET_ACTIVE_WINDOW）。"
-                + "Wayland 不提供全局前台查询，读取不到前台时规则不会命中，始终使用桌面默认配置。",
+                + "读取不到前台时规则不会命中，始终使用桌面默认配置。",
         _ => "前台检测：当前平台不支持读取前台程序，所有规则都不会命中，始终使用桌面默认配置。",
     };
 

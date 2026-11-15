@@ -36,6 +36,15 @@ public class ScrollSensitivityViewModelTests
     }
 
     [Fact]
+    public void Response_Curve_Is_Available_On_The_Initial_Panel()
+    {
+        var vm = new ScrollSensitivityViewModel();
+
+        Assert.Equal(33, vm.ResponseCurvePoints.Count);
+        Assert.Equal(1, vm.ResponseCurvePoints[^1].Y);
+    }
+
+    [Fact]
     public void Preview_Accumulates_Wheel_Notches()
     {
         var vm = new ScrollSensitivityViewModel

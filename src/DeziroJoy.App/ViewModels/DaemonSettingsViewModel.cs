@@ -18,12 +18,19 @@ public partial class DaemonSettingsViewModel : ObservableObject
 {
     private readonly IDaemonService _service;
     private readonly IDeviceAccessFixer _deviceAccessFixer;
+    private readonly IDeviceAccessProbe _deviceAccessProbe;
+    private DeviceAccessSnapshot? _deviceAccess;
+    private string? _deviceAccessProbeError;
     private bool _suppressAutostartChange;
 
-    public DaemonSettingsViewModel(IDaemonService? service = null, IDeviceAccessFixer? deviceAccessFixer = null)
+    public DaemonSettingsViewModel(
+        IDaemonService? service = null,
+        IDeviceAccessFixer? deviceAccessFixer = null,
+        IDeviceAccessProbe? deviceAccessProbe = null)
     {
         _service = service ?? PlatformFactory.CreateDaemonService();
         _deviceAccessFixer = deviceAccessFixer ?? new DeviceAccessFixer();
+        _deviceAccessProbe = deviceAccessProbe ?? new LinuxDeviceAccessProbe();
         RefreshFromService();
     }
 
@@ -106,7 +113,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
                 // reported as a run state on every refresh.
                 if (!IsDaemonInstalled)
                 {
-                    return "常驻服务：未安装（systemd 用户单元）";
+                    return "常驻服务：未安装";
                 }
 
                 if (DaemonQueryError is { } error)
@@ -115,8 +122,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
                 }
 
                 return IsDaemonRunning
-                    ? "常驻服务：已安装并正在运行（systemd 用户单元）"
-                    : "常驻服务：已安装但未运行（systemd 用户单元）";
+                    ? "常驻服务：已安装并正在运行"
+                    : "常驻服务：已安装但未运行";
             }
 
             return IsDaemonInstalled
@@ -140,10 +147,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
             if (IsSameUserModel)
             {
-                return
-                    "注入权限：Linux 为同用户设计——uinput 是内核级接口，不受 Windows UIPI 约束，"
-                    + "守护进程以当前用户身份运行，无需提权。注入只取决于设备访问权："
-                    + LinuxDeviceAccess.DeviceAccessGuidance;
+                return "同用户运行，无需管理员权限；设备访问状态见下方检测。";
             }
 
             if (!IsDaemonInstalled)
@@ -164,6 +168,57 @@ public partial class DaemonSettingsViewModel : ObservableObject
             return "注入权限：常驻服务已安装，但无法读取其运行级别（非管理员可能被拒绝读取管理员创建的任务）";
         }
     }
+
+    public string DeviceAccessStatusText
+    {
+        get
+        {
+            if (_deviceAccessProbeError is not null)
+            {
+                return $"设备权限：检测失败（{_deviceAccessProbeError}）";
+            }
+
+            if (_deviceAccess is not { } status)
+            {
+                return "设备权限：尚未检测";
+            }
+
+            var gaps = new List<string>();
+            if (status.DeniedNodeCount > 0)
+            {
+                gaps.Add($"{status.DeniedNodeCount} 个输入节点不可读");
+            }
+
+            if (status.UInputUnavailableReason is not null)
+            {
+                gaps.Add("uinput 不可用");
+            }
+
+            if (gaps.Count > 0)
+            {
+                return "设备权限：" + string.Join("；", gaps);
+            }
+
+            return status.GamepadCount > 0
+                ? "设备权限：正常（手柄可读，uinput 可写）"
+                : "设备权限：未发现缺口；当前未检测到手柄";
+        }
+    }
+
+    public string DeviceAccessConfigurationText => _deviceAccess is not { } status
+        ? string.Empty
+        : $"持久配置：udev 规则{(status.UdevRulesInstalled ? "已安装" : "未安装")}；"
+            + (status.UserInInputGroup
+                ? status.SessionInInputGroup ? "input 组已生效" : "input 组需重新登录后生效"
+                : "未加入 input 组");
+
+    public string DeviceAccessFixButtonText => _deviceAccess?.CanFixAutomatically == true
+        ? "自动修复权限"
+        : "查看手动修复方法";
+
+    public string DeviceAccessMethodText => _deviceAccess?.CanFixAutomatically == true
+        ? "自动修复需要一次管理员授权。"
+        : "缺少 pkexec 或修复脚本时，按钮会给出可复制的手动命令。";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasStatusMessage))]
@@ -218,6 +273,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
     public void RefreshFromService()
     {
         _service.Refresh();
+        RefreshDeviceAccess();
 
         _suppressAutostartChange = true;
         AutostartEnabled = _service.IsAutostartInstalled;
@@ -241,6 +297,30 @@ public partial class DaemonSettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(ElevationText));
         OnPropertyChanged(nameof(CanFixDeviceAccess));
         OnPropertyChanged(nameof(DeviceAccessFixTooltip));
+    }
+
+    private void RefreshDeviceAccess()
+    {
+        if (!IsSameUserModel)
+        {
+            return;
+        }
+
+        try
+        {
+            _deviceAccess = _deviceAccessProbe.Probe();
+            _deviceAccessProbeError = null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _deviceAccess = null;
+            _deviceAccessProbeError = exception.Message;
+        }
+
+        OnPropertyChanged(nameof(DeviceAccessStatusText));
+        OnPropertyChanged(nameof(DeviceAccessConfigurationText));
+        OnPropertyChanged(nameof(DeviceAccessFixButtonText));
+        OnPropertyChanged(nameof(DeviceAccessMethodText));
     }
 
     partial void OnAutostartEnabledChanged(bool value)
@@ -292,6 +372,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
             DeviceAccessFixStatus = result.Message;
             DeviceAccessFixNote = result.Reason ?? string.Empty;
+            RefreshDeviceAccess();
         }
         catch (Exception exception)
         {

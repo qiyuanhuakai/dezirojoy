@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
+using DeziroJoy.App.Views.Controls;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using Xunit;
@@ -428,8 +429,21 @@ public sealed class SensitivityPanelGuiTests
         Assert.True(sensitivity.CurrentRate > 0);
         Assert.Contains("格/s", panel.FindControl<TextBlock>("CurrentRateText")!.Text);
 
+        var start = panel.FindControl<Button>("ScrollStartDriftButton")!;
+        var stop = panel.FindControl<Button>("ScrollStopDriftButton")!;
         var apply = panel.FindControl<Button>("ScrollApplyDeadZoneButton")!;
-        panel.FindControl<Button>("ScrollStartDriftButton")!.Command!.Execute(null);
+        Assert.NotNull(panel.FindControl<StackPanel>("ScrollDriftCard"));
+        Assert.NotNull(panel.FindControl<ResponseCurveGraph>("ScrollCurveGraphHost"));
+        Assert.True(start.IsVisible);
+        Assert.False(stop.IsVisible);
+        Assert.Equal("primary", start.Classes.Single());
+        Assert.Equal("primary", stop.Classes.Single());
+
+        start.Command!.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.False(start.IsVisible);
+        Assert.True(stop.IsVisible);
         sensitivity.ApplySample(GamepadState.Create(default, 0f, 0.04f, 0f, 0f));
         for (var i = 0; i < 40; i++)
         {

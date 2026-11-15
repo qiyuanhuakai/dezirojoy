@@ -11,6 +11,22 @@ internal static partial class EvdevNative
     /// <summary>EACCES on Linux: the node exists but this user may not open it.</summary>
     public const int ErrnoAccessDenied = 13;
 
+    public const int ErrnoInterrupted = 4;
+
+    public const int ErrnoTryAgain = 11;
+
+    public const int EventFdNonBlock = ONonBlock;
+
+    public const int EventFdCloseOnExec = 0x80000;
+
+    public const short PollIn = 0x001;
+
+    public const short PollError = 0x008;
+
+    public const short PollHangUp = 0x010;
+
+    public const short PollInvalid = 0x020;
+
     public const int EventSize = 24;
 
     public const uint EvIocGName = 0x81004506;
@@ -53,6 +69,39 @@ internal static partial class EvdevNative
 
     [LibraryImport("libc.so.6", EntryPoint = "ioctl", SetLastError = true)]
     public static unsafe partial int Ioctl(int fd, uint request, void* arg);
+
+    [LibraryImport("libc.so.6", EntryPoint = "poll", SetLastError = true)]
+    public static unsafe partial int Poll(PollFd* fds, nuint count, int timeoutMilliseconds);
+
+    public static unsafe int PollOne(ref PollFd descriptor, int timeoutMilliseconds)
+    {
+        fixed (PollFd* pointer = &descriptor)
+        {
+            return Poll(pointer, 1, timeoutMilliseconds);
+        }
+    }
+
+    [LibraryImport("libc.so.6", EntryPoint = "eventfd", SetLastError = true)]
+    public static partial int EventFd(uint initialValue, int flags);
+
+    public static unsafe void SignalEventFd(int fd)
+    {
+        ulong signal = 1;
+        _ = Write(fd, &signal, sizeof(ulong));
+    }
+
+    [LibraryImport("libc.so.6", EntryPoint = "write", SetLastError = true)]
+    public static unsafe partial nint Write(int fd, void* buffer, nuint count);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct PollFd
+{
+    public int Fd;
+
+    public short Events;
+
+    public short ReturnedEvents;
 }
 
 [StructLayout(LayoutKind.Sequential)]

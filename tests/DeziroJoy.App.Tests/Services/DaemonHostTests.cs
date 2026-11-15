@@ -18,6 +18,38 @@ namespace DeziroJoy.App.Tests.Services;
 public class DaemonHostTests
 {
     [Fact]
+    public async Task Leader_Preset_Switches_Are_Serialized_Off_The_Input_Thread()
+    {
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        var profile = DefaultProfileLibrary.CreateDefault(new GamepadDescriptor("pad-1", "Test Controller"));
+        presets.SaveSlot("pad-1", 2, profile with { Name = "第二套" });
+        presets.SaveSlot("pad-1", 3, profile with { Name = "第三套" });
+        var host = new FakeDaemonHost();
+        host.AddDevice("pad-1");
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-preset-queue-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(host, store, new DaemonStateStore(statePath));
+        using var queue = new DaemonPresetSwitchQueue(server);
+
+        queue.Enqueue(2);
+        queue.Enqueue(3);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (host.GetProfile("pad-1")?.PresetSlot != 3 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(3, host.GetProfile("pad-1")!.PresetSlot);
+        Assert.Equal(2, host.ReloadedDevices.Count);
+
+        if (File.Exists(statePath))
+        {
+            File.Delete(statePath);
+        }
+    }
+
+    [Fact]
     public void Startup_Summary_Names_The_Platform_The_Devices_And_The_Engine()
     {
         using var composition = new EngineComposition();

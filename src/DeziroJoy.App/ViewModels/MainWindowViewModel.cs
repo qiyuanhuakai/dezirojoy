@@ -308,12 +308,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<MappingCardViewModel> MappingCards { get; } = [];
 
     /// <summary>
-    /// The two global special keys as the 按键配置 top area shows them: 精准键 and Leader 键,
-    /// one row each, configured or not. They are device-level configuration - shared across
-    /// every preset of the device - so they lead the page above the per-preset mapping list
-    /// instead of being searched for inside it, and every collision on their buttons is
-    /// reported beside them. Rebuilt on every refresh, so an edit, a preset switch or a
-    /// shared-key fan-out re-lists them immediately.
+    /// 精准键, Leader 键 and 屏幕键盘键, one row each, configured or not. Precision and
+    /// leader settings are shared across presets; all three are listed by kind above the
+    /// mapping list, with every collision reported beside them. Rebuilt on every refresh, so
+    /// an edit, a preset switch or a shared-key fan-out re-lists them immediately.
     /// </summary>
     public ObservableCollection<GlobalSpecialKeyItem> SpecialKeys { get; } = [];
 
@@ -374,7 +372,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ? "本地映射引擎"
         : DaemonSnapshot is null
             ? "守护进程不可用；未启用本地注入回退"
-            : $"守护进程已连接 · 修订 {DaemonSnapshot.Revision} · 序列 {DaemonSnapshot.Sequence}";
+            : "守护进程已连接";
 
     [ObservableProperty]
     private StateSnapshot? _daemonSnapshot;
@@ -1239,8 +1237,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool CanDisableGameBarControllerLaunch => ShowGameBarPopupGuard && !IsGameBarControllerLaunchDisabled;
 
     public string GameBarPopupHint => IsGameBarControllerLaunchDisabled
-        ? "已关闭当前用户的手柄唤起 Game Bar；Win+G 与游戏录制不受影响。"
-        : "连接手柄或按 Guide 时若出现 ms-gamebar 弹窗，可关闭 Windows 的“允许控制器打开 Game Bar”。仅影响当前用户，不影响 Win+G 与游戏录制。";
+        ? "关闭设置已写入并核验。若仍会弹出 ms-gamebar，请用系统设置再关闭一次；部分系统需要重新登录。"
+        : "出现 ms-gamebar 弹窗时，可写入当前用户的关闭设置，或打开系统设置手动关闭“允许控制器打开 Game Bar”。不影响 Win+G 与录制。";
 
     [ObservableProperty]
     private string? _gameBarPopupError;
@@ -1253,12 +1251,28 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             _gameBarPopupGuard.DisableControllerLaunch();
-            IsGameBarControllerLaunchDisabled = true;
+            IsGameBarControllerLaunchDisabled = _gameBarPopupGuard.IsControllerLaunchDisabled;
             GameBarPopupError = null;
         }
         catch (Exception exception)
         {
             GameBarPopupError = $"无法修改 Windows Game Bar 设置：{exception.Message}。也可在系统设置 → 游戏 → Xbox Game Bar 中手动关闭“允许控制器打开 Game Bar”。";
+        }
+
+        OnPropertyChanged(nameof(HasGameBarPopupError));
+    }
+
+    [RelayCommand]
+    private void OpenGameBarSettings()
+    {
+        try
+        {
+            _gameBarPopupGuard.OpenSystemSettings();
+            GameBarPopupError = null;
+        }
+        catch (Exception exception)
+        {
+            GameBarPopupError = $"无法打开 Windows 游戏设置：{exception.Message}。请手动打开系统设置 → 游戏 → Xbox Game Bar。";
         }
 
         OnPropertyChanged(nameof(HasGameBarPopupError));
@@ -1343,7 +1357,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 ? InjectorIntegrity == InjectorIntegrityLevel.Elevated
                     ? "由提权守护进程注入，可覆盖管理员目标"
                     : "守护进程未提权；管理员目标仍会被 UIPI 拦截"
-                : "由守护进程注入；Linux 为同用户模型，uinput 不受 UIPI 约束，注入只取决于设备访问权"
+                : "由守护进程注入；同用户运行，无需提权"
         : IsElevationSupported
             ? IsElevated
                 ? "已提权：可向以管理员身份运行的应用注入输入"
@@ -2829,10 +2843,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         var controllers = _host.Controllers;
 
-        Controllers.Clear();
-        foreach (var controller in controllers)
+        if (!Controllers.SequenceEqual(controllers))
         {
-            Controllers.Add(controller);
+            Controllers.Clear();
+            foreach (var controller in controllers)
+            {
+                Controllers.Add(controller);
+            }
         }
 
         if (controllers.Count == 0)
@@ -3496,8 +3513,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
-    /// Re-lists the two global special keys above the mapping list: 精准键 and Leader 键,
-    /// one row each, in that order. A kind the device configures names its trigger button
+    /// Re-lists 精准键, Leader 键 and 屏幕键盘键 above the mapping list, in that order.
+    /// A kind the device configures names its trigger button
     /// and how it engages; one it does not still takes its row, so the area says where the
     /// key would live rather than looking like a feature that is missing. Every collision of
     /// the kind rides along, whatever button carries it.
@@ -3515,6 +3532,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             ItemFor(SpecialKeyKind.Precision),
             ItemFor(SpecialKeyKind.Leader),
+            ItemFor(SpecialKeyKind.Keyboard),
         };
 
         SpecialKeys.Clear();
@@ -3568,10 +3586,10 @@ public sealed partial class PresetSlotItem : ObservableObject
 }
 
 /// <summary>
-/// One global special key as the 按键配置 top area shows it: 精准键 or Leader 键, the button
-/// that triggers it, how it engages, and every collision on that kind's buttons. The two
-/// keys are device-level configuration - shared across every preset of the device - which is
-/// why the area lists them above the per-preset mapping list: they are looked for by kind,
+/// One special key as the 按键配置 top area shows it: 精准键, Leader 键 or 屏幕键盘键,
+/// the button that triggers it, how it engages, and every collision on that kind's buttons.
+/// Precision and leader keys are device-level configuration shared across presets; the screen
+/// keyboard is listed beside them for quick access. Entries are looked for by kind,
 /// not hunted for inside one preset's rows.
 /// <para>
 /// A kind the device does not configure still takes its row: the area is where the user
@@ -3607,7 +3625,12 @@ public sealed class GlobalSpecialKeyItem
     public Guid? MappingId => Entry?.Id;
 
     /// <summary>What the kind is called, the way its own picker calls it.</summary>
-    public string Title => Kind == SpecialKeyKind.Leader ? "Leader 键" : "精准键";
+    public string Title => Kind switch
+    {
+        SpecialKeyKind.Leader => "Leader 键",
+        SpecialKeyKind.Keyboard => "屏幕键盘键",
+        _ => "精准键",
+    };
 
     /// <summary>
     /// What the key does today: the trigger button, the gesture position it sits on when it
@@ -3645,9 +3668,15 @@ public sealed class GlobalSpecialKeyItem
 
         var position = PositionOf(entry);
         var source = MappingDescriptions.Source(entry.Source);
-        var engage = target.Kind == SpecialKeyKind.Leader
-            ? $"{MappingDescriptions.LeaderSwitchModeLabel(target.SwitchMode)}：预设 {target.SlotA} ↔ {target.SlotB}"
-            : MappingDescriptions.PrecisionModeLabel(target.PrecisionMode);
+        var engage = target.Kind switch
+        {
+            SpecialKeyKind.Leader when target.Action == LeaderAction.Layer
+                => $"{MappingDescriptions.LeaderSwitchModeLabel(target.SwitchMode)}：临时层",
+            SpecialKeyKind.Leader
+                => $"{MappingDescriptions.LeaderSwitchModeLabel(target.SwitchMode)}：预设 {target.SlotA} ↔ {target.SlotB}",
+            SpecialKeyKind.Keyboard => "切换屏幕键盘",
+            _ => MappingDescriptions.PrecisionModeLabel(target.PrecisionMode),
+        };
         var disabled = entry.Enabled ? string.Empty : "已禁用 · ";
 
         return position is null

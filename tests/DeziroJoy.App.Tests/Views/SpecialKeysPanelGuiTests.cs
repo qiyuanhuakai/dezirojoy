@@ -17,8 +17,7 @@ namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
 /// The 全局特殊键 area at the top of the 按键配置 page, and the collision hints it, the
-/// mapping rows and the mapping editor show. The area leads the page because the two keys
-/// are device-level configuration; it is pinned above the mapping list rather than scrolling
+/// mapping rows and the mapping editor show. The area is pinned above the mapping list rather than scrolling
 /// with it, so the keys and their warnings stay in view while the rows scroll under them.
 /// </summary>
 public sealed class SpecialKeysPanelGuiTests
@@ -112,13 +111,13 @@ public sealed class SpecialKeysPanelGuiTests
             .Where(panel => panel.DataContext is GlobalSpecialKeyItem)
             .ToList();
 
-        Assert.Equal(2, items.Count);
+        Assert.Equal(3, items.Count);
 
         foreach (var item in items)
         {
             var texts = item.GetVisualDescendants().OfType<TextBlock>().Select(text => text.Text).ToList();
             Assert.Contains("未配置", texts);
-            Assert.Contains(texts, text => text!.Contains("特殊键"));
+            Assert.Contains("可在映射编辑器中添加", texts);
 
             // The 编辑 affordance exists only for a configured kind: an unconfigured row has
             // no mapping to open, so its button stays out of sight rather than leading nowhere.
