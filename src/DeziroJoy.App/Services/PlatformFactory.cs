@@ -23,6 +23,13 @@ public static class PlatformFactory
 
     public static bool TryCreateProvider(out IGamepadProvider provider)
     {
+        // Test-only, provider-layer virtual pad. The production engine and output sink remain
+        // unchanged; without DEZIROJOY_VIRTUAL_PAD this branch is just one environment read.
+        if (VirtualGamepadProvider.TryCreate(out provider))
+        {
+            return true;
+        }
+
         if (OperatingSystem.IsWindows())
         {
             provider = new XInputGamepadProvider();

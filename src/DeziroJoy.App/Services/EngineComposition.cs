@@ -21,6 +21,10 @@ public sealed class EngineComposition : IDisposable
 
         ProfileStore = profileStore ?? new FileProfileStore();
         Provider = PlatformFactory.TryCreateProvider(out var provider) ? provider : new NoGamepadProvider();
+        if (Provider is VirtualGamepadProvider virtualProvider)
+        {
+            virtualProvider.SeedProfiles(ProfileStore);
+        }
 
         if (presentationOnly)
         {

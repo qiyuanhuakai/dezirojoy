@@ -1,3 +1,4 @@
+using DeziroJoy.Core.Diagnostics;
 using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
@@ -278,9 +279,11 @@ public sealed class EngineHost : IDisposable
 
                 var runtime = EnsureRuntime(descriptor);
 
+                RuntimePerformance.BeginInputSample();
                 var state = _provider.Poll(descriptor.DeviceId);
                 if (state is null)
                 {
+                    RuntimePerformance.EndInputSample();
                     // Transient read failure: keep the runtime, try again next tick.
                     continue;
                 }
@@ -299,6 +302,8 @@ public sealed class EngineHost : IDisposable
                     presetSwitch ??= FirstPresetSwitch(commands);
                     screenKeyboardToggle |= FirstScreenKeyboardToggle(commands);
                 }
+
+                RuntimePerformance.EndInputSample();
 
                 if (ShouldPublishSample(descriptor.DeviceId, state))
                 {
@@ -836,6 +841,7 @@ public sealed class EngineHost : IDisposable
                 var now = stopwatch.Elapsed;
                 var delta = now - last;
                 last = now;
+                RuntimePerformance.RecordTick(delta);
 
                 try
                 {

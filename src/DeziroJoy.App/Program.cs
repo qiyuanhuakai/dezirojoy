@@ -16,6 +16,13 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        using var performanceReporter = PerformanceReporter.StartIfEnabled(args);
+
+        if (PerformanceControl.TryRun(args, out var performanceControlExit))
+        {
+            return performanceControlExit;
+        }
+
         // The headless daemon must never touch Avalonia: no App object, no window, no UI
         // stack. Dispatch before BuildAvaloniaApp() so those assemblies stay unloaded and
         // the resident process stays near the bare .NET memory floor.

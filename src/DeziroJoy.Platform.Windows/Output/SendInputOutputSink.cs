@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using DeziroJoy.Core.Diagnostics;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Platform;
 using DeziroJoy.Platform.Windows.Keys;
@@ -254,6 +255,7 @@ public sealed class SendInputOutputSink : IOutputSink
     /// </summary>
     private void RecordInjection(InjectionAction action, int primary, int secondary, bool success)
     {
+        RuntimePerformance.RecordInjection(success);
         var handler = InjectionEmitted;
         if (handler is null)
         {

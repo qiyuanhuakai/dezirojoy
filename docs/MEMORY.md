@@ -1,5 +1,8 @@
 # Memory footprint
 
+> 历史记录：本文保留旧架构与旧测量方法。新三进程后台的当前墙钟基线见
+> [PERFORMANCE-BASELINE.md](PERFORMANCE-BASELINE.md)；两份数据不应直接拼接比较。
+
 Both platforms measured. RSS and private memory from `Process` counters after
 the process settled; module sizes from `Process.Modules`.
 

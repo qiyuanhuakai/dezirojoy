@@ -271,7 +271,9 @@ tests/
 - [DESIGN.md](DESIGN.md) — 界面设计系统、交互模型与常驻架构基准。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
-- [docs/MEMORY.md](docs/MEMORY.md) — 内存占用实测。
+- [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。
+- [docs/PERFORMANCE-BASELINE.md](docs/PERFORMANCE-BASELINE.md) — 新后台架构墙钟性能基线与虚拟手柄证据边界。
+- [tools/PerfBaseline/](tools/PerfBaseline/) — 可复跑的虚拟手柄性能采集工具。
 - [skills/dezirojoy-config/](skills/dezirojoy-config/SKILL.md) — 配置文件编写技能。
 
 ## 许可
