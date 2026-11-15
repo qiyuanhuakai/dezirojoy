@@ -283,7 +283,7 @@ public sealed class UpdateProcessCoordinatorTests
         // A launch-capable endpoint answers the two differently: with a launch allowed it
         // starts a daemon (UAC on Windows) and waits for it. This one must not, whatever it is
         // asked for - and must answer well inside the launch budget either way.
-        var endpoint = new ProbeOnlyDaemonEndpoint();
+        var endpoint = new ProbeOnlyDaemonEndpoint($"DeziroJoy.Test.Update.Probe.{Guid.NewGuid():N}");
 
         var withLaunch = await ProbeAsync(endpoint, allowLaunch: true);
         var withoutLaunch = await ProbeAsync(endpoint, allowLaunch: false);

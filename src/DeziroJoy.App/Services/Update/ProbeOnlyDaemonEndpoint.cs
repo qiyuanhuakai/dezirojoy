@@ -20,6 +20,11 @@ namespace DeziroJoy.App.Services;
 /// </remarks>
 internal sealed class ProbeOnlyDaemonEndpoint : IDaemonEndpoint
 {
+    private readonly string _pipeName;
+
+    internal ProbeOnlyDaemonEndpoint(string? pipeName = null)
+        => _pipeName = pipeName ?? IpcContract.PipeName;
+
     /// <summary>How long one connect attempt waits for the pipe to answer.</summary>
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromMilliseconds(250);
 
@@ -74,7 +79,7 @@ internal sealed class ProbeOnlyDaemonEndpoint : IDaemonEndpoint
         }
     }
 
-    private static async Task<bool> ProbeAsync(CancellationToken cancellationToken)
+    private async Task<bool> ProbeAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -92,9 +97,9 @@ internal sealed class ProbeOnlyDaemonEndpoint : IDaemonEndpoint
         }
     }
 
-    private static NamedPipeClientStream CreateClient() => new(
+    private NamedPipeClientStream CreateClient() => new(
         ".",
-        IpcContract.PipeName,
+        _pipeName,
         PipeDirection.InOut,
         PipeOptions.Asynchronous);
 }
