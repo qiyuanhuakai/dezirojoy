@@ -1223,6 +1223,108 @@ public class DaemonServerTests
         Assert.Equal(3, snapshot.Snapshot.ActivePresetSlot);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    public async Task Restart_Rebuilds_The_Snapshot_From_The_Active_Slot_Not_A_Stale_Profile_Body(int activeSlot)
+    {
+        var stateStore = NewStore();
+        var profileStore = new InMemoryProfileStore();
+        var presets = new PresetStore(profileStore);
+        foreach (var slot in new[] { 1, 4 })
+        {
+            presets.SaveSlot("xinput:0", slot, DefaultProfileLibrary.CreateForLayout(GamepadLayout.Xbox) with
+            {
+                Name = $"配置 {slot}",
+                DeviceId = "xinput:0",
+                PresetSlot = slot,
+            });
+        }
+
+        var staleSlot = activeSlot == 1 ? 4 : 1;
+        var stale = presets.LoadSlot("xinput:0", staleSlot)!;
+        stateStore.Save(new DaemonState(
+            true,
+            stale.Name,
+            ProfileSerializer.Serialize(stale with { DeviceId = "xinput:0" }),
+            7,
+            activeSlot));
+        var host = new FakeDaemonHost();
+        host.AddDevice("xinput:0");
+        var server = CreateServer(host, stateStore, profileStore: profileStore);
+
+        server.ResumeDesiredState();
+        var state = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("state")));
+        var body = ProfileSerializer.Deserialize(state.Snapshot.ProfileJson!);
+
+        Assert.Equal(activeSlot, state.Snapshot.ActivePresetSlot);
+        Assert.Equal($"配置 {activeSlot}", state.Snapshot.ProfileName);
+        Assert.Equal($"配置 {activeSlot}", body.Name);
+        Assert.Equal($"配置 {activeSlot}", host.GetProfile("xinput:0")!.Name);
+        Assert.Equal($"配置 {staleSlot}", presets.LoadSlot("xinput:0", staleSlot)!.Name);
+    }
+
+    [Fact]
+    public async Task Restart_Preserves_Distinct_Preset_Contents_Names_And_Layers_In_The_File_Store()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"dezirojoy-preset-restart-{Guid.NewGuid():N}");
+        var profileStore = new FileProfileStore(Path.Combine(directory, "profiles"));
+        var stateStore = new DaemonStateStore(Path.Combine(directory, "daemon-state.json"));
+        var presets = new PresetStore(profileStore);
+        var keys = new[] { GamepadKey.A, GamepadKey.B, GamepadKey.C, GamepadKey.D };
+        try
+        {
+            foreach (var slot in new[] { 1, 2, 3, 4 })
+            {
+                presets.SaveSlot("xinput:0", slot, new GamepadProfile
+                {
+                    Name = $"配置 {slot}",
+                    DeviceId = "xinput:0",
+                    Layout = GamepadLayout.Xbox,
+                    PresetSlot = slot,
+                    Mappings =
+                    [
+                        new MappingEntry
+                        {
+                            Source = new ButtonBinding(GamepadButton.Y),
+                            Target = new KeyPressTarget(keys[slot - 1]),
+                            Layer = slot == 2 ? 1 : 0,
+                        },
+                    ],
+                });
+            }
+
+            var firstHost = new FakeDaemonHost();
+            firstHost.AddDevice("xinput:0");
+            var first = CreateServer(firstHost, stateStore, profileStore: profileStore);
+            await first.ProcessAsync(new SwitchPresetSlotMessage("switch", "xinput:0", 4));
+            var before = presets.SlotsInUse("xinput:0").ToDictionary(
+                slot => slot,
+                slot => ProfileSerializer.Serialize(presets.LoadSlot("xinput:0", slot)!));
+
+            var secondHost = new FakeDaemonHost();
+            secondHost.AddDevice("xinput:0");
+            var second = CreateServer(secondHost, stateStore, profileStore: profileStore);
+            second.ResumeDesiredState();
+
+            Assert.Equal(4, stateStore.Load()!.ActivePresetSlot);
+            Assert.Equal("配置 4", secondHost.GetProfile("xinput:0")!.Name);
+            foreach (var (slot, expected) in before)
+            {
+                var actual = presets.LoadSlot("xinput:0", slot)!;
+                Assert.Equal(expected, ProfileSerializer.Serialize(actual));
+                Assert.Single(actual.Mappings, mapping => mapping.Source is ButtonBinding { Button: GamepadButton.Y });
+            }
+
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task DeletePresetSlot_Removes_The_Slot_Bumps_The_Revision_And_Publishes()
     {
@@ -2355,6 +2457,136 @@ public class DaemonServerTests
         await server.ProcessAsync(new SetNativeGamepadPausedMessage("req-2", true));
 
         Assert.Single(pushes);
+    }
+
+    [Fact]
+    public async Task A_Foreground_Lock_Request_Without_An_Authority_Is_Refused()
+    {
+        // A server with no foreground wiring cannot honour a lock, and a silent success would
+        // leave the panel quoting a lock that freezes nothing.
+        var (server, _, _) = CreateRunning();
+
+        var error = Assert.IsType<ErrorMessage>(
+            await server.ProcessAsync(new SetForegroundLockedMessage("req-lock", true)));
+
+        Assert.Equal("no-foreground-authority", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task The_Foreground_Lock_Lands_On_The_Daemons_Watcher_And_Reaches_The_Snapshot()
+    {
+        // The bug this verb exists for: the lock used to live only in the GUI, so the daemon's
+        // own watcher kept switching profiles behind the window's back. The request must land
+        // on the watcher that really applies the rules, and the snapshot must carry the answer.
+        var (server, _, _) = CreateRunning();
+        var source = new FakeForegroundSource("chrome");
+        using var watcher = new ForegroundWatcher(source, new NullForegroundTarget(), new ForegroundSettings
+        {
+            Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 2 }],
+        });
+        server.ForegroundAuthority = watcher;
+        watcher.StateChanged += server.PublishForegroundState;
+        watcher.Refresh();
+
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetForegroundLockedMessage("req-lock", true)));
+
+        Assert.True(ack.Accepted);
+        Assert.True(watcher.IsLocked);
+
+        var push = Assert.Single(pushes);
+        var state = push.Snapshot.ForegroundState;
+        Assert.NotNull(state);
+        Assert.True(state.Locked);
+        Assert.Equal(2, state.Applied!.Slot);
+        Assert.Equal(ack.Sequence, push.Snapshot.Sequence);
+
+        // The lock is operational state, not configuration: the revision does not move.
+        Assert.Equal(0, push.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task Repeating_The_Foreground_Lock_Publishes_Nothing()
+    {
+        var (server, _, _) = CreateRunning();
+        using var watcher = new ForegroundWatcher(new FakeForegroundSource("chrome"), new NullForegroundTarget());
+        server.ForegroundAuthority = watcher;
+        watcher.StateChanged += server.PublishForegroundState;
+
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        await server.ProcessAsync(new SetForegroundLockedMessage("req-1", true));
+        await server.ProcessAsync(new SetForegroundLockedMessage("req-2", true));
+
+        Assert.Single(pushes);
+    }
+
+    [Fact]
+    public async Task Unlocking_Hands_Control_Back_To_The_Rules()
+    {
+        // While locked, the rules keep saying what they want and the applied decision stays
+        // put; unlocking applies what they want on the spot, not one poll later.
+        var (server, _, _) = CreateRunning();
+        var source = new FakeForegroundSource("chrome");
+        using var watcher = new ForegroundWatcher(source, new NullForegroundTarget(), new ForegroundSettings
+        {
+            Rules =
+            [
+                new ForegroundRule { ProcessName = "chrome", Slot = 2 },
+                new ForegroundRule { ProcessName = "game", Slot = 3 },
+            ],
+        });
+        server.ForegroundAuthority = watcher;
+        watcher.StateChanged += server.PublishForegroundState;
+        watcher.Refresh();
+
+        await server.ProcessAsync(new SetForegroundLockedMessage("req-lock", true));
+        source.Context = new ForegroundContext("game", false);
+        watcher.Refresh();
+
+        Assert.Equal(2, watcher.AppliedDecision!.Slot);
+        Assert.Equal(3, watcher.LastDecision!.Slot);
+
+        await server.ProcessAsync(new SetForegroundLockedMessage("req-unlock", false));
+
+        Assert.False(watcher.IsLocked);
+        Assert.Equal(3, watcher.AppliedDecision!.Slot);
+    }
+
+    [Fact]
+    public async Task The_Foreground_Lock_Is_Session_State_And_Not_Persisted()
+    {
+        // A daemon restart starts unlocked: the lock is the user's hold on this running
+        // session, not a configuration the next daemon inherits.
+        var store = NewStore();
+        var server = CreateServer(new FakeDaemonHost(), store);
+        using var watcher = new ForegroundWatcher(new FakeForegroundSource("chrome"), new NullForegroundTarget());
+        server.ForegroundAuthority = watcher;
+        watcher.StateChanged += server.PublishForegroundState;
+
+        await server.ProcessAsync(new SetForegroundLockedMessage("req-lock", true));
+        Assert.True(watcher.IsLocked);
+
+        var restarted = CreateServer(new FakeDaemonHost(), store);
+        using var freshWatcher = new ForegroundWatcher(new FakeForegroundSource("chrome"), new NullForegroundTarget());
+        restarted.ForegroundAuthority = freshWatcher;
+
+        var answer = Assert.IsType<StateChangedMessage>(
+            await restarted.ProcessAsync(new GetStateMessage("req-state")));
+
+        Assert.False(answer.Snapshot.ForegroundState!.Locked);
+    }
+
+    /// <summary>A foreground source the test moves by hand.</summary>
+    private sealed class FakeForegroundSource(string processName) : IForegroundSource
+    {
+        public ForegroundContext Context { get; set; } = new(processName, false);
+
+        public ForegroundContext Read() => Context;
     }
 
     [Fact]

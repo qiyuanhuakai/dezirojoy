@@ -214,9 +214,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // while this window owns mapping, nothing at all while the resident daemon does. The
         // daemon runs the same watcher over its own engine host for its whole life, so a window
         // that also drove would send every switch and pause twice; what it still owes the user
-        // is the panel - the program in front, the rule that matches it and the decision it
-        // resolves to, all read off the shared table the daemon is running. Neither path touches
-        // the injection mutex, so the three pauses stay independent.
+        // is the panel - the program in front from its own source, the lock and the decisions
+        // mirrored from the daemon's snapshots. Neither path touches the injection mutex, so
+        // the three pauses stay independent.
         IForegroundTarget foregroundTarget = _daemon is null
             ? new EngineHostForegroundTarget(_host, _presets)
             : new NullForegroundTarget();
@@ -340,9 +340,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// The foreground rules watcher: the live rule table, the program in front and the decision
     /// that is in effect, driven by the window's own poll timer. Built here rather than by the
     /// rules panel because the target it drives depends on who owns mapping - the engine host
-    /// locally, nothing in daemon mode, where the resident daemon runs its own watcher - which
-    /// is this view model's knowledge. The panel it feeds is created by the view, so a window
-    /// that never opens never builds it.
+    /// locally, nothing in daemon mode, where the resident daemon runs its own watcher and this
+    /// one mirrors the lock and decisions from the daemon's snapshots - which is this view
+    /// model's knowledge. The panel it feeds is created by the view, so a window that never
+    /// opens never builds it.
     /// </summary>
     public ForegroundWatcher Foreground { get; }
 
@@ -1017,6 +1018,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (deviceId == _presetSlotDeviceId
             && PresetSlots.Select(item => item.Slot).SequenceEqual(slots))
         {
+            foreach (var item in PresetSlots)
+            {
+                item.Name = _presets.LoadSlot(deviceId!, item.Slot)?.Name ?? $"预设 {item.Slot}";
+            }
+
             return;
         }
 
@@ -1469,6 +1475,38 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    /// Locks or unlocks the profile the foreground rules put in effect. In daemon mode the
+    /// lock belongs to the daemon - its watcher is the one that applies the rules - so the
+    /// request lands there and the snapshot that follows mirrors the authoritative state back
+    /// into <see cref="Foreground"/>; a lock set here locally would freeze nothing. In local
+    /// mode this window's own watcher is the authority, so the lock lands on it directly.
+    /// </summary>
+    public async Task SetForegroundLockedAsync(bool locked)
+    {
+        if (_daemon is null)
+        {
+            Foreground.SetLocked(locked);
+            return;
+        }
+
+        if (!IsDaemonConnected)
+        {
+            SetTransferError("守护进程不可用；锁定状态未改变。");
+            return;
+        }
+
+        try
+        {
+            var result = await _daemon.SetForegroundLockedAsync(locked, _lifetime.Token);
+            ReportMutationFailure(result, locked ? "锁定当前配置" : "解锁前台规则");
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            ReportDaemonUnavailable(exception.Message);
+        }
+    }
+
+    /// <summary>
     /// The engine asked to toggle the floating screen keyboard - a 屏幕键盘 special key, in
     /// local mode where this window's own host is the mapping authority. The daemon answers
     /// the same request in daemon mode and publishes the outcome, which is why this path is
@@ -1876,6 +1914,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         _presets.SaveSlot(deviceId, ActivePresetSlot, ActiveProfile);
+        ReconcilePresetSlots(deviceId);
     }
 
     private string? PersistenceDeviceId
@@ -3200,6 +3239,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         // The layer hint follows the layer the snapshot reports, resolved against the profile
         // it carries: the two arrive together, so the hint is rebuilt once per snapshot.
         RefreshLayerHint();
+
+        // The foreground lock and decisions are the daemon's: mirroring them here is what
+        // keeps the rules panel quoting the authority instead of a local evaluation, and what
+        // makes a lock survive closing and reopening the window. A daemon that predates the
+        // field reports null and the window keeps its own local evaluation.
+        if (snapshot.ForegroundState is { } foregroundState)
+        {
+            Foreground.MirrorDaemonState(foregroundState);
+        }
     }
 
     private void AdoptDaemonProfile(StateSnapshot snapshot)
@@ -3544,10 +3592,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 }
 
 /// <summary>
-/// One row of the dynamic preset selector: the slot number, the preset's stored name, and
-/// whether it is the app-wide active slot. The view iterates
-/// <see cref="MainWindowViewModel.PresetSlots"/> over these; <see cref="IsActive"/> is the
-/// only mutable field, kept in step by the view model as the active slot moves.
+/// One row of the dynamic preset selector: the slot number, its current stored name,
+/// activity and delete confirmation. The view model keeps those fields in step with the store.
 /// </summary>
 public sealed partial class PresetSlotItem : ObservableObject
 {
@@ -3559,7 +3605,8 @@ public sealed partial class PresetSlotItem : ObservableObject
 
     public int Slot { get; }
 
-    public string Name { get; }
+    [ObservableProperty]
+    private string _name;
 
     /// <summary>
     /// Whether this slot offers a delete affordance. Slot 1 is the device's own profile and

@@ -77,6 +77,9 @@ public sealed class MappingEngine
     /// </summary>
     internal const float SamplingGapSeconds = 3f;
 
+    public static bool IsSamplingGap(float deltaSeconds)
+        => Sanitize(deltaSeconds) > SamplingGapSeconds;
+
     /// <summary>
     /// Identifies one gesture action's smoothing processor: a mapping plus a gesture.
     /// </summary>
@@ -128,6 +131,7 @@ public sealed class MappingEngine
     /// </summary>
     private readonly HashSet<Guid> _layerHolders = [];
     private GamepadButtonMask _previousButtons;
+    private readonly Guid _runtimeId = Guid.NewGuid();
 
     public MappingEngine(GamepadProfile profile)
     {
@@ -415,11 +419,10 @@ public sealed class MappingEngine
 
         foreach (var runtime in _programs.Values)
         {
-            // Silent by design: the host pairs the same clearing with
-            // CommandDispatcher.ReleaseAll, which lifts whatever the program held.
             runtime.Reset();
         }
 
+        _queuedRestarts.Clear();
         AdoptBaseline(current);
     }
 
@@ -760,7 +763,7 @@ public sealed class MappingEngine
             // and the new one adopts an activation if the user is still holding the source.
             CancelHold(previous, current, commands);
 
-            if (next is not null)
+            if (next is not null && !IsNewPress(next.Source, current))
             {
                 AdoptHold(next, current, commands);
             }
@@ -770,7 +773,7 @@ public sealed class MappingEngine
         // adopts an activation if the user is holding it.
         foreach (var (source, next) in after)
         {
-            if (!before.ContainsKey(source))
+            if (!before.ContainsKey(source) && !IsNewPress(next.Source, current))
             {
                 AdoptHold(next, current, commands);
             }
@@ -805,6 +808,21 @@ public sealed class MappingEngine
     /// a press edge that will never come. A mapping whose source is not held is left alone -
     /// it fires on its next real press edge.
     /// </summary>
+    private bool IsNewPress(InputBinding source, IGamepadState current)
+    {
+        if (!SourceActive(source, current))
+        {
+            return false;
+        }
+
+        return source switch
+        {
+            ButtonBinding { Button: GamepadButton.Extra, Code: var code } => !_previousExtraButtons.Contains(code),
+            ButtonBinding button => (_previousButtons & button.Button.ToMask()) == 0,
+            _ => false,
+        };
+    }
+
     private void AdoptHold(MappingEntry mapping, IGamepadState current, List<InputCommand> commands)
     {
         if (!SourceActive(mapping.Source, current))
@@ -1869,19 +1887,21 @@ public sealed class MappingEngine
     /// takes the pad over while it is open and a release has nothing to end. Precision keys
     /// emit nothing here - their engagement is tracked separately.
     /// </summary>
+    private OutputOwner OwnerFor(Guid mappingId) => new(mappingId, _runtimeId);
+
     private void BeginHold(MappingTarget target, Guid mappingId, IGamepadState current, List<InputCommand> commands)
     {
         switch (target)
         {
             case KeyPressTarget key:
-                commands.Add(new KeyDownCommand(key.Key, KeyModifiers.None, new OutputOwner(mappingId)));
+                commands.Add(new KeyDownCommand(key.Key, KeyModifiers.None, OwnerFor(mappingId)));
                 break;
             case KeyComboTarget combo:
-                commands.Add(new KeyDownCommand(combo.Key, combo.Modifiers, new OutputOwner(mappingId)));
-                commands.Add(new KeyUpCommand(combo.Key, combo.Modifiers, new OutputOwner(mappingId)));
+                commands.Add(new KeyDownCommand(combo.Key, combo.Modifiers, OwnerFor(mappingId)));
+                commands.Add(new KeyUpCommand(combo.Key, combo.Modifiers, OwnerFor(mappingId)));
                 break;
             case MouseButtonTarget mouseButton:
-                commands.Add(new MouseDownCommand(mouseButton.Button, new OutputOwner(mappingId)));
+                commands.Add(new MouseDownCommand(mouseButton.Button, OwnerFor(mappingId)));
                 break;
             case TextTarget text:
                 // Text is a tap by nature: it goes out on the press edge and a release has
@@ -1930,10 +1950,10 @@ public sealed class MappingEngine
         switch (target)
         {
             case KeyPressTarget key:
-                commands.Add(new KeyUpCommand(key.Key, KeyModifiers.None, new OutputOwner(mappingId)));
+                commands.Add(new KeyUpCommand(key.Key, KeyModifiers.None, OwnerFor(mappingId)));
                 break;
             case MouseButtonTarget mouseButton:
-                commands.Add(new MouseUpCommand(mouseButton.Button, new OutputOwner(mappingId)));
+                commands.Add(new MouseUpCommand(mouseButton.Button, OwnerFor(mappingId)));
                 break;
             case SpecialKeyTarget { Kind: SpecialKeyKind.Leader, Action: LeaderAction.Layer, SwitchMode: LeaderSwitchMode.Hold }:
                 DeactivateLayer(mappingId, current, commands);

@@ -19,11 +19,19 @@ public sealed class UpdateOrchestratorTests : IDisposable
 
     private const string PackageName = "DeziroJoy_0.0.2_amd64.deb";
 
+    private const string WindowsPackageName = "DeziroJoy-0.0.2-win-x64-setup.exe";
+
+    private const string WindowsPackageUrl = "https://example.invalid/DeziroJoy-0.0.2-win-x64-setup.exe";
+
+    private const string WindowsSidecarUrl = WindowsPackageUrl + ".sha256";
+
     private readonly string _cache;
 
     private readonly List<string> _log = [];
 
     private readonly RecordingInstaller _installer;
+
+    private readonly List<bool> _trayPreserveDaemon = [];
 
     public UpdateOrchestratorTests()
     {
@@ -52,6 +60,19 @@ public sealed class UpdateOrchestratorTests : IDisposable
             ],
         };
 
+    private static ReleaseInfo WindowsRelease()
+        => new()
+        {
+            TagName = "v0.0.2",
+            Version = SemanticVersion.Parse("0.0.2"),
+            PageUrl = "https://example.invalid/release",
+            Assets =
+            [
+                new ReleaseAsset { Name = WindowsPackageName, DownloadUrl = WindowsPackageUrl, Size = 16 },
+                new ReleaseAsset { Name = WindowsPackageName + ".sha256", DownloadUrl = WindowsSidecarUrl, Size = 64 },
+            ],
+        };
+
     private static string ChecksumFor(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
@@ -63,29 +84,33 @@ public sealed class UpdateOrchestratorTests : IDisposable
         bool trayExits = true,
         HttpMessageHandler? handler = null,
         Func<CancellationToken, Task<bool>>? stopDaemon = null,
-        Func<CancellationToken, Task<bool>>? askTrayExit = null)
+        Func<bool, CancellationToken, Task<bool>>? askTrayExit = null)
     {
         var payload = Encoding.UTF8.GetBytes("the deb payload");
         handler ??= new StubHandler(url => url switch
         {
-            PackageUrl => new StringContent(Encoding.UTF8.GetString(payload)),
-            SidecarUrl => new StringContent($"{ChecksumFor(payload)}\n"),
+            PackageUrl or WindowsPackageUrl => new StringContent(Encoding.UTF8.GetString(payload)),
+            SidecarUrl or WindowsSidecarUrl => new StringContent($"{ChecksumFor(payload)}\n"),
             _ => (HttpContent?)null,
         });
 
         return new UpdateOrchestrator(
-            service ?? new FakeUpdateService(UpdateCheckResult.Available(Release())),
+            service ?? new FakeUpdateService(UpdateCheckResult.Available(
+                kind == InstallKind.WindowsInstall ? WindowsRelease() : Release())),
             new UpdateDownloader(handler, TimeSpan.FromSeconds(10), () => _cache),
             installers ?? [_installer],
-            detectInstall: () => new InstallKindInfo(kind ?? InstallKind.Deb, "linux-x64"),
+            detectInstall: () => new InstallKindInfo(
+                kind ?? InstallKind.Deb,
+                kind == InstallKind.WindowsInstall ? "win-x64" : "linux-x64"),
             stopDaemon: stopDaemon ?? (_ =>
             {
                 _log.Add("daemon");
                 return Task.FromResult(daemonStops);
             }),
-            askTrayExit: askTrayExit ?? (_ =>
+            askTrayExit: askTrayExit ?? ((preserveDaemon, _) =>
             {
                 _log.Add("tray");
+                _trayPreserveDaemon.Add(preserveDaemon);
                 return Task.FromResult(trayExits);
             }));
     }
@@ -197,9 +222,9 @@ public sealed class UpdateOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public async Task An_Install_Stops_The_Daemon_Then_The_Tray_Then_Installs()
+    public async Task A_Windows_Install_Stops_The_Daemon_Then_The_Tray_Then_Installs()
     {
-        var orchestrator = Orchestrator();
+        var orchestrator = Orchestrator(kind: InstallKind.WindowsInstall);
         var restarted = false;
         orchestrator.RestartRequested += () => restarted = true;
         await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
@@ -212,6 +237,21 @@ public sealed class UpdateOrchestratorTests : IDisposable
         Assert.Equal(UpdatePhase.Restarting, orchestrator.Phase);
         Assert.True(restarted, "the host must be told the app is about to be replaced");
         Assert.True(_installer.Handled, "the installer ran");
+    }
+
+    [Fact]
+    public async Task A_Linux_Install_Keeps_The_Daemon_And_Restarts_The_Presentation_Host()
+    {
+        var orchestrator = Orchestrator();
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+        await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var installed = await orchestrator.InstallAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(installed, orchestrator.ErrorMessage);
+        Assert.Equal(["tray", "install"], _log);
+        Assert.Equal([true], _trayPreserveDaemon);
+        Assert.Equal(UpdatePhase.Restarting, orchestrator.Phase);
     }
 
     [Fact]
@@ -265,7 +305,7 @@ public sealed class UpdateOrchestratorTests : IDisposable
     [Fact]
     public async Task A_Daemon_That_Will_Not_Stop_Cancels_The_Install_Before_Anything_Else()
     {
-        var orchestrator = Orchestrator(daemonStops: false);
+        var orchestrator = Orchestrator(kind: InstallKind.WindowsInstall, daemonStops: false);
         await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
         await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
 
@@ -289,9 +329,9 @@ public sealed class UpdateOrchestratorTests : IDisposable
         var installed = await orchestrator.InstallAsync(TestContext.Current.CancellationToken);
 
         Assert.False(installed);
-        Assert.Equal(["daemon", "tray"], _log);
-        Assert.Contains("托盘", orchestrator.ErrorMessage);
-        Assert.Contains("守护进程已停止", orchestrator.ErrorMessage);
+        Assert.Equal(["tray"], _log);
+        Assert.Contains("呈现宿主", orchestrator.ErrorMessage);
+        Assert.Contains("仍在运行", orchestrator.ErrorMessage);
         Assert.False(_installer.Handled);
     }
 
@@ -306,7 +346,7 @@ public sealed class UpdateOrchestratorTests : IDisposable
         var installed = await orchestrator.InstallAsync(TestContext.Current.CancellationToken);
 
         Assert.False(installed);
-        Assert.Equal(["daemon", "tray", "install"], _log);
+        Assert.Equal(["tray", "install"], _log);
         Assert.Equal(UpdatePhase.Failed, orchestrator.Phase);
         Assert.Equal("安装失败：pkexec 不可用。", orchestrator.ErrorMessage);
     }
@@ -353,7 +393,7 @@ public sealed class UpdateOrchestratorTests : IDisposable
         gate.SetResult();
         Assert.True(await first, orchestrator.ErrorMessage);
 
-        Assert.Equal(["daemon", "tray", "install"], _log);
+        Assert.Equal(["tray", "install"], _log);
         Assert.Equal(UpdatePhase.Restarting, orchestrator.Phase);
     }
 
@@ -413,6 +453,7 @@ public sealed class UpdateOrchestratorTests : IDisposable
     public async Task A_Cancelled_Install_Leaves_The_Flow_Not_Busy()
     {
         var orchestrator = Orchestrator(
+            kind: InstallKind.WindowsInstall,
             stopDaemon: _ => throw new OperationCanceledException());
         await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
         await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -451,6 +492,7 @@ public sealed class UpdateOrchestratorTests : IDisposable
         // An exception nobody classified must not reach the host with the phase stuck at
         // Installing: it becomes a presentable failure, and the flow is usable again.
         var orchestrator = Orchestrator(
+            kind: InstallKind.WindowsInstall,
             stopDaemon: _ => throw new InvalidOperationException("the seam exploded"));
         await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
         await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);

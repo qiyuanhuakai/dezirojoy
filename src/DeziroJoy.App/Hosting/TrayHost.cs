@@ -790,6 +790,17 @@ internal static class TrayHost
                 return Task.CompletedTask;
             };
             activation.ShowRequested += ShowAsync;
+            activation.RestartRequested += () =>
+            {
+                if (!render.Stop())
+                {
+                    return Task.FromException(
+                        new InvalidOperationException("the render could not stop for the presentation host restart"));
+                }
+
+                Retire(shutdown, lifetime);
+                return Task.CompletedTask;
+            };
             activation.ExitRequested += () =>
             {
                 if (!ExitTray(daemonAlreadyStopped: true))

@@ -44,19 +44,12 @@ public enum UpdatePhase
 /// </summary>
 /// <remarks>
 /// <para>
-/// The order of the stop steps is a hard constraint, not a preference. On Linux, dpkg and
-/// rpm cannot replace a binary a running process has mapped (ETXTBSY), so the daemon and the
-/// tray must both be gone before the installer runs. On Windows the elevated daemon can only
-/// be stopped over its IPC channel - a medium-integrity process cannot terminate it - which
-/// is exactly what the default daemon seam does, over an endpoint that never starts a daemon:
-/// a liveness probe that launched one would pop UAC for a daemon that was not even running,
-/// and after a successful shutdown would resurrect the daemon it just stopped. "Gone" there
-/// means the daemon's process, not only its pipe: the elevated daemon releases the pipe as part
-/// of exiting and can still be unwinding behind it, so the default daemon seam waits for the
-/// process it named before the install is allowed to start. The tray is
-/// asked to exit over the activation channel, because a tray left running holds the old
-/// binary and the instance lease: without the request, a relaunch on Linux would wake the old
-/// tray instead of the new copy.
+/// Only Windows stops the daemon before installation: its file locks and elevated process
+/// require it. Linux package and AppImage updates can replace files while the old inode remains
+/// mapped, so the daemon keeps mapping. The presentation host is asked to restart with a
+/// preserve-daemon request; an older host that does not understand the flag exits through its
+/// original stop path as a compatibility fallback. On Windows the daemon stop is acknowledged
+/// only after the process named by the snapshot has actually exited, not merely closed its pipe.
 /// </para>
 /// <para>
 /// The restart is deliberately not this class's job. The platform installers arrange it -
@@ -79,7 +72,7 @@ public sealed class UpdateOrchestrator : IDisposable
     private readonly IReadOnlyList<IUpdateInstaller> _installers;
     private readonly Func<InstallKindInfo> _detectInstall;
     private readonly Func<CancellationToken, Task<bool>> _stopDaemon;
-    private readonly Func<CancellationToken, Task<bool>> _askTrayExit;
+    private readonly Func<bool, CancellationToken, Task<bool>> _askTrayExit;
     private readonly List<IDisposable> _owned = [];
 
     private InstallKindInfo? _install;
@@ -103,7 +96,7 @@ public sealed class UpdateOrchestrator : IDisposable
         IEnumerable<IUpdateInstaller>? installers = null,
         Func<InstallKindInfo>? detectInstall = null,
         Func<CancellationToken, Task<bool>>? stopDaemon = null,
-        Func<CancellationToken, Task<bool>>? askTrayExit = null)
+        Func<bool, CancellationToken, Task<bool>>? askTrayExit = null)
     {
         _updateService = updateService ?? Track(new UpdateService());
         _downloader = downloader ?? Track(new UpdateDownloader());
@@ -113,7 +106,8 @@ public sealed class UpdateOrchestrator : IDisposable
         _detectInstall = detectInstall ?? InstallKindDetector.Detect;
         _stopDaemon = stopDaemon ?? (cancellationToken =>
             UpdateProcessCoordinator.StopDaemonAsync(cancellationToken));
-        _askTrayExit = askTrayExit ?? UpdateProcessCoordinator.AskTrayExitAsync;
+        _askTrayExit = askTrayExit ?? (static (preserveDaemon, cancellationToken) =>
+            UpdateProcessCoordinator.AskTrayExitAsync(cancellationToken, preserveDaemon));
     }
 
     /// <summary>Where the flow stands; the UI renders this and <see cref="StatusText"/>.</summary>
@@ -317,8 +311,9 @@ public sealed class UpdateOrchestrator : IDisposable
     }
 
     /// <summary>
-    /// Installs the verified package. Everything that must be stopped is stopped first, and
-    /// nothing is stopped when the install cannot even be attempted: the capability gate runs
+    /// Installs the verified package. Only Windows stops the daemon; every form restarts the
+    /// presentation host when needed, and Linux preserves mapping. Nothing is stopped when
+    /// the install cannot even be attempted: the capability gate runs
     /// before the daemon, so a machine without an installer keeps its daemon and its tray.
     /// A cancelled <paramref name="cancellationToken"/> throws after the phase moved to
     /// <see cref="UpdatePhase.Failed"/>; every other failure - including one nothing
@@ -353,21 +348,28 @@ public sealed class UpdateOrchestrator : IDisposable
 
         try
         {
-            Enter(UpdatePhase.Installing, "正在停止守护进程…");
-            if (!await _stopDaemon(cancellationToken).ConfigureAwait(false))
+            if (install.RequiresDaemonStop)
             {
-                Fail(
-                    "安装失败。",
-                    "无法停止守护进程，更新已取消；映射功能不受影响，请重试。");
-                return false;
+                Enter(UpdatePhase.Installing, "正在停止守护进程…");
+                if (!await _stopDaemon(cancellationToken).ConfigureAwait(false))
+                {
+                    Fail(
+                        "安装失败。",
+                        "无法停止守护进程，更新已取消；映射功能不受影响，请重试。");
+                    return false;
+                }
             }
 
-            Enter(UpdatePhase.Installing, "正在请托盘退出…");
-            if (!await _askTrayExit(cancellationToken).ConfigureAwait(false))
+            Enter(
+                UpdatePhase.Installing,
+                install.RequiresDaemonStop ? "正在请托盘退出…" : "正在重启呈现宿主…");
+            if (!await _askTrayExit(!install.RequiresDaemonStop, cancellationToken).ConfigureAwait(false))
             {
                 Fail(
                     "安装失败。",
-                    "无法请托盘退出，更新已取消；守护进程已停止，请手动退出托盘后重启应用。");
+                    install.RequiresDaemonStop
+                        ? "无法请托盘退出，更新已取消；守护进程已停止，请手动退出托盘后重启应用。"
+                        : "无法重启呈现宿主，更新已取消；daemon 与映射仍在运行，请重试。");
                 return false;
             }
 

@@ -25,14 +25,17 @@ public readonly record struct OutputOwner
     /// <summary>No owner: an untagged command, counted as one anonymous owner.</summary>
     public static OutputOwner None => default;
 
-    public OutputOwner(Guid id)
+    public OutputOwner(Guid id, Guid runtimeId = default)
     {
         Id = id;
+        RuntimeId = runtimeId;
     }
 
     public Guid Id { get; }
 
-    public bool IsNone => Id == Guid.Empty;
+    public Guid RuntimeId { get; }
+
+    public bool IsNone => Id == Guid.Empty && RuntimeId == Guid.Empty;
 
     /// <summary>
     /// A short tag rather than the record's full dump: the owner is dispatch metadata, and a

@@ -58,6 +58,7 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
 [JsonDerivedType(typeof(SetNativeGamepadPausedMessage), "set-native-gamepad-paused")]
+[JsonDerivedType(typeof(SetForegroundLockedMessage), "set-foreground-locked")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
 [JsonDerivedType(typeof(DeletePresetSlotMessage), "delete-preset-slot")]
 [JsonDerivedType(typeof(SetScreenKeyboardMessage), "set-screen-keyboard")]
@@ -138,6 +139,16 @@ public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspend
 /// the resident model survives it exactly as it survives the other two.
 /// </summary>
 public sealed record SetNativeGamepadPausedMessage(string RequestId, bool Paused) : IpcMessage;
+
+/// <summary>
+/// GUI to daemon: lock or unlock the profile the foreground rules put in effect. The lock is
+/// daemon session state, never persisted: the daemon owns the watcher that applies the rules,
+/// so a lock that lived only in the GUI would freeze nothing - the daemon's own watcher would
+/// keep switching profiles behind the window's back. The daemon answers with a mutation ack
+/// and publishes the new <see cref="StateSnapshot.ForegroundState"/>, which is what every
+/// connected window - including one opened later - reads the lock from.
+/// </summary>
+public sealed record SetForegroundLockedMessage(string RequestId, bool Locked) : IpcMessage;
 
 /// <summary>
 /// GUI to daemon: switch the active preset slot. The slot is app-wide rather than
@@ -311,7 +322,38 @@ public sealed record StateSnapshot(
     /// session state rather than desired state, so a daemon restart starts closed.
     /// </summary>
     public bool ScreenKeyboardOpen { get; init; }
+
+    /// <summary>
+    /// The foreground rules' authoritative state: the lock, the decision in effect and the
+    /// decision the rules want. Null when the daemon runs no foreground watcher, and absent
+    /// from a daemon that predates the field - a window that reads null keeps its own local
+    /// evaluation rather than mirroring nothing.
+    /// </summary>
+    public ForegroundStateSnapshot? ForegroundState { get; init; }
 }
+
+/// <summary>
+/// One foreground decision as the wire carries it: the outcome and the reason the panel
+/// quotes. The deciding rule itself stays on the daemon - the window edits the table through
+/// the shared file, and the reason line already names the rule that matched.
+/// </summary>
+public sealed record ForegroundDecisionSnapshot(ForegroundDecisionKind Kind, int Slot, string Reason)
+{
+    public static ForegroundDecisionSnapshot? From(ForegroundDecision? decision)
+        => decision is null ? null : new ForegroundDecisionSnapshot(decision.Kind, decision.Slot, decision.Reason);
+}
+
+/// <summary>
+/// The daemon's foreground authority as every snapshot carries it. <see cref="Applied"/> is
+/// what is actually in effect and <see cref="Wanted"/> what the rules resolved to on the last
+/// poll; the two differ only while <see cref="Locked"/> holds the profile in place, which is
+/// what lets the panel explain the lock instead of quoting a rule that is not in charge.
+/// Session state: a daemon restart starts unlocked.
+/// </summary>
+public sealed record ForegroundStateSnapshot(
+    bool Locked,
+    ForegroundDecisionSnapshot? Applied,
+    ForegroundDecisionSnapshot? Wanted);
 
 /// <summary>What the GUI should do with a snapshot that just arrived.</summary>
 public enum SnapshotDisposition

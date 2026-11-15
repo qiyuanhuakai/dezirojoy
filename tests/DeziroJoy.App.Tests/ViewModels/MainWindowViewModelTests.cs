@@ -150,6 +150,22 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Saving_A_Renamed_Preset_Updates_Its_Existing_Card()
+    {
+        var (vm, host, provider, store) = CreateHost();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        SampleHelper.Sample(vm, host);
+        await vm.SwitchPresetSlotCommand.ExecuteAsync(4);
+
+        vm.ActiveProfile = vm.ActiveProfile! with { Name = "自定义第四套" };
+        vm.SaveProfileCommand.Execute(null);
+
+        Assert.Equal("自定义第四套", vm.PresetSlots.Single(item => item.Slot == 4).Name);
+        Assert.Equal("自定义第四套", new PresetStore(store).LoadSlot("xinput:0", 4)!.Name);
+    }
+
+    [Fact]
     public async Task Committing_An_Edit_Persists_To_The_Slot_And_Survives_A_Switch_Round_Trip()
     {
         var (vm, host, provider, store) = CreateHost();

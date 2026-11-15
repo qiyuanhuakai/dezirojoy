@@ -265,7 +265,10 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `Stop` | GUI → daemon | — | 请求停止映射 |
 | `SetMappingEnabled` | GUI → daemon | 请求 ID、启用状态 | 暂停或恢复分发，不停止引擎 |
 | `SetInjectionSuspended` | GUI/tray → daemon | 请求 ID、挂起状态 | 显式劫持生效期间按连接暂停注入 |
+| `SetNativeGamepadPaused` | GUI → daemon | 请求 ID、暂停状态 | 前台规则的原生手柄暂停：暂停键鼠映射，引擎与互斥体不动 |
+| `SetForegroundLocked` | GUI → daemon | 请求 ID、锁定状态 | 锁定/解锁前台规则当前生效的配置；锁在 daemon 的前台 watcher 上 |
 | `SwitchPresetSlot` | GUI → daemon | 请求 ID、目标槽位（`DeviceId` 保留线上传输但服务端忽略） | 切换整体级活动预设槽 |
+| `DeletePresetSlot` | GUI → daemon | 请求 ID、设备 ID、槽位 | 删除一个设备预设槽并修复 Leader 引用；主槽与最后一套预设拒绝 |
 | `SetScreenKeyboard` | GUI → daemon | 请求 ID、开/关 | 开关浮窗屏幕键盘（引擎的屏幕键盘键在 daemon 内部驱动同一开关） |
 | `InjectText` | GUI → daemon | 请求 ID、要输入的文本 | 把浮窗键盘的一个键帽经 daemon 自己的输出通道输入到当前聚焦应用 |
 | `InjectKey` | GUI → daemon | 请求 ID、键、修饰键 | 点按一个键（退格 / Ctrl+A + Delete），同样经 daemon 的输出通道 |
@@ -307,6 +310,13 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   发现不一致就拒绝该请求并回 `MutationAck(Accepted=false, ErrorCode="revision-mismatch")`，
   同时携带当前修订号；GUI 的编辑草稿固定其基线修订，冲突后必须重新读取权威 profile 或明确合并，
   **不得只更新修订号后提交旧草稿，也不自动重放**。
+- **前台规则锁定由 daemon 持有，窗口只镜像**：真正应用规则的是 daemon 自己的
+  `ForegroundWatcher`，所以「锁定当前配置」必须落在它上面——GUI 经 `SetForegroundLocked`
+  请求，daemon 把锁写进自己的 watcher 并推送快照。快照的 `ForegroundState` 携带锁定标志、
+  当前生效决策（Applied）与规则想要的决策（Wanted），窗口据此镜像显示；锁定期间两者不同，
+  面板据此解释「已锁定：…（若解锁：…）」。锁是会话状态、不落 `DaemonState`，daemon 重启即解锁；
+  它只推进快照序号，不动配置 revision。GUI 关闭再打开，从同一 daemon 快照读到同一把锁。
+  没有前台 watcher 的 server 对该请求明确回 `Error`，不假装锁定成功。
 - **浮窗屏幕键盘由 daemon 持有开关，窗口只镜像**：引擎的 `ToggleScreenKeyboardCommand`
   与 Leader 键的 `SwitchPresetCommand` 一样不进入输出 sink，由
   `EngineHost.ScreenKeyboardToggleRequested` 在 tick 线程交给 daemon（`DaemonServer.RequestScreenKeyboardToggle`），
@@ -342,6 +352,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 | `ApplyConfiguration` | 运行中**直接换 profile，不停引擎**；未运行则只更新待用配置 | 配置已生效后 |
 | `SetMappingEnabled` | 暂停或恢复分发；引擎与互斥体保持运行 | 分发状态已改变后 |
 | `SetInjectionSuspended` | 按连接持有显式劫持租约；多个客户端叠加，断开自动释放自己的租约 | 聚合挂起状态已改变后 |
+| `SetForegroundLocked` | 锁定/解锁 daemon 前台 watcher 当前生效的配置；幂等，重复同一状态不推送 | 锁已改变后 |
 | `SetScreenKeyboard` | 翻转 daemon 持有的浮窗键盘开关；幂等，重复同一状态不推送 | 开关已改变后 |
 | `InjectText` / `InjectKey` | 经 daemon 自己的输出通道输入一个键帽；不持有任何输出、不受三个暂停门控 | 输入已发出后 |
 | `ShutdownDaemon` | 停止映射、释放所有按键与互斥体，然后退出 daemon | **退出开始前**先写完 ack |
@@ -360,7 +371,7 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
   `CurrentUserOnly`；同一用户的普通 GUI 与提权守护进程均可连接，其他用户不可写。
 - **同会话验证**：任何控制消息之前必须完成握手，拒绝后立即断开；Windows 上通过
   `GetNamedPipeClientProcessId` 取得真实对端 PID/SessionId，不信任客户端自报的会话字段。
-- **最小攻击面**：管道只暴露 4.4 节那 17 条映射控制消息，不提供任意代码执行、文件读写或
+- **最小攻击面**：管道只暴露 4.4 节那 20 条映射控制消息，不提供任意代码执行、文件读写或
   进程启动能力。`ShutdownDaemon` 只能请求本 daemon 按既定清理路径退出，不接受命令行或任意 PID。
 
 ### 4.7 第二个守护进程

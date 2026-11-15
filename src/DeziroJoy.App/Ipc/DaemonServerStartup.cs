@@ -50,10 +50,39 @@ public sealed partial class DaemonServer
                 _host.SwitchPresetSlot(_activePresetSlot, profiles);
             }
 
+            var restoredDeviceId = ProfileDeviceId(_restored?.ProfileJson);
+            var snapshotDeviceId = restoredDeviceId is not null
+                ? SnapshotDeviceFor(restoredDeviceId)
+                : _host.ConnectedDeviceIds.Count > 0 ? _host.ConnectedDeviceIds[0] : null;
+            if (snapshotDeviceId is not null
+                && (_host.GetProfile(snapshotDeviceId)
+                    ?? _presetStore.LoadSlot(snapshotDeviceId, _activePresetSlot)) is { } activeProfile)
+            {
+                _profileName = activeProfile.Name;
+                _profileJson = ProfileSerializer.Serialize(activeProfile with { DeviceId = snapshotDeviceId });
+            }
+
             if (_desiredEnabled && !_host.IsRunning)
             {
                 TryStartMapping();
             }
+        }
+    }
+
+    private static string? ProfileDeviceId(string? profileJson)
+    {
+        if (string.IsNullOrEmpty(profileJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            return ProfileSerializer.Deserialize(profileJson).DeviceId;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }

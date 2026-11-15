@@ -347,6 +347,16 @@ public sealed class DaemonController : IAsyncDisposable
     public Task<MutationResult> SetNativeGamepadPausedAsync(bool paused, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SetNativeGamepadPausedMessage(requestId, paused), cancellationToken);
 
+    /// <summary>
+    /// Locks or unlocks the profile the foreground rules put in effect. The daemon owns the
+    /// lock - its watcher is the one that applies the rules - so the request lands there and
+    /// the snapshot that follows carries the authoritative state every window reads. A
+    /// refused or unknown outcome is reported in the result rather than thrown, so the panel
+    /// keeps quoting the last state the daemon confirmed.
+    /// </summary>
+    public Task<MutationResult> SetForegroundLockedAsync(bool locked, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SetForegroundLockedMessage(requestId, locked), cancellationToken);
+
     public Task<MutationResult> SwitchPresetSlotAsync(string deviceId, int slot, CancellationToken cancellationToken)
         => MutateAsync(requestId => new SwitchPresetSlotMessage(requestId, deviceId, slot), cancellationToken);
 

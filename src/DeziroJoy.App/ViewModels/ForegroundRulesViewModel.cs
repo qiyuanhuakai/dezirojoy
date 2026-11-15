@@ -103,17 +103,30 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
     private readonly ForegroundRuleStore _store;
 
+    /// <summary>
+    /// Where a lock request goes when the daemon owns the rules: the window's view model
+    /// routes it over the control channel, and the daemon's snapshot mirrors the outcome back
+    /// into the watcher. Null in local mode - and in the panel's own tests - where the watcher
+    /// this panel views is itself the authority.
+    /// </summary>
+    private readonly Func<bool, Task>? _setLocked;
+
     private IPresetSlotSource? _presetSlots;
 
     private bool _disposed;
 
-    public ForegroundRulesViewModel(ForegroundWatcher watcher, ForegroundRuleStore? store = null, IPresetSlotSource? presetSlots = null)
+    public ForegroundRulesViewModel(
+        ForegroundWatcher watcher,
+        ForegroundRuleStore? store = null,
+        IPresetSlotSource? presetSlots = null,
+        Func<bool, Task>? setLocked = null)
     {
         ArgumentNullException.ThrowIfNull(watcher);
 
         _watcher = watcher;
         _store = store ?? new ForegroundRuleStore();
         _presetSlots = presetSlots;
+        _setLocked = setLocked;
 
         _watcher.StateChanged += OnWatcherStateChanged;
 
@@ -368,11 +381,19 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Locks or unlocks the profile in effect. The only control that acts immediately: a user
-    /// fighting a rule over the profile should not have to save anything to win.
+    /// fighting a rule over the profile should not have to save anything to win. With a
+    /// daemon in play the request goes to the authority and the panel follows the snapshot
+    /// that answers it; locally the watcher this panel views is the authority itself.
     /// </summary>
     [RelayCommand]
-    private void ToggleLock()
+    private async Task ToggleLock()
     {
+        if (_setLocked is not null)
+        {
+            await _setLocked(!_watcher.IsLocked);
+            return;
+        }
+
         _watcher.SetLocked(!_watcher.IsLocked);
         SyncFromWatcher();
     }

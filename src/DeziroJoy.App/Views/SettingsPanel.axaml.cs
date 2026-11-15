@@ -51,10 +51,8 @@ public partial class SettingsPanel : UserControl
     /// <summary>
     /// The new version is in place and, for the forms that left the relaunch to the host, a
     /// detached chain is already waiting for this process to exit. The exit is a hard one on
-    /// purpose: the window's own close path would hand the instance lease to a freshly spawned
-    /// tray, and the successor would lose its arbitration to that tray and never come up. The
-    /// daemon and the tray are already stopped by the update flow itself, so there is nothing
-    /// left to hand over.
+    /// purpose: this is a process restart, not a user closing the window to the tray. The
+    /// presentation host has already been asked to restart; on Linux the daemon keeps running.
     /// </summary>
     private void OnRestartRequested(object? sender, EventArgs e) => Environment.Exit(0);
 

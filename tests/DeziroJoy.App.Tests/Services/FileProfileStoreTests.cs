@@ -121,6 +121,7 @@ public class FileProfileStoreTests : IDisposable
         store.Save(SampleProfile("dev-1") with { Name = "更新后的配置" });
 
         Assert.Equal("更新后的配置", store.Load("dev-1")!.Name);
+        Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
     }
 
     [Fact]

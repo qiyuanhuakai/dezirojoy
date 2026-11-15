@@ -373,6 +373,59 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void SetForegroundLocked_Round_Trips()
+    {
+        var locked = new SetForegroundLockedMessage("req-1", true);
+        var unlocked = new SetForegroundLockedMessage("req-2", false);
+
+        var restoredLocked = Assert.IsType<SetForegroundLockedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(locked)));
+        var restoredUnlocked = Assert.IsType<SetForegroundLockedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(unlocked)));
+
+        Assert.True(restoredLocked.Locked);
+        Assert.False(restoredUnlocked.Locked);
+    }
+
+    [Fact]
+    public void StateChanged_Round_Trips_The_Foreground_State()
+    {
+        var message = new StateChangedMessage("daemon-instance-1", new StateSnapshot(
+            1, 1, true, true, 1234, "high", "Xbox Default", null, 10, 0, true)
+        {
+            ForegroundState = new ForegroundStateSnapshot(
+                true,
+                new ForegroundDecisionSnapshot(ForegroundDecisionKind.Profile, 2, "命中规则「chrome → 预设 2」"),
+                new ForegroundDecisionSnapshot(ForegroundDecisionKind.Profile, 3, "命中规则「game → 预设 3」")),
+        });
+
+        var restored = Assert.IsType<StateChangedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        var state = restored.Snapshot.ForegroundState;
+        Assert.NotNull(state);
+        Assert.True(state.Locked);
+        Assert.Equal(ForegroundDecisionKind.Profile, state.Applied!.Kind);
+        Assert.Equal(2, state.Applied.Slot);
+        Assert.Equal(3, state.Wanted!.Slot);
+        Assert.Equal(message.Snapshot.ForegroundState, state);
+    }
+
+    [Fact]
+    public void An_Older_Snapshot_Without_The_Foreground_State_Reads_As_Null()
+    {
+        // The field is additive: a daemon that predates it writes no property at all, and the
+        // client must read that as "no authoritative state to mirror" rather than fail.
+        var message = new StateChangedMessage("daemon-instance-1", new StateSnapshot(
+            1, 1, true, true, 1234, "high", "Xbox Default", null, 10, 0, true));
+
+        var restored = Assert.IsType<StateChangedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.Null(restored.Snapshot.ForegroundState);
+    }
+
+    [Fact]
     public void An_Older_Snapshot_Without_The_Native_Gamepad_Pause_Reads_As_Not_Paused()
     {
         // The field is additive: a daemon that predates it writes no property at all, and the

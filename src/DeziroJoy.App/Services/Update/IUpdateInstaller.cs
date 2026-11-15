@@ -42,20 +42,17 @@ public sealed record UpdateInstallResult
 }
 
 /// <summary>
-/// Installs a verified package for one install form. The orchestrator owns everything around
-/// the install - stop the daemon, ask the tray to exit, verify the package, report progress -
+/// Installs a verified package for one install form. The orchestrator owns the platform-specific
+/// process policy, presentation-host restart, package verification and progress reporting -
 /// and delegates only the part that genuinely differs per platform to an implementation of
 /// this interface. Adding a platform therefore means adding one class and registering it,
 /// never touching the orchestration again.
 /// </summary>
 /// <remarks>
 /// <para>
-/// An implementation must not return before the new files are in place: the orchestrator has
-/// already stopped the daemon and the tray, so anything still running from the old install
-/// directory is the installer's own doing. Where the install can only finish after this
-/// process is gone - dpkg and rpm cannot replace a running binary (ETXTBSY), and on Windows the
-/// setup's Restart Manager has to close this GUI to replace the files it holds open - the
-/// implementation hands the work to a detached process and reports success, with
+/// Where installation must outlive the GUI restart, the implementation hands the work to a
+/// detached process and reports success. Windows stops the daemon first because of file locks;
+/// Linux keeps it running while package files or the AppImage are replaced, with
 /// <see cref="UpdateInstallResult.RelaunchHandled"/> describing who restarts the app.
 /// </para>
 /// <para>

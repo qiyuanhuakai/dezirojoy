@@ -289,6 +289,11 @@ public sealed class EngineHost : IDisposable
 
                 if (IsMappingEnabled && !_injectionSuspended && !_nativeGamepadPaused)
                 {
+                    if (MappingEngine.IsSamplingGap((float)delta.TotalSeconds))
+                    {
+                        runtime.Dispatcher.ReleaseAll();
+                    }
+
                     var commands = runtime.Engine.Tick(state, (float)delta.TotalSeconds);
                     runtime.Dispatcher.DispatchAll(commands);
                     presetSwitch ??= FirstPresetSwitch(commands);

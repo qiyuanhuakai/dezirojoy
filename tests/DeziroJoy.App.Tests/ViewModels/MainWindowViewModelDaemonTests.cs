@@ -939,6 +939,113 @@ public sealed class MainWindowViewModelDaemonTests
     private static string BodyOf(GamepadProfile profile)
         => ProfileSerializer.Serialize(profile with { PresetSlot = 0 });
 
+    [Fact]
+    public async Task The_Foreground_Lock_Survives_Closing_And_Reopening_The_Window()
+    {
+        // The acceptance: 锁定 → 切换前台应用 → 关闭 GUI → 重新打开, all over one real daemon
+        // state. The lock lives on the daemon's watcher, the engine really stays put while
+        // locked, and a freshly opened window reads the same lock and the same reasons.
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+
+        var daemonHost = new FakeDaemonHost();
+        daemonHost.AddDevice("pad-1");
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+
+        var provider = new FakeGamepadProvider();
+        provider.Add("pad-1", "Xbox Wireless Controller");
+        using var engine = new EngineHost(provider, new RecordingOutputSink(), store);
+        engine.RefreshPresence();
+
+        var rules = new ForegroundRuleStore(Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json"));
+        rules.Save(new ForegroundSettings
+        {
+            Rules =
+            [
+                new ForegroundRule { ProcessName = "chrome", Slot = 2 },
+                new ForegroundRule { ProcessName = "game", Slot = 3 },
+            ],
+        });
+
+        var source = new FakeForegroundSource("chrome");
+        using var stop = new CancellationTokenSource();
+        // The watcher is driven by hand; the poll loop exits at once and never races the test.
+        stop.Cancel();
+        using var foreground = new DaemonHost.DaemonForeground(engine, store, server, source, rules, stop.Token);
+        foreground.Watcher.Refresh();
+        Assert.Equal(2, engine.ActivePresetSlot);
+
+        var channel1 = new ServerChannel(server);
+        server.StateChanged += channel1.Push;
+        var controller1 = new DaemonController(new ServerEndpoint(channel1));
+        await controller1.ConnectAsync(TestContext.Current.CancellationToken);
+        var viewModel1 = new MainWindowViewModel(
+            new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store),
+            store,
+            daemon: controller1,
+            daemonRequired: true);
+
+        Assert.False(viewModel1.Foreground.IsLocked);
+        Assert.Equal(2, viewModel1.Foreground.AppliedDecision!.Slot);
+
+        await viewModel1.SetForegroundLockedAsync(true);
+        await WaitFor(() => viewModel1.Foreground.IsLocked);
+
+        // The foreground moves while locked: the daemon's engine stays on the locked profile,
+        // and the window explains the hold - applied 2, wanted 3.
+        source.Context = new ForegroundContext("game", false);
+        foreground.Watcher.Refresh();
+
+        Assert.Equal(2, engine.ActivePresetSlot);
+        await WaitFor(() => viewModel1.Foreground.LastDecision?.Slot == 3);
+        Assert.Equal(2, viewModel1.Foreground.AppliedDecision!.Slot);
+
+        // Closing the window takes the GUI's watcher with it; the daemon keeps the lock.
+        await viewModel1.DisposeAsync();
+
+        var channel2 = new ServerChannel(server);
+        server.StateChanged += channel2.Push;
+        var controller2 = new DaemonController(new ServerEndpoint(channel2));
+        await controller2.ConnectAsync(TestContext.Current.CancellationToken);
+        await using var viewModel2 = new MainWindowViewModel(
+            new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store),
+            store,
+            daemon: controller2,
+            daemonRequired: true);
+
+        Assert.True(viewModel2.Foreground.IsLocked);
+        Assert.Equal(2, viewModel2.Foreground.AppliedDecision!.Slot);
+        Assert.Equal(3, viewModel2.Foreground.LastDecision!.Slot);
+
+        // Unlocking from the new window hands control back to the rules, on the daemon.
+        await viewModel2.SetForegroundLockedAsync(false);
+
+        Assert.Equal(3, engine.ActivePresetSlot);
+        Assert.Equal(3, daemonHost.GetProfile("pad-1")!.PresetSlot);
+        await WaitFor(() => !viewModel2.Foreground.IsLocked && viewModel2.Foreground.AppliedDecision?.Slot == 3);
+    }
+
+    private static async Task WaitFor(Func<bool> condition)
+    {
+        for (var attempt = 0; attempt < 300 && !condition(); attempt++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(condition());
+    }
+
+    /// <summary>A foreground source the test moves by hand.</summary>
+    private sealed class FakeForegroundSource(string processName) : IForegroundSource
+    {
+        public ForegroundContext Context { get; set; } = new(processName, false);
+
+        public ForegroundContext Read() => Context;
+    }
+
     private static async Task WaitForSuspension(FakeDaemonHost host, bool expected)
     {
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

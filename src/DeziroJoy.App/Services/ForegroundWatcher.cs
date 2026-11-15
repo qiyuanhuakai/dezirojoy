@@ -1,3 +1,4 @@
+using DeziroJoy.App.Ipc;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Profiles;
 using DeziroJoy.Platform.Linux.Foreground;
@@ -93,15 +94,9 @@ public sealed class EngineHostForegroundTarget : IForegroundTarget
 /// engine, the injection mutex and the app-wide slot - and runs its own watcher over its own
 /// engine host for its whole life, so a window that also drove would send every switch and
 /// pause twice, once from each side. What the window still owes the user is the panel: the
-/// program in front, the rule that matches it and the decision it resolves to, all read off
-/// the same shared table the daemon is running.
-/// <para>
-/// Mirroring the applied slot and pause is what keeps the watcher's own no-op checks truthful
-/// against this target - a decision that is already in effect finds the slot and the pause it
-/// names - so an unchanged foreground costs one window read exactly as it does against a live
-/// engine, which is what makes the display cheap to keep current while the window is closed
-/// to the tray.
-/// </para>
+/// program in front read by its own source, and the lock and decisions mirrored from the
+/// daemon's snapshot (<see cref="ForegroundWatcher.MirrorDaemonState"/>) - a mirrored watcher
+/// never evaluates against this target at all, so nothing here is ever driven in daemon mode.
 /// </summary>
 public sealed class NullForegroundTarget : IForegroundTarget
 {
@@ -151,6 +146,15 @@ public sealed class ForegroundWatcher : IDisposable
     private ForegroundDecision? _applied;
 
     private bool _locked;
+
+    /// <summary>
+    /// Whether the decisions are mirrored from the daemon instead of evaluated here. Set by
+    /// the first <see cref="MirrorDaemonState"/>: in daemon mode the resident daemon owns the
+    /// rule evaluation and the lock, and a window that also evaluated would quote its own
+    /// answer over the authority's. A mirrored watcher still reads the foreground - the panel
+    /// shows what is in front - but the decisions and the lock arrive only via the mirror.
+    /// </summary>
+    private bool _mirrored;
 
     private bool _disposed;
 
@@ -238,6 +242,16 @@ public sealed class ForegroundWatcher : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         _context = _source.Read();
+
+        if (_mirrored)
+        {
+            // The daemon evaluates and applies; this watcher only reads the foreground for
+            // the panel. Evaluating here would overwrite the mirrored decisions with a local
+            // answer the daemon never made.
+            StateChanged?.Invoke();
+            return;
+        }
+
         _decision = ForegroundRules.Evaluate(_settings, _context);
 
         if (!_settings.Enabled)
@@ -313,6 +327,30 @@ public sealed class ForegroundWatcher : IDisposable
 
         StateChanged?.Invoke();
     }
+
+    /// <summary>
+    /// Adopts the daemon's authoritative foreground state: the lock, the decision in effect
+    /// and the decision the rules want. From the first call on, this watcher mirrors rather
+    /// than evaluates - the daemon owns the rule table's application, and the window's own
+    /// poll keeps only the foreground reading current. The deciding rule is not carried on
+    /// the wire; the reason line already names it, which is what the panel quotes.
+    /// </summary>
+    public void MirrorDaemonState(ForegroundStateSnapshot state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _mirrored = true;
+        _locked = state.Locked;
+        _decision = ToDecision(state.Wanted);
+        _applied = ToDecision(state.Applied);
+        StateChanged?.Invoke();
+    }
+
+    private static ForegroundDecision? ToDecision(ForegroundDecisionSnapshot? snapshot)
+        => snapshot is null
+            ? null
+            : new ForegroundDecision(snapshot.Kind, snapshot.Slot, null, snapshot.Reason);
 
     /// <summary>
     /// Performs one decision. A pause leaves the profile alone - mapping is off, so which

@@ -123,6 +123,45 @@ public class EngineHostTests
     }
 
     [Fact]
+    public void A_Sampling_Gap_Releases_A_Macros_Held_Modifier_At_The_Output_Sink()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(new GamepadProfile
+        {
+            Name = "Macro",
+            DeviceId = "xinput:0",
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new ButtonBinding(GamepadButton.LeftBumper)
+                    {
+                        Gesture = new ButtonGesture
+                        {
+                            LongPressThreshold = 0.2f,
+                            LongPressAction = new ComplexShortcutTarget { Script = "hold Alt" },
+                        },
+                    },
+                    Target = new NoneTarget(),
+                },
+            ],
+        });
+        var (host, provider, sink) = CreateHost(store);
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.LeftBumper, 0, 0, 0, 0));
+        host.TickOnce(TimeSpan.FromSeconds(0.1));
+        host.TickOnce(TimeSpan.FromSeconds(0.2));
+        Assert.Equal(["down:LeftAlt"], sink.Calls);
+
+        host.TickOnce(TimeSpan.FromSeconds(10));
+        Assert.Equal(["down:LeftAlt", "up:LeftAlt"], sink.Calls);
+
+        provider.SetState("xinput:0", GamepadState.Neutral);
+        host.TickOnce(Tick);
+        Assert.Equal(1, sink.Calls.Count(call => call == "up:LeftAlt"));
+    }
+
+    [Fact]
     public void No_Devices_Means_No_Controllers_And_No_Output()
     {
         var (host, _, sink) = CreateHost();

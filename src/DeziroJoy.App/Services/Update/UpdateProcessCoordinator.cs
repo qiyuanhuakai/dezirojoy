@@ -242,18 +242,21 @@ internal static class UpdateProcessCoordinator
     }
 
     /// <summary>
-    /// Asks the tray process to exit over the activation channel. Three outcomes, and only
-    /// the middle one means work was needed:
+    /// Asks the presentation host to exit or restart over the activation channel. When
+    /// <paramref name="preserveDaemon"/> is true, a current host leaves mapping running; an older
+    /// host that does not know the flag uses its original stop path as a compatibility fallback.
+    /// Three outcomes, and only the middle one means work was needed:
     /// <list type="number">
-    /// <item>No tray is resident - the render process owns the instance lease while its
-    /// window is up, and then no tray exists at all - so there is nothing to stop.</item>
+    /// <item>No presentation host is resident - it has exited or was never started.</item>
     /// <item>The tray accepted the Exit request: wait for it to actually disappear, because
     /// an installer cannot replace a binary a retiring tray is still running.</item>
     /// <item>The tray refused (an older build that does not know the request) or never left:
     /// the caller reports an honest failure instead of installing behind a live tray.</item>
     /// </list>
     /// </summary>
-    public static async Task<bool> AskTrayExitAsync(CancellationToken cancellationToken)
+    public static async Task<bool> AskTrayExitAsync(
+        CancellationToken cancellationToken,
+        bool preserveDaemon = false)
     {
         var identity = GuiInstanceIdentity.ForCurrentProcess();
 
@@ -264,9 +267,12 @@ internal static class UpdateProcessCoordinator
             return true;
         }
 
-        if (!await GuiActivationClient.TryExitAsync(
-                identity, GuiActivationOptions.Default, cancellationToken)
-            .ConfigureAwait(false))
+        var accepted = preserveDaemon
+            ? await GuiActivationClient.TryRestartAsync(identity, GuiActivationOptions.Default, cancellationToken)
+                .ConfigureAwait(false)
+            : await GuiActivationClient.TryExitAsync(identity, GuiActivationOptions.Default, cancellationToken)
+                .ConfigureAwait(false);
+        if (!accepted)
         {
             return false;
         }

@@ -54,6 +54,6 @@ public sealed class DaemonStateStore
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(state, Options));
+        FileProfileStore.WriteAllTextAtomic(FilePath, JsonSerializer.Serialize(state, Options));
     }
 }

@@ -219,6 +219,58 @@ public class LeaderLayerTests
     }
 
     [Fact]
+    public void A_Button_Pressed_With_The_Leader_Runs_The_New_Layers_Gesture_State_Machine()
+    {
+        var engine = new MappingEngine(Profile(
+            LayerLeader(GamepadButton.RightBumper),
+            new MappingEntry
+            {
+                Source = new ButtonBinding(GamepadButton.X)
+                {
+                    Gesture = new ButtonGesture
+                    {
+                        LongPressThreshold = 0.2f,
+                        LongPressAction = new KeyPressTarget(GamepadKey.V),
+                    },
+                },
+                Target = new KeyPressTarget(GamepadKey.C),
+                Layer = Layer,
+            }));
+
+        Assert.Empty(engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.X), Tick));
+        var commands = engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.X), 0.25f);
+
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.V, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.V, KeyModifiers.None),
+            ],
+            commands);
+        Assert.DoesNotContain(commands, command => command is KeyDownCommand { Key: GamepadKey.C });
+    }
+
+    [Fact]
+    public void A_Button_Pressed_With_The_Leader_Starts_The_New_Layers_Dsl_Program()
+    {
+        var engine = new MappingEngine(Profile(
+            LayerLeader(GamepadButton.RightBumper),
+            OnLayer(GamepadButton.X, new ComplexShortcutTarget
+            {
+                Script = "tap V",
+                Trigger = ActionTrigger.Press,
+            })));
+
+        var commands = engine.Tick(Held(GamepadButton.RightBumper, GamepadButton.X), Tick);
+
+        Assert.Equal(
+            [
+                new KeyDownCommand(GamepadKey.V, KeyModifiers.None),
+                new KeyUpCommand(GamepadKey.V, KeyModifiers.None),
+            ],
+            commands);
+    }
+
+    [Fact]
     public void A_Combo_Target_Is_Not_Fired_Twice_When_The_Layer_Adopts_It()
     {
         var engine = new MappingEngine(Profile(

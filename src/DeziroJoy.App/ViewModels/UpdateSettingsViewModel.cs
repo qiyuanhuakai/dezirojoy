@@ -191,9 +191,8 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
     /// Raised once the new version is in place and the host may exit this process: the
     /// successor is either the platform installer's own doing (Windows setup, the Linux
     /// package chain) or a detached chain this view model already started for the AppImage
-    /// swap. The view answers by exiting the process - a hard exit, because the window's own
-    /// close path would hand the instance lease to a freshly spawned tray and the successor
-    /// would lose its arbitration to that.
+    /// swap. The view answers by exiting the process directly; the presentation host has already
+    /// been asked to restart, and Linux leaves the mapping daemon running.
     /// </summary>
     public event EventHandler? RestartRequested;
 

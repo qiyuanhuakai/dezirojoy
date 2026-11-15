@@ -52,7 +52,7 @@ public sealed class FileProfileStore : IProfileStore
         var normalized = profile with { SchemaVersion = GamepadProfile.CurrentSchemaVersion };
         var json = ProfileSerializer.Serialize(normalized);
 
-        File.WriteAllText(PathFor(normalized.DeviceId ?? normalized.Name), json);
+        WriteAllTextAtomic(PathFor(normalized.DeviceId ?? normalized.Name), json);
     }
 
     public bool Delete(string deviceId)
@@ -91,5 +91,28 @@ public sealed class FileProfileStore : IProfileStore
         var safe = string.Join("_", key.Split(invalid.ToArray(), StringSplitOptions.RemoveEmptyEntries));
 
         return Path.Combine(ProfilesDirectory, string.IsNullOrEmpty(safe) ? "unnamed" : safe) + ".json";
+    }
+
+    internal static void WriteAllTextAtomic(string path, string contents)
+    {
+        var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporary, contents);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 }

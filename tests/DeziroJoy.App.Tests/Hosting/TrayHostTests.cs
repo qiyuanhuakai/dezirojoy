@@ -354,6 +354,23 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task A_Restart_Request_Retires_The_Host_Without_Stopping_The_Daemon()
+    {
+        var identity = GuiInstanceIdentity.ForCurrentProcess();
+        using var activation = GuiActivationServer.CreatePending(identity, GuiInstanceRole.Tray);
+        var fixture = BuildTray(activation: activation, daemonPipeAnswers: () => true);
+
+        var accepted = await GuiActivationClient.TryRestartAsync(
+            identity,
+            GuiActivationOptions.Default,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(accepted);
+        Assert.Single(fixture.Shutdowns);
+        Assert.DoesNotContain("stop-daemon", fixture.Order);
+    }
+
+    [AvaloniaFact]
     public async Task An_Exit_Request_Still_Stops_A_Daemon_Whose_Pipe_Answers()
     {
         // The skip above is verified, not assumed: when the mapping pipe still answers, the

@@ -106,7 +106,8 @@ public sealed record GuiShowRequest(
     int Version,
     GuiActivationRequestKind Kind = GuiActivationRequestKind.Show,
     GuiInstanceRole? RequiredRole = null,
-    int? ProcessId = null);
+    int? ProcessId = null,
+    bool PreserveDaemon = false);
 
 /// <summary>
 /// GUI to GUI: the answer to a <see cref="GuiShowRequest"/>. <see cref="Accepted"/> is false
@@ -312,6 +313,8 @@ public sealed class GuiActivationServer : IDisposable
     public event Func<int, Task>? RenderStarted;
 
     public event Func<Task>? RenderStopped;
+
+    public event Func<Task>? RestartRequested;
 
     internal static GuiActivationServer StartActive(
         GuiInstanceIdentity identity,
@@ -549,7 +552,9 @@ public sealed class GuiActivationServer : IDisposable
 
         if (request.Kind == GuiActivationRequestKind.Exit)
         {
-            var exitHandler = ExitRequested;
+            var exitHandler = request.PreserveDaemon && RestartRequested is { } restart
+                ? restart
+                : ExitRequested;
             if (exitHandler is null)
             {
                 return (false, "this GUI cannot be asked to exit");
@@ -864,10 +869,27 @@ internal static class GuiActivationClient
         GuiInstanceIdentity identity,
         GuiActivationOptions options,
         CancellationToken cancellationToken = default)
+        => TryExitAsync(identity, options, preserveDaemon: false, cancellationToken);
+
+    public static Task<bool> TryRestartAsync(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions options,
+        CancellationToken cancellationToken = default)
+        => TryExitAsync(identity, options, preserveDaemon: true, cancellationToken);
+
+    private static Task<bool> TryExitAsync(
+        GuiInstanceIdentity identity,
+        GuiActivationOptions options,
+        bool preserveDaemon,
+        CancellationToken cancellationToken)
         => TryExchangeAsync(
             identity,
             options,
-            new GuiShowRequest(GuiActivationContract.ProtocolVersion, GuiActivationRequestKind.Exit, GuiInstanceRole.Tray),
+            new GuiShowRequest(
+                GuiActivationContract.ProtocolVersion,
+                GuiActivationRequestKind.Exit,
+                GuiInstanceRole.Tray,
+                PreserveDaemon: preserveDaemon),
             GuiInstanceRole.Tray,
             cancellationToken);
 

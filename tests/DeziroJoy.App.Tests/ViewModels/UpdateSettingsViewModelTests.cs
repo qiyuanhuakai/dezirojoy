@@ -322,7 +322,7 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
             installers ?? [new RecordingInstaller()],
             detectInstall: () => new InstallKindInfo(kind, "linux-x64"),
             stopDaemon: _ => Task.FromResult(true),
-            askTrayExit: _ => Task.FromResult(true));
+            askTrayExit: (_, _) => Task.FromResult(true));
     }
 
     /// <summary>The package this install form downloads, named the way the release names it.</summary>

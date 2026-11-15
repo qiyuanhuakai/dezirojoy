@@ -3,10 +3,9 @@ using System.Diagnostics;
 namespace DeziroJoy.App.Services;
 
 /// <summary>
-/// Installs the .deb or .rpm update on Linux. Both package managers refuse to overwrite a binary
-/// a running process has mapped (ETXTBSY), and the orchestrator has already stopped the daemon and
-/// asked the tray to exit - but this process itself still holds the GUI binary - so the install
-/// cannot run here. It is handed to a detached shell chain that outlives this process: elevate
+/// Installs a .deb or .rpm update on Linux through a detached shell chain that outlives the
+/// GUI being restarted. The daemon is deliberately left running: replacing package files does
+/// not require stopping processes that still map the old inode. The chain elevates
 /// through pkexec, install the package, re-engage the daemon's user unit when one is installed,
 /// and relaunch the app. This installer reports success the moment the chain is launched and
 /// <see cref="UpdateInstallResult.RelaunchHandled"/> is true, because the chain - not the host -

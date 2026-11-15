@@ -212,6 +212,31 @@ public class OutputOwnershipTests
     }
 
     [Fact]
+    public void Two_Devices_With_The_Same_Serialized_Mapping_Keep_Independent_Runtime_Owners()
+    {
+        var serialized = ProfileSerializer.Serialize(Profile(
+            Button(GamepadButton.LeftBumper, new KeyPressTarget(GamepadKey.LeftCtrl))));
+        var padA = new MappingEngine(ProfileSerializer.Deserialize(serialized));
+        var padB = new MappingEngine(ProfileSerializer.Deserialize(serialized));
+        Assert.Equal(
+            padA.EffectiveMappings.Single().Id,
+            padB.EffectiveMappings.Single().Id);
+        var ownership = new OutputOwnership();
+        var (dispatcherA, sinkA) = CreateDispatcher(ownership);
+        var (dispatcherB, sinkB) = CreateDispatcher(ownership);
+
+        dispatcherA.DispatchAll(padA.Tick(Held(GamepadButton.LeftBumper), Tick));
+        dispatcherB.DispatchAll(padB.Tick(Held(GamepadButton.LeftBumper), Tick));
+        Assert.Equal(1, Count(sinkA.Calls.Concat(sinkB.Calls), "down:LeftCtrl"));
+
+        dispatcherA.ReleaseAll();
+        Assert.DoesNotContain("up:LeftCtrl", sinkA.Calls.Concat(sinkB.Calls));
+
+        dispatcherB.DispatchAll(padB.Tick(Released, Tick));
+        Assert.Equal(1, Count(sinkA.Calls.Concat(sinkB.Calls), "up:LeftCtrl"));
+    }
+
+    [Fact]
     public void Revoking_One_Owner_Lifts_Only_What_That_Owner_Holds()
     {
         var engine = new MappingEngine(Profile(
@@ -220,19 +245,19 @@ public class OutputOwnershipTests
 
         var (dispatcher, sink) = CreateDispatcher();
 
-        dispatcher.DispatchAll(engine.Tick(Held(GamepadButton.LeftBumper), Tick));
-        dispatcher.DispatchAll(engine.Tick(Held(GamepadButton.LeftBumper, GamepadButton.RightBumper), Tick));
+        var leftActivation = engine.Tick(Held(GamepadButton.LeftBumper), Tick);
+        dispatcher.DispatchAll(leftActivation);
+        var rightActivation = engine.Tick(Held(GamepadButton.LeftBumper, GamepadButton.RightBumper), Tick);
+        dispatcher.DispatchAll(rightActivation);
         Assert.Equal(["down:Enter"], sink.Calls);
 
         // Cancel the left bumper's mapping alone: RB still holds the key, so it stays down.
-        var cancelled = engine.EffectiveMappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.LeftBumper });
-        dispatcher.Revoke(new OutputOwner(cancelled.Id));
+        dispatcher.Revoke(Assert.IsType<KeyDownCommand>(Assert.Single(leftActivation)).Owner);
 
         Assert.DoesNotContain("up:Enter", sink.Calls);
 
         // Revoking the last owner lifts it.
-        var survivor = engine.EffectiveMappings.Single(m => m.Source is ButtonBinding { Button: GamepadButton.RightBumper });
-        dispatcher.Revoke(new OutputOwner(survivor.Id));
+        dispatcher.Revoke(Assert.IsType<KeyDownCommand>(Assert.Single(rightActivation)).Owner);
 
         Assert.Equal(["down:Enter", "up:Enter"], sink.Calls);
     }

@@ -65,6 +65,17 @@ public sealed partial class DaemonServer
     /// </summary>
     public Func<IReadOnlyList<ActiveLayerSnapshot>>? LayerStateSource { get; set; }
 
+    /// <summary>
+    /// The daemon's foreground authority: the watcher that evaluates the rule table and drives
+    /// this process's engine host. Set by the wiring that owns both (<see cref="DaemonHost"/>),
+    /// and the one place the lock lives - a window asks through
+    /// <see cref="SetForegroundLockedMessage"/> and reads the outcome back from
+    /// <see cref="StateSnapshot.ForegroundState"/>, so closing and reopening the GUI never
+    /// loses it. Left unset - a server with no foreground wiring - snapshots report no
+    /// foreground state and a lock request is refused rather than silently ignored.
+    /// </summary>
+    public ForegroundWatcher? ForegroundAuthority { get; set; }
+
     /// <summary>Raised after every state change, carrying the full snapshot to publish.</summary>
     public event Action<StateChangedMessage>? StateChanged;
 
@@ -95,6 +106,39 @@ public sealed partial class DaemonServer
             StateChanged?.Invoke(message);
             PublishToConnections(message);
         }
+    }
+
+    /// <summary>
+    /// Publishes the current snapshot because the foreground authority's state changed - a
+    /// lock toggled, a rule applied, or the rules' wanted decision moved while locked. Like
+    /// <see cref="PublishLayerState"/>, this is operational state rather than configuration:
+    /// the sequence moves so every GUI adopts it, the revision does not, and nothing is
+    /// persisted - the lock is session state by design.
+    /// </summary>
+    internal void PublishForegroundState()
+    {
+        lock (_sync)
+        {
+            _sequence++;
+            var message = new StateChangedMessage(DaemonInstanceId, BuildSnapshot());
+            StateChanged?.Invoke(message);
+            PublishToConnections(message);
+        }
+    }
+
+    /// <summary>
+    /// The foreground state as the authority currently holds it, or null when no watcher is
+    /// wired. Read by the snapshot builder and by the wiring that deduplicates publishes.
+    /// </summary>
+    internal ForegroundStateSnapshot? CurrentForegroundState()
+    {
+        var authority = ForegroundAuthority;
+        return authority is null
+            ? null
+            : new ForegroundStateSnapshot(
+                authority.IsLocked,
+                ForegroundDecisionSnapshot.From(authority.AppliedDecision),
+                ForegroundDecisionSnapshot.From(authority.LastDecision));
     }
 
     /// <summary>Changes on every daemon start, so a GUI can tell a restarted daemon apart.</summary>
@@ -236,6 +280,9 @@ public sealed partial class DaemonServer
 
             case SetNativeGamepadPausedMessage nativePaused:
                 return HandleSetNativeGamepadPaused(nativePaused);
+
+            case SetForegroundLockedMessage foregroundLocked:
+                return HandleSetForegroundLocked(foregroundLocked);
 
             case SwitchPresetSlotMessage switchSlot:
                 return HandleSwitchPresetSlot(switchSlot);
@@ -913,6 +960,34 @@ public sealed partial class DaemonServer
     }
 
     /// <summary>
+    /// Locks or unlocks the profile the foreground rules put in effect. The lock lives on the
+    /// daemon's own watcher - the one that drives this process's engine host - so it holds
+    /// whether or not a window is connected, and every window reads the same answer back from
+    /// the snapshot. Deliberately outside <see cref="_sync"/>: SetLocked raises the watcher's
+    /// StateChanged, whose handler publishes under that same lock. A request for the state
+    /// already in effect is acked without publishing, the same idempotence every other setter
+    /// here has.
+    /// </summary>
+    private IpcMessage HandleSetForegroundLocked(SetForegroundLockedMessage request)
+    {
+        var authority = ForegroundAuthority;
+        if (authority is null)
+        {
+            return new ErrorMessage(
+                request.RequestId,
+                "no-foreground-authority",
+                "守护进程没有运行前台规则，无法锁定配置。");
+        }
+
+        authority.SetLocked(request.Locked);
+
+        lock (_sync)
+        {
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    /// <summary>
     /// Starts the mapping loop. Returns the refusal message when another process holds the
     /// injection mutex, or null on success. The caller only acks after this returns, so a
     /// start ack always follows a real mutex acquire.
@@ -1094,6 +1169,7 @@ public sealed partial class DaemonServer
             Layers = LayerStateSource?.Invoke() ?? [],
             NativeGamepadPaused = _host.IsNativeGamepadPaused,
             ScreenKeyboardOpen = _screenKeyboardOpen,
+            ForegroundState = CurrentForegroundState(),
         };
     }
 }

@@ -666,14 +666,27 @@ public static class DaemonHost
     /// <summary>
     /// The resident daemon's foreground authority: the watcher over this process's own engine
     /// host, the mirror that keeps the server's published slot in step with it, and the poll
-    /// loop that drives both. Owned as one object so shutdown lifts all three together - the
-    /// loop stops, the mirror detaches, and a pause a rule left behind is released - and so a
-    /// test can run the whole daemon-side path against a fake foreground source with no window,
-    /// no pipe and no GUI anywhere in the picture.
+    /// loop that drives both. The watcher is also registered on the server as the authority
+    /// every snapshot reads the lock and the decisions from, so a window's lock request lands
+    /// on the watcher that really applies the rules. Owned as one object so shutdown lifts
+    /// everything together - the loop stops, the mirror detaches, the authority is cleared,
+    /// and a pause a rule left behind is released - and so a test can run the whole daemon-side
+    /// path against a fake foreground source with no window, no pipe and no GUI anywhere in
+    /// the picture.
     /// </summary>
     internal sealed class DaemonForeground : IDisposable
     {
         private readonly ForegroundSlotMirror _mirror;
+
+        private readonly DaemonServer _server;
+
+        /// <summary>
+        /// The last state this wiring published, so an unchanged poll costs nothing: the
+        /// watcher raises StateChanged after every poll, and a snapshot per poll would be
+        /// noise every GUI has to adopt. Records compare by value, so the signature is the
+        /// lock plus both decisions' outcomes and reasons.
+        /// </summary>
+        private ForegroundStateSnapshot? _lastPublished;
 
         private bool _stopped;
 
@@ -688,9 +701,19 @@ public static class DaemonHost
             ArgumentNullException.ThrowIfNull(server);
             ArgumentNullException.ThrowIfNull(rules);
 
+            _server = server;
             Watcher = CreateForegroundWatcher(host, profileStore, source, rules);
             _mirror = new ForegroundSlotMirror(host, server, Watcher, host.ActivePresetSlot);
             _mirror.Start();
+
+            // The watcher is the daemon's foreground authority: the server reads the lock and
+            // both decisions from it for every snapshot, and a window's lock request lands on
+            // it. The subscription publishes only when the state actually moved - a lock
+            // toggled, a rule applied, or the wanted decision changed while locked.
+            server.ForegroundAuthority = Watcher;
+            Watcher.StateChanged += OnWatcherStateChanged;
+            server.StateChanged += OnServerPublished;
+
             Loop = MonitorForegroundAsync(Watcher, rules, cancellationToken);
         }
 
@@ -699,6 +722,26 @@ public static class DaemonHost
 
         /// <summary>The poll loop, so the caller can wait for it before lifting the watcher.</summary>
         public Task Loop { get; }
+
+        private void OnWatcherStateChanged()
+        {
+            var state = _server.CurrentForegroundState();
+            if (state == _lastPublished)
+            {
+                return;
+            }
+
+            _lastPublished = state;
+            _server.PublishForegroundState();
+        }
+
+        /// <summary>
+        /// Any snapshot the server publishes already carries the current foreground state -
+        /// a rule-driven switch publishes through the slot mirror, for instance - so recording
+        /// it here keeps the watcher subscription from sending the same state a second time.
+        /// </summary>
+        private void OnServerPublished(StateChangedMessage message)
+            => _lastPublished = message.Snapshot.ForegroundState;
 
         /// <summary>
         /// Lifts the authority. The caller waits for <see cref="Loop"/> first: disposing the
@@ -712,6 +755,13 @@ public static class DaemonHost
             }
 
             _stopped = true;
+            Watcher.StateChanged -= OnWatcherStateChanged;
+            _server.StateChanged -= OnServerPublished;
+            if (ReferenceEquals(_server.ForegroundAuthority, Watcher))
+            {
+                _server.ForegroundAuthority = null;
+            }
+
             _mirror.Stop();
             Watcher.Dispose();
         }

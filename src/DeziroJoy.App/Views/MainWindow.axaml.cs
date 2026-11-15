@@ -327,7 +327,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void HostForegroundRules()
     {
-        var panel = new ForegroundRulesPanel { DataContext = new ForegroundRulesViewModel(ViewModel.Foreground) };
+        var panel = new ForegroundRulesPanel
+        {
+            DataContext = new ForegroundRulesViewModel(ViewModel.Foreground, setLocked: ViewModel.SetForegroundLockedAsync),
+        };
         var tab = new TabItem
         {
             Header = "前台规则",

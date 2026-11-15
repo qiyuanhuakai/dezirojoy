@@ -529,6 +529,102 @@ public class DaemonHostTests
     }
 
     [Fact]
+    public async Task The_Foreground_Lock_Holds_The_Profile_Against_The_Daemons_Own_Watcher()
+    {
+        // The acceptance, with no GUI anywhere: lock → the foreground moves → the daemon's
+        // engine stays put → unlock hands control back. The lock lands on the watcher that
+        // really applies the rules, and the published state explains the hold.
+        var daemonHost = new FakeDaemonHost();
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", PresetStore.MinSlot)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+
+        using var host = HostWithPad(store);
+        var rules = RulesOnDisk(new ForegroundSettings
+        {
+            Rules = [Rule("chrome", slot: 2), Rule("game", slot: 3)],
+        });
+
+        using var stop = new CancellationTokenSource();
+        var source = new FakeForegroundSource("chrome");
+        using var foreground = new DaemonHost.DaemonForeground(host, store, server, source, rules, stop.Token);
+
+        await WaitFor(() => host.ActivePresetSlot == 2);
+
+        var ack = Assert.IsType<MutationAckMessage>(
+            await server.ProcessAsync(new SetForegroundLockedMessage("req-lock", true)));
+        Assert.True(ack.Accepted);
+
+        source.Context = new ForegroundContext("game", false);
+        foreground.Watcher.Refresh();
+
+        // The daemon's own engine did not move, and neither did the published slot.
+        Assert.Equal(2, host.ActivePresetSlot);
+        Assert.Equal(2, daemonHost.GetProfile("pad-1")!.PresetSlot);
+
+        var state = server.CurrentForegroundState();
+        Assert.NotNull(state);
+        Assert.True(state.Locked);
+        Assert.Equal(2, state.Applied!.Slot);
+        Assert.Equal(3, state.Wanted!.Slot);
+
+        // Unlocking applies what the rules want on the spot, through the same mirror path a
+        // rule-driven switch takes.
+        await server.ProcessAsync(new SetForegroundLockedMessage("req-unlock", false));
+
+        Assert.Equal(3, host.ActivePresetSlot);
+        Assert.Equal(3, daemonHost.GetProfile("pad-1")!.PresetSlot);
+        Assert.False(server.CurrentForegroundState()!.Locked);
+
+        stop.Cancel();
+        await foreground.Loop;
+    }
+
+    [Fact]
+    public async Task An_Unchanged_Foreground_Publishes_No_Snapshot()
+    {
+        // The watcher raises StateChanged after every poll; without the signature check each
+        // poll would push a snapshot every connected GUI has to adopt.
+        var daemonHost = new FakeDaemonHost();
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", PresetStore.MinSlot)!);
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+
+        using var host = HostWithPad(store);
+        var rules = RulesOnDisk(new ForegroundSettings { Rules = [Rule("chrome", slot: 2)] });
+
+        using var stop = new CancellationTokenSource();
+        using var foreground = new DaemonHost.DaemonForeground(
+            host,
+            store,
+            server,
+            new FakeForegroundSource("chrome"),
+            rules,
+            stop.Token);
+
+        await WaitFor(() => host.ActivePresetSlot == 2);
+
+        var pushes = new List<StateChangedMessage>();
+        server.StateChanged += pushes.Add;
+
+        foreground.Watcher.Refresh();
+        foreground.Watcher.Refresh();
+
+        Assert.Empty(pushes);
+
+        stop.Cancel();
+        await foreground.Loop;
+    }
+
+    [Fact]
     public void The_Foreground_Note_Names_The_Table_And_The_Cadence()
     {
         var running = DaemonHost.BuildForegroundNote(

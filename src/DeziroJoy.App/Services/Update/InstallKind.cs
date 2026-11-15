@@ -45,4 +45,6 @@ public sealed record InstallKindInfo(InstallKind Kind, string Rid)
     /// </summary>
     public bool HasUpdatePackage
         => Kind is InstallKind.WindowsInstall or InstallKind.Deb or InstallKind.Rpm or InstallKind.AppImage;
+
+    public bool RequiresDaemonStop => Kind == InstallKind.WindowsInstall;
 }

@@ -132,7 +132,7 @@
                                          Value="{Binding Update.DownloadProgress}" />
                             <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
                                        IsVisible="{Binding Update.CanInstall}"
-                                       Text="安装会先停止守护进程与托盘，完成后自动重启应用；更新包已经 SHA256 校验，未经代码签名。" />
+                                       Text="安装后自动重启应用；Windows 会先停止 daemon，Linux 更新保留映射 daemon。更新包已经 SHA256 校验，未经代码签名。" />
                             <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
                                        IsVisible="{Binding Update.HasResult}"
                                        Foreground="{Binding Update.IsResultError, Converter={StaticResource TransferMessageBrush}}"
