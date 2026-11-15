@@ -131,7 +131,11 @@ public sealed class InstallKindDetectorTests
     {
         var asked = false;
         var info = InstallKindDetector.Detect(
+            flatpakInfoExists: () => false,
+            appImagePath: () => null,
             processPath: () => "/home/someone/DeziroJoy/DeziroJoy",
+            isWindows: () => false,
+            windowsUninstallKeyExists: () => false,
             packageInstalled: _ =>
             {
                 asked = true;

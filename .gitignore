@@ -492,3 +492,6 @@ $RECYCLE.BIN/
 
 # 会话过程文件
 session-*.md
+
+# Kimi Code 本地工作区（项目技能统一放在 skills/）
+.kimi-code/

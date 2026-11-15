@@ -193,14 +193,25 @@ trigger cannot use `run whileheld`; `queue` cannot pair with `whileheld`.
   "Notes": "用途与用法说明…",
   "Presets": [ { "Slot": 1, "Profile": { ...GamepadProfile... }, "ActionNames": [ {"Source":"A 键","Action":"空格"} ] } ],
   "SpecialKeys": null,
-  "Layers": [ { "LayerId": 1, "PresetSlot": 1, "Actions": [ ... ] } ]
+  "Layers": [ { "LayerId": 1, "PresetSlot": 1, "Actions": [ ... ] } ],
+  "ForegroundRules": {
+    "Enabled": true,
+    "DefaultSlot": 1,
+    "Rules": [ { "ProcessName": "chrome", "Action": "Profile", "Slot": 2 } ]
+  }
 }
 ```
 
 - `Presets` is required and non-empty for a real bundle; each `Slot` ≥ 1 and unique; the embedded
   `Profile` is exactly a profile file. `ActionNames`/`Layers` are human-readable summaries (the
   profiles are the authority). `SpecialKeys: null` means "take the subset the presets carry".
+- `ForegroundRules` is optional and app-wide, not per-device. Export includes the current table;
+  import previews it but leaves it unapplied unless the receiver explicitly opts in. `null` means
+  the bundle carries no rule table.
 - A plain profile file (no `Presets`) imports as a one-preset scheme automatically.
+- Every import writes a durable one-level recovery point before changing configuration. Undo remains
+  available from Settings after GUI exit/reopen and restores presets, active slot, and rules if they
+  were applied. See `${KIMI_SKILL_DIR}/reference/schema.md` for its storage and schema.
 
 ## Foreground rules
 
@@ -233,6 +244,8 @@ trigger cannot use `run whileheld`; `queue` cannot pair with `whileheld`.
 6. Precision key on the single-click position. Leader/Layer on the base layer. A layer mapping is
    not on its own leader's input. Only one temporary layer (`Layer: 1`).
 7. Bundle: unique slots ≥ 1, embedded profiles valid, `SpecialKeys` entries are `specialKey` targets.
+   Optional foreground rules have `DefaultSlot ≥ 1`, nonblank process names, and `Slot ≥ 1` for
+   `Profile` actions. Never imply that rules apply without the receiver's explicit opt-in.
 8. If you can run code: `ProfileSerializer.Deserialize` + `new MappingEngine(profile)` must succeed;
    `SchemeBundleCodec.Parse` must return `Succeeded`. Fix anything that throws.
 

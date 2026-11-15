@@ -10,7 +10,18 @@ namespace DeziroJoy.App.ViewModels;
 /// layer makes it do - X：复制 rather than X：Ctrl + C. The key is the element's short name,
 /// the action its readable name, so a player holding a layer leader reads what each button
 /// DOES without decoding a key combo mid-fight.</summary>
-public sealed record LayerHintRow(string Key, string Action);
+public sealed record LayerHintRow(string Key, string Action)
+{
+    /// <summary>Null when this source has no distinct double-click gesture.</summary>
+    public string? DoubleClickAction { get; init; }
+
+    /// <summary>Null when this source has no distinct long-press gesture.</summary>
+    public string? LongPressAction { get; init; }
+
+    public bool HasDoubleClickAction => DoubleClickAction is not null;
+
+    public bool HasLongPressAction => LongPressAction is not null;
+}
 
 /// <summary>
 /// Where the layer hint overlay sits on screen. <see cref="Fixed"/> parks it at a chosen
@@ -127,10 +138,39 @@ public partial class LayerHintViewModel : ObservableObject
                 continue;
             }
 
-            rows.Add(new LayerHintRow(ShortSource(entry.Source), MappingDescriptions.ActionName(entry.Target)));
+            rows.Add(new LayerHintRow(ShortSource(entry.Source), MappingDescriptions.ActionName(entry.Target))
+            {
+                DoubleClickAction = GestureAction(entry, static gesture => gesture.DoubleClickAction, isDoubleClick: true),
+                LongPressAction = GestureAction(entry, static gesture => gesture.LongPressAction, isDoubleClick: false),
+            });
         }
 
         return rows;
+    }
+
+    /// <summary>
+    /// One enabled gesture's readable action. A null action inherits the click target rather
+    /// than meaning "disabled"; click auto-repeat suppresses long-press exactly as the engine does.
+    /// </summary>
+    private static string? GestureAction(
+        MappingEntry entry,
+        Func<ButtonGesture, MappingTarget?> action,
+        bool isDoubleClick)
+    {
+        if (entry.Source is not ButtonBinding { Gesture: { } gesture })
+        {
+            return null;
+        }
+
+        var enabled = isDoubleClick ? gesture.HasDoubleClick : gesture.HasEffectiveLongPress;
+        if (!enabled)
+        {
+            return null;
+        }
+
+        return action(gesture) is { } target
+            ? MappingDescriptions.ActionName(target)
+            : $"同单击（{MappingDescriptions.ActionName(entry.Target)}）";
     }
 
     /// <summary>

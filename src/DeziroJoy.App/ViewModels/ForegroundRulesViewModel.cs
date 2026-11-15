@@ -101,7 +101,7 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 {
     private readonly ForegroundWatcher _watcher;
 
-    private readonly ForegroundRuleStore _store;
+    private readonly IForegroundRuleStore _store;
 
     /// <summary>
     /// Where a lock request goes when the daemon owns the rules: the window's view model
@@ -117,7 +117,7 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
 
     public ForegroundRulesViewModel(
         ForegroundWatcher watcher,
-        ForegroundRuleStore? store = null,
+        IForegroundRuleStore? store = null,
         IPresetSlotSource? presetSlots = null,
         Func<bool, Task>? setLocked = null)
     {
@@ -472,13 +472,19 @@ public partial class ForegroundRulesViewModel : ObservableObject, IDisposable
         SyncFromWatcher();
     }
 
+    /// <summary>Reloads an externally imported/restored table without touching real AppData itself.</summary>
+    public void ReloadSaved()
+    {
+        LoadFromStore();
+        SyncFromWatcher();
+    }
+
     /// <summary>Puts the stored table back on screen and applies it, discarding staged edits.</summary>
     [RelayCommand]
     private void Revert()
     {
-        LoadFromStore();
+        ReloadSaved();
         StatusMessage = "已恢复到已保存的规则。";
-        SyncFromWatcher();
     }
 
     private void LoadFromStore()

@@ -171,18 +171,25 @@ RimeSharp，但社区采用度极低，等于自担维护风险。
 - SDL2（为一个次要功能引入重量级依赖）；
 - libpinyin（GPL 与宽松许可冲突）。
 
-### 已知限制：Windows 上 Guide 键不可用
+### 当前限制与待验证路线：Windows 上 Guide 键
 
-XInput 的 `wButtons` 位图没有 Guide 位（代码中的 `XInputNative.Guide = 0x0400` 是
-占位常量，恒 0），`Windows.Gaming.Input.GamepadButtons` 同样没有 Guide，因此
-Windows 上 XInput 通道永不报告 Guide 按下——可视化器 Guide 元素常灭、Guide 映射
-不触发均为可解释状态，不是缺陷。Linux 侧 evdev 经 `BTN_MODE`(0x13c) 正常识别
-Guide，不受影响。因此输入法的呼出/导航若拟绑定 Guide 键，Windows 上需改选其他
-按键；GUI 会在右侧按键配置区和 Guide 映射编辑器中直接说明此限制。确需 Guide 的唯一路径是
-Raw Input 解析 HID 报告中的 Guide 键位（需第二条完整输入通道，成本高，列入远期
-backlog，详见 `docs/QA-CHECKLIST.md`「已知限制」）。Game Bar 缺失导致的
-`ms-gamebar` 系统弹窗在设置页的「Windows 手柄兼容性」卡片处理：写入当前 Windows 用户的
-“允许控制器打开 Game Bar”关闭值后会重新读取核验，也可直接打开系统游戏设置；不会把 Guide 变成可读输入。
+**当前产品后端仍是 XInput**。XInput 的 `wButtons` 位图没有 Guide 位（代码中的
+`XInputNative.Guide = 0x0400` 是占位常量，恒 0），`Windows.Gaming.Input.GamepadButtons`
+同样没有 Guide，因此现有 Windows XInput 通道不会报告 Guide 按下——可视化器 Guide 元素常灭、
+Guide 映射不触发均为当前后端的可解释状态。Linux 侧 evdev 经 `BTN_MODE`(0x13c) 正常识别
+Guide，不受影响。输入法的呼出／导航若拟绑定 Guide，在产品更换并验证输入后端前仍需改选
+其他按键；GUI 会在右侧按键配置区和 Guide 映射编辑器中说明当前限制。
+
+Raw Input **不再是唯一可能路线**。GameInput v4 已提供 `GameInputKindSystemButton`、
+`IGameInputReading::GetSystemButtonState`（Guide／Share）、`EnableBackgroundInput` 和
+`IGameInputDevice::GetXInputDeviceIndex`，可作为第二条待实测路径。仓库新增独立探针
+[`tools/GameInputProbe`](../tools/GameInputProbe/README.md)，用于按设备验证按钮、后台行为、
+连接事件、运行时部署与槽位关联；它尚未接入产品 provider。API 提供读取通道不等于所有第三方
+手柄都能上报这些能力，尤其 app-local 运行时的后台输入开关有明确限制。
+
+Game Bar 缺失导致的 `ms-gamebar` 系统弹窗仍在设置页的「Windows 手柄兼容性」卡片处理：
+写入当前 Windows 用户的“允许控制器打开 Game Bar”关闭值后会重新读取核验，也可直接打开
+系统游戏设置；该功能本身不会把 Guide 变成可读输入。
 
 ## 参考链接
 

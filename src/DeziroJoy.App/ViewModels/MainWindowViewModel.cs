@@ -90,6 +90,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly PresetStore _presets;
 
+    private readonly IForegroundRuleStore _foregroundRuleStore;
+
+    private readonly ISchemeImportRecoveryStore _schemeImportRecoveryStore;
+
     private readonly IElevationService _elevationService;
 
     private readonly IUpdateService _updateService;
@@ -162,7 +166,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Func<LinuxRuntimeHints>? runtimeHints = null,
         string? sinkError = null,
         bool? guideButtonSupported = null,
-        IGameBarPopupGuard? gameBarPopupGuard = null)
+        IGameBarPopupGuard? gameBarPopupGuard = null,
+        IForegroundRuleStore? foregroundRuleStore = null,
+        ISchemeImportRecoveryStore? schemeImportRecoveryStore = null)
     {
         _host = host;
         _daemon = daemon;
@@ -171,6 +177,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _uiContext = SynchronizationContext.Current;
         _profileStore = profileStore;
         _presets = new PresetStore(_profileStore);
+        _foregroundRuleStore = foregroundRuleStore ?? new InMemoryForegroundRuleStore();
+        _schemeImportRecoveryStore = schemeImportRecoveryStore ?? new InMemorySchemeImportRecoveryStore();
         _elevationService = elevationService ?? new ElevationService();
         _updateService = updateService ?? new UpdateService();
         _ownsUpdateService = updateService is null;
@@ -221,7 +229,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             ? new EngineHostForegroundTarget(_host, _presets)
             : new NullForegroundTarget();
 
-        Foreground = new ForegroundWatcher(ForegroundSourceFactory.Create(), foregroundTarget);
+        Foreground = new ForegroundWatcher(
+            ForegroundSourceFactory.Create(), foregroundTarget, _foregroundRuleStore.Load());
+
+        _schemeUndo = _schemeImportRecoveryStore.Load();
+        CanUndoSchemeImport = _schemeUndo is not null;
+        if (_schemeImportRecoveryStore.LastError is { } recoveryError)
+        {
+            SetTransferError(recoveryError);
+        }
 
         // Fixed for the lifetime of the process: elevation is decided at launch.
         IsElevationSupported = _elevationService.IsSupported;
@@ -2043,20 +2059,46 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private bool _canUndoSchemeImport;
 
     /// <summary>
-    /// The import that can still be undone: the device it landed on, the slot set it replaced
-    /// and the app-wide slot the device was on. One level only - a second import replaces the
-    /// snapshot rather than stacking, because the second import is itself undoable.
+    /// The latest recovery point, loaded from disk at startup and replaced only by a successful
+    /// import. It survives the stateless render process; a failed undo leaves it available.
     /// </summary>
-    private sealed record SchemeUndo(
-        string DeviceId,
-        IReadOnlyDictionary<int, GamepadProfile?> Slots,
-        int ActiveSlot);
-
-    private SchemeUndo? _schemeUndo;
+    private SchemeImportRecovery? _schemeUndo;
 
     private SchemeBundle? _pendingScheme;
 
     private string? _pendingSchemeDeviceId;
+
+    [ObservableProperty]
+    private bool _applySchemeForegroundRules;
+
+    /// <summary>Raised after import/undo replaces the shared table so an open panel can reload it.</summary>
+    public event EventHandler? ForegroundRulesReplaced;
+
+    public IForegroundRuleStore ForegroundRuleStore => _foregroundRuleStore;
+
+    /// <summary>Reopens the persisted recovery point after this GUI, or a previous GUI, closed.</summary>
+    [RelayCommand]
+    private void ShowSchemeUndo()
+    {
+        if (_schemeUndo is not { } undo)
+        {
+            return;
+        }
+
+        _pendingScheme = null;
+        _pendingSchemeDeviceId = null;
+        ApplySchemeForegroundRules = false;
+        SchemePreview = new SchemeImportPreview
+        {
+            SchemeName = $"撤销「{undo.SchemeName}」导入",
+            Notes = $"将恢复设备 {undo.DeviceId} 的 {undo.Slots.Count} 个预设槽位和活动槽位 {undo.ActiveSlot}。"
+                + (undo.ForegroundRules is null ? string.Empty : "同时恢复导入前的前台规则。")
+                + "恢复点来自磁盘，关闭本窗口不会将其清除。",
+        };
+        SchemeImportApplied = true;
+        IsSchemePreviewOpen = true;
+        SchemeImportPreviewRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     [RelayCommand]
     private void ExportScheme() => ExportSchemePathRequested?.Invoke(this, EventArgs.Empty);
@@ -2100,9 +2142,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             deviceId,
             ActiveProfile?.Name ?? "未命名方案",
             $"导出自 DeziroJoy {SchemeBundleFactory.CurrentAppVersion()}：{slots.Count} 套预设，" +
-            $"{_presets.SpecialKeysInEffect(deviceId).Count} 个全局特殊键。" +
-            "导入后会整体替换目标设备的预设，可在导入确认后撤销一次。",
-            SchemeBundleFactory.CurrentAppVersion());
+            $"{_presets.SpecialKeysInEffect(deviceId).Count} 个全局特殊键，并携带当前前台规则。" +
+            "导入后会整体替换目标设备的预设；前台规则需在预览中单独勾选，导入后可撤销一次。",
+            SchemeBundleFactory.CurrentAppVersion()) with
+        {
+            ForegroundRules = _foregroundRuleStore.Load(),
+        };
 
         Report(ProfileTransferService.ExportScheme(bundle, path));
     }
@@ -2164,6 +2209,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         _pendingScheme = normalized;
         _pendingSchemeDeviceId = deviceId;
+        ApplySchemeForegroundRules = false;
         SchemePreview = SchemeImportPreview.Build(normalized, _presets, deviceId);
         SchemeImportApplied = false;
         IsSchemePreviewOpen = true;
@@ -2235,38 +2281,113 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         var slots = bundle.Presets.ToDictionary(preset => preset.Slot, preset => preset.Profile);
-        var rollback = _presets.CaptureSlots(deviceId);
-        var previousActiveSlot = ActivePresetSlot;
+        var applyRules = ApplySchemeForegroundRules && bundle.ForegroundRules is not null;
+        var recovery = new SchemeImportRecovery
+        {
+            DeviceId = deviceId,
+            SchemeName = bundle.Name,
+            Slots = _presets.CaptureSlots(deviceId),
+            ActiveSlot = ActivePresetSlot,
+            ForegroundRules = applyRules ? _foregroundRuleStore.Load() : null,
+        };
+        var previousRecovery = _schemeUndo;
+
+        // Durable first: if this save fails, no preset or rule write is allowed to start. If the
+        // GUI dies after this point, the next one still has enough state to undo a partial import.
+        try
+        {
+            _schemeImportRecoveryStore.Save(recovery);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            SetTransferError($"导入失败：无法保存恢复点，尚未修改配置（{exception.Message}）");
+            return;
+        }
 
         try
         {
             _presets.ReplaceScheme(deviceId, slots);
             _presets.SyncSpecialKeys(deviceId, bundle.SpecialKeys!);
 
-            if (!await ReloadSchemeSlotsAsync(deviceId, previousActiveSlot, "导入方案"))
+            if (applyRules)
             {
-                _presets.RestoreSlots(deviceId, rollback);
-                await ReloadSchemeSlotsAsync(deviceId, previousActiveSlot, "恢复方案");
-                return;
+                ReplaceForegroundRules(bundle.ForegroundRules!);
+            }
+
+            if (!await ReloadSchemeSlotsAsync(deviceId, recovery.ActiveSlot, "导入方案"))
+            {
+                throw new InvalidOperationException("运行中的配置未能重载。");
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
         {
-            _presets.RestoreSlots(deviceId, rollback);
-            await ReloadSchemeSlotsAsync(deviceId, previousActiveSlot, "恢复方案");
-            SetTransferError($"导入失败：{exception.Message}");
+            var rollbackError = await RollbackFailedImportAsync(recovery, previousRecovery);
+            SetTransferError($"导入失败：{exception.Message}{rollbackError}");
             return;
         }
 
-        _schemeUndo = new SchemeUndo(deviceId, rollback, previousActiveSlot);
+        _schemeUndo = recovery;
         CanUndoSchemeImport = true;
         SchemeImportApplied = true;
+        if (applyRules)
+        {
+            ForegroundRulesReplaced?.Invoke(this, EventArgs.Empty);
+        }
+
         Report(ProfileTransferResult.SchemeImported(bundle.Name));
     }
 
-    /// <summary>
-    /// Dismisses the pending import without touching the device.
-    /// </summary>
+    /// <summary>Restores both configuration halves after a failed import and restores the older undo point.</summary>
+    private async Task<string> RollbackFailedImportAsync(
+        SchemeImportRecovery failed,
+        SchemeImportRecovery? previousRecovery)
+    {
+        try
+        {
+            _presets.RestoreSlots(failed.DeviceId, failed.Slots);
+            if (failed.ForegroundRules is { } rules)
+            {
+                ReplaceForegroundRules(rules);
+                ForegroundRulesReplaced?.Invoke(this, EventArgs.Empty);
+            }
+
+            if (!await ReloadSchemeSlotsAsync(failed.DeviceId, failed.ActiveSlot, "恢复方案"))
+            {
+                _schemeUndo = failed;
+                CanUndoSchemeImport = true;
+                return "；运行中的旧配置也未能重载。已保留恢复点，可重试撤销。";
+            }
+
+            if (previousRecovery is null)
+            {
+                _schemeImportRecoveryStore.Clear();
+            }
+            else
+            {
+                _schemeImportRecoveryStore.Save(previousRecovery);
+            }
+
+            _schemeUndo = previousRecovery;
+            CanUndoSchemeImport = previousRecovery is not null;
+            return string.Empty;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            // The durable pre-import point is safer than pretending the older point survived a
+            // failed restore. Keep it armed so the user can explicitly return to that state.
+            _schemeUndo = failed;
+            CanUndoSchemeImport = true;
+            return $"；自动回滚未完成：{exception.Message}。已保留恢复点，可重试撤销。";
+        }
+    }
+
+    private void ReplaceForegroundRules(ForegroundSettings settings)
+    {
+        _foregroundRuleStore.Save(settings);
+        Foreground.Update(settings);
+    }
+
+    /// <summary>Dismisses the dialog without consuming the persisted recovery point.</summary>
     [RelayCommand]
     private void CancelSchemeImport()
     {
@@ -2274,13 +2395,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _pendingSchemeDeviceId = null;
         SchemePreview = null;
         SchemeImportApplied = false;
+        ApplySchemeForegroundRules = false;
         IsSchemePreviewOpen = false;
     }
 
     /// <summary>
-    /// Restores the slot set the last scheme import replaced, as one atomic operation, and
-    /// brings the running engine back in step with it. The undo is one level: it clears itself
-    /// as it runs, so a second import's snapshot is never undone by mistake.
+    /// Restores the latest persisted pre-import state. The recovery point is deleted only after
+    /// slots, optional rules and the running engine have all been restored, so a disconnected
+    /// device/daemon or a write failure leaves the undo available for another attempt.
     /// </summary>
     [RelayCommand]
     private async Task UndoSchemeImport()
@@ -2290,29 +2412,39 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        _schemeUndo = null;
-        CanUndoSchemeImport = false;
-
         try
         {
             _presets.RestoreSlots(undo.DeviceId, undo.Slots);
+            if (undo.ForegroundRules is { } rules)
+            {
+                ReplaceForegroundRules(rules);
+            }
 
             if (!await ReloadSchemeSlotsAsync(undo.DeviceId, undo.ActiveSlot, "撤销方案导入"))
             {
                 return;
             }
+
+            _schemeImportRecoveryStore.Clear();
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
         {
-            SetTransferError($"撤销失败：{exception.Message}");
+            SetTransferError($"撤销失败：{exception.Message}。恢复点已保留，可重试。");
             return;
         }
 
+        _schemeUndo = null;
+        CanUndoSchemeImport = false;
         _pendingScheme = null;
         _pendingSchemeDeviceId = null;
         SchemePreview = null;
         SchemeImportApplied = false;
         IsSchemePreviewOpen = false;
+        if (undo.ForegroundRules is not null)
+        {
+            ForegroundRulesReplaced?.Invoke(this, EventArgs.Empty);
+        }
+
         Report(ProfileTransferResult.SchemeImportUndone());
     }
 

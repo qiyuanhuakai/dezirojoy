@@ -91,7 +91,7 @@
         <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
 
-                <Border Classes="card">
+                <Border Classes="card" IsVisible="{Binding !SchemeImportApplied}">
                     <StackPanel>
                         <TextBlock Classes="cardTitle" Text="预设槽位变化" />
                         <ItemsControl x:Name="SlotRows" Margin="0,10,0,0"
@@ -112,6 +112,27 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="ForegroundRulesCard" Classes="card"
+                        IsVisible="{Binding SchemePreview.HasForegroundRules}">
+                    <StackPanel>
+                        <TextBlock Classes="cardTitle" Text="前台规则（可选）" />
+                        <TextBlock Classes="hint" Margin="0,8,0,0"
+                                   Text="{Binding SchemePreview.ForegroundRulesSummary}" />
+                        <ItemsControl x:Name="ForegroundRuleLines" Margin="0,8,0,0"
+                                      ItemsSource="{Binding SchemePreview.ForegroundRuleLines}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="x:String">
+                                    <TextBlock Text="{Binding}" FontSize="11" Margin="0,2" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <CheckBox x:Name="ApplyForegroundRulesCheck" Margin="0,10,0,0"
+                                  Content="同时替换全应用的前台规则"
+                                  IsChecked="{Binding ApplySchemeForegroundRules}" />
                     </StackPanel>
                 </Border>
 
@@ -155,7 +176,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Classes="card">
+                <Border Classes="card" IsVisible="{Binding !SchemeImportApplied}">
                     <StackPanel>
                         <TextBlock Classes="cardTitle" Text="导入后各预设的按键" />
                         <ItemsControl x:Name="IncomingPresets" Margin="0,10,0,0"
@@ -208,7 +229,7 @@
             <Grid Margin="0,12,0,0" ColumnDefinitions="*,Auto,Auto">
                 <TextBlock Grid.Column="0" VerticalAlignment="Center" Classes="hint"
                            IsVisible="{Binding SchemePreview.ReplacesAnything}"
-                           Text="导入会整体替换上述槽位，导入后可在本窗口撤销一次。" />
+                           Text="导入会整体替换上述槽位，导入后可随时从设置页撤销一次。" />
                 <Button Grid.Column="1" x:Name="CancelSchemeButton" Classes="ghost" Content="取消"
                         Margin="8,0,0,0" IsVisible="{Binding !SchemeImportApplied}"
                         Command="{Binding CancelSchemeImportCommand}" />

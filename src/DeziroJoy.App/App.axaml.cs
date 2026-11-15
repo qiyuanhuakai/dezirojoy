@@ -59,11 +59,15 @@ public partial class App : Application
         var themes = new ThemeService();
         var controller = new DaemonController(new NamedPipeDaemonEndpoint());
 
+        var foregroundRules = new ForegroundRuleStore();
+        var recovery = new FileSchemeImportRecoveryStore();
         var viewModel = new MainWindowViewModel(
             presentationHost,
             store,
             daemon: controller,
-            settings: themes);
+            settings: themes,
+            foregroundRuleStore: foregroundRules,
+            schemeImportRecoveryStore: recovery);
 
         var services = new ServiceCollection();
         services.AddSingleton<IGamepadProvider>(provider);

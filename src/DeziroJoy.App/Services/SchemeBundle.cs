@@ -77,6 +77,13 @@ public sealed record SchemeBundle
 
     /// <summary>The temporary layers the scheme carries, one entry per layer per preset.</summary>
     public IReadOnlyList<SchemeLayer> Layers { get; init; } = [];
+
+    /// <summary>
+    /// The app-wide foreground rules exported beside the presets. Null keeps old bundles and
+    /// templates compatible and means import offers no rule-apply choice; the user must still
+    /// opt in before a non-null table replaces the receiver's global rules.
+    /// </summary>
+    public ForegroundSettings? ForegroundRules { get; init; }
 }
 
 /// <summary>
@@ -241,6 +248,32 @@ public static class SchemeBundleCodec
             if (key.Target is not SpecialKeyTarget)
             {
                 return SchemeBundleLoadResult.Failed("导入失败：方案包的特殊键包含无法识别的目标。");
+            }
+        }
+
+        if (bundle.ForegroundRules is { } foreground)
+        {
+            if (foreground.DefaultSlot < PresetStore.MinSlot)
+            {
+                return SchemeBundleLoadResult.Failed("导入失败：方案包的前台规则默认槽位无效。");
+            }
+
+            if (foreground.Rules is null)
+            {
+                return SchemeBundleLoadResult.Failed("导入失败：方案包的前台规则列表无效。");
+            }
+
+            foreach (var rule in foreground.Rules)
+            {
+                if (rule is null || string.IsNullOrWhiteSpace(rule.ProcessName))
+                {
+                    return SchemeBundleLoadResult.Failed("导入失败：方案包的前台规则包含空白的进程名。");
+                }
+
+                if (rule.Action == ForegroundAction.Profile && rule.Slot < PresetStore.MinSlot)
+                {
+                    return SchemeBundleLoadResult.Failed("导入失败：方案包的前台规则预设槽位无效。");
+                }
             }
         }
 

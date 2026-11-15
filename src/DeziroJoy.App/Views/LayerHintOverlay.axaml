@@ -57,9 +57,16 @@
                                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                                     </Border>
-                                    <TextBlock Margin="8,0,0,0" Text="{Binding Action}" FontSize="13"
-                                               Foreground="{DynamicResource OverlayTextBrush}"
-                                               VerticalAlignment="Center" />
+                                    <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Action}" FontSize="13"
+                                                   Foreground="{DynamicResource OverlayTextBrush}" />
+                                        <TextBlock Text="{Binding DoubleClickAction, StringFormat='双击：{0}'}"
+                                                   IsVisible="{Binding HasDoubleClickAction}" FontSize="11" Margin="0,2,0,0"
+                                                   Foreground="{DynamicResource HintTextBrush}" />
+                                        <TextBlock Text="{Binding LongPressAction, StringFormat='长按：{0}'}"
+                                                   IsVisible="{Binding HasLongPressAction}" FontSize="11" Margin="0,2,0,0"
+                                                   Foreground="{DynamicResource HintTextBrush}" />
+                                    </StackPanel>
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

@@ -90,6 +90,16 @@ public sealed record SchemeImportPreview
     /// <summary>True when the scheme populates at least one temporary layer.</summary>
     public bool HasLayers => LayerLines.Count > 0;
 
+    /// <summary>True when the bundle carries a foreground table the user may choose to apply.</summary>
+    public bool HasForegroundRules => ForegroundRuleLines.Count > 0;
+
+    /// <summary>The incoming global rules as readable lines, including the desktop default.</summary>
+    public IReadOnlyList<string> ForegroundRuleLines { get; init; } = [];
+
+    public string ForegroundRulesSummary => HasForegroundRules
+        ? $"方案包含 {ForegroundRuleLines.Count - 1} 条前台规则。规则是全应用共享配置，不只影响当前设备；默认不随导入替换。"
+        : string.Empty;
+
     /// <summary>
     /// Builds the preview for importing <paramref name="bundle"/> onto the device. The
     /// special-key lines describe the subset the device will end up with - the bundle's own
@@ -164,6 +174,10 @@ public sealed record SchemeImportPreview
             Presets = [.. bundle.Presets.OrderBy(preset => preset.Slot)],
             SpecialKeyLines = [.. keys.Select(SpecialKeyLine)],
             LayerLines = [.. bundle.Layers.Select(LayerLine)],
+            ForegroundRuleLines = bundle.ForegroundRules is { } foreground
+                ? [$"桌面默认：预设 {foreground.DefaultSlot}；规则总开关：{(foreground.Enabled ? "启用" : "停用")}",
+                    .. foreground.Rules.Select(rule => rule.Describe())]
+                : [],
         };
     }
 

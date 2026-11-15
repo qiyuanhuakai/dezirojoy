@@ -19,7 +19,32 @@ namespace DeziroJoy.App.Services;
 /// a restart.
 /// </para>
 /// </summary>
-public sealed class ForegroundRuleStore
+public interface IForegroundRuleStore
+{
+    string? LastError { get; }
+
+    ForegroundSettings Load();
+
+    void Save(ForegroundSettings settings);
+}
+
+/// <summary>Test/embedder default that never touches the signed-in user's real AppData.</summary>
+public sealed class InMemoryForegroundRuleStore : IForegroundRuleStore
+{
+    private ForegroundSettings _settings = new();
+
+    public string? LastError => null;
+
+    public ForegroundSettings Load() => _settings;
+
+    public void Save(ForegroundSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings;
+    }
+}
+
+public sealed class ForegroundRuleStore : IForegroundRuleStore
 {
     public const string FileName = "foreground-rules.json";
 

@@ -55,7 +55,7 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
   「切换临时层」。
 - **临时层**：默认一个临时层，按住（或按下切换）Leader 进入；只覆盖填写的几个按钮，
   未覆盖映射继承基础层，相同持续动作跨层保持（拖拽不中断），松开 / 断连可靠释放。
-- **命令提示浮层**：按住层 Leader 时在屏幕边缘显示当前层按键的可读动作名（如「X：复制」），
+- **命令提示浮层**：按住层 Leader 时在屏幕边缘显示当前层按键的单击 / 双击 / 长按动作，
   复用实时手柄图，不夺取目标应用键盘焦点。
 
 ### 前台应用规则
@@ -67,8 +67,10 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
 
 ### 配置分享与更新
 
-- **完整方案包**：导入 / 导出一整套方案（基础配置 + 临时层 + 全局特殊键 + 动作名称 +
-  版本 + 使用说明），导入前预览替换内容、原子保存、可撤销；内置 Windows 模板。
+- **完整方案包**：导入 / 导出一整套方案（基础配置 + 临时层 + 全局特殊键 + 前台规则 +
+  动作名称 + 版本 + 使用说明）。前台规则默认只预览、不应用，接收者明确勾选后才替换全局规则。
+- 导入前预览替换内容、原子保存；撤销点持久化，关闭并重开 GUI 后仍可从设置页撤销一次。
+  内置 Windows 模板。
 - **内置自动更新**：设置页检查更新、opt-in 自动下载、sha256 校验、一次点击安装。
 - **按设备持久化**：每个手柄独立保存，重连自动恢复；配置解析容错（未知映射保留、可删）。
 
@@ -83,6 +85,10 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
 |---|---|---|---|
 | Windows 10/11 | XInput | SendInput（提权守护进程） | 主要目标 |
 | Linux（X11 / Wayland） | evdev (`/dev/input`) | uinput (`/dev/uinput`) | 实验性 |
+
+当前产品输入后端没有改变。Windows 的 [GameInput v4 验证程序](tools/GameInputProbe/README.md)
+用于按设备核实 Guide／Share、后台输入和 XInput 槽位关联；[原生 PS／NS 接入路线](docs/NATIVE-GAMEPAD-ROADMAP.md)
+建议以独立 SDL3 provider 探针扩展覆盖，均不代表这些后端已经接入产品。
 
 Linux 实验性说明：
 
@@ -180,8 +186,10 @@ deb / rpm 装入 `/opt/dezirojoy` 并注册应用菜单入口；三种 Linux 格
 
 ### 导入 / 导出方案
 
-- 「设置 → 导出方案」把整套预设 + 特殊键 + 临时层 + 说明存为一个文件；
-  「导入方案」预览将替换的内容后原子应用，可撤销。旧的单配置文件也能作为单预设方案导入。
+- 「设置 → 导出方案」把整套预设 + 特殊键 + 临时层 + 前台规则 + 说明存为一个文件；
+  「导入方案」预览将替换的内容后原子应用。旧的单配置文件也能作为单预设方案导入。
+- 随包的前台规则默认只预览；勾选「同时替换全应用的前台规则」后才应用。
+- 导入后可立即撤销，也可关闭重开 GUI 后到「设置 → 撤销上次导入」恢复一次；成功撤销才删除恢复点。
 - 想快速开始，可「导入 Windows 内置模板」。
 
 ### 精准模式与校准
@@ -194,11 +202,12 @@ deb / rpm 装入 `/opt/dezirojoy` 并注册应用菜单入口；三种 Linux 格
 | 文件 | 内容 | 位置 |
 |---|---|---|
 | 预设配置（profile） | 单槽映射表 | `%APPDATA%\DeziroJoy\profiles\`（Win）/ `~/.config/DeziroJoy/profiles/`（Linux） |
-| 方案包（scheme） | 整套预设 + 特殊键 + 临时层 + 说明 | 任意位置，经「导入方案」导入 |
+| 方案包（scheme） | 整套预设 + 特殊键 + 临时层 + 可选前台规则 + 说明 | 任意位置，经「导入方案」导入 |
 | 前台规则 | 按程序切换 / 暂停 | `%APPDATA%\DeziroJoy\foreground-rules.json` / `~/.config/DeziroJoy/foreground-rules.json` |
+| 方案导入恢复点 | 导入前完整槽位、活动槽与可选旧规则 | `%APPDATA%\DeziroJoy\scheme-import-recovery.json` |
 
 均为人类可读 JSON（枚举用名称、多态对象带 `$type`）。**想让 AI 助手帮你写 / 改配置**，
-本仓库内置了技能 [`dezirojoy-config`](.kimi-code/skills/dezirojoy-config/SKILL.md)：
+本仓库内置了技能 [`dezirojoy-config`](skills/dezirojoy-config/SKILL.md)：
 完整 schema、枚举取值、引擎校验规则与可直接套用的示例都在其中。
 
 ## 常驻架构
@@ -258,11 +267,12 @@ tests/
 
 ## 文档
 
+- [ROADMAP.md](ROADMAP.md) — GameInput、原生 PS／NS 与完善屏幕键盘输入能力的阶段计划。
 - [DESIGN.md](DESIGN.md) — 界面设计系统、交互模型与常驻架构基准。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 内存占用实测。
-- [.kimi-code/skills/dezirojoy-config/](.kimi-code/skills/dezirojoy-config/SKILL.md) — 配置文件编写技能。
+- [skills/dezirojoy-config/](skills/dezirojoy-config/SKILL.md) — 配置文件编写技能。
 
 ## 许可
 

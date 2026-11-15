@@ -328,6 +328,45 @@ public class SchemeBundleTests : IDisposable
         Assert.Contains("槽位", result.Message);
     }
 
+    [Theory]
+    [InlineData(0, "chrome", "Profile", 1, "默认槽位")]
+    [InlineData(1, "  ", "Profile", 1, "进程名")]
+    [InlineData(1, "chrome", "Profile", 0, "预设槽位")]
+    public void Load_Refuses_Invalid_Foreground_Rules(
+        int defaultSlot, string processName, string action, int slot, string reason)
+    {
+        var bundle = new SchemeBundle
+        {
+            Name = "无效规则",
+            Presets =
+            [
+                new SchemePreset
+                {
+                    Slot = 1,
+                    Profile = new GamepadProfile { Name = "配置", Mappings = [] },
+                },
+            ],
+            ForegroundRules = new ForegroundSettings
+            {
+                DefaultSlot = defaultSlot,
+                Rules =
+                [
+                    new ForegroundRule
+                    {
+                        ProcessName = processName,
+                        Action = Enum.Parse<ForegroundAction>(action),
+                        Slot = slot,
+                    },
+                ],
+            },
+        };
+
+        var result = SchemeBundleCodec.Parse(SchemeBundleCodec.Serialize(bundle));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(reason, result.Message);
+    }
+
     [Fact]
     public void The_Windows_Template_Is_A_Complete_Two_Preset_Scheme()
     {

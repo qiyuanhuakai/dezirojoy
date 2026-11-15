@@ -84,6 +84,11 @@ public sealed class SchemeBundleDialogGuiTests : IDisposable
             ],
             SpecialKeys = [],
             Layers = [],
+            ForegroundRules = new ForegroundSettings
+            {
+                DefaultSlot = 1,
+                Rules = [new ForegroundRule { ProcessName = "chrome", Slot = 2 }],
+            },
         };
     }
 
@@ -123,6 +128,11 @@ public sealed class SchemeBundleDialogGuiTests : IDisposable
             Assert.Contains(texts, text => text!.Contains("槽位 1"));
             Assert.Contains(texts, text => text!.Contains("将替换为「导入的主配置」"));
             Assert.Contains(texts, text => text!.Contains("方案不包含此槽位"));
+
+            Assert.True(dialog.FindControl<Border>("ForegroundRulesCard")!.IsVisible);
+            Assert.False(dialog.FindControl<CheckBox>("ApplyForegroundRulesCheck")!.IsChecked == true);
+            Assert.False(vm.ApplySchemeForegroundRules);
+            Assert.Contains(vm.SchemePreview!.ForegroundRuleLines, line => line.Contains("chrome"));
 
             // The confirm affordance is the one on screen before anything is applied.
             Assert.True(dialog.FindControl<Button>("ConfirmSchemeButton")!.IsVisible);

@@ -327,9 +327,14 @@ public partial class MainWindow : Window
     /// </summary>
     private void HostForegroundRules()
     {
+        var rules = new ForegroundRulesViewModel(
+            ViewModel.Foreground,
+            store: ViewModel.ForegroundRuleStore,
+            setLocked: ViewModel.SetForegroundLockedAsync);
+        ViewModel.ForegroundRulesReplaced += (_, _) => rules.ReloadSaved();
         var panel = new ForegroundRulesPanel
         {
-            DataContext = new ForegroundRulesViewModel(ViewModel.Foreground, setLocked: ViewModel.SetForegroundLockedAsync),
+            DataContext = rules,
         };
         var tab = new TabItem
         {

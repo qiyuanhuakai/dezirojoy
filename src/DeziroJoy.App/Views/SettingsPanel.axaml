@@ -52,6 +52,10 @@
                                 <Button x:Name="ImportWindowsTemplateButton" Classes="ghost" Margin="0,0,8,8"
                                         Content="导入 Windows 内置模板"
                                         Command="{Binding ImportWindowsTemplateCommand}" />
+                                <Button x:Name="UndoSchemeImportButton" Classes="ghost" Margin="0,0,8,8"
+                                        Content="撤销上次导入" IsEnabled="{Binding CanUndoSchemeImport}"
+                                        ToolTip.Tip="恢复点已持久保存；关闭并重开 GUI 后仍可撤销。"
+                                        Command="{Binding ShowSchemeUndoCommand}" />
                             </WrapPanel>
                             <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
                                        IsVisible="{Binding HasTransferMessage}"

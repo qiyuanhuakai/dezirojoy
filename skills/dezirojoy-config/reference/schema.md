@@ -177,10 +177,31 @@ long-press repeat interval.
 | `Presets` | array | `[]` | SchemePreset; unique slots ≥1 |
 | `SpecialKeys` | array? | null | device-global special keys; null = take presets' subset |
 | `Layers` | array | `[]` | SchemeLayer summaries |
+| `ForegroundRules` | ForegroundSettings? | null | optional app-wide foreground rules; import does **not** apply them by default |
 
 - **SchemePreset**: `Slot:int`, `Profile:GamepadProfile`, `ActionNames:[{Source,Action}]`
 - **SchemeLayer**: `LayerId:int`, `PresetSlot:int`, `Actions:[{Source,Action}]`
 - A body with no `Presets` is re-read as a plain profile → one-preset scheme (slot 1).
+- `ForegroundRules:null` keeps older bundles compatible and offers no rule-apply choice. A non-null
+  table is shown in the preview; only an explicit user opt-in replaces the receiver's global rules.
+  The codec refuses `DefaultSlot < 1`, blank process names, and `Profile` rules with `Slot < 1`.
+
+## SchemeImportRecovery (durable one-level undo)
+
+A successful import first writes the complete pre-import state to
+`%APPDATA%\DeziroJoy\scheme-import-recovery.json`. If that write fails, no configuration is changed.
+The point survives GUI exit/reopen; a later GUI exposes **设置 → 撤销上次导入**. It is cleared only
+after presets, active slot, applicable foreground rules, and the running engine have all recovered.
+
+| Field | Type | Notes |
+|---|---|---|
+| `SchemaVersion` | int | 1 |
+| `DeviceId` | string | device whose preset set was replaced |
+| `SchemeName` | string | imported scheme's display name |
+| `Slots` | object | complete slot dictionary; values are nullable GamepadProfile objects |
+| `ActiveSlot` | int | app-wide active slot before import |
+| `ForegroundRules` | ForegroundSettings? | old global rules only when import applied incoming rules; else null |
+| `ImportedAtUtc` | timestamp | import time |
 
 ## ForegroundSettings
 
