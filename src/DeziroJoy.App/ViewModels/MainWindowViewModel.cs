@@ -9,6 +9,7 @@ using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Profiles;
 using DeziroJoy.Platform.Linux;
+using DeziroJoy.Platform.Windows.Gaming;
 
 namespace DeziroJoy.App.ViewModels;
 
@@ -93,6 +94,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly IUpdateService _updateService;
 
+    private readonly IGameBarPopupGuard _gameBarPopupGuard;
+
+    private readonly bool _guideButtonSupported;
+
     private readonly bool _ownsUpdateService;
 
     /// <summary>
@@ -155,7 +160,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ThemeService? settings = null,
         IUpdateService? updateService = null,
         Func<LinuxRuntimeHints>? runtimeHints = null,
-        string? sinkError = null)
+        string? sinkError = null,
+        bool? guideButtonSupported = null,
+        IGameBarPopupGuard? gameBarPopupGuard = null)
     {
         _host = host;
         _daemon = daemon;
@@ -169,7 +176,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _ownsUpdateService = updateService is null;
         _runtimeHints = runtimeHints ?? LinuxRuntimeProbe.Probe;
         _sinkError = sinkError;
-        Editor = new MappingEditorViewModel();
+        _guideButtonSupported = guideButtonSupported ?? PlatformFactory.GuideButtonSupported;
+        _gameBarPopupGuard = gameBarPopupGuard ?? new GameBarPopupGuard();
+        try
+        {
+            IsGameBarControllerLaunchDisabled = _gameBarPopupGuard.IsControllerLaunchDisabled;
+        }
+        catch (Exception exception)
+        {
+            GameBarPopupError = $"无法读取 Windows Game Bar 设置：{exception.Message}";
+        }
+
+        Editor = new MappingEditorViewModel(_guideButtonSupported);
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
         Visualizer = new GamepadVisualizerViewModel();
@@ -285,6 +303,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<ControllerRuntime> Controllers { get; } = [];
 
     public ObservableCollection<MappingRowViewModel> Mappings { get; } = [];
+
+    /// <summary>One card per physical input, containing all of its mappings on both layers.</summary>
+    public ObservableCollection<MappingCardViewModel> MappingCards { get; } = [];
 
     /// <summary>
     /// The two global special keys as the 按键配置 top area shows them: 精准键 and Leader 键,
@@ -1201,6 +1222,47 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     [RelayCommand]
     private void CloseSettings() => IsSettingsOpen = false;
+
+    public bool ShowGuidePlatformNote => !_guideButtonSupported;
+
+    public string GuidePlatformNote => _guideButtonSupported
+        ? string.Empty
+        : "Windows · XInput 无法读取 Guide 键：模型不会高亮，Guide 映射和界面导航都不会触发。请改用其他按键。";
+
+    public bool ShowGameBarPopupGuard => _gameBarPopupGuard.IsSupported;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanDisableGameBarControllerLaunch))]
+    [NotifyPropertyChangedFor(nameof(GameBarPopupHint))]
+    private bool _isGameBarControllerLaunchDisabled;
+
+    public bool CanDisableGameBarControllerLaunch => ShowGameBarPopupGuard && !IsGameBarControllerLaunchDisabled;
+
+    public string GameBarPopupHint => IsGameBarControllerLaunchDisabled
+        ? "已关闭当前用户的手柄唤起 Game Bar；Win+G 与游戏录制不受影响。"
+        : "连接手柄或按 Guide 时若出现 ms-gamebar 弹窗，可关闭 Windows 的“允许控制器打开 Game Bar”。仅影响当前用户，不影响 Win+G 与游戏录制。";
+
+    [ObservableProperty]
+    private string? _gameBarPopupError;
+
+    public bool HasGameBarPopupError => !string.IsNullOrEmpty(GameBarPopupError);
+
+    [RelayCommand]
+    private void DisableGameBarControllerLaunch()
+    {
+        try
+        {
+            _gameBarPopupGuard.DisableControllerLaunch();
+            IsGameBarControllerLaunchDisabled = true;
+            GameBarPopupError = null;
+        }
+        catch (Exception exception)
+        {
+            GameBarPopupError = $"无法修改 Windows Game Bar 设置：{exception.Message}。也可在系统设置 → 游戏 → Xbox Game Bar 中手动关闭“允许控制器打开 Game Bar”。";
+        }
+
+        OnPropertyChanged(nameof(HasGameBarPopupError));
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(InjectorDescription))]
@@ -2417,6 +2479,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _ => false,
     };
 
+    private static InputBinding PhysicalSourceKey(InputBinding source) => source switch
+    {
+        ButtonBinding button => button with { Direction = null, Gesture = null },
+        StickBinding stick => stick with { Direction = null },
+        _ => source,
+    };
+
     /// <summary>
     /// Routes one gamepad sample to the editor's capture and to navigation, in that order, so
     /// the two never fight over the same press: a press consumed by capture must not also
@@ -3412,6 +3481,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                     ToggleMappingEnabled,
                     SpecialKeyConflicts.Involving(conflicts, entry.Id)));
             }
+        }
+
+        MappingCards.Clear();
+        foreach (var group in Mappings.GroupBy(row => PhysicalSourceKey(row.Entry.Source)))
+        {
+            var rows = group
+                .OrderBy(row => row.Entry.Layer == 0 ? 0 : 1)
+                .ToArray();
+            MappingCards.Add(new MappingCardViewModel(rows[0].Entry.Source, rows));
         }
 
         RefreshSpecialKeys(conflicts);

@@ -223,6 +223,10 @@
                 <TextBlock Classes="cardTitle" Text="编辑映射" />
                 <TextBlock Text="{Binding SourceDescription}" FontSize="13"
                            Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,6,0,0" />
+                <TextBlock x:Name="GuideUnavailableHint" Classes="hint" Margin="0,4,0,0"
+                           TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                           IsVisible="{Binding ShowGuideUnavailableHint}"
+                           Text="{Binding GuideUnavailableHint}" />
                 <TextBlock Text="{Binding ActiveTargetDescription}" FontSize="12"
                            Foreground="{DynamicResource AccentBrush}" Margin="0,2,0,0" />
                 <!-- Which layer the mapping being edited is on, so a mapping placed on a

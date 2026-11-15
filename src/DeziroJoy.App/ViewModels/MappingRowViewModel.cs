@@ -57,17 +57,17 @@ public partial class MappingRowViewModel : ObservableObject
 
     public string SourceText => MappingDescriptions.Source(Entry.Source);
 
-    /// <summary>
-    /// The layer this row's mapping sits on, named the way the editor's switcher names it. A
-    /// button can carry a base-layer mapping and a temporary-layer one side by side, so the
-    /// two rows that share a source read differently rather than as one mapping listed
-    /// twice. The base layer is what every row is unless it says otherwise, so it stays
-    /// blank here.
-    /// </summary>
-    public string LayerText => Entry.Layer == 0 ? string.Empty : MappingEditorViewModel.LayerLabel(1);
+    /// <summary>The layer this mapping sits on; both layers are named explicitly in the list.</summary>
+    public string LayerText => MappingEditorViewModel.LayerLabel(Entry.Layer);
 
     /// <summary>True when the row's mapping sits on the temporary layer rather than the base one.</summary>
     public bool OnTemporaryLayer => Entry.Layer != 0;
+
+    /// <summary>Direction details are shown only when they distinguish mappings within a card.</summary>
+    public string SourceDetailText => HasSourceDetail ? SourceText : string.Empty;
+
+    public bool HasSourceDetail => Entry.Source is ButtonBinding { Direction: not null }
+        or StickBinding { Direction: not null };
 
     public string TargetText => MappingDescriptions.Target(Entry.Target);
 

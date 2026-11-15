@@ -117,8 +117,13 @@ public sealed class MappingRowBorder : Border
             return;
         }
 
-        if (this.GetVisualAncestors().OfType<ItemsControl>().FirstOrDefault()?.DataContext
-            is not MainWindowViewModel vm)
+        var vm = this.GetVisualAncestors()
+            .OfType<ItemsControl>()
+            .Select(control => control.DataContext)
+            .OfType<MainWindowViewModel>()
+            .FirstOrDefault();
+
+        if (vm is null)
         {
             return;
         }

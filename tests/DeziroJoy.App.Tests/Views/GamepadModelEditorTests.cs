@@ -302,7 +302,7 @@ public sealed class GamepadModelEditorTests
         Assert.False(viewModel.IsEditing, "Enter must confirm the mapping settings");
         Assert.Equal(before + 1, list.ItemCount);
         Assert.Contains(
-            list.Items.OfType<MappingRowViewModel>(),
+            list.Items.OfType<MappingCardViewModel>().SelectMany(card => card.Mappings),
             row => row.Entry.Source == new ButtonBinding(GamepadButton.LeftBumper));
     }
 
@@ -323,7 +323,7 @@ public sealed class GamepadModelEditorTests
 
         Assert.False(viewModel.IsEditing);
         Assert.Single(
-            list.Items.OfType<MappingRowViewModel>(),
+            list.Items.OfType<MappingCardViewModel>().SelectMany(card => card.Mappings),
             row => row.Entry.Source == new StickBinding(GamepadStick.Right));
     }
 

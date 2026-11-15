@@ -12,6 +12,9 @@ namespace DeziroJoy.App.Services;
 /// </summary>
 public static class PlatformFactory
 {
+    /// <summary>XInput has no Guide button bit; evdev can report BTN_MODE.</summary>
+    public static bool GuideButtonSupported => !OperatingSystem.IsWindows();
+
     public static string PlatformName => OperatingSystem.IsWindows()
         ? "Windows · XInput + SendInput"
         : OperatingSystem.IsLinux()

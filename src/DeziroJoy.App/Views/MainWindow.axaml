@@ -41,19 +41,13 @@
         <conv:BoolToDoubleConverter x:Key="EditorFade" TrueValue="1" FalseValue="0" />
         <conv:BoolToDoubleConverter x:Key="RowTintFade" TrueValue="1" FalseValue="0" />
 
-        <!-- One source row. Shared by the left and the right column of the mapping surface so
-             both sides render identically. The selected row carries a full-bleed tint behind
-             its content as well as the accent bar: a 3px bar alone reads as a sliver among a
-             wall of cards. Clicking the row opens its settings, so there is no separate edit
-             button - only the enable toggle and delete remain.
-
-             Under the source, the row is the complete summary of the three gestures the
-             mapping carries (DESIGN 4.3.8): 单击 / 双击 / 长按 each get one line with a fixed
-             category label, so the three functions align in one column instead of squeezing
-             into three narrow ones. 已关闭, 无功能 and the legacy 重复单击的功能 are three
-             different states and read differently here, exactly as they do in the editor. -->
+        <!-- One layer's mapping inside a physical-input card. Every layer is named, and all
+             three gestures remain visible. Clicking the row opens that exact mapping. -->
         <DataTemplate x:Key="MappingRowTemplate" DataType="vm:MappingRowViewModel">
-            <controls:MappingRowBorder Classes="card mappingRow" Padding="0" Margin="0,0,0,6">
+            <controls:MappingRowBorder Classes="mappingRow" Padding="0" Margin="0,0,0,6"
+                                       Background="{DynamicResource SubtleBrush}"
+                                       BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
+                                       CornerRadius="{DynamicResource CornerRadiusLg}">
                 <Grid>
                     <!-- The tint bleeds one pixel past its slot on every side. The row's card
                          border insets its children, so without the bleed a selected row would
@@ -75,7 +69,7 @@
                             <MultiBinding Converter="{StaticResource RowSelected}">
                                 <Binding />
                                 <Binding Path="DataContext.(vm:MainWindowViewModel).SelectedMapping"
-                                         RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
+                                         RelativeSource="{RelativeSource AncestorType=Window}" />
                             </MultiBinding>
                         </Border.IsVisible>
                     </Border>
@@ -86,23 +80,19 @@
                             <MultiBinding Converter="{StaticResource RowSelected}">
                                 <Binding />
                                 <Binding Path="DataContext.(vm:MainWindowViewModel).SelectedMapping"
-                                         RelativeSource="{RelativeSource AncestorType=ItemsControl}" />
+                                         RelativeSource="{RelativeSource AncestorType=Window}" />
                             </MultiBinding>
                         </Border.IsVisible>
                     </Border>
                     <Grid ColumnDefinitions="*,Auto,Auto" Margin="14,9,12,9">
-                        <!-- The layer badge: a button can carry a base-layer mapping and a
-                             temporary-layer one side by side, so the row that sits on the
-                             temporary layer says which of the two it is rather than reading
-                             as a second copy of the same source. -->
-                        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="30,*">
+                        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="42,*">
                             <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnDefinitions="Auto,Auto">
-                                <TextBlock Grid.Column="0" Text="{Binding SourceText}" FontSize="12"
-                                           Foreground="{DynamicResource TextPrimaryBrush}" />
-                                <TextBlock Grid.Column="1" Text="{Binding LayerText}" FontSize="11"
-                                           Margin="8,1,0,0" VerticalAlignment="Center"
-                                           Foreground="{DynamicResource AccentBrush}"
-                                           IsVisible="{Binding OnTemporaryLayer}" />
+                                <TextBlock Grid.Column="0" Text="{Binding LayerText}" FontSize="11"
+                                           FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" />
+                                <TextBlock Grid.Column="1" Text="{Binding SourceDetailText}" FontSize="11"
+                                           Margin="8,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           IsVisible="{Binding HasSourceDetail}" />
                             </Grid>
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="单击" Classes="gestureLabel" />
                             <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ClickText}" Classes="gestureValue" />
@@ -125,6 +115,17 @@
                     </Grid>
                 </Grid>
             </controls:MappingRowBorder>
+        </DataTemplate>
+
+        <DataTemplate x:Key="MappingCardTemplate" DataType="vm:MappingCardViewModel">
+            <Border Classes="card mappingCard" Padding="12" Margin="0,0,0,10">
+                <StackPanel>
+                    <TextBlock Text="{Binding SourceText}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                    <ItemsControl Margin="0,8,0,0" ItemsSource="{Binding Mappings}"
+                                  ItemTemplate="{StaticResource MappingRowTemplate}" />
+                </StackPanel>
+            </Border>
         </DataTemplate>
     </Window.Resources>
 
@@ -593,6 +594,21 @@
                                     <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
                                     <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
                                                Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
+                                    <TextBlock x:Name="GuidePlatformNote" Classes="hint" Margin="0,4,0,0"
+                                               TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                                               IsVisible="{Binding ShowGuidePlatformNote}" Text="{Binding GuidePlatformNote}" />
+                                    <StackPanel IsVisible="{Binding ShowGameBarPopupGuard}">
+                                        <TextBlock x:Name="GameBarPopupHint" Classes="hint" Margin="0,4,0,0"
+                                                   TextWrapping="Wrap" Text="{Binding GameBarPopupHint}" />
+                                        <Button x:Name="DisableGameBarControllerLaunchButton" Classes="ghost"
+                                                Content="关闭手柄唤起 Game Bar" MinHeight="30" FontSize="11"
+                                                HorizontalAlignment="Left" Margin="0,6,0,0"
+                                                IsVisible="{Binding CanDisableGameBarControllerLaunch}"
+                                                Command="{Binding DisableGameBarControllerLaunchCommand}" />
+                                        <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource DangerBrush}"
+                                                   IsVisible="{Binding HasGameBarPopupError}" Text="{Binding GameBarPopupError}" />
+                                    </StackPanel>
                                 </StackPanel>
                                 <!-- The temporary gamepad-hijack switch, beside the model it governs.
                                      It is session-only (never persisted): on, a press drives the UI
@@ -739,14 +755,14 @@
                          than taking layout space, so without the gutter it would sit on top
                          of the rows' delete buttons (DESIGN 4.3.8). -->
                     <ScrollViewer Grid.Row="2" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding Mappings}">
+                        <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding MappingCards}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
-                                <StaticResource ResourceKey="MappingRowTemplate" />
+                                <StaticResource ResourceKey="MappingCardTemplate" />
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </ScrollViewer>

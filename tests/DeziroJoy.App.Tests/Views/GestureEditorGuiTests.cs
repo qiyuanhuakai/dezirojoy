@@ -878,7 +878,7 @@ public sealed class GestureEditorGuiTests
 
         // B already maps to Enter; editing it must replace that one entry, not add a second.
         Assert.Contains(
-            list.Items.OfType<MappingRowViewModel>(),
+            list.Items.OfType<MappingCardViewModel>().SelectMany(card => card.Mappings),
             row => row.Entry.Source == new ButtonBinding(GamepadButton.B));
 
         SelectTab(window, viewModel, "GestureDoubleClickTab");
@@ -890,7 +890,7 @@ public sealed class GestureEditorGuiTests
 
         Click(EditorPanelOf(window).FindControl<Button>("CommitButton")!, window);
 
-        var rows = list.Items.OfType<MappingRowViewModel>()
+        var rows = list.Items.OfType<MappingCardViewModel>().SelectMany(card => card.Mappings)
             .Where(row => row.Entry.Source is ButtonBinding { Button: GamepadButton.B })
             .ToArray();
 

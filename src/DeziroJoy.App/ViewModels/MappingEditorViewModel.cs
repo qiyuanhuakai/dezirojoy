@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DeziroJoy.App.Services;
 using DeziroJoy.Core.Engine;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
@@ -718,8 +719,9 @@ public partial class MappingEditorViewModel : ObservableObject
         return [GestureOffOption, GestureNoneOption, GestureRepeatOption, .. keys, .. buttons];
     }
 
-    public MappingEditorViewModel()
+    public MappingEditorViewModel(bool? guideButtonSupported = null)
     {
+        GuideButtonSupported = guideButtonSupported ?? PlatformFactory.GuideButtonSupported;
         RebuildButtonOptions();
         RebuildKeyOptions();
 
@@ -2728,6 +2730,16 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>What the model element being edited is called, e.g. "左肩键 LB".</summary>
     public string SourceDescription => MappingDescriptions.Source(BuildSource());
 
+    public bool GuideButtonSupported { get; }
+
+    public bool ShowGuideUnavailableHint => !GuideButtonSupported
+        && !SourceIsStick
+        && SelectedButton == GamepadButton.Guide;
+
+    public string GuideUnavailableHint => GuideButtonSupported
+        ? string.Empty
+        : "Windows 的 XInput 接口不上报 Guide 键（系统限制）：这条映射会保存，但不会触发，模型上的 Guide 也不会高亮。请改用其他按键；Linux（evdev）可识别设备上报的 Guide。";
+
     /// <summary>What the chosen target does, e.g. "Ctrl + C", or 无功能 when the click does nothing.</summary>
     public string TargetDescription
     {
@@ -3312,6 +3324,7 @@ public partial class MappingEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowButtonPicker));
         OnPropertyChanged(nameof(ShowStickPicker));
         OnPropertyChanged(nameof(SourceDescription));
+        OnPropertyChanged(nameof(ShowGuideUnavailableHint));
         OnPropertyChanged(nameof(NeedsDirection));
         OnPropertyChanged(nameof(ShowDirectionPicker));
 
@@ -3340,6 +3353,7 @@ public partial class MappingEditorViewModel : ObservableObject
 
         SetSelectedButtonOption(CurrentOption());
         OnPropertyChanged(nameof(SourceDescription));
+        OnPropertyChanged(nameof(ShowGuideUnavailableHint));
         RefreshSpecialKeyConflicts();
     }
 

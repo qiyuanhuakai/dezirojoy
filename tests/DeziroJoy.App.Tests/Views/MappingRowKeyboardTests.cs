@@ -100,7 +100,7 @@ public sealed class MappingRowKeyboardTests
             ?.GetVisualDescendants().OfType<TextBlock>().ToHashSet() ?? [];
 
         var header = stage.GetVisualDescendants().OfType<TextBlock>()
-            .Where(text => !modelTexts.Contains(text) && !toggleTexts.Contains(text))
+            .Where(text => text.IsEffectivelyVisible && !modelTexts.Contains(text) && !toggleTexts.Contains(text))
             .ToList();
 
         Assert.Equal(2, header.Count);
@@ -172,15 +172,13 @@ public sealed class MappingRowKeyboardTests
 
     // ---- A row is a keyboard activation target --------------------------------
 
-    // ---- A row says which layer its mapping sits on ---------------------------
+    // ---- One card shows every layer of the same physical input ---------------
 
     [AvaloniaFact]
-    public async Task A_Row_On_The_Temporary_Layer_Says_So_And_A_Base_One_Does_Not()
+    public async Task A_Button_Card_Shows_Its_Base_And_Temporary_Layers_Together()
     {
-        // A button can carry a base-layer mapping and a temporary-layer one side by side, so
-        // the two rows that share a source have to read differently: the temporary layer's
-        // row wears its layer beside the source, and the base layer's row stays bare, since
-        // the base layer is what every row is unless it says otherwise.
+        // Both layers stay visible in one physical-button card, each with its own complete
+        // gesture summary and an explicit layer label.
         var (window, viewModel, host, provider) = BuildWindow();
 
         ConnectPad(provider);
@@ -212,10 +210,17 @@ public sealed class MappingRowKeyboardTests
 
         Assert.Equal(2, rows.Length);
 
+        var card = Assert.Single(viewModel.MappingCards,
+            candidate => candidate.Source is ButtonBinding { Button: GamepadButton.B });
+        Assert.Equal(2, card.Mappings.Count);
+        Assert.Contains(rows[0], card.Mappings);
+        Assert.Contains(rows[1], card.Mappings);
+
         var baseRow = rows.Single(row => row.Entry.Layer == 0);
 
         Assert.False(baseRow.OnTemporaryLayer);
-        Assert.Equal(string.Empty, baseRow.LayerText);
+        Assert.Equal("基础层", baseRow.LayerText);
+        Assert.Contains("基础层", RowFor(window, baseRow).GetLogicalDescendants().OfType<TextBlock>().Select(text => text.Text));
         Assert.DoesNotContain("临时层", RowFor(window, baseRow).GetLogicalDescendants().OfType<TextBlock>().Select(text => text.Text));
 
         var temporaryRow = rows.Single(row => row.Entry.Layer == 1);
@@ -277,7 +282,7 @@ public sealed class MappingRowKeyboardTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        AssertColor(Token(row.ActualThemeVariant, "CardBrush"), ColorOf(row.Background),
+        AssertColor(Token(row.ActualThemeVariant, "SubtleBrush"), ColorOf(row.Background),
             "releasing must drop the pressed wash");
 
         // The same editor a click opens: the row is selected and its entry is loaded.
@@ -306,7 +311,7 @@ public sealed class MappingRowKeyboardTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        AssertColor(Token(row.ActualThemeVariant, "CardBrush"), ColorOf(row.Background),
+        AssertColor(Token(row.ActualThemeVariant, "SubtleBrush"), ColorOf(row.Background),
             "releasing must drop the pressed wash");
         Assert.True(viewModel.IsEditing, "Space on a focused row must open that row's editor");
         Assert.Same(row.DataContext, viewModel.SelectedMapping);
