@@ -828,6 +828,19 @@ public sealed class TrayHostTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void Disposing_The_Host_Also_Stops_External_Settings_Synchronization()
+    {
+        var fixture = BuildTray();
+        fixture.Tray.Dispose();
+        var before = _application.RequestedThemeVariant;
+
+        new ThemeService(_directory).Save(ThemeVariant.Light);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(before, _application.RequestedThemeVariant);
+    }
+
+    [AvaloniaFact]
     public void Disposing_The_Tray_Removes_The_Icon_From_The_Application()
     {
         var fixture = BuildTray();

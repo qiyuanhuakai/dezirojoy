@@ -815,14 +815,13 @@ internal static class TrayHost
             });
         }
 
-        lifetime.Exit += (_, _) =>
+        tray.Disposed += () =>
         {
             themes.ExternalChanged -= PreferencesChanged;
             settingsWatcher?.Dispose();
             render.Exited -= RenderExited;
             observedRender?.Dispose();
             observedRender = null;
-            tray.Dispose();
             layerHint?.Dispose();
             screenKeyboard?.Dispose();
             daemon.Dispose();

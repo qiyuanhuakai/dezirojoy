@@ -10,6 +10,8 @@ public sealed class LinuxDeviceAccessProbeTests
     [Fact]
     public void Probe_Reports_Live_Access_Persistent_Configuration_And_Automatic_Fix()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the fixture models Linux paths and permissions");
+
         var files = new Dictionary<string, string>
         {
             [LinuxDeviceAccess.UdevRulesPath] = LinuxDeviceAccess.UdevRulesText + "\n",
@@ -34,6 +36,8 @@ public sealed class LinuxDeviceAccessProbeTests
     [Fact]
     public void Probe_Distinguishes_A_Configured_Group_From_The_Current_Session()
     {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the fixture models Linux paths and permissions");
+
         var files = new Dictionary<string, string>
         {
             ["/etc/group"] = "input:x:42:alice\n",

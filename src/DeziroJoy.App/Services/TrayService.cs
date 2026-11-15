@@ -38,6 +38,8 @@ public sealed class TrayService : IDisposable
     private bool _exiting;
     private bool _disposed;
 
+    public event Action? Disposed;
+
     public TrayService(
         Application application,
         IClassicDesktopStyleApplicationLifetime lifetime,
@@ -149,6 +151,7 @@ public sealed class TrayService : IDisposable
         _trayIcon = null;
 
         TrayIcon.SetIcons(_application, null);
+        Disposed?.Invoke();
     }
 
     private NativeMenu BuildMenu()
