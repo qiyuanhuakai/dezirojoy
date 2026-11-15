@@ -611,14 +611,15 @@ jobs:
           cat > body.md <<'NOTES'
           ## DeziroJoy vVERSION
 
-          DeziroJoy 0.0.2-beta.6 预览版：把游戏手柄映射为鼠标与键盘的跨平台工具。
+          DeziroJoy 0.0.2-beta.7 预览版：把游戏手柄映射为鼠标与键盘的跨平台工具。
           Windows 走 XInput + SendInput（提权常驻守护进程作为唯一注入权威），Linux 走
           evdev + uinput（systemd 用户单元常驻），读取与注入都在内核级，与显示服务器
-          无关。本版修复一批配置与浮窗问题：一个键现在可同时配置基础层与临时层两个动作、
-          自动检查/自动下载开关可持久化、提示浮窗位置准确且按 Leader 可靠出现、屏幕键盘
-          不再超出屏幕并更适合手柄操作、前台规则改用下拉栏与纯数字优先级输入。安装与
-          卸载都走系统标准途径，安装器不注册自启动、计划任务或 udev 规则（登录自启动与
-          常驻服务请在应用内「设置」中按需开启），卸载也不会删除用户配置。欢迎按
+          无关。本版集中修复 Linux/X11 输入链路：evdev 轴量程读取错误（右摇杆无响应、
+          左摇杆不回中、扳机方向）、守护进程首次连接与 Unix 管道竞态、systemd 单元
+          归属 / XDG 路径 / 启用状态原因、uinput 鼠标能力声明与写入错误日志、udev
+          一键修复同时放行 event* 与 /dev/uinput 且两种权限修改持久。安装与卸载都走
+          系统标准途径，安装器不注册自启动、计划任务或 udev 规则（登录自启动与常驻
+          服务请在应用内「设置」中按需开启），卸载也不会删除用户配置。欢迎按
           [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
 
           ### 本版更新
@@ -649,17 +650,42 @@ jobs:
 
           #### 本批新增
 
-          - **一个键可同时配置基础层与临时层动作**：所属层改为「基础层 / 临时层」分段
-            切换，两个层各自独立保存、互不覆盖（如 X 平时 Ctrl+C、按住层 Leader 时
-            Alt+V）；拦截「临时层没有 Leader 命名」「临时层映射占用 Leader 自身按键」，
-            映射行为临时层加徽标
-          - **自动检查 / 自动下载开关可持久化**：修复读取时机，重启后开关状态保持
-          - **提示浮窗位置准确且可靠出现**：按屏幕像素与窗口缩放换算位置，所选锚点 /
-            跟随鼠标即实际落点；层激活即推送快照，按住 Leader 每次都出现
-          - **屏幕键盘不再超出屏幕、更适合手柄**：夹取到可见屏幕（DPI 感知、越界恢复），
-            大键帽、清晰光标环、重排分页，适配十字键操作
-          - **前台规则改用下拉栏与纯数字输入**：默认预设 / 切换到预设为下拉栏，优先级为
-            纯数字输入（无加减），统一按钮尺寸并现代化
+          - **evdev 轴量程修复（右摇杆、左摇杆回中、扳机方向）**：`EVIOCGABS` 的
+            ioctl 号 nr 基座误写为 0x00（正确为 0x40），每次读轴量程 / 静止值要么
+            EINVAL 失败、要么对 0x20..0x3f 轴号被误答成 `EVIOCGBIT` 掩码字节，
+            死区与满幅判定随之偏差。现按内核 `_IOC` 定义推导并经 gcc 对内核头文件
+            核对，轴号按位或到 0x40 基座；读不到时回退默认量程的行为不变
+          - **daemon 首次连接重试与 Unix 管道竞态**：刚被要求启动的 daemon 要几百
+            毫秒后才开管道，首个探测不再据此误报"找不到守护进程"——启动宽限内重试
+            开管道与握手，首次探测之后的重试只探测、不重新拉起（不为同一个 daemon
+            弹第二次 UAC）；宽限按真实耗时计算，成功探测后另静置一个探测间隔，
+            避开管道实例替换时"连上即断"的竞态
+          - **systemd 单元归属、XDG 路径与启用状态原因**：单元已安装后 daemon 归
+            单元所有，托盘 supervisor 经 `systemctl --user start` 取服务，不再另起
+            与单元实例竞争的私有子进程（单元起不动才回退自有子进程）；安装序列去掉
+            多余的 `daemon-reload`（`enable` 自行 reload，它从前只增加失败面）；
+            autostart 与单元目录按 XDG 规范解析（`$XDG_CONFIG_HOME` / `$HOME`），
+            不再因目录不存在而落到当前工作目录；`is-enabled` 答 not-found / static /
+            masked 时卡片在启用行旁给出原因与出路，"已启用但启动失败"指向
+            `journalctl --user -u dezirojoy-daemon`
+          - **uinput 鼠标能力声明与写入错误日志**：虚拟设备在 EV_KEY 键码之外同时
+            声明 `BTN_LEFT..BTN_EXTRA`（udev 只从声明的 BTN_* 打 `ID_INPUT_MOUSE`
+            标，X11 指针兜底匹配该属性）与 EV_REL 移动 / 滚轮，鼠标可被正常识别；
+            `write()` 失败不再丢弃返回值——内核要么整个事件成功要么失败，负返回带
+            errno 抛出并指名事件码；引擎 tick 失败以节流方式写入日志，daemon 摘要
+            同样不再无声
+          - **udev helper 同时 trigger input 和 misc/uinput，权限修改持久性**：
+            `/dev/uinput` 是 misc 子系统设备，只 trigger input 时规则写了、
+            event* 立即放行，而 uinput 节点权限要等模块重载或重启——重新登录并不
+            重载模块。helper 现同时 trigger 两个子系统，该 trigger 失败即非 0 退出、
+            让应用降级为可照抄的命令而非宣称"已修复"；udev 规则与组成员关系两种
+            修改都持久，差别只在生效时机（规则重载后即时、组变更重新登录后）
+
+          用户报告的"滚轮有效、但 ABXY / 肩键 / Start / Back / Guide 映射为键盘全
+          无效"不在本版宣称已修复：Core 端到端回归（按用户映射形状逐键驱动引擎
+          tick → 派发 → 注入全链路）与真实 Xorg + uinput 环境验证均表明键盘可以正常
+          投递，用户真机复测尚未完成，欢迎按
+          [QA 清单](docs/QA-CHECKLIST.md) 反馈复测结果。
 
           ### 下载
 
@@ -743,18 +769,19 @@ jobs:
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Release 构建 0 警告、0 错误；完整测试共 2563 项，
-          2553 通过、0 失败、10 项跳过（Windows 专属 / 需显示服务的跨平台分支），含
-          本轮基础层 + 临时层双动作 / 设置持久化 / 提示浮窗位置与可靠性 / 屏幕键盘 /
-          前台规则修复与改进的回归测试；release.yml 已通过 actionlint；本地另构建 linux-x64 deb，校验
-          control 元数据与载荷完整性（hicolor 七尺寸图标、fix-device-access.sh 0755、
-          desktop entry），并从解包位置冒烟运行 daemon；rpm / AppImage 本机缺
-          rpmbuild / appimagetool，由 Release workflow 构建校验（完整安装 / 卸载循环
-          与 Windows Inno 安装器需对应平台运行器，由 Release workflow 验证）。
-          Windows / Ubuntu 双平台 CI、四 RID、
-          Windows Inno per-user EXE 与 Linux 三种包格式的构建与安装验证由 Release
-          workflow 执行；本轮未进行 Windows 真机、物理手柄或人工 GUI 实测，不以自动化
-          测试替代人工验收。人工验证清单：[docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
+          发布前本地验证（Linux）：Debug 与 Release 全量测试均为 2614 项，
+          2604 通过、0 失败、10 项跳过（Windows 专属 / 需显示服务的跨平台分支），
+          含本轮 evdev 轴量程（EVIOCGABS）修复、daemon 首次连接重试与 Unix 管道
+          竞态、systemd 单元归属 / XDG 路径 / 启用状态原因、uinput 设备能力与写入
+          错误日志、udev
+          helper 双子系统 trigger 与权限持久性的回归测试，以及用户报告的键盘映射
+          Core 端到端回归；release.yml 已通过 actionlint。本轮未在本地另构建
+          deb / rpm / AppImage，也未进行 Windows 真机与人工 GUI 实测：Windows /
+          Ubuntu 双平台 CI、四 RID、Windows Inno per-user EXE 与 Linux 三种包格式
+          的构建与安装 / 卸载验证由 Release workflow 在对应平台运行器上执行。
+          本轮未进行用户 X11 物理手柄验收（键盘投递真机复测待用户反馈），不以自动化
+          测试替代人工验收。人工验证清单：
+          [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
 
