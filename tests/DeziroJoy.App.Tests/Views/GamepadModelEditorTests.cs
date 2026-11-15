@@ -494,8 +494,10 @@ public sealed class GamepadModelEditorTests
         var buttonA = Model(window).FindControl<Control>("ButtonA")!;
         var fill = Assert.IsType<Avalonia.Media.ISolidColorBrush>(buttonA.GetValue(Shape.FillProperty), exactMatch: false);
 
-        // The app starts on the Light variant, so the pressed accent is the light-theme value.
-        Assert.Equal(Color.FromRgb(0x0A, 0x6F, 0xBF), fill.Color);
+        var app = Application.Current!;
+        Assert.True(app.TryFindResource("PadPressedBrush", buttonA.ActualThemeVariant, out var resource));
+        var expected = Assert.IsType<ISolidColorBrush>(resource, exactMatch: false);
+        Assert.Equal(expected.Color, fill.Color);
     }
 
     [AvaloniaFact]
