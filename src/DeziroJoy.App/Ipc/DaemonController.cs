@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 
@@ -53,8 +54,23 @@ public sealed class DaemonController : IAsyncDisposable
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>Pause between readiness probes while waiting for a daemon that is still starting.</summary>
+    private static readonly TimeSpan StartupProbeInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// How long a first connect waits for a daemon that has been asked to start but has not
+    /// opened its pipe yet. The supervisor spawns the daemon (or systemd starts it) moments
+    /// before the window connects, and the daemon's own startup - engine, devices, pipe -
+    /// measured at ~340 ms even on a machine with no input subsystem at all - outlasts the
+    /// endpoint's single 250 ms probe. Without this wait that probe reads "no daemon", the
+    /// window opens in the connection-error state, and the only way back is a manual
+    /// reconnect - for a daemon that was seconds away.
+    /// </summary>
+    private static readonly TimeSpan DefaultStartupGrace = TimeSpan.FromSeconds(3);
+
     private readonly IDaemonEndpoint _endpoint;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan _startupGrace;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly object _pendingGate = new();
@@ -85,13 +101,15 @@ public sealed class DaemonController : IAsyncDisposable
         IDaemonEndpoint endpoint,
         TimeSpan? requestTimeout = null,
         TimeSpan? heartbeatInterval = null,
-        TimeSpan? reconnectDelay = null)
+        TimeSpan? reconnectDelay = null,
+        TimeSpan? startupGrace = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         _endpoint = endpoint;
         _requestTimeout = requestTimeout ?? DefaultRequestTimeout;
         _heartbeatInterval = heartbeatInterval ?? TimeSpan.FromSeconds(5);
         _reconnectDelay = reconnectDelay ?? TimeSpan.FromSeconds(1);
+        _startupGrace = startupGrace ?? DefaultStartupGrace;
         ClientInstanceId = Guid.NewGuid().ToString("N");
     }
 
@@ -159,25 +177,7 @@ public sealed class DaemonController : IAsyncDisposable
 
         try
         {
-            if (!await _endpoint.EnsureReadyAsync(allowLaunch: true, timeout.Token).ConfigureAwait(false))
-            {
-                throw new DaemonUnavailableException("the resident daemon could not be found or started");
-            }
-
-            var channel = await _endpoint.OpenChannelAsync(timeout.Token).ConfigureAwait(false);
-            _channel = channel;
-
-            var hello = await ExchangeDirectAsync(
-                channel,
-                new HelloMessage(
-                    "DeziroJoy.GUI",
-                    IpcContract.ProtocolVersion,
-                    ClientInstanceId,
-                    IpcSession.Current,
-                    SubscribeInputSamples: true),
-                message => message is HelloAckMessage,
-                timeout.Token).ConfigureAwait(false);
-            var ack = (HelloAckMessage)hello;
+            var ack = await OpenHandshakenChannelAsync(timeout.Token).ConfigureAwait(false);
             if (!ack.Accepted)
             {
                 throw new DaemonHandshakeException(ack.RejectReason ?? "the daemon refused the handshake");
@@ -189,7 +189,7 @@ public sealed class DaemonController : IAsyncDisposable
 
             var requestId = NextRequestId();
             var state = await ExchangeDirectAsync(
-                channel,
+                _channel!,
                 new GetStateMessage(requestId),
                 message => message is StateChangedMessage { RequestId: var id } && id == requestId,
                 timeout.Token).ConfigureAwait(false);
@@ -202,7 +202,7 @@ public sealed class DaemonController : IAsyncDisposable
             AdoptAuthoritative(initial, reset: true);
             State = DaemonConnectionState.Connected;
             LastError = null;
-            _receiver = Task.Run(() => ReceiveLoopAsync(channel, lifetime.Token), CancellationToken.None);
+            _receiver = Task.Run(() => ReceiveLoopAsync(_channel!, lifetime.Token), CancellationToken.None);
             _heartbeat = Task.Run(() => HeartbeatLoopAsync(lifetime.Token), CancellationToken.None);
             Connected?.Invoke();
             return initial.Snapshot;
@@ -212,6 +212,77 @@ public sealed class DaemonController : IAsyncDisposable
             State = DaemonConnectionState.Disconnected;
             await CleanupConnectionAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Opens the channel and completes the handshake, waiting within the startup grace for a
+    /// daemon that has been asked to start but is not serving yet. The first readiness probe
+    /// is the one that may launch; every retry after it is probe-only, because a retry that
+    /// relaunched would prompt (UAC on Windows) for a daemon that is already on its way. The
+    /// daemon this waits for is the one the supervisor just spawned - or the one systemd is
+    /// still bringing up - whose pipe is not open yet.
+    /// <para>
+    /// The grace is measured in real elapsed time, not in attempts: a probe or a connect can
+    /// itself take longer than the whole grace, and counting attempts as if each cost one
+    /// probe interval would let the wait run far past it. The open-and-handshake pair is what
+    /// gets retried, not just the connect, and the successful probe is followed by one probe
+    /// interval of quiet: the daemon serves one connection per pipe instance and replaces the
+    /// instance once that connection ends, so the probe takes the instance's single accept
+    /// and a connect issued straight away lands in the backlog of the instance being
+    /// replaced - accepted, never served, and reset when the instance goes away, which
+    /// surfaces as a broken pipe on the first frame rather than at the connect. Waiting one
+    /// interval is that replacement with room to spare; the retry covers a daemon that took
+    /// longer.
+    /// </para>
+    /// </summary>
+    private async Task<HelloAckMessage> OpenHandshakenChannelAsync(CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        var attempt = 0;
+        while (true)
+        {
+            if (await _endpoint.EnsureReadyAsync(allowLaunch: attempt++ == 0, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await Task.Delay(StartupProbeInterval, cancellationToken).ConfigureAwait(false);
+
+                IDaemonChannel? channel = null;
+                try
+                {
+                    channel = await _endpoint.OpenChannelAsync(cancellationToken).ConfigureAwait(false);
+                    _channel = channel;
+                    var hello = await ExchangeDirectAsync(
+                        channel,
+                        new HelloMessage(
+                            "DeziroJoy.GUI",
+                            IpcContract.ProtocolVersion,
+                            ClientInstanceId,
+                            IpcSession.Current,
+                            SubscribeInputSamples: true),
+                        message => message is HelloAckMessage,
+                        cancellationToken).ConfigureAwait(false);
+                    return (HelloAckMessage)hello;
+                }
+                catch (Exception exception) when (exception is IOException or TimeoutException)
+                {
+                    // The instance this connect reached was replaced underneath it: the next
+                    // probe waits for the one that took its place.
+                    if (channel is not null)
+                    {
+                        await channel.DisposeAsync().ConfigureAwait(false);
+                    }
+
+                    _channel = null;
+                }
+            }
+
+            if (elapsed.Elapsed > _startupGrace)
+            {
+                throw new DaemonUnavailableException("the resident daemon could not be found or started");
+            }
+
+            await Task.Delay(StartupProbeInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 

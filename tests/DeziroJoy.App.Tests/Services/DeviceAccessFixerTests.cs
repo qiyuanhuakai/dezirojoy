@@ -12,7 +12,9 @@ namespace DeziroJoy.App.Tests.Services;
 /// injected fake runner and every kernel probe through the injected fakes, so pkexec's polkit
 /// dialog never actually opens here - and the rules the fixer stages are read back off disk to
 /// prove they are the single-source text. The gate is pinned against the real probe shapes:
-/// a machine with no pad plugged in must never reach pkexec.
+/// a machine with no pad plugged in must never reach pkexec. One test reads the packaged
+/// helper itself out of the repo checkout, because the half of the fix the app cannot see -
+/// which udev devices the helper re-triggers - is exactly where its effectiveness lives.
 /// </summary>
 public class DeviceAccessFixerTests
 {
@@ -318,10 +320,73 @@ public class DeviceAccessFixerTests
         Assert.Equal(DeviceAccessFixOutcome.Degraded, result.Outcome);
 
         // A build that was never installed as a .deb has no helper to run - and the result
-        // says exactly that instead of firing a pkexec that cannot succeed.
+        // says exactly that instead of firing a pkexec that cannot succeed. All three
+        // shipped formats carry the helper beside the binary, so the message names them
+        // all: the deb path is only the fallback, not the whole story.
         Assert.Contains("deb", result.Message);
+        Assert.Contains("rpm", result.Message);
+        Assert.Contains("AppImage", result.Message);
         Assert.Contains(LinuxDeviceAccess.InputGroupCommand, result.Message);
         Assert.Empty(process.Calls);
+    }
+
+    /// <summary>
+    /// The packaged helper the fixer runs through pkexec must re-apply the rules to BOTH
+    /// node kinds. /dev/uinput is a misc-subsystem device - the kernel registers it with
+    /// misc_register (drivers/input/misc/uinput.c), so it never appears under
+    /// --subsystem-match=input - and a trigger limited to that subsystem leaves the uinput
+    /// node at its old permissions until the module reloads or the machine reboots. A
+    /// re-login does not reload the module, so without the second trigger the user who
+    /// followed the fix's own advice ("重新登录后生效") would still be unable to open
+    /// /dev/uinput, with nothing left to explain why. This pins the shell contract the
+    /// app itself cannot see: the helper ships beside the binary on deb/rpm/AppImage, and
+    /// the app only ever checks that the path exists.
+    /// </summary>
+    [Fact]
+    public void The_Packaged_Helper_Triggers_The_UInput_Device_Too()
+    {
+        var helper = FindRepoFile(Path.Combine("tools", "Packaging", "linux", "fix-device-access.sh"));
+
+        Assert.SkipWhen(helper is null, "no repo checkout above the test binary to read the packaged helper from");
+
+        var script = File.ReadAllText(helper);
+
+        // The event* half: every event node the scan opens lives in the input subsystem.
+        Assert.Contains("--subsystem-match=input", script);
+
+        // The uinput half: the misc subsystem device, triggered by its sysfs name so a
+        // machine whose uinput module is not loaded (nothing to match) still succeeds.
+        Assert.Contains("--subsystem-match=misc", script);
+        Assert.Contains("--sysname-match=uinput", script);
+
+        // Both triggers stay behind the udevadm availability check, and a failed uinput
+        // trigger must fail the helper rather than let the app report "已修复".
+        Assert.Contains("command -v udevadm", script);
+        Assert.Contains("uinput 节点权限尚未生效", script);
+    }
+
+    /// <summary>
+    /// The first file at <paramref name="relativePath"/> walking up from the test binary's
+    /// directory, or null when no repo checkout sits above it (a published test run). The
+    /// walk is bounded so a pathological directory tree cannot spin it.
+    /// </summary>
+    private static string? FindRepoFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        for (var level = 0; level < 8 && directory is not null; level++)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 
     [Fact]

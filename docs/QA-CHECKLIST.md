@@ -120,13 +120,28 @@ X11 不是变量：输入走内核级 evdev/uinput，与显示服务器无关。
       `sudo usermod -aG input $USER` 指引与 errno，不再静默显示「未检测到手柄」
 - [ ] 执行 `sudo usermod -aG input $USER`（或写入
       `/etc/udev/rules.d/99-dezirojoy.rules`：`KERNEL=="event*",GROUP="input",MODE="0660"`
-      与 `KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"`）
-      并重新登录后：手柄被检测到，映射生效（应用内 opt-in，安装器不注册 udev）
+      与 `KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"`）后：
+      手柄被检测到、映射生效。两种修改都持久（规则落盘、组成员关系落 `/etc/group`），
+      差别是生效时机：udev 规则重载后对后续 open 立即生效，组变更要重新登录
+      （应用内 opt-in，安装器不注册 udev）
+- [ ] 「修复设备访问权限」一键修复：只在探测到权限缺口时可点（没插手柄时得到"无需修复"，
+      不空跑 pkexec）；helper 同时 trigger input 与 misc 两个子系统（`/dev/uinput` 属
+      misc 子系统），执行后 event* 与 `/dev/uinput` 立即可用，input 组变更仍需重新登录；
+      helper 非 0 退出时按钮降级为可照抄的命令，而非宣称已修复
 - [ ] `/dev/uinput` 不可写时（`ls -l /dev/uinput` 非当前用户/组）：daemon 摘要的
-      `output sink` 一行带出无法打开的原因与修复指引，不再静默降级为空注入
-- [ ] 设置面板「后台服务」卡片：安装常驻 → 写入 `~/.config/systemd/user/dezirojoy-daemon.service`
-      并启动，`systemctl --user status dezirojoy-daemon.service` 为 active；
-      卡片显示「已安装并正在运行」
+      `output sink` 一行带出无法打开的原因与修复指引，不再静默降级为空注入；
+      注入过程中 `write()` 失败（如虚拟设备被销毁）也不再丢弃返回值——负返回即带 errno
+      抛出并指名事件码
+- [ ] 设置面板「后台服务」卡片：安装常驻 = 写单元 → `enable` → `start`（无单独
+      `daemon-reload`，`enable` 自行 reload），`systemctl --user status
+      dezirojoy-daemon.service` 为 active；卡片显示「已安装并正在运行」。启动失败时
+      卡片提示查 `journalctl --user -u dezirojoy-daemon` 并可手动重试，不把已成功的启用
+      误报成"启用失败」
+- [ ] 刷新显示「未启用」时：若原因是 systemd 找不到单元文件（not-found）、单元无
+      `[Install]` 段（static）或已被 mask，卡片在启用行旁给出原因与出路，而非一个每次
+      刷新原样复现的"未启用"
+- [ ] 单元已安装时托盘/渲染进程经 `systemctl --user start` 取 daemon，不另起私有子进程
+      （`ps` 里只有一个由单元管理的 `--daemon` 进程，设置卡片的启动/停止作用于它）
 - [ ] 单元文件内容：`Restart=on-failure`、`ExecStart` 指向安装的二进制加 `--daemon`、
       `WantedBy=default.target`，且**不**依赖 `graphical-session.target`
       （无图形会话的 SSH/控制台同样要能常驻）
@@ -139,6 +154,9 @@ X11 不是变量：输入走内核级 evdev/uinput，与显示服务器无关。
 - [ ] CLI：`DeziroJoy --install-daemon` / `--uninstall-daemon` / `--install-autostart` /
       `--uninstall-autostart` 在 Linux 全部可用（不再一律 exit 2）
 - [ ] daemon 日志：`journalctl --user -u dezirojoy-daemon -f` 能看到启动摘要与设备指引
+- [ ] 真机轴校准：满幅推摇杆鼠标达到满速、轻推只到微速；用 `evtest` 选设备后核对申报
+      量程（minimum..maximum）与手感一致——量程经 EVIOCGABS 真读，读不到会静默回退默认
+      量程（±32767 / 0..255），表现为死区与满幅判定偏差（见权限文档 5.4）
 
 ## 11. 配置导入/导出（方案包）
 

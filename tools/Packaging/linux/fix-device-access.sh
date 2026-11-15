@@ -9,7 +9,9 @@
 #
 # 动作（全部是用户显式 opt-in：安装器从不注册 udev 规则，见 docs/ELEVATION-AND-DAEMON.md）：
 #   1. 安装 /etc/udev/rules.d/99-dezirojoy.rules；
-#   2. udevadm control --reload && udevadm trigger（重载即生效，无需重启）；
+#   2. udevadm control --reload && udevadm trigger（重载即生效，无需重启）：
+#      input 子系统（event* 节点）与 /dev/uinput 所在的 misc 子系统都要 trigger，
+#      二者不是同一个子系统，见下方注释；
 #   3. usermod -aG input <调用者>（组变更要重新登录后生效）。
 #
 # 退出码：0 = 承诺的步骤全部完成；非 0 = 有步骤无法完成（工具缺失或执行失败）。
@@ -36,6 +38,19 @@ echo "已写入 $rules_target"
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload
   udevadm trigger --subsystem-match=input
+  # /dev/uinput 是 misc 子系统的 misc 设备（内核 drivers/input/misc/uinput.c 用
+  # misc_register/module_misc_device 注册），不在 input 子系统里：
+  # --subsystem-match=input 不会给它重新套用规则。只 trigger input 的话，规则写入
+  # 了、event* 节点也立即放行，而 /dev/uinput 的节点权限要等模块重载或重启才变——
+  # 重新登录并不重载模块，用户会在"已加入 input 组"之后依旧打不开 /dev/uinput，
+  # 而结果里只有"用户组变更需要重新登录后生效"这一句，届时无从解释。所以这里单独
+  # trigger 它；模块未加载时匹配不到设备，udevadm 仍以 0 退出。
+  if ! udevadm trigger --subsystem-match=misc --sysname-match=uinput; then
+    # 与 udevadm 缺失同一个契约：uinput 节点权限没落地就是未完成的修复，
+    # 必须非 0 退出让应用降级，而不是 exit 0 让应用宣称"已修复"。
+    echo "无法重载 /dev/uinput 的规则（misc 子系统 trigger 失败），规则已写入 $rules_target，但 uinput 节点权限尚未生效" >&2
+    exit 1
+  fi
   echo "已重载 udev 规则"
 else
   # 规则已写入但无法加载：这是一次未完成的修复，必须非 0 退出让应用降级，

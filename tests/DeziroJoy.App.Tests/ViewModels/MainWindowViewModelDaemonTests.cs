@@ -35,6 +35,37 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task The_Injection_Status_Card_Does_Not_Claim_Elevation_On_The_Same_User_Platform()
+    {
+        var context = await CreateDaemonViewModel();
+        await using var viewModel = context.ViewModel;
+
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+
+        // The 注入状态 card is where a user reads why their mapping does nothing. On the
+        // same-user platform the daemon runs as this user and uinput is a kernel interface
+        // UIPI does not gate, so an integrity level or a UIPI block describes a mechanism
+        // the platform does not have - quoting either sends the user hunting for a fix that
+        // cannot exist. Windows keeps its wording: the elevated token is real there.
+        if (viewModel.IsElevationSupported)
+        {
+            Assert.Contains("提权守护进程", viewModel.InjectorDescription);
+            Assert.Contains("提权守护进程", viewModel.MappingOwnerDescription);
+        }
+        else
+        {
+            Assert.Contains("4242", viewModel.InjectorDescription);
+            Assert.DoesNotContain("提权", viewModel.InjectorDescription);
+            Assert.Contains("同用户模型", viewModel.InjectorStatusText);
+            Assert.Contains("设备访问权", viewModel.InjectorStatusText);
+            Assert.DoesNotContain("未提权", viewModel.InjectorStatusText);
+            Assert.DoesNotContain("拦截", viewModel.InjectorStatusText);
+            Assert.Contains("守护进程", viewModel.MappingOwnerDescription);
+            Assert.DoesNotContain("提权", viewModel.MappingOwnerDescription);
+        }
+    }
+
+    [Fact]
     public async Task Pause_And_Editor_Suspension_Are_Distinct_And_Do_Not_Stop_The_Engine()
     {
         var context = await CreateDaemonViewModel();
@@ -174,7 +205,15 @@ public sealed class MainWindowViewModelDaemonTests
         Assert.False(host.IsRunning);
         Assert.Equal(MappingOwner.None, viewModel.MappingOwner);
         Assert.Contains("未启动本地注入回退", viewModel.TransferMessage);
-        Assert.Equal("提权守护进程不可用；未启用本地注入回退", viewModel.StatusMessage);
+
+        // Windows names the elevated resident process, because earning that token is what
+        // makes injection reach elevated targets there. Linux runs the same daemon as this
+        // user with no elevation to earn, so the 提权 wording would describe a mechanism the
+        // platform does not have.
+        var expected = viewModel.IsElevationSupported
+            ? "提权守护进程不可用；未启用本地注入回退"
+            : "守护进程不可用；未启用本地注入回退";
+        Assert.Equal(expected, viewModel.StatusMessage);
     }
 
     [Fact]

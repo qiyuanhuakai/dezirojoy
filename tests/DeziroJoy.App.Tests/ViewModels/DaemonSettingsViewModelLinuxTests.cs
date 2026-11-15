@@ -170,6 +170,33 @@ public class DaemonSettingsViewModelLinuxTests
     }
 
     [Fact]
+    public void A_Unit_Systemd_Cannot_See_Gets_Its_Reason_Next_To_The_Enablement_Line()
+    {
+        // The user's "点启用再刷新又显示未启用": the plain line says 未启用 and the reason -
+        // systemd cannot see the unit file at all, so no amount of refreshing will enable it -
+        // rides next to it instead of leaving the user to guess at the toggle.
+        var service = new FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = false,
+            IsDaemonEnabled = false,
+            DaemonEnablementNote = "systemd 找不到已写入的单元文件：/home/qiyuaner/.config/systemd/user/dezirojoy-daemon.service 不在 systemd 的用户单元搜索路径中",
+        };
+        var vm = LinuxCard(service);
+
+        Assert.Equal("未启用（登录不会自动启动）", vm.DaemonEnabledText);
+        Assert.True(vm.HasDaemonEnablementNote);
+        Assert.Contains("搜索路径", vm.DaemonEnablementNote);
+
+        // The note is republished like every other derived state.
+        service.DaemonEnablementNote = null;
+        vm.RefreshCommand.Execute(null);
+
+        Assert.False(vm.HasDaemonEnablementNote);
+        Assert.Null(vm.DaemonEnablementNote);
+    }
+
+    [Fact]
     public void Start_And_Stop_Drive_The_Service_And_The_Running_State()
     {
         var service = new FakeLinuxDaemonService { IsDaemonInstalled = true, IsDaemonRunning = false };
@@ -466,6 +493,8 @@ public class DaemonSettingsViewModelLinuxTests
         public bool IsDaemonEnabled { get; set; }
 
         public string? DaemonQueryError { get; set; }
+
+        public string? DaemonEnablementNote { get; set; }
 
         public bool IsAutostartInstalled { get; set; }
 

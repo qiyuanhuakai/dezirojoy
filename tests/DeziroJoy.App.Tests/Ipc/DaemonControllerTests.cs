@@ -1,5 +1,8 @@
+using System.IO.Pipes;
 using DeziroJoy.App.Ipc;
+using DeziroJoy.App.Services;
 using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Ipc;
@@ -434,6 +437,189 @@ public sealed class DaemonControllerTests
         Assert.Equal(1, endpoint.OpenCalls);
     }
 
+    [Fact]
+    public async Task A_Daemon_Still_Starting_Is_Waited_For_With_Probe_Only_Retries()
+    {
+        // The daemon the supervisor just spawned opens its pipe a few hundred milliseconds
+        // after the process starts, so the first probe - the same single 250 ms probe the
+        // endpoint makes - reads "no daemon". The connect must wait for it, and every wait
+        // probe must be probe-only: a retry that relaunched would prompt (UAC on Windows)
+        // for a daemon that is already on its way.
+        var endpoint = new FakeEndpoint { BecomeReadyAfterEnsureCalls = 4 };
+        await using var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromSeconds(3));
+
+        var snapshot = await controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+        Assert.Equal(0, snapshot.Sequence);
+        Assert.Equal([true, false, false, false], endpoint.AllowLaunchCalls);
+    }
+
+    [Fact]
+    public async Task A_Daemon_That_Never_Answers_Fails_After_The_Startup_Grace()
+    {
+        // The wait is bounded in real time: a machine with no daemon coming still gets its
+        // error window, after the grace rather than after one probe. Three probes because the
+        // grace is checked after each attempt in elapsed time - the second lands at ~250 ms,
+        // still inside a 300 ms grace, and the third at ~500 ms ends it.
+        var endpoint = new FakeEndpoint { Ready = false };
+        await using var controller = new DaemonController(
+            endpoint,
+            startupGrace: TimeSpan.FromMilliseconds(300));
+
+        await Assert.ThrowsAsync<DaemonUnavailableException>(
+            () => controller.ConnectAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(DaemonConnectionState.Disconnected, controller.State);
+        Assert.Equal(3, endpoint.EnsureCalls);
+        Assert.Equal(0, endpoint.OpenCalls);
+        Assert.Equal([true, false, false], endpoint.AllowLaunchCalls);
+    }
+
+    [Fact]
+    public async Task A_Probe_Slower_Than_The_Grace_Spends_Real_Time_Not_Attempts()
+    {
+        // The grace is elapsed time, not a fictional counter: a probe that itself costs more
+        // than the whole grace ends the wait after that one probe, instead of buying another
+        // interval of patience per attempt and running the wait far past its budget.
+        var endpoint = new FakeEndpoint { Ready = false, ProbeDelay = TimeSpan.FromMilliseconds(500) };
+        await using var controller = new DaemonController(
+            endpoint,
+            startupGrace: TimeSpan.FromMilliseconds(300));
+
+        await Assert.ThrowsAsync<DaemonUnavailableException>(
+            () => controller.ConnectAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(DaemonConnectionState.Disconnected, controller.State);
+        Assert.Equal(1, endpoint.EnsureCalls);
+        Assert.Equal(0, endpoint.OpenCalls);
+        Assert.Equal([true], endpoint.AllowLaunchCalls);
+    }
+
+    [Fact]
+    public async Task A_Slow_Endpoint_That_Becomes_Ready_Connects_Within_The_Real_Grace()
+    {
+        // The other side of the same accounting: a slow probe that turns ready inside the
+        // grace still connects, and only the first attempt may launch.
+        var endpoint = new FakeEndpoint
+        {
+            BecomeReadyAfterEnsureCalls = 2,
+            ProbeDelay = TimeSpan.FromMilliseconds(400),
+        };
+        await using var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromSeconds(3));
+
+        var snapshot = await controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+        Assert.Equal(0, snapshot.Sequence);
+        Assert.Equal(2, endpoint.EnsureCalls);
+        Assert.Equal([true, false], endpoint.AllowLaunchCalls);
+    }
+
+    [Fact]
+    public async Task An_Open_Reset_By_A_Replaced_Daemon_Instance_Is_Retried_Within_The_Grace()
+    {
+        // The daemon serves one connection per pipe instance and replaces it afterwards, so
+        // an open that lands on the instance the readiness probe just left behind is reset
+        // by the daemon. The connect must ride the same grace the probe does instead of
+        // opening the window in the connection-error state over a daemon that is serving.
+        var endpoint = new FakeEndpoint { BecomeReadyAfterEnsureCalls = 2, FailFirstOpens = 1 };
+        await using var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromSeconds(3));
+
+        var snapshot = await controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+        Assert.Equal(0, snapshot.Sequence);
+        Assert.Equal(2, endpoint.OpenCalls);
+        Assert.Equal([true, false, false], endpoint.AllowLaunchCalls);
+    }
+
+    [Fact]
+    public async Task A_Daemon_Whose_Pipe_Opens_Late_Is_Connected_Instead_Of_Reported_Missing()
+    {
+        // The reported failure, end to end over a real pipe: the daemon process exists and
+        // its engine is up, but the mapping pipe opens only after the endpoint's probe
+        // window. Hermetic - a GUID pipe name no daemon on this machine can answer - and
+        // the serve starts late on purpose, so the first probe must fail.
+        var pipeName = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(
+            new FakeDaemonHost(),
+            new InMemoryProfileStore(),
+            new DaemonStateStore(statePath));
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var serve = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(600), TestContext.Current.CancellationToken);
+            await DaemonHost.ServePipeAsync(server, cancellation.Token, pipeName);
+        }, TestContext.Current.CancellationToken);
+
+        try
+        {
+            await using var controller = new DaemonController(
+                new LatePipeEndpoint(pipeName),
+                startupGrace: TimeSpan.FromSeconds(3));
+
+            var snapshot = await controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(DaemonConnectionState.Connected, controller.State);
+            Assert.NotNull(controller.DaemonInstanceId);
+            Assert.NotNull(snapshot);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await serve;
+            cancellation.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The production endpoint's shape: probe the pipe, and on Linux never launch - the
+    /// supervisor owns the launch, exactly as <see cref="NamedPipeDaemonEndpoint"/> does
+    /// off Windows.
+    /// </summary>
+    private sealed class LatePipeEndpoint(string pipeName) : IDaemonEndpoint
+    {
+        public async Task<bool> EnsureReadyAsync(bool allowLaunch, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var pipe = new NamedPipeClientStream(
+                    ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                await using (pipe)
+                {
+                    await pipe.ConnectAsync(TimeSpan.FromMilliseconds(250), cancellationToken);
+                    return pipe.IsConnected;
+                }
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+
+        public async Task<IDaemonChannel> OpenChannelAsync(CancellationToken cancellationToken)
+        {
+            var pipe = new NamedPipeClientStream(
+                ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            try
+            {
+                await pipe.ConnectAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                return new NamedPipeDaemonChannel(pipe);
+            }
+            catch
+            {
+                await pipe.DisposeAsync();
+                throw;
+            }
+        }
+    }
+
     private static async Task ConnectAsync(DaemonController controller)
     {
         await controller.ConnectAsync(TestContext.Current.CancellationToken);
@@ -448,6 +634,29 @@ public sealed class DaemonControllerTests
         public FakeDaemonChannel Channel { get; private set; }
 
         public bool Ready { get; set; } = true;
+
+        /// <summary>
+        /// Becomes ready once this many <see cref="EnsureReadyAsync"/> calls have been made;
+        /// 0 leaves <see cref="Ready"/> authoritative. Stands in for a daemon whose pipe
+        /// opens a few hundred milliseconds after the process starts.
+        /// </summary>
+        public int BecomeReadyAfterEnsureCalls { get; set; }
+
+        /// <summary>
+        /// How long one readiness probe takes to answer. Stands in for an endpoint whose
+        /// probe costs more than one probe interval, so the grace is spent in real time.
+        /// </summary>
+        public TimeSpan ProbeDelay { get; set; }
+
+        /// <summary>Every allowLaunch flag the controller passed, in order.</summary>
+        public List<bool> AllowLaunchCalls { get; } = [];
+
+        /// <summary>
+        /// Throws from this many <see cref="OpenChannelAsync"/> calls before letting one
+        /// through, as the daemon's replaced pipe instance resets a connect that landed on
+        /// it. 0 opens normally.
+        /// </summary>
+        public int FailFirstOpens { get; set; }
 
         public bool RenewChannelOnOpen { get; set; }
 
@@ -479,16 +688,31 @@ public sealed class DaemonControllerTests
             };
         }
 
-        public Task<bool> EnsureReadyAsync(bool allowLaunch, CancellationToken cancellationToken)
+        public async Task<bool> EnsureReadyAsync(bool allowLaunch, CancellationToken cancellationToken)
         {
             EnsureCalls++;
             LastAllowLaunch = allowLaunch;
-            return Task.FromResult(Ready);
+            AllowLaunchCalls.Add(allowLaunch);
+            if (ProbeDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(ProbeDelay, cancellationToken).ConfigureAwait(false);
+            }
+
+            var ready = BecomeReadyAfterEnsureCalls > 0
+                ? EnsureCalls >= BecomeReadyAfterEnsureCalls
+                : Ready;
+            return ready;
         }
 
         public Task<IDaemonChannel> OpenChannelAsync(CancellationToken cancellationToken)
         {
             OpenCalls++;
+            if (FailFirstOpens > 0)
+            {
+                FailFirstOpens--;
+                throw new IOException("broken pipe");
+            }
+
             if (RenewChannelOnOpen && OpenCalls > 1)
             {
                 Channel = CreateChannel();

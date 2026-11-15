@@ -58,6 +58,46 @@ public class EngineHostTests
         }
     }
 
+    /// <summary>
+    /// The shape of a dead uinput node: every write the dispatcher makes throws with the
+    /// errno named, exactly as UInputOutputSink's write path does. The lifts (KeyUp,
+    /// MouseButtonUp) stay quiet so a Stop's ReleaseAll cannot throw on the test thread.
+    /// </summary>
+    private sealed class FailingWriteSink : IOutputSink
+    {
+        public int FailedWrites { get; private set; }
+
+        public void KeyDown(GamepadKey key) => Fail();
+
+        public void KeyUp(GamepadKey key)
+        {
+        }
+
+        public void SendText(string text) => Fail();
+
+        public void MouseMove(int dx, int dy) => Fail();
+
+        public void ScrollWheel(int horizontalNotches, int verticalNotches) => Fail();
+
+        public void MouseButtonDown(MouseButton button) => Fail();
+
+        public void MouseButtonUp(MouseButton button)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        private void Fail()
+        {
+            FailedWrites++;
+            throw new InvalidOperationException(
+                "写入 input_event 失败（type 0x0002 code 0x0000，写入 -1/8 字节，errno 9）："
+                + "虚拟输入设备可能已销毁或 /dev/uinput 已不可写。");
+        }
+    }
+
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1.0 / 64.0);
 
     private static (EngineHost Host, FakeProvider Provider, RecordingSink Sink) CreateHost(IProfileStore? store = null)
@@ -567,6 +607,119 @@ public class EngineHostTests
 
         Assert.Throws<InjectionAlreadyActiveException>(() => second.Start(TimeSpan.FromMilliseconds(2)));
         Assert.False(second.IsRunning);
+    }
+
+    [Fact]
+    public async Task A_Tick_That_Throws_Is_Reported_Instead_Of_Being_Swallowed()
+    {
+        // The integration gap this closes: the loop used to catch every tick failure with
+        // an empty catch, so a uinput write the kernel refused - which throws on every
+        // tick that dispatches - turned every injection into nothing with nothing in the
+        // journal to say why. The sink here fails like a destroyed virtual device.
+        var name = $"Global\\DeziroJoy.Injection.Tests.{Guid.NewGuid():N}";
+        var sink = new FailingWriteSink();
+        var provider = new FakeProvider();
+        provider.Add("xinput:0", "Xbox Wireless Controller");
+        provider.SetState("xinput:0", GamepadState.Create(GamepadButtonMask.None, 0, 0, 1, 0));
+
+        using var host = new EngineHost(provider, sink, StoreWithMouseStick(), name);
+
+        var reported = new TaskCompletionSource<TickFailedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reports = 0;
+        host.TickFailed += (_, args) =>
+        {
+            Interlocked.Increment(ref reports);
+            reported.TrySetResult(args);
+        };
+
+        host.Start(TimeSpan.FromMilliseconds(2));
+        try
+        {
+            var args = await reported.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+            // The real exception, not a wrapper: the errno in the message is the diagnosis.
+            Assert.IsType<InvalidOperationException>(args.Exception);
+            Assert.Contains("errno 9", args.Exception.Message);
+
+            // The loop survived the failure and kept ticking straight into it, and the
+            // throttled channel reported the burst once, not once per tick.
+            Assert.True(host.IsRunning);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            Assert.True(sink.FailedWrites > 1, "the loop stopped ticking after the failure");
+            Assert.Equal(1, Volatile.Read(ref reports));
+        }
+        finally
+        {
+            host.Stop();
+        }
+    }
+
+    [Fact]
+    public void Repeated_Failures_Report_Once_Per_Window()
+    {
+        var (host, _, _) = CreateHost();
+        var reported = new List<Exception>();
+        host.TickFailed += (_, args) => reported.Add(args.Exception);
+
+        var boom = new InvalidOperationException("写入 input_event 失败（errno 9）");
+        host.ReportTickFailure(boom, TimeSpan.Zero);
+        host.ReportTickFailure(boom, TimeSpan.FromMilliseconds(2)); // the very next tick
+        host.ReportTickFailure(boom, TimeSpan.FromSeconds(4.9));    // still inside the window
+
+        Assert.Single(reported);
+        Assert.Same(boom, reported[0]);
+
+        // The window passing re-arms the report: a still-broken sink keeps a line in the
+        // journal instead of going quiet forever after the first one.
+        host.ReportTickFailure(boom, TimeSpan.FromSeconds(5.1));
+
+        Assert.Equal(2, reported.Count);
+        Assert.Same(boom, reported[1]);
+    }
+
+    [Fact]
+    public void A_Notification_That_Throws_Is_Not_Swallowed()
+    {
+        // The loop reports with no guard around the handler, so a notification that cannot
+        // be delivered surfaces here rather than vanishing the way the tick failure it
+        // reports used to.
+        var (host, _, _) = CreateHost();
+        host.TickFailed += (_, _) => throw new InvalidOperationException("journal is gone");
+
+        Assert.Throws<InvalidOperationException>(
+            () => host.ReportTickFailure(new InvalidOperationException("tick"), TimeSpan.Zero));
+    }
+
+    /// <summary>A profile whose only mapping is a mouse-move stick: it dispatches every tick.</summary>
+    private static InMemoryProfileStore StoreWithMouseStick()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(new GamepadProfile
+        {
+            Name = "mouse-stick",
+            DeviceId = "xinput:0",
+            Layout = GamepadLayout.Xbox,
+            Mappings =
+            [
+                new MappingEntry
+                {
+                    Source = new StickBinding(GamepadStick.Right),
+                    Target = new MouseMoveTarget(new MouseStickSettings
+                    {
+                        DeadZone = 0f,
+                        MaxSpeed = 640f,
+                        Curve = ResponseCurve.Linear,
+                        CurveStrength = 0f,
+                        ResponseTime = 0f,
+                        InvertY = false,
+                        PrecisionScale = 0.5f,
+                        PrecisionButton = GamepadButton.LeftStick,
+                        PrecisionMode = PrecisionMode.Toggle,
+                    }),
+                },
+            ],
+        });
+        return store;
     }
 
     [Fact]

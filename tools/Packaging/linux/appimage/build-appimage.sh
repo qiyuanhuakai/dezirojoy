@@ -108,9 +108,10 @@ cp "$ico" "$appdir/opt/dezirojoy/dezirojoy.ico"
 # The device-access fix helper, shipped executable but inert: it writes the opt-in
 # udev rules only when the app runs it through pkexec on the user's explicit request,
 # and it registers nothing by itself. It rides along for payload parity with the
-# .deb/rpm layout; the app currently resolves the helper at the absolute deb path,
-# so on an AppImage the one-click fix degrades to the manual command until that
-# lookup learns about this install kind.
+# .deb/rpm layout; LinuxDeviceAccess.FixHelperPath resolves the helper beside the
+# running binary first, which on this install form is exactly the AppDir's
+# opt/dezirojoy, so the AppImage one-click fix runs the same packaged helper as the
+# .deb and .rpm instead of degrading to the manual command.
 install -m 0755 "$helper" "$appdir/opt/dezirojoy/fix-device-access.sh"
 
 install -m 0755 "$apprun" "$appdir/AppRun"

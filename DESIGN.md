@@ -503,7 +503,9 @@ Back 右缘约 41%，Guide 命中区更抢走了 Back 右部点击。每个控�
   回落到约 115/255 行程以下才松开，死区内保持原状态；每个设备独立保持自己的扳机状态。
   停在半行程附近或带模拟噪声的扳机因此不再逐样本翻转高亮——映射引擎由按下边沿驱动，
   同一处抖动也不再反复注入按下/松开。evdev 与 XInput 两个 provider 同此契约，evdev 侧
-  阈值按设备申报的轴行程归一化；LB/RB 是数字按键，不走该路径，不受影响。
+  阈值按设备申报的轴行程归一化（该量程经 EVIOCGABS 真读，nr 基座与真机校准的重要性见
+  [`docs/ELEVATION-AND-DAEMON.md`](docs/ELEVATION-AND-DAEMON.md) 5.4）；LB/RB 是数字按键，
+  不走该路径，不受影响。
 
 ---
 
@@ -527,7 +529,9 @@ Back 右缘约 41%，Guide 命中区更抢走了 Back 右部点击。每个控�
 
 - **守护进程是唯一权威**。它持有 provider、sink、`EngineHost` 与注入互斥体，是唯一真正
   注入输入的进程。GUI 是客户端，只表达意图与呈现状态。**Linux 与 Windows 同形态**：
-  Linux 的 daemon 由渲染进程以当前用户权限拉起（uinput 不受 UIPI 约束，无需提权）。
+  Linux 的 daemon 以当前用户权限运行（uinput 不受 UIPI 约束，无需提权）；装了 systemd
+  用户单元后 daemon 归单元所有，supervisor 经 `systemctl --user start` 取它而不另起私有
+  子进程（详见权限文档 5.1）。
 - **设备身份与全局预设来自权威快照**。daemon 快照携带真实连接设备的 `DeviceId`、名称与
   Xbox / DualShock / 通用布局，GUI 不再虚构设备名或布局。活动预设槽是 daemon 的单一全局标量，
   不设数量上限；GUI 的预设选择器（初始 1–4 与手动新增的槽）与 Leader 键走同一切换路径，切换

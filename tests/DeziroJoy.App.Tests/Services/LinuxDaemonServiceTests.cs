@@ -55,7 +55,7 @@ public class LinuxDaemonServiceTests : IDisposable
         => name == "XDG_RUNTIME_DIR" ? "/run/user/1000" : null;
 
     [Fact]
-    public void Install_Writes_The_Unit_Then_Reloads_Enables_And_Starts_It()
+    public void Install_Writes_The_Unit_Then_Enables_And_Starts_It()
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
 
@@ -65,9 +65,15 @@ public class LinuxDaemonServiceTests : IDisposable
 
         Assert.Equal(DaemonOp.Completed, result.Result);
         Assert.True(File.Exists(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName)));
-        Assert.Contains("daemon-reload", _systemCtl.Calls[0]);
-        Assert.Contains($"enable {LinuxDaemonService.UnitName}", _systemCtl.Calls[1]);
-        Assert.Contains($"start {LinuxDaemonService.UnitName}", _systemCtl.Calls[2]);
+
+        // No daemon-reload of its own: systemctl's enable verb reloads the user manager once
+        // the symlinks are in place, and a separate reload only added a failure mode - a
+        // manager that was briefly unreachable aborted the install between the write and the
+        // enable, leaving a unit that was never enabled and that every later refresh then
+        // honestly reported as 未启用.
+        Assert.Equal(
+            [$"enable {LinuxDaemonService.UnitName}", $"start {LinuxDaemonService.UnitName}"],
+            _systemCtl.Calls);
 
         // Surviving a logout needs linger; the install result is where the user learns that.
         Assert.Contains("loginctl enable-linger", result.Message);
@@ -127,6 +133,9 @@ public class LinuxDaemonServiceTests : IDisposable
         Assert.Contains("已写单元但启用失败", result.Message);
         Assert.Contains("Failed to connect to bus", result.Message);
         Assert.Contains(LinuxDaemonService.UnitName, result.Message);
+
+        // systemctl's stderr carries its own full stop; the message must not double it.
+        Assert.DoesNotContain("。。", result.Message);
     }
 
     [Fact]
@@ -134,7 +143,7 @@ public class LinuxDaemonServiceTests : IDisposable
     {
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
 
-        _systemCtl.Fail("daemon-reload", exitCode: 1, standardError: "Failed to connect to bus: No medium found");
+        _systemCtl.Fail("enable", exitCode: 1, standardError: "Failed to connect to bus: No medium found");
         var service = CreateService(environmentVariable: _ => null);
 
         var result = service.InstallDaemon();
@@ -146,6 +155,30 @@ public class LinuxDaemonServiceTests : IDisposable
         Assert.Contains("XDG_RUNTIME_DIR", result.Message);
         Assert.Contains("DBUS_SESSION_BUS_ADDRESS", result.Message);
         Assert.True(File.Exists(Path.Combine(_unitDirectory, LinuxDaemonService.UnitName)));
+    }
+
+    [Fact]
+    public void A_Start_That_Fails_After_A_Good_Enable_Reports_The_Enablement_As_Done()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        // The enable worked (the next login will start the daemon); only the start now failed.
+        // Reporting this stage as "启用失败" misattributes the failure - and the reason a
+        // daemon fails to start is in its own output, which systemctl's stderr never carries.
+        _systemCtl.Fail(
+            "start",
+            exitCode: 1,
+            standardError: "Job for dezirojoy-daemon.service failed. See \"systemctl status\" for details.");
+        var service = CreateService();
+
+        var result = service.InstallDaemon();
+
+        Assert.Equal(DaemonOp.Failed, result.Result);
+        Assert.Contains("已启用但启动失败", result.Message);
+        Assert.DoesNotContain("已写单元但启用失败", result.Message);
+        Assert.Contains($"journalctl --user -u {LinuxDaemonService.UnitName}", result.Message);
+        Assert.Contains("缺少依赖库", result.Message);
+        Assert.Contains($"systemctl --user start {LinuxDaemonService.UnitName}", result.Message);
     }
 
     [Fact]
@@ -274,6 +307,133 @@ public class LinuxDaemonServiceTests : IDisposable
         Assert.True(service.IsDaemonRunning);
         Assert.False(service.IsDaemonEnabled);
         Assert.Contains("boom", service.DaemonQueryError);
+    }
+
+    [Fact]
+    public void A_Unit_Systemd_Cannot_See_Is_Explained_Not_Merely_Reported_Disabled()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        // The unit file is on disk where this app writes it, but systemd answers "not-found" -
+        // it sits outside the user unit search path, so nothing is enabled and nothing will
+        // start. This is the state behind the user's "安装后刷新又显示未启用": a bare 未启用
+        // with no reason, on every refresh, forever.
+        _systemCtl.EnabledAnswer = "not-found";
+        _systemCtl.Active = false; // a unit systemd cannot find is not active either
+        var service = CreateService();
+        service.InstallDaemon();
+
+        service.Refresh();
+
+        Assert.True(service.IsDaemonInstalled);
+        Assert.False(service.IsDaemonEnabled);
+        Assert.False(service.IsDaemonRunning);
+        Assert.Null(service.DaemonQueryError);
+
+        var note = service.DaemonEnablementNote;
+        Assert.NotNull(note);
+        Assert.Contains(service.UnitPath, note);
+        Assert.Contains("搜索路径", note);
+    }
+
+    [Fact]
+    public void A_Static_Or_Masked_Unit_Says_Why_It_Will_Never_Autostart()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        var service = CreateService();
+        service.InstallDaemon();
+
+        // No [Install] section: the unit exists and can be started by hand, but never at login.
+        _systemCtl.EnabledAnswer = "static";
+        service.Refresh();
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Contains("static", service.DaemonEnablementNote);
+        Assert.Contains("[Install]", service.DaemonEnablementNote);
+
+        // Masked by an administrator: the same plain 未启用, a different reason and a
+        // different way out.
+        _systemCtl.EnabledAnswer = "masked";
+        service.Refresh();
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Contains($"systemctl --user unmask {LinuxDaemonService.UnitName}", service.DaemonEnablementNote);
+    }
+
+    [Fact]
+    public void Ordinary_Enablement_Answers_Carry_No_Note()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        var service = CreateService();
+        service.InstallDaemon();
+
+        service.Refresh();
+        Assert.True(service.IsDaemonEnabled);
+        Assert.Null(service.DaemonEnablementNote);
+
+        // Plainly disabled is all the plain line needs to say; so is plainly enabled.
+        _systemCtl.Enabled = false;
+        service.Refresh();
+        Assert.False(service.IsDaemonEnabled);
+        Assert.Null(service.DaemonEnablementNote);
+
+        // A query that never answered is not an enablement fact either - that stays the
+        // query error, never a note that pretends to know the answer.
+        _systemCtl.Enabled = true;
+        _systemCtl.Fail("is-enabled", exitCode: 1, standardError: "boom");
+        service.Refresh();
+        Assert.Null(service.DaemonEnablementNote);
+        Assert.Contains("boom", service.DaemonQueryError);
+    }
+
+    [Fact]
+    public void The_Default_Unit_Directory_Matches_Systemd_Search_Path_Resolution()
+    {
+        // systemd resolves the user config directory as $XDG_CONFIG_HOME/systemd/user when the
+        // variable is set and $HOME/.config/systemd/user otherwise - and neither has to exist
+        // yet. The default once went through GetFolderPath(ApplicationData), which returns an
+        // empty string when the directory does not exist: the unit path became CWD-relative,
+        // the unit was written where systemd never searches, and every enable answered
+        // not-found while the card said 已安装.
+        Assert.Equal(
+            Path.Combine("/custom/config", "systemd", "user"),
+            LinuxDaemonService.DefaultUnitDirectory(name => name == "XDG_CONFIG_HOME" ? "/custom/config" : "/home/qiyuaner"));
+
+        Assert.Equal(
+            Path.Combine("/home/qiyuaner", ".config", "systemd", "user"),
+            LinuxDaemonService.DefaultUnitDirectory(name => name == "HOME" ? "/home/qiyuaner" : null));
+
+        // An empty XDG_CONFIG_HOME counts as unset, exactly as in systemd.
+        Assert.Equal(
+            Path.Combine("/home/qiyuaner", ".config", "systemd", "user"),
+            LinuxDaemonService.DefaultUnitDirectory(name => name switch
+            {
+                "XDG_CONFIG_HOME" => "",
+                "HOME" => "/home/qiyuaner",
+                _ => null,
+            }));
+    }
+
+    [Fact]
+    public void An_Install_Without_Any_Home_Directory_Refuses_Instead_Of_Writing_Into_The_Working_Directory()
+    {
+        Assert.SkipWhen(!OperatingSystem.IsLinux(), "the systemd/XDG paths only exist on Linux");
+
+        // No HOME and no XDG_CONFIG_HOME: there is nothing to resolve the unit path against,
+        // and a relative unit file would be written into the working directory - installed
+        // nowhere, while the card (checking the same relative path) says 已安装.
+        var service = new LinuxDaemonService(
+            _systemCtl,
+            () => LinuxDaemonService.DefaultUnitDirectory(_ => null),
+            () => "/opt/dezirojoy/DeziroJoy",
+            BusEnvironmentPresent);
+
+        var result = service.InstallDaemon();
+
+        Assert.Equal(DaemonOp.Failed, result.Result);
+        Assert.Contains("无法确定用户配置目录", result.Message);
+        Assert.False(Path.IsPathRooted(service.UnitPath));
+        Assert.Empty(_systemCtl.Calls);
     }
 
     [Fact]
@@ -410,6 +570,13 @@ public class LinuxDaemonServiceTests : IDisposable
 
         public bool Enabled { get; set; } = true;
 
+        /// <summary>
+        /// Overrides the is-enabled answer with a raw systemd state word ("not-found",
+        /// "static", "masked", ...) - the answers that are neither plainly enabled nor plainly
+        /// disabled and that the card must explain instead of flattening.
+        /// </summary>
+        public string? EnabledAnswer { get; set; }
+
         private readonly Dictionary<string, SystemCtlResult> _failures = new(StringComparer.Ordinal);
 
         public void Fail(string verbPrefix, int exitCode, string standardError)
@@ -434,7 +601,10 @@ public class LinuxDaemonServiceTests : IDisposable
 
             if (arguments.StartsWith("is-enabled", StringComparison.Ordinal))
             {
-                return new SystemCtlResult(Enabled ? 0 : 1, Enabled ? "enabled" : "disabled", string.Empty);
+                var answer = EnabledAnswer ?? (Enabled ? "enabled" : "disabled");
+                var exit = answer is "enabled" or "enabled-runtime" ? 0 : 1;
+
+                return new SystemCtlResult(exit, answer, string.Empty);
             }
 
             return new SystemCtlResult(0, string.Empty, string.Empty);

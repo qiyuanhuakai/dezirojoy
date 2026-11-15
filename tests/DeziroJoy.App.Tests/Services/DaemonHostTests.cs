@@ -154,6 +154,26 @@ public class DaemonHostTests
         Assert.Contains("1 blocked", summary);
     }
 
+    [Fact]
+    public void The_Tick_Failure_Note_Quotes_The_Real_Exception()
+    {
+        // The write failure the loop used to swallow: the errno in the message is the whole
+        // diagnosis, so the journal line has to carry it verbatim.
+        var note = DaemonHost.BuildTickFailureNote(new InvalidOperationException(
+            "写入 input_event 失败（type 0x0001 code 0x001e，写入 -1/24 字节，errno 9）："
+            + "虚拟输入设备可能已销毁或 /dev/uinput 已不可写。"));
+
+        Assert.Contains("engine tick failed", note);
+        Assert.Contains("errno 9", note);
+        Assert.Contains("/dev/uinput", note);
+    }
+
+    [Fact]
+    public void The_Tick_Failure_Note_Rejects_No_Exception()
+    {
+        Assert.Throws<ArgumentNullException>(() => DaemonHost.BuildTickFailureNote(null!));
+    }
+
     // A connected pad used to suppress the device note entirely, which hid the unhandled-axis
     // diagnostic a user needs to compare a dead stick or trigger against evtest. The note is a
     // pure function of the scan diagnostic and the pad count, so the whole matrix - pad or not,

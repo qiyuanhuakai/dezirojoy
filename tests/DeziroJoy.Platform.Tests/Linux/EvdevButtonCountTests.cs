@@ -32,6 +32,45 @@ public class EvdevButtonCountTests
     }
 
     [Fact]
+    public void EvIocGAbs_Matches_The_Kernel_IOC_Formula()
+    {
+        // EVIOCGABS(abs) = _IOR('E', 0x40 + abs, struct input_absinfo): the nr base is 0x40, not
+        // 0x00. This constant shipped as 0x80184500, so every EVIOCGABS call the provider made
+        // carried nr = 0x00..0x3f, which the kernel does not dispatch as EVIOCGABS at all
+        // (evdev.c: (_IOC_NR(cmd) & ~ABS_MAX) == _IOC_NR(EVIOCGABS(0))). Every call failed
+        // EINVAL, ReadAxisRanges silently returned an empty table, and the tracker normalized
+        // every axis against its hard-coded default instead of the device's real calibration.
+        // Verified against the kernel header by compiling EVIOCGABS(0) with gcc.
+        const uint expected = (2u << 30) | ((uint)'E' << 8) | 0x40u | (24u << 16);
+
+        Assert.Equal(expected, EvdevNative.EvIocGAbs);
+    }
+
+    [Theory]
+    [InlineData(0)]  // ABS_X
+    [InlineData(1)]  // ABS_Y
+    [InlineData(2)]  // ABS_Z
+    [InlineData(3)]  // ABS_RX - the right stick's X axis
+    [InlineData(4)]  // ABS_RY - the right stick's Y axis
+    [InlineData(5)]  // ABS_RZ
+    [InlineData(9)]  // ABS_GAS
+    [InlineData(10)] // ABS_BRAKE
+    [InlineData(16)] // ABS_HAT0X
+    [InlineData(17)] // ABS_HAT0Y
+    [InlineData(63)] // ABS_MAX - the last code the 8-byte EVIOCGBIT(EV_ABS) mask can carry
+    public void EvIocGAbs_Composes_The_Axis_Number_Into_The_Nr_Field(int axis)
+    {
+        // The provider composes the per-axis request as EvIocGAbs | axis. That is only
+        // EVIOCGABS(axis) while the axis stays below the 0x40 nr base - the mask walk is
+        // bounded by the 8-byte EVIOCGBIT(EV_ABS) buffer (ABS_MAX = 0x3f), so it always is.
+        // A regression here puts the request back outside the kernel's dispatch window and
+        // silently drops every axis range again.
+        var expected = (2u << 30) | ((uint)'E' << 8) | (0x40u + (uint)axis) | (24u << 16);
+
+        Assert.Equal(expected, EvdevNative.EvIocGAbs | (uint)axis);
+    }
+
+    [Fact]
     public void KeyBitBufferSize_Covers_The_Whole_EvKey_Range()
     {
         // KEY_CNT is 0x300 (768) bits, so 96 bytes is the smallest whole-byte buffer that

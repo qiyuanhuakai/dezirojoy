@@ -401,7 +401,8 @@ public sealed class TrayHostTests : IDisposable
             {
                 launcher.Daemon!.RaiseExited();
                 return Task.FromResult(true);
-            });
+            },
+            isDaemonUnitInstalled: () => false);
         var render = new RenderSupervisor(launcher.Start, () => { });
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var shutdownRequested = false;
@@ -523,7 +524,8 @@ public sealed class TrayHostTests : IDisposable
             launcher.Start,
             () => false,
             () => false,
-            requestShutdown: static _ => Task.FromResult(false));
+            requestShutdown: static _ => Task.FromResult(false),
+            isDaemonUnitInstalled: () => false);
         daemon.EnsureRunning();
 
         Assert.True(daemon.Stop());
@@ -609,7 +611,8 @@ public sealed class TrayHostTests : IDisposable
             launcher.Start,
             () => false,
             () => false,
-            requestShutdown: static _ => Task.FromResult(true));
+            requestShutdown: static _ => Task.FromResult(true),
+            isDaemonUnitInstalled: () => false);
         daemon.EnsureRunning();
 
         daemon.Dispose();
@@ -627,7 +630,8 @@ public sealed class TrayHostTests : IDisposable
             launcher.Start,
             () => true,
             () => true,
-            requestShutdown: static _ => Task.FromResult(false));
+            requestShutdown: static _ => Task.FromResult(false),
+            isDaemonUnitInstalled: () => false);
         var render = new RenderSupervisor(launcher.Start, () => { });
         var lifetime = new ClassicDesktopStyleApplicationLifetime();
         var shutdowns = 0;
@@ -668,7 +672,8 @@ public sealed class TrayHostTests : IDisposable
             {
                 shutdownRequests++;
                 return Task.FromResult(false);
-            });
+            },
+            isDaemonUnitInstalled: () => false);
         daemon.EnsureRunning();
 
         Assert.False(daemon.Stop());
@@ -679,7 +684,7 @@ public sealed class TrayHostTests : IDisposable
     public void The_Daemon_Supervisor_Starts_The_Same_Entry_Unelevated_On_Linux()
     {
         var launcher = new FakeLauncher();
-        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => false);
+        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => false, isDaemonUnitInstalled: () => false);
 
         daemon.EnsureRunning();
 
@@ -694,7 +699,7 @@ public sealed class TrayHostTests : IDisposable
     {
         var launcher = new FakeLauncher();
         var elevation = new FakeElevation();
-        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true, () => false);
+        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true, () => false, isDaemonUnitInstalled: () => false);
 
         daemon.EnsureRunning();
 
@@ -711,7 +716,7 @@ public sealed class TrayHostTests : IDisposable
         // relaunch would be a UAC prompt for a copy the instance mutex makes exit at once.
         var launcher = new FakeLauncher();
         var elevation = new FakeElevation();
-        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true, () => true);
+        var daemon = new DaemonSupervisor(elevation, launcher.Start, () => true, () => true, isDaemonUnitInstalled: () => false);
 
         daemon.EnsureRunning();
 
@@ -723,10 +728,143 @@ public sealed class TrayHostTests : IDisposable
     public void A_Reachable_Daemon_On_Linux_Skips_The_Child_Launch()
     {
         var launcher = new FakeLauncher();
-        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => true);
+        var daemon = new DaemonSupervisor(new FakeElevation(), launcher.Start, () => false, () => true, isDaemonUnitInstalled: () => false);
 
         daemon.EnsureRunning();
 
+        Assert.Empty(launcher.Started);
+    }
+
+    [AvaloniaFact]
+    public void The_Systemd_Unit_Owns_The_Daemon_So_No_Private_Child_Competes_With_It()
+    {
+        // The unit is installed and its daemon is mid-start: the first probe loses that race,
+        // so the supervisor asks systemd for the daemon - the same action the settings card's
+        // 启动常驻 takes - and waits for the pipe. Spawning a private child instead is the
+        // section 4.7 competition in reverse: the unit's own instance exits without competing
+        // while mapping keeps running under the child, which leaves the card reading 未运行
+        // for a daemon that is very much alive.
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var probes = 0;
+        var unitStarts = 0;
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => ++probes > 2,
+            requestShutdown: static _ => Task.FromResult(true),
+            isDaemonUnitInstalled: () => true,
+            startDaemonUnit: () =>
+            {
+                unitStarts++;
+                return true;
+            },
+            unitStartupWait: TimeSpan.FromSeconds(5));
+
+        daemon.EnsureRunning();
+
+        Assert.Equal(1, unitStarts);
+        Assert.Empty(launcher.Started);
+        Assert.Equal(DaemonSupervisionState.Running, daemon.State);
+    }
+
+    [AvaloniaFact]
+    public void An_Already_Running_Unit_Daemon_Is_Never_Asked_To_Start_Again()
+    {
+        // The reachability re-check inside the unit path is what keeps a daemon that came up
+        // between the first probe and the unit query from being started a second time.
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var probes = 0;
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => ++probes > 1,
+            requestShutdown: static _ => Task.FromResult(true),
+            isDaemonUnitInstalled: () => true,
+            startDaemonUnit: () => throw new InvalidOperationException("the unit is already serving"),
+            unitStartupWait: TimeSpan.FromSeconds(5));
+
+        daemon.EnsureRunning();
+
+        Assert.Equal(DaemonSupervisionState.Running, daemon.State);
+        Assert.Empty(launcher.Started);
+    }
+
+    [AvaloniaFact]
+    public void A_Unit_That_Cannot_Be_Started_Falls_Back_To_The_Owned_Child()
+    {
+        // No session bus or a broken ExecStart: the unit cannot deliver a daemon, so the
+        // child launch still runs. A daemon that maps outranks a coherent service state, and
+        // nothing live is being competed with - the pipe is not answering.
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: static _ => Task.FromResult(true),
+            isDaemonUnitInstalled: () => true,
+            startDaemonUnit: () => false,
+            unitStartupWait: TimeSpan.FromSeconds(5));
+
+        daemon.EnsureRunning();
+
+        var started = Assert.Single(launcher.Started);
+        Assert.Contains("--daemon", started.Info.Arguments);
+        Assert.Equal(DaemonSupervisionState.Running, daemon.State);
+    }
+
+    [AvaloniaFact]
+    public void A_Started_Unit_Whose_Pipe_Is_Late_Never_Gets_A_Competing_Child()
+    {
+        // The unit start succeeded, so the unit owns the daemon from that moment: a pipe
+        // that is slow to open must not send the supervisor back to the child launch, which
+        // is the section 4.7 competition in reverse - the unit's instance exits without
+        // competing while mapping keeps running under the child. The supervisor keeps the
+        // unit's ownership and the controller reports the connection state instead.
+        var launcher = new FakeLauncher { Daemon = new FakeProcessHandle() };
+        var unitStarts = 0;
+        var daemon = new DaemonSupervisor(
+            new FakeElevation(),
+            launcher.Start,
+            () => false,
+            () => false,
+            requestShutdown: static _ => Task.FromResult(true),
+            isDaemonUnitInstalled: () => true,
+            startDaemonUnit: () =>
+            {
+                unitStarts++;
+                return true;
+            },
+            unitStartupWait: TimeSpan.FromMilliseconds(100));
+
+        daemon.EnsureRunning();
+
+        Assert.Equal(1, unitStarts);
+        Assert.Empty(launcher.Started);
+        Assert.Equal(DaemonSupervisionState.Running, daemon.State);
+        Assert.Contains("mapping pipe", daemon.LastError);
+    }
+
+    [AvaloniaFact]
+    public void Windows_Never_Consults_The_Systemd_Unit()
+    {
+        // The unit is a Linux resident form; on Windows the elevated relaunch stays the only
+        // path, so the unit seams must not even be queried.
+        var launcher = new FakeLauncher();
+        var elevation = new FakeElevation();
+        var daemon = new DaemonSupervisor(
+            elevation,
+            launcher.Start,
+            () => true,
+            () => false,
+            isDaemonUnitInstalled: () => throw new InvalidOperationException("Windows has no unit"),
+            startDaemonUnit: () => throw new InvalidOperationException("Windows has no unit"));
+
+        daemon.EnsureRunning();
+
+        Assert.Equal(1, elevation.RelaunchCalls);
         Assert.Empty(launcher.Started);
     }
 
@@ -851,7 +989,8 @@ public sealed class TrayHostTests : IDisposable
                 }
 
                 return stopped;
-            });
+            },
+            isDaemonUnitInstalled: () => false);
         var shows = new List<string>();
         var render = new RenderSupervisor(launcher.Start, () => shows.Add("show"));
 

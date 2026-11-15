@@ -94,6 +94,13 @@ public static class DaemonHost
             sendInputSink.InjectionFailed += OnInjectionFailed;
         }
 
+        // The loop's other swallowing catch: a tick that throws is reported here rather
+        // than dropped, because a uinput write the kernel refuses fails on every tick that
+        // dispatches and an empty catch made that indistinguishable from a working mapping.
+        // The host throttles the reports, so this is one journal line per window rather
+        // than one every 2 ms.
+        composition.Host.TickFailed += OnTickFailed;
+
         var stateStore = new DaemonStateStore(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "DeziroJoy",
@@ -432,6 +439,19 @@ public static class DaemonHost
         return blocked == 0
             ? $"injected: {total} events"
             : $"injected: {total} events · {blocked} blocked";
+    }
+
+    /// <summary>
+    /// The journal's one line about a tick that threw: the exception's message, quoted
+    /// verbatim because the errno in it is the whole diagnosis. The engine reports at most
+    /// once per <see cref="EngineHost.TickFailureReportInterval"/>, so a persistent failure
+    /// is a steady line rather than a flood.
+    /// </summary>
+    internal static string BuildTickFailureNote(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        return $"[DeziroJoy] engine tick failed: {exception.Message}";
     }
 
     /// <summary>Stops the mapping loop, which also releases every key the dispatcher holds.</summary>
@@ -800,5 +820,15 @@ public static class DaemonHost
             $"[DeziroJoy] input injection blocked: {args.InjectedCount}/{args.RequestedCount} events injected, " +
             $"Win32 error {args.ErrorCode}. A medium-integrity process cannot inject into an elevated target " +
             "(UIPI); relaunch elevated.");
+    }
+
+    /// <summary>
+    /// Writes one tick failure to the journal. Deliberately unguarded: a line that cannot be
+    /// written is itself a failure, and catching it here would rebuild the silence the event
+    /// exists to remove.
+    /// </summary>
+    private static void OnTickFailed(object? sender, TickFailedEventArgs args)
+    {
+        Console.WriteLine(BuildTickFailureNote(args.Exception));
     }
 }

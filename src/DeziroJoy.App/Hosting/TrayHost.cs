@@ -57,11 +57,25 @@ internal sealed class DaemonSupervisor : IDisposable
 {
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>Pause between pipe probes while waiting for a unit-managed daemon to serve.</summary>
+    private static readonly TimeSpan UnitProbeInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// How long the supervisor waits for the unit's daemon to open its pipe after asking
+    /// systemd to start it. <c>systemctl start</c> returns once the unit is started, not
+    /// once the daemon serves, and the daemon's own startup is the same few hundred
+    /// milliseconds the GUI's connect grace covers.
+    /// </summary>
+    private static readonly TimeSpan DefaultUnitStartupWait = TimeSpan.FromSeconds(3);
+
     private readonly IElevationService _elevation;
     private readonly ProcessLaunch _launcher;
     private readonly Func<bool> _isWindows;
     private readonly Func<bool> _isDaemonReachable;
     private readonly Func<CancellationToken, Task<bool>> _requestShutdown;
+    private readonly Func<bool> _isDaemonUnitInstalled;
+    private readonly Func<bool> _startDaemonUnit;
+    private readonly TimeSpan _unitStartupWait;
     private readonly TimeSpan _stopTimeout;
     private IProcessHandle? _daemon;
     private bool _elevatedRequested;
@@ -73,7 +87,10 @@ internal sealed class DaemonSupervisor : IDisposable
         Func<bool>? isWindows = null,
         Func<bool>? isDaemonReachable = null,
         Func<CancellationToken, Task<bool>>? requestShutdown = null,
-        TimeSpan? stopTimeout = null)
+        TimeSpan? stopTimeout = null,
+        Func<bool>? isDaemonUnitInstalled = null,
+        Func<bool>? startDaemonUnit = null,
+        TimeSpan? unitStartupWait = null)
     {
         _elevation = elevation ?? new ElevationService();
         _launcher = launch ?? ProcessLauncher.Start;
@@ -81,6 +98,9 @@ internal sealed class DaemonSupervisor : IDisposable
         _isDaemonReachable = isDaemonReachable ?? (static () => IsDaemonReachable(IpcContract.PipeName));
         _requestShutdown = requestShutdown ?? RequestDaemonShutdownAsync;
         _stopTimeout = stopTimeout ?? StopTimeout;
+        _isDaemonUnitInstalled = isDaemonUnitInstalled ?? IsDaemonUnitInstalledDefault;
+        _startDaemonUnit = startDaemonUnit ?? StartDaemonUnitDefault;
+        _unitStartupWait = unitStartupWait ?? DefaultUnitStartupWait;
     }
 
     public bool IsRunning => _daemon is { HasExited: false };
@@ -95,6 +115,18 @@ internal sealed class DaemonSupervisor : IDisposable
     /// it stays resident and the next menu action tries again. There is no local-engine
     /// fallback - the daemon is the only mapping authority, and a tray that injected on its
     /// own behalf would be the UIPI-silent-drop failure the architecture exists to prevent.
+    /// <para>
+    /// On Linux with the systemd user unit installed, the unit owns the resident daemon: the
+    /// supervisor asks systemd for it - the same action the settings card's 启动常驻 takes -
+    /// instead of spawning a private child. The child is the section 4.7 competition in
+    /// reverse: the unit's own instance exits without competing while mapping keeps running
+    /// under the child, which leaves the settings card reading 未运行 for a daemon that is
+    /// very much alive, and its start/stop buttons operating on the instance that already
+    /// left. The owned child is the fallback only when the unit cannot be started at all
+    /// (no session bus, a broken ExecStart) - never once the unit has taken ownership, not
+    /// even while its daemon is still opening its pipe: a daemon that maps outranks a
+    /// coherent service state, and a second one competes with the first.
+    /// </para>
     /// </summary>
     public void EnsureRunning()
     {
@@ -104,6 +136,12 @@ internal sealed class DaemonSupervisor : IDisposable
         }
 
         if (SafeIsDaemonReachable())
+        {
+            State = DaemonSupervisionState.Running;
+            return;
+        }
+
+        if (!_isWindows() && SafeIsDaemonUnitInstalled() && TryStartUnitDaemon())
         {
             State = DaemonSupervisionState.Running;
             return;
@@ -126,6 +164,70 @@ internal sealed class DaemonSupervisor : IDisposable
         _daemon = _launcher(ProcessLauncher.DaemonStartInfo());
         State = _daemon is null ? DaemonSupervisionState.StartFailed : DaemonSupervisionState.Running;
         Trace.WriteLine($"[DeziroJoy] daemon supervisor: {State}");
+    }
+
+    /// <summary>
+    /// Asks the systemd user unit for its daemon and waits for the pipe. The reachability
+    /// re-check is not redundant: the probe that sent us here can lose a race against a
+    /// daemon that is mid-start, and asking systemd to start an already-active unit is the
+    /// no-op that keeps this supervisor from competing with it.
+    /// <para>
+    /// A start that failed returns false, and the caller falls back to the owned child - the
+    /// path that works with no systemd at all. A start that succeeded never does: from that
+    /// moment the unit owns the daemon, so a pipe that is late to open still returns true.
+    /// Spawning a private child beside a started unit is the section 4.7 competition in
+    /// reverse - the unit's own instance exits without competing while mapping keeps running
+    /// under the child - which is exactly the state this path exists to prevent. The
+    /// controller reports the connection state while the daemon is still on its way.
+    /// </para>
+    /// </summary>
+    private bool TryStartUnitDaemon()
+    {
+        if (SafeIsDaemonReachable())
+        {
+            return true;
+        }
+
+        if (!SafeStartDaemonUnit())
+        {
+            return false;
+        }
+
+        var elapsed = Stopwatch.StartNew();
+        while (elapsed.Elapsed < _unitStartupWait)
+        {
+            Thread.Sleep(UnitProbeInterval);
+            if (SafeIsDaemonReachable())
+            {
+                return true;
+            }
+        }
+
+        LastError ??= "the unit's daemon did not open the mapping pipe within the startup wait";
+        return true;
+    }
+
+    /// <summary>
+    /// The production unit check: the unit file on disk is the install - the same fact the
+    /// settings card reads - so this is that file check behind the refresh the service needs
+    /// before its properties answer.
+    /// </summary>
+    private static bool IsDaemonUnitInstalledDefault()
+    {
+        var service = new LinuxDaemonService();
+        service.Refresh();
+        return service.IsDaemonInstalled;
+    }
+
+    /// <summary>
+    /// The production unit start: the same <c>systemctl --user start</c> the settings card's
+    /// 启动常驻 runs, so the daemon has exactly one owner whichever surface asked for it.
+    /// </summary>
+    private static bool StartDaemonUnitDefault()
+    {
+        var service = new LinuxDaemonService();
+        service.Refresh();
+        return service.StartDaemon().Result == DaemonOp.Completed;
     }
 
     /// <summary>
@@ -276,6 +378,40 @@ internal sealed class DaemonSupervisor : IDisposable
             return _isDaemonReachable();
         }
         catch (Exception exception) when (exception is IOException or TimeoutException or UnauthorizedAccessException)
+        {
+            LastError = exception.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The unit check behind its own guard: a query that throws says nothing about whether
+    /// the unit is installed, so it is reported and treated as "no unit" - which sends the
+    /// supervisor down the child path that works without systemd at all.
+    /// </summary>
+    private bool SafeIsDaemonUnitInstalled()
+    {
+        try
+        {
+            return _isDaemonUnitInstalled();
+        }
+        catch (Exception exception) when (exception
+            is IOException or TimeoutException or UnauthorizedAccessException or Win32Exception)
+        {
+            LastError = exception.Message;
+            return false;
+        }
+    }
+
+    /// <summary>The unit start behind its own guard, with the same "reported, not guessed" rule.</summary>
+    private bool SafeStartDaemonUnit()
+    {
+        try
+        {
+            return _startDaemonUnit();
+        }
+        catch (Exception exception) when (exception
+            is IOException or TimeoutException or UnauthorizedAccessException or Win32Exception)
         {
             LastError = exception.Message;
             return false;

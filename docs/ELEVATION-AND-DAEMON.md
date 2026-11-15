@@ -289,7 +289,10 @@ llvmpipe 软件渲染所致。** Windows 上没有 Mesa/llvmpipe，Skia 走 D3D�
 - **心跳、重连与有序推送**：客户端周期 `GetState`，兼作心跳与权威状态刷新；断线后串行重连并
   重新握手，实例 ID 与序号在新会话重新建立基线。每个 daemon 连接只有一个写队列，响应和推送
   不会因并发线程不同而乱序。快照推送与权威应答在同一同步边界检查并采用，晚到应答不能覆盖更新快照。
-  主动 `ShutdownDaemon` 成功后客户端不再自动拉起 daemon。
+  主动 `ShutdownDaemon` 成功后客户端不再自动拉起 daemon。**首次连接带启动宽限**：刚被要求
+  启动的 daemon（supervisor 拉起、或 systemd 正在启动）要几百毫秒后才开管道，首个探测之后
+  的每次重试都只探测、不重新拉起（避免为同一个 daemon 弹第二次 UAC），宽限内重试开管道与
+  握手，耗尽才报不可用。
 - **实时输入样本**：新 GUI 在 `Hello` 中显式订阅；旧客户端省略该可选字段，daemon 因而不向它发送
   新消息类型，协议仍保持版本 1。运行 tick 与停止后的 250ms 存在性采样都发布物理状态，重复状态不发送；
   每连接只合并同一设备且数字键状态相同的连续模拟量样本，设备之间以及所有按下/松开转换逐项保序，
@@ -439,9 +442,23 @@ WantedBy=default.target
 - **不依赖 `graphical-session.target`**：uinput 无头可用，把单元绑到图形登录会恰恰破坏
   最需要映射的 SSH / 控制台会话。登录自启用 `default.target`。
 
-安装 = 写单元 + `daemon-reload` + `enable` + `start`；卸载 = `stop` + `disable` + 删文件
-+ `daemon-reload`。GUI 登录自启动（XDG `.desktop`）与单元启用是**两个独立开关**，
-与 Windows 的 daemon 任务 / autostart 任务分离一一对应。
+安装 = 写单元 → `enable` → `start`；卸载 = `stop` + `disable` + 删文件 + `daemon-reload`。
+安装序列里**没有单独的 `daemon-reload`**：`systemctl enable` 建好符号链接后自行 reload 用户
+管理器，多插一次只增加失败面——管理器短暂不可达曾让安装中断在"单元已写、未 enable"之间，
+此后每次刷新都如实显示未启用。`enable` 成功而 `start` 失败时，安装结果说"已启用但启动失败"
+并指向 `journalctl --user -u dezirojoy-daemon`：daemon 起不来的原因（缺依赖库、设备不可读）
+在它自己的输出里，systemctl 的 stderr 只说 job failed。GUI 登录自启动（XDG `.desktop`）与
+单元启用是**两个独立开关**，与 Windows 的 daemon 任务 / autostart 任务分离一一对应。
+
+刷新读到的启用态可能还需要一句解释：`is-enabled` 答 `not-found`（单元文件不在 systemd 的
+用户单元搜索路径里——GUI 与 systemd 解析出的 `XDG_CONFIG_HOME`/`HOME` 不一致时出现）、
+`static`（无 `[Install]` 段，只能手动启动）或 `masked` 时，卡片在启用行旁给出原因与出路，
+而不是一个每次刷新原样复现的"未启用"。
+
+**单元已安装时不另起私有子进程**：装了用户单元后 daemon 归单元所有——托盘/渲染进程的
+supervisor 直接请求 `systemctl --user start`（与设置卡片同一个动作）并等待管道就绪，不
+spawn 与单元实例竞争的私有子进程（那会让卡片把活着的 daemon 显示成未运行）；单元起不动
+（无会话总线、ExecStart 损坏）时回退为自有子进程：能映射优先于服务状态一致。
 
 **linger**：用户单元的 systemd 实例随登录会话结束而终止，因此"退出登录后继续常驻"需要
 `loginctl enable-linger $USER`（非 root 执行时可能要求 polkit 认证，见 4.8 的同一约束）。
@@ -469,7 +486,8 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
 
 上述两种修复可以在设置页「后台服务」卡片上一键完成（仅 Linux 显示「修复设备访问权限」
 按钮）。它把"照抄命令"升级为显式动作，但**不改变 opt-in 原则**：安装器与包体仍然不注册
-任何规则，helper 脚本随包放在 `/opt/dezirojoy` 里也只是待命，只有用户点击按钮才会运行。
+任何规则，helper 脚本随包放在运行二进制旁边（deb/rpm 为 `/opt/dezirojoy`，AppImage 为
+挂载 AppDir 内的同一路径）也只是待命，只有用户点击按钮才会运行。
 
 流程（`DeviceAccessFixer`，测试以 mock 进程/探针覆盖各分支）：
 
@@ -482,14 +500,22 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
    点按钮同样得到 NoGap，而不是白跑一次 pkexec。
 3. 有缺口时把 `LinuxDeviceAccess.UdevRulesText`（规则文本的单一来源）写入临时文件，
    用 `pkexec` 运行随包 helper `tools/Packaging/linux/fix-device-access.sh`（装入
-   `/opt/dezirojoy/fix-device-access.sh`）：安装上述规则 → `udevadm control --reload &&
-   udevadm trigger` → `usermod -aG input <调用者>`。helper 自身不含规则副本，规则正文
-   始终由应用生成，两处不会漂移。
-4. 无 polkit 代理、pkexec 不在 PATH、对话框被取消、helper 缺失（非 deb 安装）或 helper
-   因工具缺失/执行失败未能完成承诺步骤（非 0 退出）时降级：状态行回退为可照抄的命令
-   （即 `DeviceAccessGuidance` 文案，stderr 原因在前），按钮 tooltip 说明本次降级的原因。
-5. UI 明示修改内容：tooltip 写明将写入 `/etc/udev/rules.d` 并把当前用户加入 input 组；
-   udev 规则重载后对后续 open 立即生效，而组变更需要重新登录。
+   `/opt/dezirojoy/fix-device-access.sh`）：安装上述规则 → `udevadm control --reload` →
+   trigger **input 与 misc 两个子系统** → `usermod -aG input <调用者>`。helper 自身不含
+   规则副本，规则正文始终由应用生成，两处不会漂移。两个子系统都要 trigger：`/dev/uinput`
+   是 misc 设备（内核以 misc_register 注册），`--subsystem-match=input` 碰不到它——只
+   trigger input 的话规则写了、event* 立即放行，uinput 节点权限却要等模块重载或重启才变，
+   而重新登录并不重载模块；该 trigger 失败时 helper 非 0 退出，让应用降级为可照抄的命令，
+   而不是宣称"已修复"。三种包格式都把 helper 放在运行二进制旁边（deb/rpm 为
+   `/opt/dezirojoy`，AppImage 为挂载 AppDir 的 `opt/dezirojoy`），AppImage 的一键修复
+   同样跑随包 helper。
+4. 无 polkit 代理、pkexec 不在 PATH、对话框被取消、helper 缺失（三种包格式都不随包带的
+   构建）或 helper 因工具缺失/执行失败未能完成承诺步骤（非 0 退出）时降级：状态行回退为
+   可照抄的命令（即 `DeviceAccessGuidance` 文案，stderr 原因在前），按钮 tooltip 说明本次
+   降级的原因。
+5. UI 明示修改内容：tooltip 写明将写入 `/etc/udev/rules.d` 并把当前用户加入 input 组。
+   两种修改都**持久**（udev 规则落盘、组成员关系落 `/etc/group`），差别只在生效时机：
+   udev 规则重载后对后续 open 立即生效（含 `/dev/uinput`），组变更要重新登录。
 
 边界：一键修复只解决设备访问权。权限修好但注入仍然无效时，原因在注入路径本身
 （uinput ioctl 失败等），由 5.3 的 sink 错误常驻展示暴露——"提权了还是没反应"不该
@@ -519,7 +545,26 @@ KERNEL=="uinput",GROUP="input",MODE="0660",OPTIONS+="static_node=uinput"
 
 `uinput` 打不开时，`UInputOutputSink` 的异常消息与 `ProbeUnavailableReason()` 使用同一
 段文案（errno + usermod + udev 规则），`EngineComposition.SinkError` 把它带进 daemon 摘要
-——不再出现"降级为空注入而界面上什么都没有"的形态。
+——不再出现"降级为空注入而界面上什么都没有"的形态。注入过程中的 `write()` 失败同样不再
+静默：内核的 uinput 写入路径要么整个事件成功要么失败，负返回时带 errno 抛出、消息指名
+事件码与"虚拟输入设备可能已销毁或 /dev/uinput 已不可写"（短写则报出写入计数），与设置
+ioctl 失败同一契约——返回值曾被丢弃，那正是"映射毫无反应而日志无一字"的形态。
+
+### 5.4 EVIOCGABS 的 nr 基座与真机轴校准
+
+`EVIOCGABS(axis)` 的 ioctl 号是 `_IOR('E', 0x40 + axis, struct input_absinfo)`：**nr 基座
+是 0x40**，轴号按位或上去——`EvdevNative.EvIocGAbs` = `0x80184540`，`EvIocGAbs | axis`
+即 EVIOCGABS(axis)（轴号来自 8 字节 EVIOCGBIT(EV_ABS) 掩码的遍历，ABS_MAX = 0x3f，
+恒小于基座；常量经 gcc 对内核头文件核对）。它一度把基座写成 0x00：每次 ioctl 以
+nr = 0x00..0x3f 到达内核，evdev 不按 EVIOCGABS 分发（`_IOC_NR(cmd) & ~ABS_MAX` 对不上
+`EVIOCGABS(0)`），全部 EINVAL，`ReadAxisRanges` 静默返回空表——tracker 于是拿硬编码默认
+量程（±32767 / 0..255）归一化每一轴。
+
+后果只在真机可见：死区、半推速度、"推到底"的判定与扳机施密特阈值（[`DESIGN.md`](../DESIGN.md)
+4.6 节，evdev 侧同样按设备申报行程归一化）全部按错误量程计算，而演示值与不经过 evdev 的
+测试不受影响。轴的 minimum/maximum/当前值是设备自己的校准数据，必须经 EVIOCGABS 真读；
+读不到时按默认量程只是降级。真机核对方式：`evtest` 选设备后看到的申报量程应与推满手感
+一致——满幅推到底达到满速、轻推只到微速。
 
 ---
 

@@ -135,6 +135,34 @@ public sealed class DaemonStatusSettingsGuiTests
     }
 
     [AvaloniaFact]
+    public void Linux_Card_Shows_The_Reason_Behind_An_Unexplained_Not_Enabled()
+    {
+        // A bare 未启用 with no reason is what the user reported after installing: the unit
+        // file is written where systemd cannot see it. The card must state that reason next to
+        // the enablement line instead of leaving a toggle-looking state with nothing behind it.
+        var service = new DaemonSettingsViewModelLinuxTests.FakeLinuxDaemonService
+        {
+            IsDaemonInstalled = true,
+            IsDaemonRunning = false,
+            IsDaemonEnabled = false,
+            DaemonEnablementNote = "systemd 找不到已写入的单元文件：/home/qiyuaner/.config/systemd/user/dezirojoy-daemon.service 不在 systemd 的用户单元搜索路径中（GUI 与 systemd 的 XDG_CONFIG_HOME/HOME 不一致时会出现），未启用也不会启动。",
+        };
+        var (_, card) = ShowCard(new DaemonSettingsViewModel(service));
+
+        var note = card.FindControl<TextBlock>("DaemonEnablementNote")!;
+        Assert.True(note.IsVisible);
+        Assert.Contains("搜索路径", note.Text!);
+        Assert.Contains("未启用", card.FindControl<TextBlock>("DaemonEnabledText")!.Text!);
+
+        // Nothing to explain: the line stays away, like every other hint on the card.
+        service.DaemonEnablementNote = null;
+        var vm = new DaemonSettingsViewModel(service);
+        var (_, plainCard) = ShowCard(vm);
+
+        Assert.False(plainCard.FindControl<TextBlock>("DaemonEnablementNote")!.IsEffectivelyVisible);
+    }
+
+    [AvaloniaFact]
     public void Linux_Card_Reports_A_Failed_Query_Instead_Of_Not_Running()
     {
         var service = new DaemonSettingsViewModelLinuxTests.FakeLinuxDaemonService

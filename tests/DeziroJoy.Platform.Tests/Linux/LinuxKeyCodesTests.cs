@@ -1,5 +1,6 @@
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Platform.Linux.Keys;
+using DeziroJoy.Platform.Linux.Output;
 using Xunit;
 
 namespace DeziroJoy.Platform.Tests.Linux;
@@ -32,4 +33,22 @@ public class LinuxKeyCodesTests
     [InlineData(GamepadKey.ArrowRight, 106)]
     public void Named_Keys_Use_Their_Evdev_Codes(GamepadKey key, ushort expected)
         => Assert.Equal(expected, LinuxKeyCodes.ToEvdevCode(key));
+
+    [Fact]
+    public void No_GamepadKey_Maps_To_A_Mouse_Button_Code()
+    {
+        // The keyboard vocabulary and the mouse-button vocabulary are translated by two
+        // different tables (LinuxKeyCodes and EvdevMouseButtons) that must never collide:
+        // one code claimed by both would make a key press and a mouse click the same
+        // physical output on the virtual device.
+        var buttonCodes = Enum.GetValues<MouseButton>()
+            .Select(button => EvdevMouseButtons.TryGetButtonCode(button, out var code) ? code : (ushort)0)
+            .Where(code => code != 0)
+            .ToArray();
+
+        foreach (var key in Enum.GetValues<GamepadKey>())
+        {
+            Assert.DoesNotContain(LinuxKeyCodes.ToEvdevCode(key), buttonCodes);
+        }
+    }
 }

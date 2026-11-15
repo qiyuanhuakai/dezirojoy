@@ -1237,8 +1237,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     public string InjectorDescription => _daemonRequired
         ? DaemonSnapshot is { } daemon
-            ? $"提权守护进程（PID {daemon.InjectorPid}）"
-            : "提权守护进程（不可用）"
+            ? IsElevationSupported
+                ? $"提权守护进程（PID {daemon.InjectorPid}）"
+                : $"守护进程（PID {daemon.InjectorPid}）"
+            : IsElevationSupported
+                ? "提权守护进程（不可用）"
+                : "守护进程（不可用）"
         : IsElevationSupported
             ? IsElevated
                 ? "DeziroJoy 主窗口（已提权）"
@@ -1266,14 +1270,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// What the injector's integrity level means for reach, stated plainly. SendInput is
     /// subject to UIPI and fails silently when blocked, so this is the only place the user
     /// can tell "UIPI dropped my input" from "it worked" - and the only hint that the
-    /// relaunch is the fix.
+    /// relaunch is the fix. The daemon branch splits by platform: on the same-user platform
+    /// there is no integrity level to earn and no UIPI to be blocked by, so quoting either
+    /// would describe a mechanism that platform does not have.
     /// </summary>
     public string InjectorStatusText => _daemonRequired
         ? DaemonSnapshot is null
             ? "守护进程不可用；未启动本地注入"
-            : InjectorIntegrity == InjectorIntegrityLevel.Elevated
-                ? "由提权守护进程注入，可覆盖管理员目标"
-                : "守护进程未提权；管理员目标仍会被 UIPI 拦截"
+            : IsElevationSupported
+                ? InjectorIntegrity == InjectorIntegrityLevel.Elevated
+                    ? "由提权守护进程注入，可覆盖管理员目标"
+                    : "守护进程未提权；管理员目标仍会被 UIPI 拦截"
+                : "由守护进程注入；Linux 为同用户模型，uinput 不受 UIPI 约束，注入只取决于设备访问权"
         : IsElevationSupported
             ? IsElevated
                 ? "已提权：可向以管理员身份运行的应用注入输入"
@@ -1294,7 +1302,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         MappingOwner.None => "映射未启动",
         MappingOwner.ThisWindow => "本窗口正在注入映射",
         MappingOwner.AnotherProcess => "另一个进程正在注入映射（常驻服务或其他 DeziroJoy 实例），本次启动已被拒绝",
-        MappingOwner.ResidentDaemon => $"提权守护进程正在注入映射（PID {DaemonSnapshot?.InjectorPid.ToString(CultureInfo.InvariantCulture) ?? "未知"}）",
+        MappingOwner.ResidentDaemon => IsElevationSupported
+            ? $"提权守护进程正在注入映射（PID {DaemonSnapshot?.InjectorPid.ToString(CultureInfo.InvariantCulture) ?? "未知"}）"
+            : $"守护进程正在注入映射（PID {DaemonSnapshot?.InjectorPid.ToString(CultureInfo.InvariantCulture) ?? "未知"}）",
         _ => "映射未启动",
     };
 
@@ -2801,7 +2811,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     {
         if (_daemonRequired && DaemonSnapshot is null)
         {
-            StatusMessage = "提权守护进程不可用；未启用本地注入回退";
+            // Windows names the elevated resident process, because earning that token is
+            // what makes injection reach elevated targets there. Linux runs the same daemon
+            // as this user with no elevation to earn, so the 提权 wording would describe a
+            // mechanism the platform does not have.
+            StatusMessage = IsElevationSupported
+                ? "提权守护进程不可用；未启用本地注入回退"
+                : "守护进程不可用；未启用本地注入回退";
             return;
         }
 
@@ -3210,7 +3226,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public void ReportDaemonUnavailable(string reason)
     {
-        SetTransferError($"提权守护进程不可用：{reason}；未启用本地注入回退。");
+        // The prefix follows the platform, exactly as RefreshStatus words it: on the
+        // same-user platform there is no elevated token the daemon needed.
+        SetTransferError($"{(IsElevationSupported ? "提权守护进程" : "守护进程")}不可用：{reason}；未启用本地注入回退。");
         RefreshStatus();
     }
 

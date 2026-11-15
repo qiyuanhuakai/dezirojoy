@@ -55,6 +55,17 @@ public partial class DaemonSettingsViewModel : ObservableObject
     public string? DaemonQueryError => _service.DaemonQueryError;
 
     /// <summary>
+    /// Why the installed unit's enablement needs a second look - the scheduler cannot see the
+    /// unit file at all, or the unit can never auto-start (static/masked) - or null when the
+    /// plain enabled/disabled line says everything. This is the reason behind a 未启用 the user
+    /// did not expect: the file was written where systemd does not search, so nothing is
+    /// enabled and nothing will start no matter how often the card is refreshed.
+    /// </summary>
+    public string? DaemonEnablementNote => _service.DaemonEnablementNote;
+
+    public bool HasDaemonEnablementNote => DaemonEnablementNote is not null;
+
+    /// <summary>
     /// The unit's login-autostart state as its own line: "已启用（登录自动）" once the unit
     /// exists on the same-user platform, "未启用（登录不会自动启动）" when it will not start at
     /// login, and null everywhere else - a Windows scheduled task runs at logon once installed,
@@ -219,6 +230,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsDaemonRunning));
         OnPropertyChanged(nameof(IsDaemonEnabled));
         OnPropertyChanged(nameof(DaemonQueryError));
+        OnPropertyChanged(nameof(DaemonEnablementNote));
+        OnPropertyChanged(nameof(HasDaemonEnablementNote));
         OnPropertyChanged(nameof(DaemonEnabledText));
         OnPropertyChanged(nameof(HasDaemonEnabledText));
         OnPropertyChanged(nameof(CanStartDaemon));

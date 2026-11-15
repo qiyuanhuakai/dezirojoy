@@ -20,6 +20,21 @@ public sealed class ControllerSampledEventArgs : EventArgs
 }
 
 /// <summary>
+/// The exception one mapping tick threw. The loop survives the failure, so this is the
+/// only place the real exception - a sink naming the errno of a write the kernel
+/// refused, say - ever surfaces to a subscriber.
+/// </summary>
+public sealed class TickFailedEventArgs : EventArgs
+{
+    public TickFailedEventArgs(Exception exception)
+    {
+        Exception = exception;
+    }
+
+    public Exception Exception { get; }
+}
+
+/// <summary>
 /// Ties provider, per-device engines, dispatchers and the output sink together.
 /// <see cref="TickOnce"/> is deterministic and thread-free (used by tests and the UI);
 /// <see cref="Start"/> runs the same loop on a background thread for live mapping.
@@ -67,6 +82,21 @@ public sealed class EngineHost : IDisposable
     private volatile bool _nativeGamepadPaused;
     private volatile int _injectionVerdict;
     private int _presenceVersion;
+
+    /// <summary>
+    /// When the loop last reported a tick failure, read on the loop's own clock, or null
+    /// when this run has reported none yet. Only the loop thread writes it - the one place
+    /// a tick failure is reported - so it needs no lock.
+    /// </summary>
+    private TimeSpan? _lastTickFailureReport;
+
+    /// <summary>
+    /// How long one reported tick failure silences the next. A write that fails once fails
+    /// on every tick that dispatches - 2 ms apart, an unthrottled report would put the same
+    /// errno in the journal hundreds of times a second - so the first failure of a burst is
+    /// reported and the rest are dropped until this window passes.
+    /// </summary>
+    public static readonly TimeSpan TickFailureReportInterval = TimeSpan.FromSeconds(5);
 
     private const int InjectionVerdictPending = 0;
     private const int InjectionVerdictHeld = 1;
@@ -171,6 +201,16 @@ public sealed class EngineHost : IDisposable
     /// <see cref="PresetSwitchRequested"/>, because the daemon answers by taking the same lock.
     /// </summary>
     public event Action? ActiveLayersChanged;
+
+    /// <summary>
+    /// Raised when a tick threw and the loop swallowed the failure to stay alive, carrying
+    /// the exception the tick threw. This is how the daemon's journal sees a uinput write
+    /// the kernel refused: the loop's catch used to be empty, so every injection silently
+    /// became nothing. Raised outside the engine lock, at most once per
+    /// <see cref="TickFailureReportInterval"/>, and the handler's own exception is not
+    /// swallowed - see <see cref="ReportTickFailure"/>.
+    /// </summary>
+    public event EventHandler<TickFailedEventArgs>? TickFailed;
 
     /// <summary>Advances every connected controller by one tick.</summary>
     public void TickOnce(TimeSpan delta)
@@ -699,6 +739,14 @@ public sealed class EngineHost : IDisposable
         _sink.Dispose();
     }
 
+    /// <summary>
+    /// The background mapping loop: one <see cref="TickOnce"/> per <paramref name="interval"/>
+    /// until <see cref="Stop"/> clears <c>_running</c>. A tick that throws is reported through
+    /// <see cref="TickFailed"/> and then swallowed - the loop survives, because a dead loop
+    /// injects nothing at all - but it is never swallowed silently: a uinput write the kernel
+    /// refuses throws here on every tick that dispatches, and an empty catch made that
+    /// indistinguishable from a working mapping.
+    /// </summary>
     private void Run(TimeSpan interval)
     {
         // Acquired here, on the loop thread, and released in the finally below: .NET mutex
@@ -719,6 +767,10 @@ public sealed class EngineHost : IDisposable
         try
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            // The loop's clock restarts with the loop, so the report window does too: a burst
+            // reported by an earlier run must not silence this run's first failure.
+            _lastTickFailureReport = null;
             var last = stopwatch.Elapsed;
 
             while (_running)
@@ -731,9 +783,15 @@ public sealed class EngineHost : IDisposable
                 {
                     TickOnce(delta);
                 }
-                catch (Exception)
+                catch (Exception exception)
                 {
-                    // A failing tick must never kill the mapping loop.
+                    // A failing tick must never kill the mapping loop - and must never be
+                    // silent either. Reported here, on the loop thread, throttled to one
+                    // report per window. The report itself is deliberately unguarded: a
+                    // notification that cannot be delivered is a failure too, and wrapping
+                    // it in another swallowing catch is how the tick failure it reports
+                    // stayed invisible.
+                    ReportTickFailure(exception, stopwatch.Elapsed);
                 }
 
                 var sleep = interval - (stopwatch.Elapsed - now);
@@ -749,6 +807,34 @@ public sealed class EngineHost : IDisposable
             // alike - by the thread that owns it.
             injection.Release();
         }
+    }
+
+    /// <summary>
+    /// Reports one tick failure to <see cref="TickFailed"/>, at most once per
+    /// <see cref="TickFailureReportInterval"/>. <paramref name="sinceLoopStart"/> is the
+    /// loop's own clock reading, passed in so the cadence is testable without waiting the
+    /// window out. The first failure of a burst reports; the rest are dropped until the
+    /// window passes, which is what keeps a persistent write failure from filling the
+    /// journal with the same errno every 2 ms.
+    /// <para>
+    /// The handler is invoked with no guard around it: a subscriber that cannot be reached -
+    /// a journal that cannot be written - has its exception propagate to the loop and stop
+    /// it. That is deliberate; a silently failing notification channel is the bug this
+    /// event exists to remove.
+    /// </para>
+    /// </summary>
+    internal void ReportTickFailure(Exception exception, TimeSpan sinceLoopStart)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        if (_lastTickFailureReport is { } last
+            && sinceLoopStart - last < TickFailureReportInterval)
+        {
+            return;
+        }
+
+        _lastTickFailureReport = sinceLoopStart;
+        TickFailed?.Invoke(this, new TickFailedEventArgs(exception));
     }
 
     /// <summary>

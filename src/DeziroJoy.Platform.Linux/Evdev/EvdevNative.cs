@@ -15,7 +15,18 @@ internal static partial class EvdevNative
 
     public const uint EvIocGName = 0x81004506;
 
-    public const uint EvIocGAbs = 0x80184500;
+    /// <summary>
+    /// EVIOCGABS(0) = 0x80184540. Derived with the kernel's _IOC macro
+    /// (<c>_IOC_READ</c> = 2, type 'E' = 0x45, nr = 0x40 + abs, size = sizeof(struct
+    /// input_absinfo) = 24): (2 &lt;&lt; 30) | (0x45 &lt;&lt; 8) | 0x40 | (24 &lt;&lt; 16). The axis
+    /// number is OR'd onto the 0x40 nr base, so <see cref="EvIocGAbs"/> | axis is EVIOCGABS(axis)
+    /// for every axis below 0x40 (ABS_MAX). The nr base is what the kernel dispatches on
+    /// (<c>_IOC_NR(cmd) &amp; ~ABS_MAX == _IOC_NR(EVIOCGABS(0))</c>): with nr = 0x00..0x3f
+    /// instead, every EVIOCGABS call fails EINVAL - or, for axis codes 0x20..0x3f, is
+    /// mis-answered as EVIOCGBIT and fills the absinfo struct with bitmask bytes. Verified
+    /// against the kernel header: gcc, EVIOCGABS(0) = 0x80184540.
+    /// </summary>
+    public const uint EvIocGAbs = 0x80184540;
 
     public const uint EvIocGBitAbs = 0x80084523;
 

@@ -22,6 +22,13 @@
                        x:Name="DaemonEnabledText"
                        IsVisible="{Binding HasDaemonEnabledText}"
                        Text="{Binding DaemonEnabledText}" />
+            <!-- ...and when that 未启用 has a reason the plain line cannot say - systemd cannot
+                 see the unit file at all, or the unit can never auto-start - the reason is
+                 stated here instead of leaving the user to guess at the toggle. -->
+            <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                       x:Name="DaemonEnablementNote"
+                       IsVisible="{Binding HasDaemonEnablementNote}"
+                       Text="{Binding DaemonEnablementNote}" />
             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" Text="{Binding ElevationText}" />
 
             <!-- Linux only: the one-click device-access fix. The installers deliberately never

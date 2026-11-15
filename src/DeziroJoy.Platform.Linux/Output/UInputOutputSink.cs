@@ -17,6 +17,16 @@ namespace DeziroJoy.Platform.Linux.Output;
 /// message and <see cref="ProbeUnavailableReason"/> both spell the fix out - the old
 /// NullOutputSink degradation was silent, which is how "mapping does nothing" shipped.
 /// </summary>
+/// <remarks>
+/// The device is declared as one keyboard and one mouse sharing a node: EV_KEY with the
+/// key-code vocabulary plus the BTN_LEFT..BTN_EXTRA codes, EV_REL with the motion and
+/// wheel axes (see <see cref="UInputDevicePlan"/>). Both halves matter for recognition -
+/// udev tags the device ID_INPUT_KEYBOARD from the key bits but only ID_INPUT_MOUSE from a
+/// declared BTN_* code, and X11's stock pointer catchall matches on that property alone.
+/// A dropped <c>write()</c> is no longer silent either: the kernel takes a whole event or
+/// none of it, so anything short of the full buffer throws with the errno named, the same
+/// way a rejected setup ioctl does.
+/// </remarks>
 public sealed class UInputOutputSink : IOutputSink
 {
     /// <summary>The kernel's virtual-input device node.</summary>
@@ -51,31 +61,28 @@ public sealed class UInputOutputSink : IOutputSink
     /// fail on any non-uinput fd (ENOTTY), which is the shape of the failure that shipped -
     /// the open succeeding says nothing about the ioctls, and a silent one degraded every
     /// injection to nothing. The caller keeps ownership of the fd on every outcome.
+    /// <para>
+    /// <paramref name="configure"/> false skips the device setup and adopts the bare
+    /// descriptor, which is how a suite drives the event-write path - a write to a
+    /// non-writable fd fails with EBADF, the same errno-naming contract the setup ioctls
+    /// have, without a real uinput node or an injected keystroke.
+    /// </para>
     /// </summary>
-    internal UInputOutputSink(int fd, string deviceName)
+    internal UInputOutputSink(int fd, string deviceName, bool configure = true)
     {
         _fd = fd;
-        Configure(deviceName);
+        if (configure)
+        {
+            Configure(deviceName);
+        }
     }
 
     private unsafe void Configure(string deviceName)
     {
-        EnableEventType(1); // EV_KEY
-        EnableEventType(2); // EV_REL
-
-        foreach (var key in Enum.GetValues<GamepadKey>())
+        foreach (var (request, code) in UInputDevicePlan.Build())
         {
-            var code = LinuxKeyCodes.ToEvdevCode(key);
-            if (code != LinuxKeyCodes.Unmapped)
-            {
-                SetBit(UInputNative.UiSetKeyBit, code);
-            }
+            SetBit(request, code);
         }
-
-        SetBit(UInputNative.UiSetRelBit, 0); // REL_X
-        SetBit(UInputNative.UiSetRelBit, 1); // REL_Y
-        SetBit(UInputNative.UiSetRelBit, 8); // REL_WHEEL
-        SetBit(UInputNative.UiSetRelBit, 6); // REL_HWHEEL
 
         var nameBytes = Encoding.UTF8.GetBytes(deviceName);
         var nameLength = Math.Min(nameBytes.Length, 79);
@@ -156,12 +163,12 @@ public sealed class UInputOutputSink : IOutputSink
     {
         if (dx != 0)
         {
-            Emit(EvdevCodes.EvRel, 0, dx);
+            Emit(EvdevCodes.EvRel, UInputDevicePlan.RelX, dx);
         }
 
         if (dy != 0)
         {
-            Emit(EvdevCodes.EvRel, 1, dy);
+            Emit(EvdevCodes.EvRel, UInputDevicePlan.RelY, dy);
         }
 
         Syn();
@@ -171,12 +178,12 @@ public sealed class UInputOutputSink : IOutputSink
     {
         if (verticalNotches != 0)
         {
-            Emit(EvdevCodes.EvRel, 8, verticalNotches);
+            Emit(EvdevCodes.EvRel, UInputDevicePlan.RelWheel, verticalNotches);
         }
 
         if (horizontalNotches != 0)
         {
-            Emit(EvdevCodes.EvRel, 6, horizontalNotches);
+            Emit(EvdevCodes.EvRel, UInputDevicePlan.RelHWheel, horizontalNotches);
         }
 
         Syn();
@@ -212,8 +219,6 @@ public sealed class UInputOutputSink : IOutputSink
         UInputNative.Close(_fd);
     }
 
-    private void EnableEventType(int eventType) => SetBit(UInputNative.UiSetEvBit, (ushort)eventType);
-
     private unsafe void SetBit(uint request, ushort code)
         => EnsureOk(UInputNative.Ioctl(_fd, request, (void*)code), $"ioctl 0x{request:X8}");
 
@@ -237,11 +242,34 @@ public sealed class UInputOutputSink : IOutputSink
 
         fixed (byte* pointer = buffer)
         {
-            UInputNative.Write(_fd, pointer, (nuint)buffer.Length);
+            var written = UInputNative.Write(_fd, pointer, (nuint)buffer.Length);
+            EnsureWritten(written, buffer.Length, type, code);
         }
     }
 
     private void Syn() => Emit(EvdevCodes.EvSyn, 0, 0);
+
+    /// <summary>
+    /// A dropped write is the failure that shipped silently: the return value used to be
+    /// discarded, so a destroyed or unwritable virtual device turned every injection into
+    /// nothing with nothing in the log to say why. The kernel's uinput write path takes a
+    /// whole event or fails outright, so anything short of the full buffer is a failure and
+    /// gets the same errno-naming treatment as the setup ioctls. The errno is only read on
+    /// the negative case; a short write (which uinput does not produce in practice) names
+    /// the counts instead of a meaningless 0.
+    /// </summary>
+    private static void EnsureWritten(nint written, int requested, ushort type, ushort code)
+    {
+        if (written == requested)
+        {
+            return;
+        }
+
+        var error = written < 0 ? Marshal.GetLastPInvokeError() : 0;
+        throw new InvalidOperationException(
+            $"写入 input_event 失败（type 0x{type:X4} code 0x{code:X4}，写入 {written}/{requested} 字节"
+            + $"{(written < 0 ? $"，errno {error}" : string.Empty)}）：虚拟输入设备可能已销毁或 /dev/uinput 已不可写。");
+    }
 
     private static void EnsureOk(int result, string operation)
     {

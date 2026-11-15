@@ -32,9 +32,39 @@ public static class AutostartInstaller
     /// never touch a real home directory.
     /// </summary>
     internal static Func<string> LinuxAutostartDirectory { get; set; }
-        = static () => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "autostart");
+        = static () => DefaultLinuxAutostartDirectory();
+
+    /// <summary>
+    /// The XDG autostart directory, resolved exactly the way XDG resolves it:
+    /// <c>$XDG_CONFIG_HOME/autostart</c> when that variable is set, otherwise
+    /// <c>$HOME/.config/autostart</c> - and unlike the directory lookup, neither has to exist
+    /// yet. Deliberately not
+    /// <see cref="Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)"/>:
+    /// that returns an <em>empty string</em> when the directory does not exist, which turns the
+    /// desktop-file path into a CWD-relative one. The entry is then written where no desktop
+    /// environment ever searches, the card says 已启用 (the file is there, by the same wrong
+    /// path), and every refresh shows 未启用 with no way to tell why. The environment lookup is
+    /// injected so the resolution is testable without mutating the process environment.
+    /// </summary>
+    internal static string DefaultLinuxAutostartDirectory(Func<string, string?>? environmentVariable = null)
+    {
+        var environment = environmentVariable ?? Environment.GetEnvironmentVariable;
+        var configHome = environment("XDG_CONFIG_HOME");
+
+        if (!string.IsNullOrEmpty(configHome))
+        {
+            return Path.Combine(configHome, "autostart");
+        }
+
+        var home = environment("HOME");
+
+        // No HOME either: there is no home directory to resolve against. The path stays
+        // relative on purpose - InstallLinuxDesktop refuses to write it instead of dropping a
+        // desktop file into the working directory.
+        return string.IsNullOrEmpty(home)
+            ? Path.Combine(".config", "autostart")
+            : Path.Combine(home, ".config", "autostart");
+    }
 
     /// <summary>Full path of the XDG autostart entry on Linux.</summary>
     public static string LinuxDesktopPath => Path.Combine(LinuxAutostartDirectory(), LinuxDesktopFileName);
@@ -88,6 +118,14 @@ public static class AutostartInstaller
 
     private static bool InstallLinuxDesktop(string executablePath)
     {
+        // No home directory to resolve the autostart path against (HOME and XDG_CONFIG_HOME
+        // both unset): writing a CWD-relative desktop file would install nothing while claiming
+        // success, so refuse instead.
+        if (!Path.IsPathRooted(LinuxDesktopPath))
+        {
+            return false;
+        }
+
         try
         {
             Directory.CreateDirectory(LinuxAutostartDirectory());

@@ -75,6 +75,20 @@ public interface IDaemonService
     string? DaemonQueryError => null;
 
     /// <summary>
+    /// A fact about the installed daemon's enablement that the plain enabled/disabled line
+    /// cannot say: on Linux, a unit whose file exists where this app writes it but which
+    /// <c>systemctl --user is-enabled</c> answers <c>not-found</c> for - the file sits outside
+    /// systemd's unit search path, so nothing is enabled and nothing will start - or one that
+    /// can never auto-start at all (<c>static</c>: no <c>[Install]</c> section; <c>masked</c>).
+    /// These are the states a user reads as "it says 未启用 but I enabled it", so the card shows
+    /// the reason next to the line instead of a bare 未启用. Null in the ordinary
+    /// enabled/disabled cases, where the plain line already says everything, and null where the
+    /// scheduler never answered - that stays <see cref="DaemonQueryError"/>, because a
+    /// scheduler that never answered is not an enablement fact.
+    /// </summary>
+    string? DaemonEnablementNote => null;
+
+    /// <summary>
     /// True when the GUI's logon-autostart entry is registered - the exact registration
     /// <see cref="SetAutostart"/> writes (a scheduled task on Windows, the XDG .desktop on
     /// Linux). This is deliberately a different object from the daemon's own registration:
@@ -380,8 +394,12 @@ internal sealed class ProcessSystemCtl : ISystemCtl
 /// a writable /dev/uinput - which the settings card and the scan diagnostics explain.
 /// </para>
 /// <para>
-/// Installing writes the unit, reloads the user manager, enables it for every login and starts
-/// it now; uninstalling stops, disables and removes it. Once installed, the unit also starts
+/// Installing writes the unit, enables it for every login and starts it now - systemctl's own
+/// enable verb reloads the user manager once the symlinks are in place, so no separate
+/// daemon-reload gates the install (it only added a failure mode: a manager that was briefly
+/// unreachable aborted the install before the enable and left the unit written but never
+/// enabled, which every later refresh then honestly reported as 未启用); uninstalling stops,
+/// disables and removes it. Once installed, the unit also starts
 /// and stops on its own through <see cref="StartDaemon"/> / <see cref="StopDaemon"/> - the
 /// install decides whether the service exists, the start/stop decides whether it runs right
 /// now, and the card exposes the two separately. The unit deliberately hangs off
@@ -394,8 +412,10 @@ internal sealed class ProcessSystemCtl : ISystemCtl
 /// systemd's enabled state - and a query it cannot answer (a bus the GUI cannot reach, an
 /// environment without XDG_RUNTIME_DIR/DBUS_SESSION_BUS_ADDRESS) is reported with its reason
 /// instead of being flattened into "not running": a scheduler that never answered is not a
-/// state. The same honesty runs through the operations - an install whose unit file landed
-/// but whose enable/start failed says "已写单元但启用失败" with the reason and the way out.
+/// state. An answered enablement that still needs explaining (a unit systemd cannot see, a
+/// static or masked one) rides along as <see cref="DaemonEnablementNote"/>. The same honesty
+/// runs through the operations - an install whose unit file landed but whose enable/start
+/// failed says "已写单元但启用失败" / "已启用但启动失败" with the reason and the way out.
 /// </para>
 /// </summary>
 public sealed class LinuxDaemonService : IDaemonService
@@ -420,10 +440,7 @@ public sealed class LinuxDaemonService : IDaemonService
         Func<string, string?>? environmentVariable = null)
     {
         _systemCtl = systemCtl ?? new ProcessSystemCtl();
-        _unitDirectory = unitDirectory ?? (static () => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "systemd",
-            "user"));
+        _unitDirectory = unitDirectory ?? (static () => DefaultUnitDirectory());
         _executable = executable ?? (static () => Environment.ProcessPath);
         _environmentVariable = environmentVariable ?? Environment.GetEnvironmentVariable;
     }
@@ -445,6 +462,9 @@ public sealed class LinuxDaemonService : IDaemonService
     /// <inheritdoc/>
     public string? DaemonQueryError { get; private set; }
 
+    /// <inheritdoc/>
+    public string? DaemonEnablementNote { get; private set; }
+
     public bool IsAutostartInstalled { get; private set; }
 
     /// <inheritdoc/>
@@ -461,6 +481,7 @@ public sealed class LinuxDaemonService : IDaemonService
             IsDaemonRunning = false;
             IsDaemonEnabled = false;
             DaemonQueryError = null;
+            DaemonEnablementNote = null;
             IsAutostartInstalled = false;
             return;
         }
@@ -483,6 +504,7 @@ public sealed class LinuxDaemonService : IDaemonService
             IsDaemonRunning = false;
             IsDaemonEnabled = false;
             DaemonQueryError = null;
+            DaemonEnablementNote = null;
             return;
         }
 
@@ -494,6 +516,7 @@ public sealed class LinuxDaemonService : IDaemonService
             IsDaemonRunning = false;
             IsDaemonEnabled = false;
             DaemonQueryError = busError;
+            DaemonEnablementNote = null;
             return;
         }
 
@@ -506,6 +529,12 @@ public sealed class LinuxDaemonService : IDaemonService
         // Either unanswered query makes the whole state unreliable, so the first reason wins
         // and the card shows "could not tell" instead of half a state.
         DaemonQueryError = running.Error ?? enabled.Error;
+
+        // The answered enablement can still need explaining: a unit systemd cannot see at all
+        // is not merely "disabled", and a static/masked one never auto-starts. The user's
+        // "刷新显示未启用" after an install is exactly these answers arriving with no reason
+        // attached.
+        DaemonEnablementNote = DescribeEnablement(enabled.State);
     }
 
     public DaemonActionResult InstallDaemon()
@@ -520,6 +549,15 @@ public sealed class LinuxDaemonService : IDaemonService
             return DaemonActionResult.Failed(error);
         }
 
+        // No home directory to resolve the unit path against (HOME and XDG_CONFIG_HOME both
+        // unset): writing a CWD-relative unit file would install nothing while claiming
+        // success, so refuse instead.
+        if (!Path.IsPathRooted(UnitPath))
+        {
+            return DaemonActionResult.Failed(
+                "无法确定用户配置目录（HOME 与 XDG_CONFIG_HOME 均未设置），请从终端启动 DeziroJoy 后再安装常驻服务。");
+        }
+
         try
         {
             Directory.CreateDirectory(_unitDirectory());
@@ -530,12 +568,11 @@ public sealed class LinuxDaemonService : IDaemonService
             return DaemonActionResult.Failed($"写入 systemd 用户单元失败：{exception.Message}");
         }
 
-        var reload = _systemCtl.Run("daemon-reload");
-        if (!reload.Succeeded)
-        {
-            return DaemonActionResult.Failed(WrittenButEnableFailed(reload));
-        }
-
+        // No daemon-reload before the enable: systemctl's own enable verb reloads the user
+        // manager once the symlinks are in place, so a separate reload only adds a failure
+        // mode. A manager that was briefly unreachable used to abort the install here - after
+        // the unit file landed but before the enable - leaving a unit that was never enabled,
+        // which every later refresh then honestly reported as 未启用.
         var enable = _systemCtl.Run($"enable {UnitName}");
         if (!enable.Succeeded)
         {
@@ -545,7 +582,7 @@ public sealed class LinuxDaemonService : IDaemonService
         var start = _systemCtl.Run($"start {UnitName}");
         if (!start.Succeeded)
         {
-            return DaemonActionResult.Failed(WrittenButEnableFailed(start));
+            return DaemonActionResult.Failed(EnabledButStartFailed(start));
         }
 
         return DaemonActionResult.Completed(
@@ -662,6 +699,39 @@ public sealed class LinuxDaemonService : IDaemonService
     }
 
     /// <summary>
+    /// Where the systemd <em>user</em> unit lives, resolved exactly the way systemd itself
+    /// resolves it: <c>$XDG_CONFIG_HOME/systemd/user</c> when that variable is set, otherwise
+    /// <c>$HOME/.config/systemd/user</c> - and unlike the directory lookup, neither has to
+    /// exist yet. Deliberately not
+    /// <see cref="Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)"/>:
+    /// that returns an <em>empty string</em> when the directory does not exist, which turns the
+    /// unit path into a CWD-relative one. The unit is then written somewhere systemd never
+    /// searches, the card says 已安装 (the file is there, by the same wrong path), and every
+    /// enable/is-enabled answers not-found - the install reports "已写单元但启用失败" and every
+    /// refresh shows 未启用 with no way to tell why. The environment lookup is injected so the
+    /// resolution is testable without mutating the process environment.
+    /// </summary>
+    internal static string DefaultUnitDirectory(Func<string, string?>? environmentVariable = null)
+    {
+        var environment = environmentVariable ?? Environment.GetEnvironmentVariable;
+        var configHome = environment("XDG_CONFIG_HOME");
+
+        if (!string.IsNullOrEmpty(configHome))
+        {
+            return Path.Combine(configHome, "systemd", "user");
+        }
+
+        var home = environment("HOME");
+
+        // No HOME either: there is no home directory to resolve against. The path stays
+        // relative on purpose - InstallDaemon refuses to write it instead of dropping a unit
+        // file into the working directory.
+        return string.IsNullOrEmpty(home)
+            ? Path.Combine(".config", "systemd", "user")
+            : Path.Combine(home, ".config", "systemd", "user");
+    }
+
+    /// <summary>
     /// The unit file contents. Minimal and GUI-free on purpose: <c>After=default.target</c>
     /// (never graphical-session.target - uinput works headless, and tying the daemon to a
     /// graphical login would break the SSH and console sessions that need it most) and
@@ -713,36 +783,72 @@ public sealed class LinuxDaemonService : IDaemonService
     /// One systemctl state query. The printed state is the answer - a non-zero exit with
     /// "inactive"/"disabled" is still an answer - and a verb that printed none of its known
     /// states is a failed query carrying the reason, so the card can say "could not tell"
-    /// instead of silently claiming "not running".
+    /// instead of silently claiming "not running". The raw state word comes back too, because
+    /// some answers ("not-found" for a unit systemd cannot see, "static"/"masked" for one that
+    /// never auto-starts) need their own explanation on the card.
     /// </summary>
-    private (bool? Answer, string? Error) QueryState(string verb, string[] yesStates, string[] noStates)
+    private (bool? Answer, string? Error, string State) QueryState(
+        string verb, string[] yesStates, string[] noStates)
     {
         var result = _systemCtl.Run($"{verb} {UnitName}");
         var state = result.StandardOutput.Trim();
 
         if (yesStates.Contains(state, StringComparer.Ordinal))
         {
-            return (true, null);
+            return (true, null, state);
         }
 
         if (noStates.Contains(state, StringComparer.Ordinal))
         {
-            return (false, null);
+            return (false, null, state);
         }
 
-        return (null, DescribeReason(result));
+        return (null, DescribeReason(result), state);
     }
 
     /// <summary>
+    /// The answered enablement facts the plain 已启用/未启用 line cannot say. "not-found" means
+    /// the unit file is on disk where this app writes it but outside systemd's unit search
+    /// path - the GUI and systemd resolved different config directories - so nothing is
+    /// enabled and nothing will start; "static" means the unit has no <c>[Install]</c> section
+    /// and can only ever be started by hand; "masked" means an administrator disabled it. The
+    /// ordinary "enabled"/"disabled" answers need nothing, and a query that never answered has
+    /// its state reported through <see cref="DaemonQueryError"/> instead.
+    /// </summary>
+    private string? DescribeEnablement(string state) => state switch
+    {
+        "not-found" => $"systemd 找不到已写入的单元文件：{UnitPath} 不在 systemd 的用户单元搜索路径中"
+            + "（GUI 与 systemd 的 XDG_CONFIG_HOME/HOME 不一致时会出现），未启用也不会启动。",
+        "static" => "该单元没有 [Install] 段（systemd 报告 static）：登录时不会自动启动，"
+            + "只能手动启动或被其他单元拉起。",
+        "masked" or "masked-runtime" => $"该单元已被 mask（systemd 报告 {state}）：登录时不会自动启动，"
+            + $"需先执行 systemctl --user unmask {UnitName} 解除。",
+        _ => null,
+    };
+
+    /// <summary>
     /// The install's intermediate state. The unit file is written before any systemctl call,
-    /// so a reload/enable/start failure leaves a written unit behind - the exact state that
+    /// so a reload/enable failure leaves a written unit behind - the exact state that
     /// used to be reported as a flat failure while every later refresh showed "installed but
     /// not running" with no explanation. The message names the state, the reason and the way
     /// out (the file path and the manual command).
     /// </summary>
     private string WrittenButEnableFailed(SystemCtlResult result)
-        => $"已写单元但启用失败：{DescribeMissingBusEnvironment() ?? DescribeReason(result)}。"
+        => $"已写单元但启用失败：{(DescribeMissingBusEnvironment() ?? DescribeReason(result)).TrimEnd('.', '。')}。"
             + $"单元文件已写入 {UnitPath}，可从终端执行 systemctl --user enable --now {UnitName} 继续。";
+
+    /// <summary>
+    /// The install's late failure: the enable succeeded - the symlink is in place and the next
+    /// login will start the daemon - but the unit did not start now. Claiming "启用失败" here
+    /// (as this stage once did) misattributes the failure and sends the user looking at the
+    /// wrong switch. The reason a daemon fails to start is almost always in its own output - a
+    /// missing library, an unreadable device - and systemctl's stderr only says the job failed,
+    /// so the message points at the journal and at the manual retry instead.
+    /// </summary>
+    private static string EnabledButStartFailed(SystemCtlResult start)
+        => $"已启用但启动失败：{DescribeReason(start).TrimEnd('.', '。')}。"
+            + $"守护进程的退出原因请执行 journalctl --user -u {UnitName} 查看（缺少依赖库时这里会有报错）；"
+            + $"可手动执行 systemctl --user start {UnitName} 重试。";
 
     /// <summary>
     /// The human-readable reason a systemctl call failed: its stderr (preferred, truncated),
