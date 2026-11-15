@@ -611,155 +611,87 @@ jobs:
           cat > body.md <<'NOTES'
           ## DeziroJoy vVERSION
 
-          DeziroJoy 0.0.2-beta.8 预览版：把游戏手柄映射为鼠标与键盘的跨平台工具。
-          Windows 走 XInput + SendInput（提权常驻守护进程作为唯一注入权威），Linux 走
-          evdev + uinput（systemd 用户单元常驻），读取与注入都在内核级，与显示服务器
-          无关。本版集中改善 Windows 手柄体验与层配置展示：提供 ms-gamebar 系统弹窗的
-          一键处置、明确说明 XInput 的 Guide 限制，并让同一按键的基础层与临时层配置
-          同时完整可见。安装与卸载都走系统标准途径，安装器不注册自启动、计划任务或
-          udev 规则（登录自启动与常驻服务请在应用内「设置」中按需开启），卸载也不会
-          删除用户配置。欢迎按 [QA 清单](docs/QA-CHECKLIST.md) 测试并反馈问题。
+          DeziroJoy 0.0.2-beta.9 预览版：把游戏手柄映射为鼠标与键盘的跨平台工具。
+          本版重点修复 X11 输入、预设切换和界面卡顿，重做 GUI / 托盘 / 浮层生命周期，
+          并完善 Windows 手柄兼容设置与 Linux 权限诊断。daemon 始终是唯一映射与注入权威。
 
           ### 本版更新
 
-          #### 系列至今的关键能力（alpha → 0.0.1）
-
-          - **手柄映射**：按键、摇杆、扳机、十字键映射到键盘按键、组合键、鼠标
-            移动 / 点击 / 滚轮；死区、响应曲线（线性 / 精准 / 激进 / 灵敏）、平滑、
-            最高速度（px/s，与 DPI、分辨率解耦；仍受系统指针速度设置影响）与亚像素
-            累积均可调，改动即时生效
-          - **复杂快捷键 DSL**：长按可运行一段脚本，如「持续按住 Alt；每 1 秒点按
-            Tab」（`hold Alt` + `every 1s tap Tab`）；实时行 / 列语法诊断与白话摘要，
-            非法脚本被拦截且不污染活动映射
-          - **预设管理**：每设备四个独立预设槽，整体级活动槽随切换持久化；Leader 键
-            在引擎内切换预设槽，与 GUI 切换同一条逻辑
-          - **Leader 精准键与全局特殊键**：Leader 键与精准键置顶到「按键配置」页并带
-            实时冲突检测，只报引擎真实会出的问题，只提示、不自动改配置
-          - **实时预览**：手柄可视化器实时反映按键与摇杆，灵敏度调整带实时预览点与
-            响应曲线
-          - **托盘常驻**：关闭窗口进托盘、映射继续；托盘菜单「显示主窗口 / 切换主题 /
-            退出」
-          - **跨平台注入**：Windows 上非提权进程受 UIPI 约束无法向提权目标注入，由
-            提权常驻守护进程经命名管道作为唯一注入权威；Linux 上 uinput 不受 UIPI
-            约束，守护进程以当前用户经 systemd 用户单元常驻，注入失败不再无声
-          - **设备访问权诊断与一键修复**（Linux）：evdev 扫描区分无节点 / 无权限 /
-            无手柄并给出可操作指引，「修复设备访问权限」一键安装 udev 规则并加入
-            input 组，无 polkit 代理时降级为可复制命令
-
-          #### 本批新增
-
-          - **Windows ms-gamebar 弹窗处置**：Windows 在 Xbox Game Bar 缺失或协议
-            处理程序不可用时，连接手柄或按 Guide 可能由系统 shell 弹出「获取打开此
-            ms-gamebar 链接的应用」。右侧按键配置区新增「关闭手柄唤起 Game Bar」按钮，点击后
-            仅写当前用户的 `UseNexusForGameBarEnabled=0`；不静默修改系统，不注册
-            no-op 协议，不影响 Win+G、游戏录制或其他用户。开关状态与读写失败都会显示
-          - **同一按键的所有层配置同卡展示**：右侧按键配置按物理按键 / 摇杆归组，
-            基础层与临时层不再散成难以辨认的重复卡片，也不按当前生效层过滤；每层
-            都明确标名并完整列出单击 / 双击 / 长按。方向映射仍带方向说明，点击、
-            键盘激活、启停与删除都精确作用于对应层的映射
-          - **Windows Guide 限制直接可见**：XInput 的 `wButtons` 没有 Guide 位，
-            Windows 通道不能读取该键。右侧按键配置区现在持续说明 Guide 不会高亮、其映射和
-            界面导航不会触发；选中 Guide 时编辑器再次给出上下文提示。配置仍可保存，
-            便于跨平台方案保留该键，但 Windows 用户应改选其他按键
+          - **X11 事件化输入**：evdev 读取改为 `poll` 等待内核事件，`eventfd` 负责停止唤醒，
+            不再使用非阻塞读取加 2ms 睡眠。热插拔扫描保留节流，采样去重、模拟量限频与
+            控制器布局同步降低连接手柄后的 GUI / 桌面卡顿
+          - **X11 轴兼容**：没有 `ABS_RX/RY`、且 `ABS_Z/RZ` 在中位附近静置的设备会将 Z/RZ
+            识别为右摇杆；端点静置的 Z/RZ 仍作为扳机，避免右摇杆误触两个扳机
+          - **预设切换不阻塞输入线程**：Leader 键触发的预设切换进入 daemon 的串行队列，
+            按顺序读取配置并原子重载，不在映射 tick 内同步读盘；GUI 切换仍走同一 daemon
+            权威路径
+          - **滚轮校准与鼠标页一致**：静差采集使用相同的卡片、样本状态、建议死区确认与
+            单主按钮设计；滚轮页补齐响应曲线图，初始曲线不再为空
+          - **GUI 按需、浮层常驻**：呈现宿主独立持有托盘、临时层提示和浮窗屏幕键盘。
+            关闭或最小化到托盘会完全退出 GUI，浮层与映射继续；GUI 显示时托盘图标隐藏，
+            GUI 退出或崩溃后恢复。去掉双向进程交接和角色探针轮询
+          - **设置持续同步**：呈现宿主监听设置文件并防抖重载，主题、临时层提示开关和位置
+            在 GUI 修改后即时生效，不再需要重启托盘
+          - **Windows 手柄兼容性集中管理**：Game Bar 手柄唤起开关移到「设置 → Windows
+            手柄兼容性」，写入后重新读取核验，并提供系统游戏设置入口。XInput 不支持 Guide
+            的限制继续明确显示
+          - **全局特殊键更紧凑**：缩短说明与占用空间，新增「屏幕键盘键」入口
+          - **Linux 权限状态可辨认**：自动显示 evdev 节点、uinput、udev 规则、input 组写入及
+            当前会话生效状态；具备 pkexec 与 helper 时提供自动修复，否则给出手动方法。
+            持久规则与当前会话生效分开显示，不再把权限缺失静默当作无手柄
+          - **Wayland 边界明确**：输入、输出、配置、预设和浮层数据与 X11 共用；全局前台
+            窗口、全屏状态和指针位置没有通用 Wayland API，界面会按实际会话提示，不宣称
+            这些能力已同步
 
           ### 下载
 
           | 文件 | 平台 | 说明 |
           | --- | --- | --- |
-          | `DeziroJoy-PACKAGEVERSION-win-x64-setup.exe` | Windows | 自包含安装包，双击即装（无需安装 .NET），per-user 装到 `%LOCALAPPDATA%\Programs\DeziroJoy`，Intel / AMD 64 位 |
-          | `DeziroJoy-PACKAGEVERSION-win-arm64-setup.exe` | Windows | 同上，ARM64（如骁龙笔记本） |
-          | `DeziroJoy_PACKAGEVERSION_amd64.deb` | Linux | 自包含 deb，`sudo apt install` 装到 `/opt/dezirojoy` 并注册应用菜单入口，Intel / AMD 64 位 |
-          | `DeziroJoy_PACKAGEVERSION_arm64.deb` | Linux | 同上，ARM64（如树莓派） |
-          | `DeziroJoy-PACKAGEVERSION-x86_64.rpm` | Linux | 自包含 rpm，`sudo dnf install` 装到 `/opt/dezirojoy`，Fedora / RHEL / openSUSE 等，Intel / AMD 64 位 |
-          | `DeziroJoy-PACKAGEVERSION-aarch64.rpm` | Linux | 同上，ARM64（如树莓派） |
-          | `DeziroJoy-PACKAGEVERSION-x86_64.AppImage` | Linux | 便携 AppImage，`chmod +x` 后直接运行，无需安装、不改动系统，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-win-x64-setup.exe` | Windows | 自包含 per-user 安装包，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-win-arm64-setup.exe` | Windows | 同上，ARM64 |
+          | `DeziroJoy_PACKAGEVERSION_amd64.deb` | Linux | 自包含 deb，Intel / AMD 64 位 |
+          | `DeziroJoy_PACKAGEVERSION_arm64.deb` | Linux | 同上，ARM64 |
+          | `DeziroJoy-PACKAGEVERSION-x86_64.rpm` | Linux | 自包含 rpm，Intel / AMD 64 位 |
+          | `DeziroJoy-PACKAGEVERSION-aarch64.rpm` | Linux | 同上，ARM64 |
+          | `DeziroJoy-PACKAGEVERSION-x86_64.AppImage` | Linux | 便携 AppImage，Intel / AMD 64 位 |
           | `DeziroJoy-PACKAGEVERSION-aarch64.AppImage` | Linux | 同上，ARM64 |
           | `*.sha256` | — | SHA256 校验和 |
 
-          Windows 安装器为 per-user 模式，不需要管理员权限；所有平台的安装器都不注册
-          自启动、计划任务或 udev 规则（登录自启动与常驻服务请在应用内「设置」中按需
-          开启），卸载也不会删除用户配置。卸载方式：Windows 用「设置 → 应用」或安装
-          目录中的 `unins000.exe`，Linux deb 用 `sudo dpkg -r dezirojoy`，rpm 用
-          `sudo dnf remove dezirojoy`，AppImage 直接删除文件即可。
+          Windows 安装器双击即装，无需另装 .NET；Linux deb 用 `sudo apt install ./包名`，
+          rpm 用 `sudo dnf install ./包名`，AppImage 在 `chmod +x` 后直接运行。安装器不注册
+          自启动、计划任务或 udev 规则；这些功能请在应用内按需开启。卸载不删除用户配置。
+          安装包未做代码签名，Windows 首次运行可能出现 SmartScreen 提示。
 
-          Linux 各格式安装方式：
+          ### 已知限制与验收边界
 
-          - deb（Debian / Ubuntu）：`sudo apt install ./DeziroJoy_PACKAGEVERSION_amd64.deb`
-            （arm64 替换文件名）而非 `dpkg -i`：依赖（X11、fontconfig、ICU 等）会一并
-            解析，`dpkg -i` 不会。
-          - rpm（Fedora / RHEL / openSUSE）：`sudo dnf install ./DeziroJoy-PACKAGEVERSION-x86_64.rpm`
-            （aarch64 替换文件名）。
-          - AppImage（任意发行版）：`chmod +x DeziroJoy-PACKAGEVERSION-x86_64.AppImage`
-            后直接运行；三种 Linux 格式的 `/opt/dezirojoy` 载荷一致，只是容器不同。
-
-          **关于 Flatpak**：本版暂不提供 Flatpak 包。DeziroJoy 的注入依赖对
-          `/dev/uinput` 的写权限，而 Flatpak 沙箱默认不授予该权限，且当前桌面门户
-          （xdg-desktop-portal）没有暴露 uinput 写入口——沙箱内注入功能在默认桌面上
-          不可用。应用内的「一键修复设备访问权限」（pkexec + udev 规则）与 systemd
-          用户单元常驻模型在沙箱内同样不成立（无法写 /etc、无法管理用户单元）。待
-          libeis / 输入门户成熟后再评估接入；在此期间请使用 deb / rpm / AppImage。
-
-          安装器未做代码签名。Windows 上首次运行未签名的 setup.exe 可能弹出
-          SmartScreen「Windows 已保护你的电脑」提示，属预期行为：选择「更多信息 →
-          仍要运行」即可继续安装。
-
-          Linux 版需要系统提供 X11 / Wayland 客户端库（`libX11`、`libxcb` 等，桌面
-          发行版默认齐全）与 `evdev` / `uinput` 内核模块。读取手柄只需要 `evdev`；注入
-          鼠标键盘需要 `/dev/uinput` 可写，若不可写应用会明确报告，不会静默失效。
-
-          ### 已知限制
-
-          - Windows 上输入读取走 XInput，只能看到 Xbox 布局的标准按键；
-            超出该布局的按键（部分第三方手柄的额外宏键）不会被识别。
-          - XInput 无法提供稳定硬件 ID，Windows 上配置按 XInput 槽位（#1-#4）
-            保存；两个手柄互换插槽时，配置随槽位而非硬件走。Linux 上 evdev
-            提供稳定设备路径，按硬件保存。
-          - 常驻服务使用 Windows 计划任务的「登录时」触发器，而非开机启动：
-            登录前进程运行在会话 0，无法向用户桌面注入输入。
-          - Windows 上 SendInput 受 UIPI 约束：非提权进程无法向提权目标注入
-            输入，且失败时错误码不指明源于 UIPI。请使用提权常驻服务。
-          - 精准键只有设在单击位才生效：设在双击 / 长按手势上时引擎不注册，
-            冲突检测会提示并请改到单击位置。
-          - Linux 识别按 evdev 能力分类（第二摇杆或显式手柄按键），只有摇杆轴
-            加踏板、不带显式手柄按键的赛车方向盘类设备可能不被识别为手柄。
-          - Windows 上 Guide 键不可用（平台限制）：XInput 的 wButtons 位图
-            没有 Guide 位，Windows 通道永不报告该键按下（可视化器 Guide 常灭、
-            Guide 映射不触发均为可解释状态，GUI 已明确提示）；Linux 上 evdev 经
-            BTN_MODE 正常识别。Game Bar 弹窗按钮只是关闭系统的手柄唤起开关，
-            不会让 Guide 变得可读取；其止弹效果仍需在出现该弹窗的 Windows 机器验收。
-          - Leader 临时层与命令提示浮层：默认只有一个临时层，由 Leader 键（切换临时层）
-            按下或按住触发。提示浮窗在渲染与托盘进程都可显示，位置可选固定锚点 / 跟随
-            鼠标，可用「显示临时层提示」开关关闭。真实键盘与映射同时按住同一按键的输入
-            混用不在输出所有权表的处理范围内。
-          - 短文本输出与屏幕键盘：Windows 走 Unicode 注入；Linux 经虚拟键盘按 US 布局
-            逐键输出，无对应键码的字符（如中文）暂跳过——完整输入法焦点 / 候选 / 提交
-            协同为后续项。屏幕键盘为独立浮窗，由「屏幕键盘」特殊键唤出 / 收回，用于
-            搜索框 / 重命名 / 短网址等场景；其注入与焦点保持在真实桌面的表现未真机验证。
-          - 手柄劫持为模型旁的临时开关，仅本次会话生效、默认关闭；需要手柄导航界面时
-            手动开启。提示浮窗 / 屏幕键盘的焦点保持与真实注入本轮未真机验证。
-          - 前台应用规则：Windows 取前台进程名匹配；Linux 仅 X11 尽力而为，Wayland
-            暂不支持（回退桌面默认）。全屏检测为辅助条件、可覆盖。本轮未在 Windows
-            真机验证前台检测，Linux X11 已在 Xvfb 实测。
-          - 真实手柄校准：已提供真实输入三级读数与漂移死区建议；小目标点击 / 大距离
-            移动 / 拖拽等引导式校准任务为后续项。
+          - Windows 的 XInput 无法读取 Guide 键；Game Bar 开关只修改当前用户的
+            `UseNexusForGameBarEnabled`，不会让 Guide 变得可读，其止弹效果仍需 Windows
+            真机验收
+          - Wayland 不提供通用的全局前台窗口、窗口列表、全屏状态或全局指针查询。前台规则
+            读取不到时使用桌面默认，跟随鼠标回退固定锚点；托盘支持取决于桌面环境
+          - Linux 屏幕键盘经 uinput 按 US 布局逐键输出，无对应键码的字符暂不支持；完整 IME
+            协同仍是后续项
+          - X11 物理手柄的轴兼容、预设切换与性能改善，以及 Wayland 各桌面环境的浮层 / 托盘，
+            尚需用户真机验收；自动化通过不等于这些硬件场景已经验证
+          - XInput 配置按槽位保存，不能提供稳定硬件 ID；Windows 提权注入仍受计划任务登录
+            触发器与 UIPI 机制约束
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Debug 与 Release 全量测试均为 2627 项，
-          2617 通过、0 失败、10 项跳过（Windows 专属 / 需显示服务的跨平台分支），
-          含本轮 Game Bar 当前用户开关、读写失败报告、Guide 平台提示、双层同卡展示、
-          嵌套映射行的鼠标 / 键盘激活、Windows 兼容性卡片不改变模型尺寸与既有编辑行为回归；release.yml 已通过
-          actionlint。本轮未在本地另构建 deb / rpm / AppImage，也未进行 Windows
-          真机与人工 GUI 实测：Windows / Ubuntu 双平台 CI、四 RID、Windows Inno
-          per-user EXE 与 Linux 三种包格式的构建与安装 / 卸载验证由 Release workflow
-          在对应平台运行器上执行。本轮未进行用户 Windows 物理手柄 / Game Bar 弹窗或
-          X11 物理手柄验收，不以自动化测试替代人工验收。人工验证清单：
+          发布前本地 Linux 验证：Debug 与 Release 全量测试均为 2638 项，2628 通过、
+          0 失败、10 项跳过（Windows 专属分支）。覆盖输入采样节流、轴回退、预设队列、
+          权限探测、滚轮校准、GUI / 托盘通知与退出、设置同步及既有编辑行为。
+          另在隔离 Xvfb 中实际启动 GUI、daemon 与呈现宿主，终止 GUI 后确认后台继续，
+          再重开 GUI 且未重复拉起后台进程。release.yml 通过 actionlint。
+
+          本轮未进行 Windows 真机、X11 物理手柄或 Wayland 桌面人工验收，也未在本地另构建
+          全部安装包；四 RID、Windows Inno 安装 / 卸载与 Linux deb / rpm / AppImage 的构建
+          和包体验证由 Release workflow 执行。人工验收清单：
           [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md)
 
           ### 本版提交
 
           
-
           NOTES
           sed -i "s/vVERSION/$VERSION/g; s/PACKAGEVERSION/${VERSION#v}/g" body.md
           echo '```' >> body.md
