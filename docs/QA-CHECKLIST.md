@@ -83,8 +83,8 @@
 
 - [ ] 模型上每个元素可点击：A/B/X/Y、十字键四向、双摇杆按压、LB/RB/LT/RT、Start/Back/Guide
 - [ ] 同一按键同时配置基础层与临时层后，右侧只有一张该按键的卡片，但两层映射及各自单击/双击/长按全部可见；编辑、启停和删除仍作用于对应层
-- [ ] Windows 上模型区持续说明 XInput 的 Guide 限制；选中 Guide 时编辑器再次提示映射不会触发
-- [ ] Windows 缺少 Game Bar 并出现 ms-gamebar 弹窗时，点击模型区「关闭手柄唤起 Game Bar」后重连手柄/按 Guide 不再弹窗；Win+G 与游戏录制不受影响
+- [ ] Windows 上右侧按键配置区持续说明 XInput 的 Guide 限制；选中 Guide 时编辑器再次提示映射不会触发
+- [ ] Windows 缺少 Game Bar 并出现 ms-gamebar 弹窗时，点击右侧按键配置区「关闭手柄唤起 Game Bar」后重连手柄/按 Guide 不再弹窗；Win+G 与游戏录制不受影响
 - [ ] 按下物理按键，模型上对应元素高亮
 - [ ] 点击元素即打开该元素的映射设置，"正在配置"显示的是刚点的那个
 - [ ] 设置内直接按键盘：单键 → 单键目标；Ctrl+C → 组合键目标
@@ -432,10 +432,10 @@ uinput 写入口——沙箱内注入功能在默认桌面上不可用。应用�
   设备并解析手柄 HID 报告中的 Guide 键位（Linux xpad 正是这样映射 `BTN_MODE`），
   但需新增第二条完整输入通道（raw input 注册、HID 报告描述符/报文解析、设备身份
   匹配、后台消息循环、与 XInput 双路合并），为单按键维护第二条输入路径性价比低，
-  列入远期 backlog，本 beta 周期不做。GUI 在模型区和 Guide 编辑器中明确显示该限制
+  列入远期 backlog，本 beta 周期不做。GUI 在右侧按键配置区和 Guide 编辑器中明确显示该限制
 - Windows 在 Xbox Game Bar 缺失或协议处理程序不可用时，连接手柄或按 Guide 可能由系统
   shell 弹出「获取打开此 ms-gamebar 链接的应用」；应用自身不调用该协议，也无法经 XInput
-  拦截 Guide。模型区的「关闭手柄唤起 Game Bar」按钮仅在用户点击后写入当前用户的
+  拦截 Guide。右侧按键配置区的「关闭手柄唤起 Game Bar」按钮仅在用户点击后写入当前用户的
   `HKCU\Software\Microsoft\GameBar\UseNexusForGameBarEnabled=0`，不注册 no-op 协议、
   不修改其他用户、不关闭 Win+G 或游戏录制。也可在系统设置 → 游戏 → Xbox Game Bar
   手动关闭同一开关；该处置对“设备到达即触发”的路径仍需真机验证

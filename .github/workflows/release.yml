@@ -650,7 +650,7 @@ jobs:
 
           - **Windows ms-gamebar 弹窗处置**：Windows 在 Xbox Game Bar 缺失或协议
             处理程序不可用时，连接手柄或按 Guide 可能由系统 shell 弹出「获取打开此
-            ms-gamebar 链接的应用」。模型区新增「关闭手柄唤起 Game Bar」按钮，点击后
+            ms-gamebar 链接的应用」。右侧按键配置区新增「关闭手柄唤起 Game Bar」按钮，点击后
             仅写当前用户的 `UseNexusForGameBarEnabled=0`；不静默修改系统，不注册
             no-op 协议，不影响 Win+G、游戏录制或其他用户。开关状态与读写失败都会显示
           - **同一按键的所有层配置同卡展示**：右侧按键配置按物理按键 / 摇杆归组，
@@ -658,7 +658,7 @@ jobs:
             都明确标名并完整列出单击 / 双击 / 长按。方向映射仍带方向说明，点击、
             键盘激活、启停与删除都精确作用于对应层的映射
           - **Windows Guide 限制直接可见**：XInput 的 `wButtons` 没有 Guide 位，
-            Windows 通道不能读取该键。模型区现在持续说明 Guide 不会高亮、其映射和
+            Windows 通道不能读取该键。右侧按键配置区现在持续说明 Guide 不会高亮、其映射和
             界面导航不会触发；选中 Guide 时编辑器再次给出上下文提示。配置仍可保存，
             便于跨平台方案保留该键，但 Windows 用户应改选其他按键
 
@@ -745,10 +745,10 @@ jobs:
 
           ### 质量门禁
 
-          发布前本地验证（Linux）：Debug 与 Release 全量测试均为 2626 项，
-          2616 通过、0 失败、10 项跳过（Windows 专属 / 需显示服务的跨平台分支），
+          发布前本地验证（Linux）：Debug 与 Release 全量测试均为 2627 项，
+          2617 通过、0 失败、10 项跳过（Windows 专属 / 需显示服务的跨平台分支），
           含本轮 Game Bar 当前用户开关、读写失败报告、Guide 平台提示、双层同卡展示、
-          嵌套映射行的鼠标 / 键盘激活与既有编辑行为回归；release.yml 已通过
+          嵌套映射行的鼠标 / 键盘激活、Windows 兼容性卡片不改变模型尺寸与既有编辑行为回归；release.yml 已通过
           actionlint。本轮未在本地另构建 deb / rpm / AppImage，也未进行 Windows
           真机与人工 GUI 实测：Windows / Ubuntu 双平台 CI、四 RID、Windows Inno
           per-user EXE 与 Linux 三种包格式的构建与安装 / 卸载验证由 Release workflow

@@ -594,21 +594,6 @@
                                     <TextBlock Classes="cardTitle" Text="手柄模型" HorizontalAlignment="Center" />
                                     <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
                                                Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
-                                    <TextBlock x:Name="GuidePlatformNote" Classes="hint" Margin="0,4,0,0"
-                                               TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
-                                               IsVisible="{Binding ShowGuidePlatformNote}" Text="{Binding GuidePlatformNote}" />
-                                    <StackPanel IsVisible="{Binding ShowGameBarPopupGuard}">
-                                        <TextBlock x:Name="GameBarPopupHint" Classes="hint" Margin="0,4,0,0"
-                                                   TextWrapping="Wrap" Text="{Binding GameBarPopupHint}" />
-                                        <Button x:Name="DisableGameBarControllerLaunchButton" Classes="ghost"
-                                                Content="关闭手柄唤起 Game Bar" MinHeight="30" FontSize="11"
-                                                HorizontalAlignment="Left" Margin="0,6,0,0"
-                                                IsVisible="{Binding CanDisableGameBarControllerLaunch}"
-                                                Command="{Binding DisableGameBarControllerLaunchCommand}" />
-                                        <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                                                   Foreground="{DynamicResource DangerBrush}"
-                                                   IsVisible="{Binding HasGameBarPopupError}" Text="{Binding GameBarPopupError}" />
-                                    </StackPanel>
                                 </StackPanel>
                                 <!-- The temporary gamepad-hijack switch, beside the model it governs.
                                      It is session-only (never persisted): on, a press drives the UI
@@ -695,12 +680,33 @@
             <Border Grid.Column="4" x:Name="RightPanel" MinWidth="0"
                     Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource SubtleBrush}"
                     BorderThickness="1,0,0,0" Padding="12">
-                <Grid RowDefinitions="Auto,Auto,*">
+                <Grid RowDefinitions="Auto,Auto,Auto,*">
                     <StackPanel Grid.Row="0">
                         <TextBlock Classes="cardTitle" Text="按键配置" />
                         <TextBlock Classes="hint" Margin="0,4,0,0"
                                    Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
                     </StackPanel>
+
+                    <Border Grid.Row="1" Classes="card" Padding="12" Margin="0,12,0,0"
+                            IsVisible="{Binding ShowGuidePlatformNote}">
+                        <StackPanel>
+                            <TextBlock x:Name="GuidePlatformNote" Classes="hint"
+                                       TextWrapping="Wrap" Foreground="{DynamicResource DangerBrush}"
+                                       Text="{Binding GuidePlatformNote}" />
+                            <StackPanel IsVisible="{Binding ShowGameBarPopupGuard}">
+                                <TextBlock x:Name="GameBarPopupHint" Classes="hint" Margin="0,6,0,0"
+                                           TextWrapping="Wrap" Text="{Binding GameBarPopupHint}" />
+                                <Button x:Name="DisableGameBarControllerLaunchButton" Classes="ghost"
+                                        Content="关闭手柄唤起 Game Bar" MinHeight="30" FontSize="11"
+                                        HorizontalAlignment="Left" Margin="0,8,0,0"
+                                        IsVisible="{Binding CanDisableGameBarControllerLaunch}"
+                                        Command="{Binding DisableGameBarControllerLaunchCommand}" />
+                                <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource DangerBrush}"
+                                           IsVisible="{Binding HasGameBarPopupError}" Text="{Binding GameBarPopupError}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
 
                     <!-- 全局特殊键. 精准键与 Leader 键 are device-level configuration: every
                          preset of the device shares them, so they are not one preset's
@@ -710,7 +716,7 @@
                          every collision on their buttons stated beside them. Editing stays
                          exactly where it was: the mapping editor, reached through the row's
                          编辑 affordance or through the mapping's own row below. -->
-                    <Border Grid.Row="1" Classes="card" Margin="0,12,0,0">
+                    <Border Grid.Row="2" Classes="card" Margin="0,12,0,0">
                         <StackPanel>
                             <TextBlock Classes="cardTitle" Text="全局特殊键" />
                             <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
@@ -754,7 +760,7 @@
                          scrollbar is an overlay that paints over the content's edge rather
                          than taking layout space, so without the gutter it would sit on top
                          of the rows' delete buttons (DESIGN 4.3.8). -->
-                    <ScrollViewer Grid.Row="2" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
+                    <ScrollViewer Grid.Row="3" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
                         <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding MappingCards}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>

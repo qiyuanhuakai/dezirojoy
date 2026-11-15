@@ -178,10 +178,10 @@ XInput 的 `wButtons` 位图没有 Guide 位（代码中的 `XInputNative.Guide 
 Windows 上 XInput 通道永不报告 Guide 按下——可视化器 Guide 元素常灭、Guide 映射
 不触发均为可解释状态，不是缺陷。Linux 侧 evdev 经 `BTN_MODE`(0x13c) 正常识别
 Guide，不受影响。因此输入法的呼出/导航若拟绑定 Guide 键，Windows 上需改选其他
-按键；GUI 会在模型区和 Guide 映射编辑器中直接说明此限制。确需 Guide 的唯一路径是
+按键；GUI 会在右侧按键配置区和 Guide 映射编辑器中直接说明此限制。确需 Guide 的唯一路径是
 Raw Input 解析 HID 报告中的 Guide 键位（需第二条完整输入通道，成本高，列入远期
 backlog，详见 `docs/QA-CHECKLIST.md`「已知限制」）。Game Bar 缺失导致的
-`ms-gamebar` 系统弹窗由模型区的独立按钮处理：用户点击后仅关闭当前 Windows 用户的
+`ms-gamebar` 系统弹窗由右侧按键配置区的独立按钮处理：用户点击后仅关闭当前 Windows 用户的
 “允许控制器打开 Game Bar”开关，不会把 Guide 变成可读输入。
 
 ## 参考链接

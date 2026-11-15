@@ -1,9 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.App.Views;
@@ -70,6 +72,36 @@ public sealed class WindowsCompatibilityGuiTests
         Assert.True(hint.IsVisible);
         Assert.Contains("XInput", hint.Text);
         window.Close();
+    }
+
+    [AvaloniaFact]
+    public void Windows_Compatibility_Card_Does_Not_Shrink_The_Model()
+    {
+        var withWindowsHints = ModelHeight(guideButtonSupported: false);
+        var withoutWindowsHints = ModelHeight(guideButtonSupported: true);
+
+        Assert.Equal(withoutWindowsHints, withWindowsHints);
+    }
+
+    private static double ModelHeight(bool guideButtonSupported)
+    {
+        var provider = new FakeGamepadProvider();
+        var store = new InMemoryProfileStore();
+        using var host = new EngineHost(provider, new RecordingOutputSink(), store);
+        var vm = new MainWindowViewModel(
+            host,
+            store,
+            guideButtonSupported: guideButtonSupported,
+            gameBarPopupGuard: new FakeGameBarPopupGuard());
+        var window = new MainWindow(vm, host);
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var model = window.FindControl<DeziroJoy.App.Views.Controls.GamepadVisualizer>("GamepadVisualizer")!;
+        var height = model.GetVisualAncestors().OfType<Viewbox>().First().Bounds.Height;
+        window.Close();
+        return height;
     }
 
     private static void Click(Control target, Window window)
