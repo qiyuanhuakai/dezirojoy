@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
@@ -23,10 +24,15 @@ namespace DeziroJoy.App.Tests.Views;
 /// control detaching) tears it down rather than leaving a hook swallowing keys. The final case
 /// pins the fallback: with no global capture the window's own key events still configure a key, so
 /// a platform without the capability is not left pretending.
+/// <para>
+/// The default factory builds a real hook only for a genuine, non-zero Win32 <c>HWND</c>; a
+/// headless, stub or absent handle - including the Windows Release CI headless run - yields null,
+/// so a test window never installs a global hook that would swallow its own simulated input.
+/// </para>
 /// </summary>
 public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
 {
-    private readonly Func<IGlobalKeyboardCapture?> _previousFactory;
+    private readonly Func<IPlatformHandle?, IGlobalKeyboardCapture?> _previousFactory;
 
     public EditorInputCaptureGlobalKeyboardTests()
     {
@@ -39,7 +45,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     public void Arming_The_Editor_Installs_The_Global_Capture()
     {
         var capture = new FakeGlobalKeyboardCapture();
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => capture;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => capture;
         var (_, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -52,7 +58,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     public void A_Global_Captured_Combo_Reaches_The_Editor()
     {
         var capture = new FakeGlobalKeyboardCapture();
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => capture;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => capture;
         var (_, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -66,7 +72,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     public void A_Global_Capture_Ending_Disarms_The_Editor_And_The_Hook()
     {
         var capture = new FakeGlobalKeyboardCapture();
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => capture;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => capture;
         var (_, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -81,7 +87,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     public void Opening_Settings_Abandons_An_Armed_Capture()
     {
         var capture = new FakeGlobalKeyboardCapture();
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => capture;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => capture;
         var (_, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -96,7 +102,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     public void Losing_Focus_Abandons_An_Armed_Capture()
     {
         var capture = new FakeGlobalKeyboardCapture();
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => capture;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => capture;
         var (window, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -111,7 +117,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     public void Detaching_The_Control_Unhooks_Immediately()
     {
         var capture = new FakeGlobalKeyboardCapture();
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => capture;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => capture;
         var (window, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -125,7 +131,7 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
     [AvaloniaFact]
     public void Without_A_Global_Capture_The_Window_Events_Still_Configure_A_Key()
     {
-        EditorInputCapture.GlobalKeyboardCaptureFactory = () => null;
+        EditorInputCapture.GlobalKeyboardCaptureFactory = _ => null;
         var (window, viewModel) = BuildWindow();
 
         viewModel.Editor.IsCapturingKey = true;
@@ -136,6 +142,21 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
         Assert.Equal(GamepadKey.C, viewModel.Editor.SelectedKey);
         Assert.True(viewModel.Editor.ModifierCtrl);
     }
+
+    [AvaloniaFact]
+    public void The_Default_Factory_Builds_No_Hook_For_A_Null_Handle()
+        => Assert.Null(EditorInputCapture.CreateGlobalKeyboardCapture(null));
+
+    [AvaloniaFact]
+    public void The_Default_Factory_Builds_No_Hook_For_A_Headless_Stub_Handle()
+        // A headless window - including the Windows Release CI headless run - reports a STUB
+        // handle, so no global hook is installed and the window's own key events still drive
+        // capture instead of being swallowed by a hook that could never receive a key.
+        => Assert.Null(EditorInputCapture.CreateGlobalKeyboardCapture(new FakePlatformHandle("STUB", new IntPtr(1))));
+
+    [AvaloniaFact]
+    public void The_Default_Factory_Builds_No_Hook_For_A_Zero_Hwnd()
+        => Assert.Null(EditorInputCapture.CreateGlobalKeyboardCapture(new FakePlatformHandle("HWND", IntPtr.Zero)));
 
     private static (MainWindow Window, MainWindowViewModel ViewModel) BuildWindow()
     {
@@ -185,5 +206,18 @@ public sealed class EditorInputCaptureGlobalKeyboardTests : IDisposable
             => KeyCaptured?.Invoke(key, modifiers);
 
         public void RaiseCaptureEnded() => CaptureEnded?.Invoke();
+    }
+
+    private sealed class FakePlatformHandle : IPlatformHandle
+    {
+        public FakePlatformHandle(string handleDescriptor, IntPtr handle)
+        {
+            HandleDescriptor = handleDescriptor;
+            Handle = handle;
+        }
+
+        public IntPtr Handle { get; }
+
+        public string HandleDescriptor { get; }
     }
 }

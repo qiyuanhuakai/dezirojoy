@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.ViewModels;
@@ -35,14 +36,34 @@ namespace DeziroJoy.App.Views;
 public sealed class EditorInputCapture : Control
 {
     /// <summary>
-    /// Builds the global capture used while a key capture is armed. Windows returns the real hook;
-    /// every other platform returns null and the control falls back to the window's own key events.
-    /// Tests replace this with a double so the wiring is exercised without a real hook.
+    /// Builds the global capture used while a key capture is armed, from the window's platform
+    /// handle. The default (<see cref="CreateGlobalKeyboardCapture"/>) returns the real hook only
+    /// for a genuine Win32 window and null otherwise, so the control falls back to the window's own
+    /// key events wherever there is no real HWND - including headless test windows, which would
+    /// otherwise install a hook that can never receive a key while swallowing the window's own
+    /// simulated input. Tests replace this with a double that ignores the handle, so the wiring is
+    /// still exercised without a real hook.
     /// </summary>
-    internal static Func<IGlobalKeyboardCapture?> GlobalKeyboardCaptureFactory { get; set; }
-        = static () => OperatingSystem.IsWindows()
-            ? new GlobalKeyboardCapture(new LowLevelKeyboardHook(), action => Dispatcher.UIThread.Post(action))
-            : null;
+    internal static Func<IPlatformHandle?, IGlobalKeyboardCapture?> GlobalKeyboardCaptureFactory { get; set; }
+        = CreateGlobalKeyboardCapture;
+
+    /// <summary>
+    /// The default factory. A real <c>WH_KEYBOARD_LL</c> hook is built only on Windows and only for
+    /// a surface that is a genuine, non-zero Win32 <c>HWND</c>. A headless, stub or absent handle
+    /// yields null, so the window's own key events remain the capture path.
+    /// </summary>
+    internal static IGlobalKeyboardCapture? CreateGlobalKeyboardCapture(IPlatformHandle? handle)
+    {
+        if (!OperatingSystem.IsWindows()
+            || handle is null
+            || handle.HandleDescriptor != "HWND"
+            || handle.Handle == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        return new GlobalKeyboardCapture(new LowLevelKeyboardHook(), action => Dispatcher.UIThread.Post(action));
+    }
 
     /// <summary>
     /// Whether this platform can capture keys globally. Bound by the editor's capture hint so it
@@ -303,7 +324,7 @@ public sealed class EditorInputCapture : Control
             return;
         }
 
-        var capture = GlobalKeyboardCaptureFactory();
+        var capture = GlobalKeyboardCaptureFactory(_window?.TryGetPlatformHandle());
         if (capture is null)
         {
             return;
