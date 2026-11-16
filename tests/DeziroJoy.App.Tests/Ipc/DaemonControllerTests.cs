@@ -459,9 +459,13 @@ public sealed class DaemonControllerTests
     public async Task A_Daemon_That_Never_Answers_Fails_After_The_Startup_Grace()
     {
         // The wait is bounded in real time: a machine with no daemon coming still gets its
-        // error window, after the grace rather than after one probe. Three probes because the
-        // grace is checked after each attempt in elapsed time - the second lands at ~250 ms,
-        // still inside a 300 ms grace, and the third at ~500 ms ends it.
+        // error window, after the grace rather than after one probe. The grace is checked
+        // after each attempt in elapsed time, so a 300 ms grace against 250 ms probe
+        // intervals buys two or three probes: the second lands at ~250 ms and the third at
+        // ~500 ms ends it - but how long the runner actually slept decides whether the
+        // second attempt is still inside the grace, so the count is asserted as a range.
+        // What must hold whatever the clock does: the wait outlived one probe, it never
+        // ran past the grace by another interval, and only the first attempt may launch.
         var endpoint = new FakeEndpoint { Ready = false };
         await using var controller = new DaemonController(
             endpoint,
@@ -471,9 +475,10 @@ public sealed class DaemonControllerTests
             () => controller.ConnectAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(DaemonConnectionState.Disconnected, controller.State);
-        Assert.Equal(3, endpoint.EnsureCalls);
+        Assert.InRange(endpoint.EnsureCalls, 2, 3);
         Assert.Equal(0, endpoint.OpenCalls);
-        Assert.Equal([true, false, false], endpoint.AllowLaunchCalls);
+        Assert.True(endpoint.AllowLaunchCalls[0]);
+        Assert.All(endpoint.AllowLaunchCalls.Skip(1), allowLaunch => Assert.False(allowLaunch));
     }
 
     [Fact]
