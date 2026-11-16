@@ -197,7 +197,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _gameBarPopupGuard = gameBarPopupGuard ?? new GameBarPopupGuard();
         try
         {
-            IsGameBarControllerLaunchDisabled = _gameBarPopupGuard.IsControllerLaunchDisabled;
+            RefreshGameBarState();
         }
         catch (Exception exception)
         {
@@ -467,6 +467,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// the mapping surface. It is deliberately session-only, not a persisted preference: it
     /// governs the hijack lease for the life of the window and resets to off every launch, so a
     /// mapping session starts with presses following the active mapping until the user opts in.
+    /// <para>
+    /// While it is on, a new button press jumps straight to that element's mapping configuration
+    /// - select and open in one step - and off returns every press to the active mapping at once.
+    /// </para>
     /// </summary>
     public bool GamepadNavigationEnabled
     {
@@ -1294,21 +1298,128 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public bool ShowGameBarPopupGuard => _gameBarPopupGuard.IsSupported;
 
+    /// <summary>Layer one: the per-user preference that stops the controller opening Game Bar.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanDisableGameBarControllerLaunch))]
     [NotifyPropertyChangedFor(nameof(GameBarPopupHint))]
+    [NotifyPropertyChangedFor(nameof(GameBarPreferenceStatus))]
     private bool _isGameBarControllerLaunchDisabled;
 
     public bool CanDisableGameBarControllerLaunch => ShowGameBarPopupGuard && !IsGameBarControllerLaunchDisabled;
 
-    public string GameBarPopupHint => IsGameBarControllerLaunchDisabled
-        ? "关闭设置已写入并核验。若仍会弹出 ms-gamebar，请用系统设置再关闭一次；部分系统需要重新登录。"
-        : "出现 ms-gamebar 弹窗时，可写入当前用户的关闭设置，或打开系统设置手动关闭“允许控制器打开 Game Bar”。不影响 Win+G 与录制。";
+    /// <summary>Layer two: this app's no-op ms-gamebar handler is registered and current.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRegisterGameBarPopupHandler))]
+    [NotifyPropertyChangedFor(nameof(CanRestoreGameBarPopupHandler))]
+    [NotifyPropertyChangedFor(nameof(IsGameBarPopupHandlerStale))]
+    [NotifyPropertyChangedFor(nameof(RegisterGameBarPopupHandlerText))]
+    [NotifyPropertyChangedFor(nameof(GameBarPopupHint))]
+    [NotifyPropertyChangedFor(nameof(GameBarHandlerStatus))]
+    private bool _isGameBarPopupHandlerRegistered;
+
+    /// <summary>Layer two ownership, whatever the recorded path - what restore acts on.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRestoreGameBarPopupHandler))]
+    [NotifyPropertyChangedFor(nameof(IsGameBarPopupHandlerStale))]
+    [NotifyPropertyChangedFor(nameof(RegisterGameBarPopupHandlerText))]
+    [NotifyPropertyChangedFor(nameof(GameBarPopupHint))]
+    [NotifyPropertyChangedFor(nameof(GameBarHandlerStatus))]
+    private bool _ownsGameBarPopupHandler;
+
+    /// <summary>
+    /// The marker is still here but the command belongs to another program: it replaced
+    /// this app's handler without touching the private marker. Neither restoring nor
+    /// re-registering may act on it - both would destroy that program's registration.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRegisterGameBarPopupHandler))]
+    [NotifyPropertyChangedFor(nameof(CanRestoreGameBarPopupHandler))]
+    [NotifyPropertyChangedFor(nameof(GameBarPopupHint))]
+    [NotifyPropertyChangedFor(nameof(GameBarHandlerStatus))]
+    private bool _isGameBarPopupHandlerTakenOver;
+
+    public bool CanRegisterGameBarPopupHandler
+        => ShowGameBarPopupGuard && !IsGameBarPopupHandlerRegistered && !IsGameBarPopupHandlerTakenOver;
+
+    public string RegisterGameBarPopupHandlerText
+        => IsGameBarPopupHandlerStale ? "重新注册静默处理程序" : "注册静默处理程序";
+
+    public bool CanRestoreGameBarPopupHandler => ShowGameBarPopupGuard && OwnsGameBarPopupHandler;
+
+    /// <summary>Registered by this app, but the recorded command no longer names this executable.</summary>
+    public bool IsGameBarPopupHandlerStale => OwnsGameBarPopupHandler && !IsGameBarPopupHandlerRegistered;
+
+    public string GameBarPreferenceStatus => IsGameBarControllerLaunchDisabled
+        ? "已关闭：控制器不再经系统唤起 Game Bar。"
+        : "未关闭：连接手柄或按 Guide 时系统仍可能尝试唤起 Game Bar。";
+
+    public string GameBarHandlerStatus
+    {
+        get
+        {
+            if (IsGameBarPopupHandlerTakenOver)
+            {
+                return "已被其他程序接管：协议命令已不是本应用的，本应用的注册标记与备份原样未动；请检查系统设置，或安装/修复 Xbox Game Bar。";
+            }
+
+            if (IsGameBarPopupHandlerStale)
+            {
+                return "已注册但指向旧版程序路径：请重新注册，或恢复系统默认。";
+            }
+
+            return IsGameBarPopupHandlerRegistered
+                ? "已为本用户注册静默处理程序：仅 ms-gamebar 链接由 DeziroJoy 静默处理；部分系统组件经其他上下文触发时仍可能弹窗，此时请用系统设置，或安装/修复 Xbox Game Bar。"
+                : "未注册：系统找不到 ms-gamebar 处理程序时会弹出“选择应用”对话框。注册只覆盖 ms-gamebar，不保证抑制所有弹窗。";
+        }
+    }
+
+    public string GameBarPopupHint
+    {
+        get
+        {
+            if (!ShowGameBarPopupGuard)
+            {
+                return string.Empty;
+            }
+
+            if (IsGameBarPopupHandlerTakenOver)
+            {
+                return "ms-gamebar 处理程序已被其他程序接管：为避免破坏对方的处理程序，不提供注册与恢复，本应用的注册标记和备份保持原样。请检查系统设置，或安装/修复 Xbox Game Bar。";
+            }
+
+            if (IsGameBarPopupHandlerStale)
+            {
+                return "本应用注册的 ms-gamebar 处理程序指向已不存在的程序路径（应用可能移动或更新过），请重新注册；也可恢复系统默认。";
+            }
+
+            if (IsGameBarPopupHandlerRegistered)
+            {
+                return IsGameBarControllerLaunchDisabled
+                    ? "已为本用户注册静默处理程序：仅 ms-gamebar 链接由 DeziroJoy 静默处理（其他启动方式不主动拦截），控制器唤起偏好也已写入并核验。部分系统组件经其他上下文触发时仍可能弹窗，此时请用系统设置，或安装/修复 Xbox Game Bar。不修改系统录制设置，可随时恢复。"
+                    : "已为本用户注册静默处理程序：仅 ms-gamebar 链接由 DeziroJoy 静默处理（其他启动方式不主动拦截），控制器唤起偏好仍未关闭。部分系统组件经其他上下文触发时仍可能弹窗，此时请用系统设置，或安装/修复 Xbox Game Bar。不修改系统录制设置，可随时恢复。";
+            }
+
+            if (IsGameBarControllerLaunchDisabled)
+            {
+                return "偏好已写入并核验。若仍弹出 ms-gamebar“选择应用”对话框，可注册本应用的静默处理程序（只覆盖 ms-gamebar，不保证抑制所有弹窗）；部分系统需要重新登录。";
+            }
+
+            return "出现 ms-gamebar 弹窗时：可写入当前用户的关闭偏好（“允许控制器打开 Game Bar”）；若仍弹窗，再注册本应用的 ms-gamebar 静默处理程序（只覆盖 ms-gamebar，不保证抑制所有弹窗；Game Bar 不再经该协议打开），仅当前用户、可随时恢复。不修改系统录制设置。";
+        }
+    }
 
     [ObservableProperty]
     private string? _gameBarPopupError;
 
     public bool HasGameBarPopupError => !string.IsNullOrEmpty(GameBarPopupError);
+
+    private void RefreshGameBarState()
+    {
+        IsGameBarControllerLaunchDisabled = _gameBarPopupGuard.IsControllerLaunchDisabled;
+        IsGameBarPopupHandlerRegistered = _gameBarPopupGuard.IsProtocolHandlerRegistered;
+        OwnsGameBarPopupHandler = _gameBarPopupGuard.OwnsProtocolHandler;
+        IsGameBarPopupHandlerTakenOver = _gameBarPopupGuard.IsProtocolHandlerTakenOver;
+    }
 
     [RelayCommand]
     private void DisableGameBarControllerLaunch()
@@ -1316,12 +1427,52 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         try
         {
             _gameBarPopupGuard.DisableControllerLaunch();
-            IsGameBarControllerLaunchDisabled = _gameBarPopupGuard.IsControllerLaunchDisabled;
+            RefreshGameBarState();
             GameBarPopupError = null;
         }
         catch (Exception exception)
         {
             GameBarPopupError = $"无法修改 Windows Game Bar 设置：{exception.Message}。也可在系统设置 → 游戏 → Xbox Game Bar 中手动关闭“允许控制器打开 Game Bar”。";
+        }
+
+        OnPropertyChanged(nameof(HasGameBarPopupError));
+    }
+
+    /// <summary>
+    /// Layer two: install the per-user no-op handler for ms-gamebar. Deliberately separate
+    /// from the preference - the preference asks the system not to launch Game Bar with the
+    /// controller, the handler answers the link on the systems that launch it anyway.
+    /// </summary>
+    [RelayCommand]
+    private void RegisterGameBarPopupHandler()
+    {
+        try
+        {
+            _gameBarPopupGuard.RegisterProtocolHandler();
+            RefreshGameBarState();
+            GameBarPopupError = null;
+        }
+        catch (Exception exception)
+        {
+            GameBarPopupError = $"无法注册 ms-gamebar 静默处理程序：{exception.Message}";
+        }
+
+        OnPropertyChanged(nameof(HasGameBarPopupError));
+    }
+
+    /// <summary>Layer two undo: hand the protocol back to whatever was registered before.</summary>
+    [RelayCommand]
+    private void RestoreGameBarPopupHandler()
+    {
+        try
+        {
+            _gameBarPopupGuard.RestoreProtocolHandler();
+            RefreshGameBarState();
+            GameBarPopupError = null;
+        }
+        catch (Exception exception)
+        {
+            GameBarPopupError = $"无法恢复 ms-gamebar 系统默认处理程序：{exception.Message}";
         }
 
         OnPropertyChanged(nameof(HasGameBarPopupError));
@@ -2895,6 +3046,13 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// Handles a newly pressed button or deflected stick while the explicit hijack lease is
     /// active. Every device has an independent baseline, so interleaved samples cannot erase
     /// another pad's edges. Each device's first sample establishes a baseline without navigating.
+    /// <para>
+    /// A new button press jumps straight to that element's mapping configuration - select and
+    /// open in one step, with the element's card scrolled into view - which is the whole point
+    /// of the temporary hijack: configuring by touching the pad. A stick deflection stays a
+    /// level-1 selection, because analog movement is not a button press; the stick's own click
+    /// button is a button and jumps like any other.
+    /// </para>
     /// </summary>
     private void NavigateByPhysicalInput(IGamepadState state, string? deviceId)
     {
@@ -2966,14 +3124,50 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             if (!IsAlreadyEditing(source))
             {
-                OpenEditorForSource(source);
+                JumpToSource(source);
             }
 
             return;
         }
 
+        // The hijack jump answers a new button press with that element's mapping
+        // configuration directly - select and open in one step - and asks the view to scroll
+        // the element's card into view. A stick deflection is not a button press: pure analog
+        // movement keeps the level-1 selection, so flicking a stick never opens an editor.
+        // The stick's own click button arrives as a button like any other and does jump.
+        if (source is ButtonBinding)
+        {
+            JumpToSource(source);
+            return;
+        }
+
         SelectSource(source);
     }
+
+    /// <summary>
+    /// The hijack jump: opens one physical input's mapping configuration - the entry the
+    /// element already carries when it has one, a fresh draft when it does not - and asks the
+    /// view to scroll that element's card into view. It only ever loads the editor: nothing
+    /// is saved, no profile is written, and a draft for another element is replaced exactly
+    /// as a click on the model would replace it. A card only exists once the element carries
+    /// a mapping, so a fresh draft has nothing to scroll to yet.
+    /// </summary>
+    private void JumpToSource(InputBinding source)
+    {
+        OpenEditorForSource(source);
+
+        if (MappingCards.FirstOrDefault(card => SamePhysicalSource(card.Source, source)) is { } card)
+        {
+            MappingCardVisibleRequested?.Invoke(card);
+        }
+    }
+
+    /// <summary>
+    /// Raised when the hijack jump opened a mapping configuration whose card should be
+    /// scrolled into view. The view owns the scroll region, so it answers by bringing the
+    /// card's container into view; the view model never touches layout.
+    /// </summary>
+    public event Action<MappingCardViewModel>? MappingCardVisibleRequested;
 
     /// <summary>Records the current sample as only this device's navigation/capture baseline.</summary>
     private void RememberNavigation(IGamepadState state, string? deviceId)

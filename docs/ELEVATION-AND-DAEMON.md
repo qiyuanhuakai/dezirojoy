@@ -562,9 +562,13 @@ input 组写入及当前会话生效状态。它把"照抄命令"升级为显式
 事件码与"虚拟输入设备可能已销毁或 /dev/uinput 已不可写"（短写则报出写入计数），与设置
 ioctl 失败同一契约——返回值曾被丢弃，那正是"映射毫无反应而日志无一字"的形态。
 
-本节全部是**默认后端（evdev）**的诊断。用户在设置中显式启用 SDL3 后端后，设备侧改由
-`Sdl3ScanDiagnostic` 报告（运行时不可用／无标准 Gamepad／打开失败等结局，同样进 daemon
-摘要与 GUI 状态区），见 [SDL3-BACKEND.md](SDL3-BACKEND.md) 的「诊断」一节。
+本节全部是**默认后端（evdev）**的诊断。0.0.5-alpha.2 起 evdev 扫描本身有两项变化：
+首次之后的 250 ms 重扫改为单个后台任务，列表锁只覆盖列表操作（目录遍历与设备 I/O
+不再阻塞 2 ms 采样）；失败的扫描不再淘汰设备——保留全部已服务设备与上次诊断，
+原因记录在 `EvdevGamepadProvider.LastScanError`，由下一次成功扫描清除。用户在设置中
+显式启用 SDL3 后端后，设备侧改由 `Sdl3ScanDiagnostic` 报告（运行时不可用／无标准
+Gamepad／打开失败等结局，同样进 daemon 摘要与 GUI 状态区），见
+[SDL3-BACKEND.md](SDL3-BACKEND.md) 的「诊断」一节。
 
 ### 5.4 EVIOCGABS 的 nr 基座与真机轴校准
 

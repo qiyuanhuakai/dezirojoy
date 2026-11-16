@@ -66,6 +66,7 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     {
         _api = api;
         var interval = scanInterval ?? DefaultRescanInterval;
+        ScanInterval = interval;
         _rescanIntervalTicks = (long)(interval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
     }
 
@@ -77,6 +78,25 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     /// <see cref="Sdl3ScanDiagnostic.Hint"/>.
     /// </summary>
     public Sdl3ScanDiagnostic? LastScanDiagnostic { get; private set; }
+
+    /// <summary>
+    /// Diagnostics only: how many per-tick SDL state pumps this provider has performed -
+    /// one per <see cref="GetConnected"/> call once SDL is initialized. The engine host
+    /// ticks continuously, so a healthy provider makes this climb at the tick rate; a
+    /// count that climbs far slower than the tick rate is the signature of stale-state
+    /// input lag (state read from the last pump instead of the current one). The CLI
+    /// probe's watch mode prints the derived rate so the cadence is observable without
+    /// a profiler. Not part of the input contract.
+    /// </summary>
+    public long StateRefreshCount { get; private set; }
+
+    /// <summary>
+    /// How often this provider re-enumerates devices and rebuilds
+    /// <see cref="LastScanDiagnostic"/>. State itself is refreshed every tick (see
+    /// <see cref="StateRefreshCount"/>); this interval only governs enumeration and
+    /// diagnostics, so it is expected to be far slower than the refresh rate.
+    /// </summary>
+    public TimeSpan ScanInterval { get; }
 
     public IReadOnlyList<GamepadDescriptor> GetConnected()
     {
@@ -90,8 +110,23 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
             var now = System.Diagnostics.Stopwatch.GetTimestamp();
             if (now >= _nextScanTimestamp)
             {
+                // Scan ticks do the same per-tick refresh as every other tick, plus the
+                // throttled enumeration and diagnostic rebuild (see Scan).
                 Scan();
                 _nextScanTimestamp = now + _rescanIntervalTicks;
+            }
+            else if (_initialized)
+            {
+                // Between scans the device table is cached, but SDL's state is not:
+                // SDL_GetGamepadButton/Axis read what the last pump left behind, so
+                // skipping the pump here would pin input at the scan rate (~4 Hz at the
+                // default interval) - the observed animation and response lag. The pump
+                // runs once per tick regardless of how many pads are connected, and the
+                // queued lifecycle events are drained in the same tick, which is the
+                // documented common practice ("process the event queue once every
+                // frame") and keeps a removal from waiting for the next scan.
+                RefreshState();
+                ApplyEvents();
             }
 
             return _devices
@@ -107,6 +142,12 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     /// Reads the current SDL state of one device and normalizes it. Returns null once the
     /// device is gone (or the provider is disposed) - the same contract the XInput and evdev
     /// providers keep, so the engine's device lifecycle is provider-agnostic.
+    /// <para>
+    /// The read reflects the most recent <see cref="GetConnected"/> pump on the calling
+    /// thread: SDL_GetGamepadButton/Axis serve the state <c>SDL_UpdateGamepads</c> last
+    /// wrote, so Poll itself never pumps (the engine host calls GetConnected once per tick
+    /// before polling every pad, which is what keeps multi-device polls to one pump).
+    /// </para>
     /// </summary>
     public IGamepadState? Poll(string deviceId)
     {
@@ -211,9 +252,10 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
             return;
         }
 
-        // Pumps SDL's event queue and refreshes gamepad state - the manual counterpart of
-        // what the video subsystem's event loop would do, which this daemon does not have.
-        _api.UpdateGamepads();
+        // A scan tick refreshes state exactly like every other tick; only enumeration
+        // and the diagnostic rebuild are throttled.
+        RefreshState();
+
         ApplyEvents();
 
         var openFailures = new List<Sdl3OpenFailure>();
@@ -233,6 +275,24 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
         };
     }
 
+    /// <summary>
+    /// Pumps SDL's gamepad state once. <c>SDL_UpdateGamepads</c> is the documented manual
+    /// pump for an application without the video event loop - this daemon has none - and
+    /// <c>SDL_GetGamepadButton</c>/<c>SDL_GetGamepadAxis</c> read the state it maintains,
+    /// so without a per-tick pump every poll would return the previous pump's snapshot.
+    /// It is safe from any thread, which the engine's poll thread relies on.
+    /// <para>
+    /// Deliberately once per <see cref="GetConnected"/> and never per device: the engine
+    /// host polls every connected pad once per tick, so pumping inside
+    /// <see cref="Poll"/> would multiply identical work by the pad count.
+    /// </para>
+    /// </summary>
+    private void RefreshState()
+    {
+        _api.UpdateGamepads();
+        StateRefreshCount++;
+    }
+
     private bool EnsureInitialized()
     {
         if (_initialized)
@@ -245,12 +305,14 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     }
 
     /// <summary>
-    /// Applies the drained lifecycle events: a removal closes the handle immediately instead
-    /// of waiting for the next enumeration pass, and a remap re-reads the device's info -
-    /// the mapping string is diagnostic evidence. The tracker also resets, which is invisible
-    /// to the engine: one poll is a reset plus a full re-apply, so a button held across the
-    /// remap comes back held in the same snapshot, while a button the new layout no longer
-    /// describes cannot linger from the old one.
+    /// Drains the queued lifecycle events and applies them. Runs once per tick - the
+    /// documented common practice of processing the event queue every frame - so a removal
+    /// closes its handle within a tick instead of waiting for the enumeration throttle,
+    /// and a remap re-reads the device's info (the mapping string is diagnostic evidence).
+    /// The tracker also resets on a remap, which is invisible to the engine: one poll is
+    /// a reset plus a full re-apply, so a button held across the remap comes back held in
+    /// the same snapshot, while a button the new layout no longer describes cannot linger
+    /// from the old one.
     /// </summary>
     private void ApplyEvents()
     {

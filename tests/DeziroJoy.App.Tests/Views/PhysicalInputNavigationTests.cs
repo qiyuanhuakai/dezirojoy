@@ -14,11 +14,11 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// Physical-gamepad navigation through the real window, in two levels. A press on the pad
-/// SELECTS that element and nothing else - the mapping keeps injecting, because browsing the
-/// pad is not a request to configure. Entering the editor (a click) is the second level, and
-/// that is the only thing that hijacks the pad: while a mapping is open, presses switch which
-/// element is being configured instead of being injected.
+/// Physical-gamepad navigation through the real window. A press on the pad with the
+/// temporary hijack on jumps straight to that element's mapping configuration - select and
+/// open in one step - and a stick deflection stays a level-1 selection, because analog
+/// movement is not a button press. While a mapping is open, presses switch which element is
+/// being configured instead of being injected.
 /// <para>
 /// All of that is scoped to a visible, active mapping tab. Leaving the tab, deactivating the
 /// window or destroying it disables navigation and capture immediately and releases this
@@ -102,7 +102,7 @@ public sealed class PhysicalInputNavigationTests
     }
 
     [AvaloniaFact]
-    public void Pressing_A_Physical_Button_Selects_Without_Opening_The_Editor()
+    public void Pressing_A_Physical_Button_Jumps_To_Its_Mapping_Configuration()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
 
@@ -113,9 +113,10 @@ public sealed class PhysicalInputNavigationTests
         EngineTick(host, window);
 
         Assert.Equal(new ButtonBinding(GamepadButton.B), viewModel.SelectedSource);
-        Assert.False(viewModel.IsEditing, "a press selects; only a click enters the editor");
+        Assert.True(viewModel.IsEditing, "a press with hijack on opens the element's configuration");
+        Assert.Equal(GamepadButton.B, viewModel.Editor.SelectedButton);
         Assert.True(host.IsInjectionSuspended, "explicit hijack owns the in-scope pad even before the editor opens");
-        Assert.False(window.FindControl<Border>("EditorPanel")!.IsVisible);
+        Assert.True(window.FindControl<Border>("EditorPanel")!.IsVisible);
     }
 
     [AvaloniaFact]
@@ -126,9 +127,10 @@ public sealed class PhysicalInputNavigationTests
         ConnectPad(provider);
         EngineTick(host, window);
 
+        // The jump already opened B; the model click is the mouse route to the same place.
         SetPadState(provider, GamepadButtonMask.B);
         EngineTick(host, window);
-        Assert.False(viewModel.IsEditing);
+        Assert.True(viewModel.IsEditing);
 
         viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.B));
         Dispatcher.UIThread.RunJobs();
@@ -141,7 +143,7 @@ public sealed class PhysicalInputNavigationTests
     }
 
     [AvaloniaFact]
-    public void Pressing_A_Physical_Button_Selects_With_The_Engine_Stopped()
+    public void Pressing_A_Physical_Button_Jumps_With_The_Engine_Stopped()
     {
         var (window, viewModel, host, provider, _) = BuildWindow();
 
@@ -154,8 +156,9 @@ public sealed class PhysicalInputNavigationTests
 
         Assert.False(host.IsRunning);
         Assert.Equal(new ButtonBinding(GamepadButton.B), viewModel.SelectedSource);
-        Assert.False(viewModel.IsEditing);
-        Assert.False(window.FindControl<Border>("EditorPanel")!.IsVisible);
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(GamepadButton.B, viewModel.Editor.SelectedButton);
+        Assert.True(window.FindControl<Border>("EditorPanel")!.IsVisible);
     }
 
     [AvaloniaFact]

@@ -174,7 +174,7 @@ public class EvdevProbeTests
 
         if (EvdevNodes.DirectoryExists())
         {
-            Assert.Equal(diagnostic.NodeCount, EvdevNodes.Enumerate().Count);
+            Assert.Equal(diagnostic.NodeCount, EvdevNodes.Enumerate().Nodes.Count);
             Assert.InRange(diagnostic.GamepadCount, 0, diagnostic.NodeCount);
         }
         else

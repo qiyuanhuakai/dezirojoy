@@ -274,6 +274,10 @@ public partial class MainWindow : Window
 
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;
 
+        // The hijack jump asks for the element's card to be scrolled into view; the window
+        // owns the scroll region, so the view model never touches layout.
+        ViewModel.MappingCardVisibleRequested += OnMappingCardVisibleRequested;
+
         host.Sampled += OnHostSampled;
         host.PresenceSampled += OnHostPresenceSampled;
 
@@ -430,6 +434,7 @@ public partial class MainWindow : Window
         }
 
         ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        ViewModel.MappingCardVisibleRequested -= OnMappingCardVisibleRequested;
 
         if (this.FindControl<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
         {
@@ -496,6 +501,27 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnGamepadElementClicked(object? sender, GamepadElementClickedEventArgs e)
         => ViewModel.OpenEditorForSource(e.Source);
+
+    /// <summary>
+    /// Scrolls one mapping card into view - the hijack jump's second half. The card is a
+    /// templated container inside the mappings list, so the container whose DataContext is
+    /// the card is the one asked to bring itself into view; a card the list has not laid out
+    /// yet simply has nothing to scroll to, and a list that is not realized costs one lookup.
+    /// </summary>
+    private void OnMappingCardVisibleRequested(MappingCardViewModel card)
+    {
+        if (this.FindControl<ItemsControl>("MappingsList") is not { } list)
+        {
+            return;
+        }
+
+        if (list.GetVisualDescendants()
+            .OfType<Control>()
+            .FirstOrDefault(control => ReferenceEquals(control.DataContext, card)) is { } container)
+        {
+            container.BringIntoView();
+        }
+    }
 
     private void OnSettingsKeyDown(object? sender, KeyEventArgs e)
     {

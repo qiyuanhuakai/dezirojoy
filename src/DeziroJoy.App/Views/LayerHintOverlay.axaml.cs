@@ -16,7 +16,10 @@ namespace DeziroJoy.App.Views;
 /// mapping GUI, because it must float above the target application - which means it must
 /// never take that application's keyboard focus (<see cref="Window.ShowActivated"/> is false
 /// and the window is not focusable) and never take a click (the surface is hit-test
-/// invisible). It shows itself the moment the layer hint view model becomes active and is not
+/// invisible). Floating above is asked for twice over: <see cref="Window.Topmost"/> is the
+/// toolkit's flag, and on X11 the window manager is asked again through EWMH once the window
+/// exists, because the flag is applied before the window is mapped and no manager honours it
+/// there. It shows itself the moment the layer hint view model becomes active and is not
 /// suppressed, and hides the moment the layer is released, the hint is dismissed or the daemon
 /// is lost, so its lifetime is exactly the layer's.
 /// </summary>
@@ -35,6 +38,13 @@ public partial class LayerHintOverlay : Window
 
     /// <summary>Reads the pointer position for follow-the-mouse; null when the platform cannot.</summary>
     private readonly Func<PixelPoint?>? _cursorProvider;
+
+    /// <summary>
+    /// Keeps the hint above the target application: the production seam resolves the window's
+    /// X11 id and asks the window manager for _NET_WM_STATE_ABOVE. Injected rather than called
+    /// directly so the lifecycle is testable without a display.
+    /// </summary>
+    private readonly IOverlayTopmostState _topmostState;
 
     /// <summary>True while the hint is on screen and its anchor is re-resolved per layout pass.</summary>
     private bool _trackingLayout;
@@ -64,6 +74,21 @@ public partial class LayerHintOverlay : Window
         GamepadVisualizerViewModel pad,
         Func<LayerHintPlacement> placementProvider,
         Func<PixelPoint?>? cursorProvider = null)
+        : this(layerHint, pad, placementProvider, cursorProvider, null)
+    {
+    }
+
+    /// <summary>
+    /// The constructor the presentation host and the tests share, with the above-state seam
+    /// injectable: production passes null and gets the X11 one, the tests pass a recorder and
+    /// pin the lifecycle without a display.
+    /// </summary>
+    internal LayerHintOverlay(
+        LayerHintViewModel layerHint,
+        GamepadVisualizerViewModel pad,
+        Func<LayerHintPlacement> placementProvider,
+        Func<PixelPoint?>? cursorProvider,
+        IOverlayTopmostState? topmostState)
     {
         AvaloniaXamlLoader.Load(this);
 
@@ -71,6 +96,7 @@ public partial class LayerHintOverlay : Window
         _layerHint = layerHint;
         _placementProvider = placementProvider;
         _cursorProvider = cursorProvider;
+        _topmostState = topmostState ?? X11OverlayTopmost.Shared;
 
         // The embedded diagram is the same live model the mapping tab shows, so the leader
         // being held lights up on the overlay's copy too.
@@ -91,7 +117,21 @@ public partial class LayerHintOverlay : Window
         // resolved from here, and the hook ApplyVisibility keeps installed re-resolves it for
         // the layout passes that follow.
         TryPosition();
+
+        // The window exists now, so the window manager can be asked to keep the hint above the
+        // target application - the topmost flag was applied before the window was mapped, where
+        // no manager honours it. Asked again on the pass that follows this one, because the
+        // manager may not have seen the map yet when this ask goes out.
+        ApplyTopmost();
+        Dispatcher.UIThread.Post(ApplyTopmost);
     }
+
+    /// <summary>
+    /// Asks the window manager to keep the hint above the target application. Asks for stacking
+    /// only: no focus, no input region, no other window named - the hint still never takes the
+    /// target application's keyboard or a click away from it.
+    /// </summary>
+    private void ApplyTopmost() => _ = _topmostState.Apply(this);
 
     private void OnLayoutUpdated(object? sender, EventArgs e) => TryPosition();
 
@@ -132,7 +172,13 @@ public partial class LayerHintOverlay : Window
 
             if (!IsVisible)
             {
+                // Showing raises Opened, which asks for the above-state and posts the pass that
+                // follows the window manager's map; the direct ask here covers a platform whose
+                // Show does not raise Opened, and the ask is idempotent either way. Every
+                // appearance asks again: a hide-and-show cycle is a fresh mapping, and a window
+                // manager starts a newly mapped window at the bottom of the stack.
                 Show();
+                ApplyTopmost();
             }
 
             // Every appearance re-reads the placement and, in both modes, the pointer, so the

@@ -603,7 +603,7 @@
                                 <ToggleButton Grid.Column="1" x:Name="GamepadHijackToggle" Classes="rowToggle"
                                               VerticalAlignment="Center" Margin="12,0,0,0"
                                               FontSize="11" Padding="10,6"
-                                              ToolTip.Tip="手柄劫持（临时）：开启时手柄按键用于界面导航与编辑，映射注入暂停；关闭时手柄按键继续映射注入。仅本次会话生效，重启后恢复为关闭。"
+                                              ToolTip.Tip="手柄劫持（临时）：开启时手柄按键用于界面导航与编辑——按下哪个按键就跳转到哪个按键的映射配置，映射注入暂停；关闭时手柄按键继续映射注入。仅本次会话生效，重启后恢复为关闭。"
                                               IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}">
                                     <TextBlock Text="手柄劫持（临时）" />
                                 </ToggleButton>
@@ -683,8 +683,8 @@
                 <Grid RowDefinitions="Auto,Auto,Auto,*">
                     <StackPanel Grid.Row="0">
                         <TextBlock Classes="cardTitle" Text="按键配置" />
-                        <TextBlock Classes="hint" Margin="0,4,0,0"
-                                   Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。" />
+                        <TextBlock Classes="hint" Margin="0,4,0,0" x:Name="MappingsListHint"
+                                   Text="所有已配置的映射。点击任意一行即可编辑，选中行与手柄模型联动高亮。开启“手柄劫持（临时）”后，按下哪个按键就会直接跳转到它的配置。" />
                     </StackPanel>
 
                     <Border Grid.Row="1" Classes="card" Padding="10" Margin="0,8,0,0"

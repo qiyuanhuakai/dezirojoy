@@ -11,6 +11,9 @@ internal static partial class EvdevNative
     /// <summary>EACCES on Linux: the node exists but this user may not open it.</summary>
     public const int ErrnoAccessDenied = 13;
 
+    /// <summary>ENODEV on Linux: the device behind the descriptor is gone.</summary>
+    public const int ErrnoNoDevice = 19;
+
     public const int ErrnoInterrupted = 4;
 
     public const int ErrnoTryAgain = 11;

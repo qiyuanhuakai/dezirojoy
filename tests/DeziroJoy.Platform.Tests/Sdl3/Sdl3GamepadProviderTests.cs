@@ -201,8 +201,12 @@ public sealed class Sdl3GamepadProviderTests : IDisposable
     }
 
     [Fact]
-    public void Scans_Are_Rate_Limited_But_Always_Run_Once()
+    public void Every_Tick_Refreshes_Sdl_State_While_Scans_Stay_Throttled()
     {
+        // The 4 Hz input-lag regression: SDL_GetGamepadButton/Axis read what the last
+        // SDL_UpdateGamepads pump left behind, so the pump must run once per
+        // GetConnected (the engine's tick) - not once per scan. Enumeration and the
+        // diagnostic rebuild stay on the scan throttle.
         using var provider = new Sdl3GamepadProvider(_api, TimeSpan.FromMilliseconds(250));
         _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, serial: "unit-1"));
 
@@ -210,8 +214,97 @@ public sealed class Sdl3GamepadProviderTests : IDisposable
         provider.GetConnected();
         provider.GetConnected();
 
-        // One scan pumps SDL once; the interval is long enough that all three calls share it.
-        Assert.Equal(1, _api.UpdateGamepadsCalls);
+        Assert.Equal(3, _api.UpdateGamepadsCalls);
+        Assert.Equal(3, _api.PumpEventsCalls);
+        Assert.Equal(1, _api.GetGamepadIdsCalls);
+        Assert.Equal(3, provider.StateRefreshCount);
+    }
+
+    [Fact]
+    public void Polling_Many_Devices_Does_Not_Re_Pump_Sdl_State()
+    {
+        // The engine polls every connected pad once per tick; pumping inside Poll would
+        // multiply identical work by the pad count, so Poll must stay pump-free.
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, serial: "unit-1"));
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 2, serial: "unit-2"));
+        var connected = _provider.GetConnected();
+
+        var pumpsAfterConnect = _api.UpdateGamepadsCalls;
+        var drainsAfterConnect = _api.PumpEventsCalls;
+
+        for (var i = 0; i < 5; i++)
+        {
+            foreach (var descriptor in connected)
+            {
+                _provider.Poll(descriptor.DeviceId);
+            }
+        }
+
+        Assert.Equal(pumpsAfterConnect, _api.UpdateGamepadsCalls);
+        Assert.Equal(drainsAfterConnect, _api.PumpEventsCalls);
+    }
+
+    [Fact]
+    public void A_Removal_Event_Is_Acted_On_Between_Scans()
+    {
+        // Hotplug must not wait for the enumeration throttle: the per-tick event drain
+        // closes the handle within a tick. The enumeration reconcile stays the guaranteed
+        // safety net for a dropped event (covered above).
+        using var provider = new Sdl3GamepadProvider(_api, TimeSpan.FromMilliseconds(250));
+        var device = _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, serial: "unit-1"));
+        var deviceId = provider.GetConnected().Single().DeviceId;
+        var handle = _api.OpenedHandles.Single();
+        var enumerationsAfterOpen = _api.GetGamepadIdsCalls;
+
+        _api.Queue(Sdl3GamepadEventType.Removed, 1);
+        device.Enumerated = false;
+
+        Assert.Empty(provider.GetConnected());
+        Assert.Null(provider.Poll(deviceId));
+        Assert.Equal(1, _api.CloseCount(handle));
+        Assert.Equal(enumerationsAfterOpen, _api.GetGamepadIdsCalls);
+    }
+
+    [Fact]
+    public void StateRefreshCount_Tracks_Per_Tick_Refreshes()
+    {
+        // The observable the probe's watch mode prints: a healthy provider refreshes once
+        // per tick; polling devices never moves it.
+        using var provider = new Sdl3GamepadProvider(_api, TimeSpan.FromMilliseconds(250));
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, serial: "unit-1"));
+
+        var deviceId = provider.GetConnected().Single().DeviceId;
+        Assert.Equal(1, provider.StateRefreshCount);
+
+        provider.GetConnected();
+        Assert.Equal(2, provider.StateRefreshCount);
+
+        for (var i = 0; i < 4; i++)
+        {
+            provider.Poll(deviceId);
+        }
+
+        Assert.Equal(2, provider.StateRefreshCount);
+    }
+
+    [Fact]
+    public void An_Init_Failure_Is_Retried_On_The_Scan_Cadence_Not_Every_Tick()
+    {
+        // A failing SDL_Init must not be retried every tick; the attempt stays on the
+        // scan throttle while the per-tick refresh stays off until SDL is up.
+        using var provider = new Sdl3GamepadProvider(_api, TimeSpan.FromMilliseconds(250));
+        _api.InitSucceeds = false;
+
+        provider.GetConnected();
+        provider.GetConnected();
+        provider.GetConnected();
+
+        // No state pump at all while SDL is down, and the failed init attempt itself
+        // stays on the scan throttle (one attempt per scan, not one per tick).
+        Assert.Equal(0, provider.StateRefreshCount);
+        Assert.Equal(0, _api.UpdateGamepadsCalls);
+        Assert.Equal(0, _api.GetGamepadIdsCalls);
+        Assert.Equal(Sdl3ScanOutcome.SdlUnavailable, provider.LastScanDiagnostic!.Outcome);
     }
 
     [Fact]

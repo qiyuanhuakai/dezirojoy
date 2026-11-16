@@ -465,6 +465,9 @@
                 </WrapPanel>
                 <TextBlock Classes="hint" Margin="0,8,0,0" IsVisible="{Binding IsCapturingKey}"
                            Text="正在捕获键盘：按下目标按键（可含 Ctrl/Shift/Alt/Win 组合），全部松开即完成。" />
+                <TextBlock Classes="hint" Margin="0,2,0,0" IsVisible="{Binding IsCapturingKey}"
+                           Text="{x:Static views:EditorInputCapture.KeyboardCaptureScopeNote}"
+                           TextWrapping="Wrap" />
 
                 <!-- The optional categorized key grid. Collapsed by default so the editor
                      opens compact; expanding it reveals the grid without moving anything

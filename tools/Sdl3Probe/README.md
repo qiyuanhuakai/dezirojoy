@@ -31,6 +31,15 @@ dotnet run --project tools/Sdl3Probe/Sdl3Probe.csproj -c Release -- [list|watch]
 
 退出码：`0` 成功；`1` SDL3 运行时不可用；`2` 参数错误。
 
+### watch 的状态刷新率诊断
+
+`watch` 每 2 秒打印一行 `SDL 状态刷新 X 次/s（累计 N，枚举间隔 M ms）`。`X` 是 provider
+实际调用 `SDL_UpdateGamepads` 的频率——引擎每个 tick 调用一次 `GetConnected`，因此健康
+行为下 `X` 应等于 watch 的循环频率（默认 10/s）。若 `X` 停留在枚举间隔附近（默认 4/s），
+说明状态刷新被扫描节流拖住，即“动画与操作发涩”的根因；`--json` 模式下每轮对象带
+`stateRefreshCount`，可自行计算速率。状态刷新每 tick 一次、与设备数无关；设备枚举和完整
+诊断仍按 `M` ms 节流。
+
 ## 报告内容（S1 证据）
 
 - SDL 运行时版本与 revision、游戏手柄子系统初始化结果；
@@ -68,4 +77,6 @@ dotnet publish tools/Sdl3Probe/Sdl3Probe.csproj -c Release -r linux-x64
 | 真机输入、热插拔、同型号双设备、映射来源、触摸板／传感器 | **未做真机实测**，见路线图 S1 完成标准 |
 
 自动化覆盖见 `tests/DeziroJoy.Platform.Tests/Sdl3/`：归一化、身份组合、热插拔、
-生命周期与诊断均为无真机的确定性测试（47 项）。
+生命周期与诊断均为无真机的确定性测试（53 项），其中包括“扫描节流期间每次
+`GetConnected` 都刷新 SDL 状态、多设备 `Poll` 不重复刷新、移除事件在扫描间隙即时生效”
+的回归测试。

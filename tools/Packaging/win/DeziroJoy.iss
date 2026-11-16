@@ -17,6 +17,10 @@
 ;   scheduled tasks, autostart entries, services or udev rules - the app keeps those
 ;   opt-in features in-app (see src/DeziroJoy.App/Program.cs) - and it must never
 ;   delete the user's configuration under %APPDATA%\DeziroJoy.
+; - The one thing it does beyond copying files is [UninstallRun] below: it asks the
+;   installed app to hand back its own opt-in ms-gamebar protocol registration before
+;   the files are removed. The installer still writes no registry entry of its own for
+;   that; the app owns the registration and knows how to restore the previous command.
 
 #ifndef DeziroJoyVersion
   #error DeziroJoyVersion is not defined. Pass /DDeziroJoyVersion=<version> to ISCC.
@@ -119,3 +123,34 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 #ifdef DeziroJoyUpdateRun
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait postinstall
 #endif
+
+[UninstallRun]
+; Ask the installed app to hand the per-user ms-gamebar no-op protocol handler back
+; before the app files are removed, so a normal uninstall does not leave a registration
+; pointing at a deleted DeziroJoy.exe. [UninstallRun] entries run as the first step of
+; uninstallation - the executable is still in place - and Uninstall waits for each entry
+; to terminate (waituntilterminated, the default, stated explicitly) before deleting
+; anything. Two exceptions are accepted rather than papered over: if the executable is
+; already gone the entry is skipped (skipifdoesntexist), and if the restore fails Inno
+; does not abort the uninstall on the child's exit code - either way the registration can
+; survive and must be handed back manually afterwards (settings card or the same command
+; line), which is why the app - not the installer - owns the restore logic.
+;
+; Scope: the registration this app installed lives in the current user's own
+; HKCU\Software\Classes\ms-gamebar. No HKLM, no service, no machine-wide write; the
+; child runs as the uninstaller's user (runascurrentuser), which for this per-user
+; install is the user whose hive holds the registration. The app - not the installer -
+; owns the registration and knows how to restore the command the protocol had before,
+; or to remove the key when it had none. It refuses to act when another program has
+; taken the command over (the marker alone is not ownership), and it never claims to
+; restore a machine-wide or third-party state it never recorded; the uninstaller only
+; asks it to do that (--uninstall-gamebar-handler).
+;
+; Failure posture: skipifdoesntexist keeps a missing executable from raising the
+; "some elements could not be removed" warning, and Inno never fails an uninstall on
+; the child's exit code. There is deliberately no skipifsilent (that flag is not even
+; valid here): a silent uninstall is a normal uninstall - the CI install/uninstall loop
+; and any scripted one - and must not leave the stale association behind either. The
+; in-app update flow never runs the uninstaller, so an update that keeps the install
+; path leaves the registration untouched.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-gamebar-handler"; Flags: runhidden runascurrentuser waituntilterminated skipifdoesntexist; RunOnceId: "GameBarProtocolHandler"

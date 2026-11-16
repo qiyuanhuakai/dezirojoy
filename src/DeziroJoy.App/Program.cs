@@ -5,6 +5,7 @@ using Avalonia.Threading;
 using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Windows.Elevation;
+using DeziroJoy.Platform.Windows.Gaming;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,6 +24,14 @@ internal static class Program
             return performanceControlExit;
         }
 
+        // The registered ms-gamebar no-op handler. It answers before anything that starts a
+        // window, the daemon or the instance lock: the shell launches the app with the link
+        // and expects it to go away quietly, so this path parses its one argument and exits.
+        if (GameBarProtocol.TryRunNoop(args, out var gameBarNoopExit))
+        {
+            return gameBarNoopExit;
+        }
+
         // The headless daemon must never touch Avalonia: no App object, no window, no UI
         // stack. Dispatch before BuildAvaloniaApp() so those assemblies stay unloaded and
         // the resident process stays near the bare .NET memory floor.
@@ -39,6 +48,16 @@ internal static class Program
         if (HasFlag(args, "--uninstall-daemon"))
         {
             return UninstallDaemon();
+        }
+
+        if (HasFlag(args, "--install-gamebar-handler"))
+        {
+            return InstallGameBarHandler();
+        }
+
+        if (HasFlag(args, "--uninstall-gamebar-handler"))
+        {
+            return UninstallGameBarHandler();
         }
 
         if (HasFlag(args, "--install-autostart"))
@@ -133,6 +152,67 @@ internal static class Program
             : $"移除计划任务 \"{DaemonInstaller.TaskName}\" 失败（可能本来就不存在）。");
 
         return removed ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Registers the per-user no-op ms-gamebar protocol handler the settings card installs,
+    /// for scripted or command-line use. Per-user by design - no elevation, nothing written
+    /// outside the user's own classes key - and --uninstall-gamebar-handler puts back
+    /// whatever command the protocol had before.
+    /// </summary>
+    private static int InstallGameBarHandler()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("--install-gamebar-handler 仅支持 Windows。");
+            return 2;
+        }
+
+        try
+        {
+            new GameBarPopupGuard().RegisterProtocolHandler();
+            Console.WriteLine(
+                "已为本用户注册 ms-gamebar 静默处理程序（仅当前用户；ms-gamebar URI 由 DeziroJoy "
+                + "静默处理，其他启动方式不主动拦截；不修改系统录制设置；只覆盖 ms-gamebar，"
+                + "不保证抑制所有弹窗，部分系统组件经其他上下文触发时仍可能弹窗，"
+                + "此时请用系统设置或安装/修复 Xbox Game Bar；可用 --uninstall-gamebar-handler 恢复系统默认）。");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"注册 ms-gamebar 静默处理程序失败：{exception.Message}");
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Removes only a registration this app owns, restoring the command the protocol had
+    /// before - or removing the key when it had none. A registration another owner has
+    /// taken over is reported and left alone.
+    /// </summary>
+    private static int UninstallGameBarHandler()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("--uninstall-gamebar-handler 仅支持 Windows。");
+            return 2;
+        }
+
+        try
+        {
+            var guard = new GameBarPopupGuard();
+            var owned = guard.OwnsProtocolHandler;
+            guard.RestoreProtocolHandler();
+            Console.WriteLine(owned
+                ? "已移除本应用注册的 ms-gamebar 静默处理程序，并恢复此前的系统默认。"
+                : "没有本应用注册的 ms-gamebar 处理程序，未做任何改动。");
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"移除 ms-gamebar 静默处理程序失败：{exception.Message}");
+            return 1;
+        }
     }
 
     private static int InstallAutostart()

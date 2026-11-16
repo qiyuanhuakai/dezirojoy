@@ -60,6 +60,16 @@ internal sealed class FakeSdl3Api : ISdl3Api
 
     public int UpdateGamepadsCalls { get; private set; }
 
+    /// <summary>Times the event queue was drained - once per tick, like the real pump.</summary>
+    public int PumpEventsCalls { get; private set; }
+
+    /// <summary>
+    /// Times SDL was asked for its gamepad list. Only the throttled scan enumerates, so
+    /// this is the observable that distinguishes "state refreshed" from "devices
+    /// re-enumerated".
+    /// </summary>
+    public int GetGamepadIdsCalls { get; private set; }
+
     public int ShutdownCalls { get; private set; }
 
     /// <summary>Handles opened so far, in order.</summary>
@@ -134,13 +144,17 @@ internal sealed class FakeSdl3Api : ISdl3Api
 
     public IReadOnlyList<Sdl3GamepadEvent> PumpEvents()
     {
+        PumpEventsCalls++;
         var drained = _queuedEvents.ToArray();
         _queuedEvents.Clear();
         return drained;
     }
 
     public IReadOnlyList<uint> GetGamepadIds()
-        => Devices.Where(device => device.Enumerated).Select(device => device.InstanceId).ToArray();
+    {
+        GetGamepadIdsCalls++;
+        return Devices.Where(device => device.Enumerated).Select(device => device.InstanceId).ToArray();
+    }
 
     public Sdl3GamepadHandle? OpenGamepad(uint instanceId, out string? error)
     {

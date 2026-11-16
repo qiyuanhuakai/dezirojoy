@@ -94,7 +94,12 @@ internal static class Program
 
     private static int RunWatch(bool json, int intervalMs, double? durationSeconds)
     {
-        using var provider = new Sdl3GamepadProvider(TimeSpan.FromMilliseconds(intervalMs));
+        // The provider keeps its own default scan interval (250 ms) on purpose: the watch
+        // loop cadence then stays independent of the scan throttle, and the refresh-rate
+        // line can show state refreshes climbing at the loop rate while enumeration stays
+        // at the scan interval - the exact relationship that was broken when the pump was
+        // throttled to the scan.
+        using var provider = new Sdl3GamepadProvider();
         var stopping = false;
 
         Console.CancelKeyPress += (_, eventArgs) =>
@@ -117,6 +122,8 @@ internal static class Program
         var seen = new Dictionary<string, string>(StringComparer.Ordinal);
         var states = new Dictionary<string, IGamepadState?>(StringComparer.Ordinal);
         var everSeen = 0;
+        var lastRefreshCount = provider.StateRefreshCount;
+        var lastRefreshStamp = DateTime.UtcNow;
 
         while (!stopping)
         {
@@ -151,7 +158,7 @@ internal static class Program
 
             if (json)
             {
-                PrintWatchJson(connected, states);
+                PrintWatchJson(connected, states, provider.StateRefreshCount);
             }
             else
             {
@@ -168,6 +175,8 @@ internal static class Program
                 break;
             }
 
+            ReportRefreshRate(provider, ref lastRefreshCount, ref lastRefreshStamp, json);
+
             Thread.Sleep(intervalMs);
         }
 
@@ -181,11 +190,13 @@ internal static class Program
 
     private static void PrintWatchJson(
         IReadOnlyList<GamepadDescriptor> connected,
-        Dictionary<string, IGamepadState?> states)
+        Dictionary<string, IGamepadState?> states,
+        long stateRefreshCount)
     {
         var payload = new
         {
             stamp = Stamp(),
+            stateRefreshCount,
             devices = connected.Select(descriptor => new
             {
                 deviceId = descriptor.DeviceId,
@@ -210,6 +221,38 @@ internal static class Program
         };
 
         Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(payload));
+    }
+
+    /// <summary>
+    /// Prints how often the provider actually pumps SDL state, which is the observable
+    /// that exposes stale-state input lag: a healthy provider refreshes once per tick, so
+    /// the printed rate matches the watch interval. A rate pinned near the scan interval
+    /// (4/s at the provider default) instead of the tick rate is the bug this line exists
+    /// to show. Reported every two seconds; JSON carries the raw count per tick.
+    /// </summary>
+    private static void ReportRefreshRate(
+        Sdl3GamepadProvider provider,
+        ref long lastRefreshCount,
+        ref DateTime lastRefreshStamp,
+        bool json)
+    {
+        var now = DateTime.UtcNow;
+        var elapsed = now - lastRefreshStamp;
+        if (elapsed < TimeSpan.FromSeconds(2))
+        {
+            return;
+        }
+
+        var count = provider.StateRefreshCount;
+        var rate = (count - lastRefreshCount) / elapsed.TotalSeconds;
+
+        if (!json)
+        {
+            Console.WriteLine($"[{Stamp()}] SDL 状态刷新 {rate:0.#} 次/s（累计 {count}，枚举间隔 {provider.ScanInterval.TotalMilliseconds:0.#} ms）");
+        }
+
+        lastRefreshCount = count;
+        lastRefreshStamp = now;
     }
 
     private static string Stamp() => DateTime.Now.ToString("HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);

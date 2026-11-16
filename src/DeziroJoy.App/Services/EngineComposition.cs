@@ -62,7 +62,14 @@ public sealed class EngineComposition : IDisposable
             sendInputSink.InjectionEmitted += InjectionLog.Record;
         }
 
-        Host = new EngineHost(Provider, Sink, ProfileStore);
+        // The legacy-configuration migration copies an old XInput/evdev profile onto the SDL
+        // device that replaced it, once per pair: the marker record is what keeps it from
+        // refilling slots the user has since deleted or replacing ones they reset.
+        Host = new EngineHost(
+            Provider,
+            Sink,
+            ProfileStore,
+            legacyMigration: new LegacyBackendMigration(new LegacyMigrationMarkerFile()));
     }
 
     public IGamepadProvider Provider { get; }

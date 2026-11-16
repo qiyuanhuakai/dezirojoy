@@ -439,6 +439,55 @@ public sealed class MainWindowViewModelDaemonTests
     }
 
     [Fact]
+    public async Task A_Daemon_Sample_Press_Jumps_To_The_Pressed_Buttons_Configuration()
+    {
+        // The render process sees the pad only through the daemon's samples, so the jump has
+        // to work on that path exactly as it does on the host's own samples.
+        var pipeName = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1", "Xbox Wireless Controller");
+        var store = new InMemoryProfileStore();
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var acceptTask = DaemonHost.ServePipeAsync(server, serverCancellation.Token, pipeName);
+        await using var controller = new DaemonController(new PipeEndpoint(pipeName));
+
+        try
+        {
+            await controller.ConnectAsync(TestContext.Current.CancellationToken);
+            var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+            await using var viewModel = new MainWindowViewModel(presentation, store, daemon: controller, daemonRequired: true);
+            viewModel.SetGamepadNavigationEnabled(true);
+            await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+            await WaitForSuspension(daemonHost, true);
+
+            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
+            await WaitForCondition(() => viewModel.DaemonSnapshot is not null);
+
+            // A carries the default profile's mapping (A -> Escape): the jump opens it.
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.IsEditing);
+
+            Assert.Equal(new ButtonBinding(GamepadButton.A), viewModel.SelectedSource);
+            Assert.Equal(GamepadButton.A, viewModel.Editor.SelectedButton);
+
+            // The next press jumps again while the editor is already open.
+            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.X, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.X);
+
+            Assert.True(viewModel.IsEditing);
+        }
+        finally
+        {
+            await serverCancellation.CancelAsync();
+            await acceptTask;
+            serverCancellation.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task Interleaved_Daemon_Devices_Keep_Independent_Navigation_And_Capture_Edges()
     {
         var pipeName = $"DeziroJoy.Test.{Guid.NewGuid():N}";

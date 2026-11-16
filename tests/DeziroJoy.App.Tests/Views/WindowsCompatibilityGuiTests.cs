@@ -52,6 +52,82 @@ public sealed class WindowsCompatibilityGuiTests
     }
 
     [AvaloniaFact]
+    public void Windows_Settings_Register_And_Restore_The_GameBar_Popup_Handler()
+    {
+        var guard = new FakeGameBarPopupGuard();
+        var provider = new FakeGamepadProvider();
+        using var host = new EngineHost(provider, new RecordingOutputSink(), new InMemoryProfileStore());
+        var vm = new MainWindowViewModel(
+            host,
+            new InMemoryProfileStore(),
+            guideButtonSupported: false,
+            gameBarPopupGuard: guard);
+        var window = new MainWindow(vm, host);
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        vm.OpenSettingsCommand.Execute(null);
+        window.UpdateLayout();
+        var settings = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        var register = settings.FindControl<Button>("RegisterGameBarPopupHandlerButton")!;
+        var restore = settings.FindControl<Button>("RestoreGameBarPopupHandlerButton")!;
+        Assert.True(register.IsVisible);
+        Assert.False(restore.IsVisible);
+        Assert.Contains("未注册", settings.FindControl<TextBlock>("GameBarHandlerStatus")!.Text);
+
+        Click(register, window);
+
+        Assert.Equal(1, guard.RegisterCalls);
+        Assert.False(register.IsVisible);
+        Assert.True(restore.IsVisible);
+        Assert.Contains("已为本用户注册静默处理程序", settings.FindControl<TextBlock>("GameBarHandlerStatus")!.Text);
+
+        Click(restore, window);
+
+        Assert.Equal(1, guard.RestoreCalls);
+        Assert.True(register.IsVisible);
+        Assert.False(restore.IsVisible);
+        Assert.Contains("未注册", settings.FindControl<TextBlock>("GameBarHandlerStatus")!.Text);
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void Windows_Settings_Offer_Re_Registration_For_A_Stale_GameBar_Handler()
+    {
+        var guard = new FakeGameBarPopupGuard(handlerOwned: true, handlerRegistered: false);
+        var provider = new FakeGamepadProvider();
+        using var host = new EngineHost(provider, new RecordingOutputSink(), new InMemoryProfileStore());
+        var vm = new MainWindowViewModel(
+            host,
+            new InMemoryProfileStore(),
+            guideButtonSupported: false,
+            gameBarPopupGuard: guard);
+        var window = new MainWindow(vm, host);
+        window.Show();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        vm.OpenSettingsCommand.Execute(null);
+        window.UpdateLayout();
+        var settings = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        var register = settings.FindControl<Button>("RegisterGameBarPopupHandlerButton")!;
+        var restore = settings.FindControl<Button>("RestoreGameBarPopupHandlerButton")!;
+
+        Assert.True(register.IsVisible);
+        Assert.True(restore.IsVisible);
+        Assert.Equal("重新注册静默处理程序", register.Content);
+        Assert.Contains("重新注册", settings.FindControl<TextBlock>("GameBarHandlerStatus")!.Text);
+
+        Click(register, window);
+
+        Assert.Equal(1, guard.RegisterCalls);
+        Assert.False(register.IsVisible);
+        Assert.True(restore.IsVisible);
+        window.Close();
+    }
+
+    [AvaloniaFact]
     public void Selecting_Guide_On_Windows_Shows_The_Contextual_Warning()
     {
         var provider = new FakeGamepadProvider();
@@ -125,18 +201,57 @@ public sealed class WindowsCompatibilityGuiTests
 
     private sealed class FakeGameBarPopupGuard : IGameBarPopupGuard
     {
+        private bool _isControllerLaunchDisabled;
+        private bool _ownsProtocolHandler;
+        private bool _isProtocolHandlerRegistered;
+        private bool _isProtocolHandlerTakenOver;
+
+        public FakeGameBarPopupGuard(
+            bool handlerOwned = false,
+            bool handlerRegistered = false,
+            bool handlerTakenOver = false)
+        {
+            _ownsProtocolHandler = handlerOwned;
+            _isProtocolHandlerRegistered = handlerRegistered;
+            _isProtocolHandlerTakenOver = handlerTakenOver;
+        }
+
         public bool IsSupported => true;
 
-        public bool IsControllerLaunchDisabled { get; private set; }
+        public bool IsControllerLaunchDisabled => _isControllerLaunchDisabled;
+
+        public bool OwnsProtocolHandler => _ownsProtocolHandler;
+
+        public bool IsProtocolHandlerRegistered => _isProtocolHandlerRegistered;
+
+        public bool IsProtocolHandlerTakenOver => _isProtocolHandlerTakenOver;
 
         public int DisableCalls { get; private set; }
+
+        public int RegisterCalls { get; private set; }
+
+        public int RestoreCalls { get; private set; }
 
         public int OpenSettingsCalls { get; private set; }
 
         public void DisableControllerLaunch()
         {
             DisableCalls++;
-            IsControllerLaunchDisabled = true;
+            _isControllerLaunchDisabled = true;
+        }
+
+        public void RegisterProtocolHandler()
+        {
+            RegisterCalls++;
+            _ownsProtocolHandler = true;
+            _isProtocolHandlerRegistered = true;
+        }
+
+        public void RestoreProtocolHandler()
+        {
+            RestoreCalls++;
+            _ownsProtocolHandler = false;
+            _isProtocolHandlerRegistered = false;
         }
 
         public void OpenSystemSettings() => OpenSettingsCalls++;

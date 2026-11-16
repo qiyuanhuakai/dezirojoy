@@ -374,6 +374,14 @@ public static class DaemonHost
             lines.Add($"[DeziroJoy] input backend error: {providerError}（未切换回其他后端，当前不读取手柄输入）");
         }
 
+        foreach (var migration in composition.Host.LegacyMigrations)
+        {
+            foreach (var note in migration.Notes)
+            {
+                lines.Add($"[DeziroJoy] legacy config migration: {note}");
+            }
+        }
+
         if (deviceNote is not null)
         {
             lines.Add($"[DeziroJoy] {deviceNote}");

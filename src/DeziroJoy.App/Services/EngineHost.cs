@@ -82,6 +82,15 @@ public sealed class EngineHost : IDisposable
 
     private readonly Lock _sync = new();
     private readonly string _injectionMutexName;
+    private readonly LegacyBackendMigration _legacyMigration;
+
+    /// <summary>
+    /// What the legacy-configuration migration did per device since this host started, kept
+    /// so the daemon's startup summary can quote it and a test can assert on it. A device
+    /// that needed no migration never appears here.
+    /// </summary>
+    private readonly Dictionary<string, LegacyMigrationReport> _legacyMigrations = new(StringComparer.Ordinal);
+
     private Thread? _thread;
     private volatile bool _running;
     private volatile bool _injectionSuspended;
@@ -127,6 +136,16 @@ public sealed class EngineHost : IDisposable
     }
 
     public EngineHost(IGamepadProvider provider, IOutputSink sink, IProfileStore profileStore, string? injectionMutexName)
+        : this(provider, sink, profileStore, injectionMutexName, legacyMigration: null)
+    {
+    }
+
+    public EngineHost(
+        IGamepadProvider provider,
+        IOutputSink sink,
+        IProfileStore profileStore,
+        string? injectionMutexName = null,
+        LegacyBackendMigration? legacyMigration = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(sink);
@@ -137,6 +156,24 @@ public sealed class EngineHost : IDisposable
         _profileStore = profileStore;
         _presets = new PresetStore(profileStore);
         _injectionMutexName = injectionMutexName ?? DefaultInjectionMutexNameResolver();
+        _legacyMigration = legacyMigration ?? new LegacyBackendMigration();
+    }
+
+    /// <summary>
+    /// Every legacy-configuration migration this host performed or declined, in the order
+    /// the devices were first seen. The daemon prints these in its startup summary: a
+    /// configuration that moved across from XInput or evdev is worth one line, and a
+    /// pairing that was too ambiguous to attempt needs its reason where a human reads it.
+    /// </summary>
+    public IReadOnlyList<LegacyMigrationReport> LegacyMigrations
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _legacyMigrations.Values.ToList();
+            }
+        }
     }
 
     public bool IsMappingEnabled { get; private set; } = true;
@@ -277,7 +314,7 @@ public sealed class EngineHost : IDisposable
             {
                 present.Add(descriptor.DeviceId);
 
-                var runtime = EnsureRuntime(descriptor);
+                var runtime = EnsureRuntime(descriptor, connected);
 
                 RuntimePerformance.BeginInputSample();
                 var state = _provider.Poll(descriptor.DeviceId);
@@ -362,7 +399,7 @@ public sealed class EngineHost : IDisposable
             foreach (var descriptor in connected)
             {
                 present.Add(descriptor.DeviceId);
-                EnsureRuntime(descriptor);
+                EnsureRuntime(descriptor, connected);
             }
 
             ReconcileAbsence(present, graceTicks: 0);
@@ -493,7 +530,7 @@ public sealed class EngineHost : IDisposable
             {
                 present.Add(descriptor.DeviceId);
 
-                var runtime = EnsureRuntime(descriptor);
+                var runtime = EnsureRuntime(descriptor, connected);
 
                 var state = _provider.Poll(descriptor.DeviceId);
                 if (state is null)
@@ -975,13 +1012,22 @@ public sealed class EngineHost : IDisposable
         _lastAnalogSamples[deviceId] = _sampleClock;
     }
 
-    private ControllerRuntime EnsureRuntime(GamepadDescriptor descriptor)
+    private ControllerRuntime EnsureRuntime(GamepadDescriptor descriptor, IReadOnlyList<GamepadDescriptor> connected)
     {
         lock (_sync)
         {
             if (_runtimes.TryGetValue(descriptor.DeviceId, out var existing))
             {
                 return existing;
+            }
+
+            // The legacy migration runs first: an SDL device that replaced an XInput or evdev
+            // one must adopt the old configuration before EnsureDefaults materializes the
+            // library defaults for it, or the user's own presets stay orphaned under the old
+            // key while the new device runs the defaults.
+            if (_legacyMigration.Migrate(_profileStore, descriptor, connected) is { } migration)
+            {
+                _legacyMigrations[descriptor.DeviceId] = migration;
             }
 
             // EnsureDefaults tags the profile with the slot it actually loaded (the active slot,

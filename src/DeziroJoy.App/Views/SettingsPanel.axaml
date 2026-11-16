@@ -79,16 +79,35 @@
                             <TextBlock Classes="cardTitle" Text="Windows 手柄兼容性" />
                             <TextBlock x:Name="GameBarPopupHint" Classes="hint" Margin="0,8,0,0"
                                        TextWrapping="Wrap" Text="{Binding GameBarPopupHint}" />
+
+                            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="控制器唤起 Game Bar（偏好）" />
+                            <TextBlock x:Name="GameBarPreferenceStatus" Classes="hint" Margin="0,4,0,0"
+                                       TextWrapping="Wrap" Text="{Binding GameBarPreferenceStatus}" />
+                            <Button x:Name="DisableGameBarControllerLaunchButton" Classes="ghost"
+                                    Content="关闭手柄唤起 Game Bar" MinHeight="30" FontSize="11"
+                                    Margin="0,8,0,0"
+                                    IsVisible="{Binding CanDisableGameBarControllerLaunch}"
+                                    Command="{Binding DisableGameBarControllerLaunchCommand}" />
+
+                            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="ms-gamebar 静默处理程序（仅当前用户，可恢复）" />
+                            <TextBlock x:Name="GameBarHandlerStatus" Classes="hint" Margin="0,4,0,0"
+                                       TextWrapping="Wrap" Text="{Binding GameBarHandlerStatus}" />
                             <WrapPanel Margin="0,8,0,0">
-                                <Button x:Name="DisableGameBarControllerLaunchButton" Classes="ghost"
-                                        Content="关闭手柄唤起 Game Bar" MinHeight="30" FontSize="11"
+                                <Button x:Name="RegisterGameBarPopupHandlerButton" Classes="ghost"
+                                        Content="{Binding RegisterGameBarPopupHandlerText}"
+                                        MinHeight="30" FontSize="11" Margin="0,0,8,8"
+                                        IsVisible="{Binding CanRegisterGameBarPopupHandler}"
+                                        Command="{Binding RegisterGameBarPopupHandlerCommand}" />
+                                <Button x:Name="RestoreGameBarPopupHandlerButton" Classes="ghost"
+                                        Content="恢复系统默认" MinHeight="30" FontSize="11"
                                         Margin="0,0,8,8"
-                                        IsVisible="{Binding CanDisableGameBarControllerLaunch}"
-                                        Command="{Binding DisableGameBarControllerLaunchCommand}" />
+                                        IsVisible="{Binding CanRestoreGameBarPopupHandler}"
+                                        Command="{Binding RestoreGameBarPopupHandlerCommand}" />
                                 <Button x:Name="OpenGameBarSettingsButton" Classes="ghost"
                                         Content="打开系统游戏设置" MinHeight="30" FontSize="11"
                                         Margin="0,0,0,8" Command="{Binding OpenGameBarSettingsCommand}" />
                             </WrapPanel>
+
                             <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
                                        Foreground="{DynamicResource DangerBrush}"
                                        IsVisible="{Binding HasGameBarPopupError}" Text="{Binding GameBarPopupError}" />

@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DeziroJoy.App.ViewModels;
 
@@ -17,7 +18,10 @@ namespace DeziroJoy.App.Views;
 /// hint overlay is: it must float above the target application - which means it must never take
 /// that application's keyboard focus (<see cref="Window.ShowActivated"/> is false and the window
 /// is not focusable) - and it must outlive the editor card, which is where the old embedded
-/// keyboard lived and why a search box, a rename or a URL was awkward to fill in. Unlike the
+/// keyboard lived and why a search box, a rename or a URL was awkward to fill in. Floating above
+/// is asked for twice over: <see cref="Window.Topmost"/> is the toolkit's flag, and on X11 the
+/// window manager is asked again through EWMH once the window exists, because the flag is
+/// applied before the window is mapped and no manager honours it there. Unlike the
 /// layer hint it is not click-through: a mouse user can press a cap, and a window that cannot
 /// be focused does not move keyboard focus away from the application underneath.
 /// </para>
@@ -43,6 +47,13 @@ public partial class ScreenKeyboardWindow : Window
     private readonly ScreenKeyboardViewModel _keyboard;
 
     /// <summary>
+    /// Keeps the keyboard above the target application: the production seam resolves the
+    /// window's X11 id and asks the window manager for _NET_WM_STATE_ABOVE. Injected rather
+    /// than called directly so the lifecycle is testable without a display.
+    /// </summary>
+    private readonly IOverlayTopmostState _topmostState;
+
+    /// <summary>
     /// The key grid, resolved by name the way every other window in this project resolves its
     /// controls: a window's XAML is loaded at runtime, so the named control is looked up
     /// rather than held in a compiled field. Cached, because the cursor moves per press.
@@ -65,11 +76,22 @@ public partial class ScreenKeyboardWindow : Window
     }
 
     public ScreenKeyboardWindow(ScreenKeyboardViewModel keyboard)
+        : this(keyboard, null)
+    {
+    }
+
+    /// <summary>
+    /// The constructor the presentation host and the tests share, with the above-state seam
+    /// injectable: production passes null and gets the X11 one, the tests pass a recorder and
+    /// pin the lifecycle without a display.
+    /// </summary>
+    internal ScreenKeyboardWindow(ScreenKeyboardViewModel keyboard, IOverlayTopmostState? topmostState)
     {
         AvaloniaXamlLoader.Load(this);
 
         DataContext = keyboard;
         _keyboard = keyboard;
+        _topmostState = topmostState ?? X11OverlayTopmost.Shared;
         keyboard.PropertyChanged += OnKeyboardPropertyChanged;
 
         // The cursor and the page live on the keyboard itself, not on the view model, so it is
@@ -85,6 +107,13 @@ public partial class ScreenKeyboardWindow : Window
         // Every appearance re-reads the screen, so the keyboard lands where the user is
         // looking rather than where it last was.
         TryPosition();
+
+        // The window exists now, so the window manager can be asked to keep the keyboard above
+        // the target application - the topmost flag was applied before the window was mapped,
+        // where no manager honours it. Asked again on the pass that follows this one, because
+        // the manager may not have seen the map yet when this ask goes out.
+        ApplyTopmost();
+        Dispatcher.UIThread.Post(ApplyTopmost);
 
         // The window sizes itself to its content, so its footprint is not settled once and
         // for all: a wider page, a scaling change or a monitor going away all move the edges
@@ -145,7 +174,13 @@ public partial class ScreenKeyboardWindow : Window
         {
             if (!IsVisible)
             {
+                // Showing raises Opened, which asks for the above-state and posts the pass that
+                // follows the window manager's map; the direct ask here covers a platform whose
+                // Show does not raise Opened, and the ask is idempotent either way. Every
+                // appearance asks again: a hide-and-show cycle is a fresh mapping, and a window
+                // manager starts a newly mapped window at the bottom of the stack.
                 Show();
+                ApplyTopmost();
             }
 
             // Every appearance re-reads the screen, so the keyboard lands where the user is
@@ -157,6 +192,13 @@ public partial class ScreenKeyboardWindow : Window
             Hide();
         }
     }
+
+    /// <summary>
+    /// Asks the window manager to keep the keyboard above the target application. Asks for
+    /// stacking only: no focus, no input region, no other window named - the keyboard still
+    /// never takes the target application's keyboard focus away from it.
+    /// </summary>
+    private void ApplyTopmost() => _ = _topmostState.Apply(this);
 
     /// <summary>
     /// Parks the keyboard along the bottom of the screen it is on, clear of the taskbar. It is
