@@ -56,7 +56,7 @@ S2 初始统一 provider。默认后端没有改变（S3 未开始）；SDL3 pro
 读取语义直接面向正式复用；探针同时对照旧后端（XInput／evdev）枚举结果，为迁移期重复
 设备识别建立证据。SDL3 运行时（托管绑定 + 每平台原生库）随四个 RID 的发布包分发，并由
 打包脚本与发布工作流断言其在包内。provider、探针与设置卡片的自动化测试随版本推进
-（alpha.2 为 Linux 2973 项 0 失败）。USB／蓝牙、同型号双设备、不同 SDL Gamepad 类型与
+（alpha.2 为 Linux 2976 项 0 失败）。USB／蓝牙、同型号双设备、不同 SDL Gamepad 类型与
 休眠恢复的真机矩阵**尚未验证**——SDL 类型或 API 存在不等于真机验证完成，未实测
 设备明确标为未实测。探针用法与诊断输出见 [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
 
