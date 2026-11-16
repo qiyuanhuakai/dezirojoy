@@ -29,6 +29,14 @@ public sealed class MainWindowLifecycleTests : IDisposable
 
     private static readonly TimeSpan Tick = TimeSpan.FromSeconds(1.0 / 64.0);
 
+    /// <summary>
+    /// How long a failure notice may take to arrive after the close attempt that produces
+    /// it. The notice is a dispatcher continuation a few posts after the close's own
+    /// events, so this only absorbs scheduling delay on a loaded runner; a notice that
+    /// never arrives still fails, with the close's events and the window's state attached.
+    /// </summary>
+    private static readonly TimeSpan NoticeBudget = TimeSpan.FromSeconds(10);
+
     private readonly string _directory = Path.Combine(
         Path.GetTempPath(),
         "dezirojoy-window-lifecycle-tests",
@@ -282,19 +290,63 @@ public sealed class MainWindowLifecycleTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void A_Failed_Tray_Exit_Keeps_The_Window_Open_For_Retry()
+    public async Task A_Failed_Tray_Exit_Keeps_The_Window_Open_For_Retry()
     {
         var themes = new ThemeService(_directory);
         themes.SetCloseToTrayEnabled(false);
         var fixture = BuildRender(themes, exitTray: () => Task.FromResult(false));
+        var viewModel = (MainWindowViewModel)fixture.Window.DataContext!;
 
-        fixture.Window.Close();
-        Dispatcher.UIThread.RunJobs();
+        // The tray exit answers asynchronously and the failure notice is written from the
+        // continuation of that answer, so it can land a dispatcher pass after the close's
+        // own events - which is what left this asserting the default status on a loaded
+        // runner. The wait hangs off the property change itself and captures the notice as
+        // it is observed rather than re-reading the line afterwards: the status line is a
+        // live surface the periodic presence refresh keeps rewriting, so a later read can
+        // observe that refresh instead of the notice this failure reported. The initial
+        // state is checked first so a notice that fired before the subscription is not
+        // missed, and the budget only absorbs scheduling delay - a notice that never
+        // arrives still fails, with the close's events and the window's state attached.
+        var noticed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? notice = viewModel.StatusMessage.Contains("托盘") ? viewModel.StatusMessage : null;
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.StatusMessage)
+                && viewModel.StatusMessage.Contains("托盘"))
+            {
+                notice ??= viewModel.StatusMessage;
+                noticed.TrySetResult();
+            }
+        }
+
+        viewModel.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            fixture.Window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            if (notice is null)
+            {
+                await noticed.Task.WaitAsync(NoticeBudget, TestContext.Current.CancellationToken);
+            }
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"the failed tray exit never reported itself: events [{string.Join(", ", fixture.Events)}], " +
+                $"shutdowns {fixture.Shutdowns.Count}, window visible {fixture.Window.IsVisible}, " +
+                $"status \"{viewModel.StatusMessage}\"");
+        }
+        finally
+        {
+            viewModel.PropertyChanged -= OnPropertyChanged;
+        }
 
         Assert.True(fixture.Window.IsVisible);
         Assert.Empty(fixture.Shutdowns);
         Assert.Equal(["stop-daemon", "exit-tray"], fixture.Events);
-        Assert.Contains("托盘", ((MainWindowViewModel)fixture.Window.DataContext!).StatusMessage);
+        Assert.NotNull(notice);
+        Assert.Contains("托盘", notice);
     }
 
     [AvaloniaFact]
