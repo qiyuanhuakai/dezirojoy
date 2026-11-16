@@ -2,6 +2,7 @@ using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.Tests.Ipc;
 using DeziroJoy.App.ViewModels;
+using DeziroJoy.Core.Mapping;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.ViewModels;
@@ -85,21 +86,39 @@ public sealed class MainWindowViewModelProfileLoadTests
         await WaitForDaemonRevision(context, 2);
         await WaitForRevision(context, 2);
 
+        // ... and then the active profile itself. Snapshot adoption sets DaemonSnapshot
+        // before AdoptDaemonProfile runs, so the revision wait above can return at the
+        // instant between the two - with the baseline the next commit is checked against
+        // still naming the OLD revision. A commit issued from there is refused as stale by
+        // design ("配置已在后台更新…") and never reaches the daemon, which is what left
+        // the delete below sending no IPC at all: both sides sat at revision 2 with no
+        // request in flight. Adoption updates that baseline before it applies the profile,
+        // so the profile holding the toggled mapping IS the completion signal - the same
+        // state the user sees, and the only state from which the next edit is accepted.
+        await WaitForActiveProfile(
+            context,
+            profile => profile?.Mappings is [{ Enabled: false }],
+            "the toggled mapping disabled");
+
         var afterEdit = Assert.IsType<StateChangedMessage>(
             await context.Server.ProcessAsync(new GetStateMessage("probe")));
         Assert.Contains("hapticPattern", afterEdit.Snapshot.ProfileJson);
 
         // And the row still deletes: the mapping this build cannot read is removable like
         // any other, which is what an unreadable target used to make impossible. The delete
-        // is a second fire-and-forget round-trip and gets the same two-sided wait as the
-        // toggle: the daemon's publication of revision 3, the view model's adoption of it,
-        // and only then the table's final count. Waiting for the count alone accepted a
-        // transient empty - the delete's local apply refresh empties the table before the
-        // daemon's own snapshot has been adopted, and on a loaded runner that snapshot can
-        // land late and put the row back after the wait had already passed.
+        // is a second fire-and-forget round-trip and gets the same waits as the toggle: the
+        // daemon's publication of revision 3, the view model's adoption of it, the active
+        // profile actually emptied, and only then the table's final count. Waiting for the
+        // count alone accepted a transient empty - the delete's local apply refresh empties
+        // the table before the daemon's own snapshot has been adopted, and on a loaded runner
+        // that snapshot can land late and put the row back after the wait had already passed.
         row.DeleteCommand.Execute(null);
         await WaitForDaemonRevision(context, 3);
         await WaitForRevision(context, 3);
+        await WaitForActiveProfile(
+            context,
+            profile => profile is null || profile.Mappings.Count == 0,
+            "no mappings left after the delete");
         await WaitForMappings(context, 0);
 
         var afterDelete = Assert.IsType<StateChangedMessage>(
@@ -124,13 +143,19 @@ public sealed class MainWindowViewModelProfileLoadTests
         var row = Assert.Single(viewModel.Mappings);
         Assert.Contains("Enter", row.TargetText);
 
-        // The delete gets the same two-sided wait as the toggle above: the restored body
-        // was adopted at revision 4, so the delete lands as revision 5, and the table's
-        // final count only means "deleted" once the view model has adopted that revision -
-        // a count seen earlier can be the pre-delete table mid-refresh.
+        // The delete gets the same waits as the toggle above: the restored body was adopted
+        // at revision 4, so the delete lands as revision 5, the view model adopts that
+        // revision, and the active profile is actually emptied - the adoption applies the
+        // profile after it updates the baseline, so an empty profile is what proves the
+        // delete's round-trip reached the state the next commit would be checked against.
+        // The table count comes last: on its own it can be the pre-delete table mid-refresh.
         row.DeleteCommand.Execute(null);
         await WaitForDaemonRevision(context, 5);
         await WaitForRevision(context, 5);
+        await WaitForActiveProfile(
+            context,
+            profile => profile is null || profile.Mappings.Count == 0,
+            "no mappings left after the delete");
         await WaitForMappings(context, 0);
 
         var afterDelete = Assert.IsType<StateChangedMessage>(
@@ -301,10 +326,60 @@ public sealed class MainWindowViewModelProfileLoadTests
     }
 
     /// <summary>
+    /// Waits until the view model's active profile - the profile the table renders from and
+    /// the one the next commit is checked against - has reached the state the predicate names.
+    /// This is the completion barrier a snapshot adoption needs: <c>OnDaemonSnapshot</c> sets
+    /// <c>DaemonSnapshot</c> first and adopts the profile second, so a wait that ends on the
+    /// snapshot property can return at the instant between them, when the baseline revision
+    /// still names the previous state and a commit issued then is refused as stale by design
+    /// ("配置已在后台更新…") - the request is never sent and both sides sit at the old
+    /// revision. Adoption updates that baseline before it applies the profile, so the profile
+    /// reaching its end state is exactly when the view model is ready for the next edit, and
+    /// it is the state the user actually sees before editing again.
+    /// </summary>
+    private static async Task WaitForActiveProfile(
+        DaemonTestContext context,
+        Func<GamepadProfile?, bool> settled,
+        string description)
+    {
+        var viewModel = context.ViewModel;
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(MainWindowViewModel.ActiveProfile) && settled(viewModel.ActiveProfile))
+            {
+                reached.TrySetResult();
+            }
+        }
+
+        viewModel.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            // The initial check first: a profile that already reached the state - the change
+            // landed before the subscription - must not be waited for a second time.
+            if (!settled(viewModel.ActiveProfile))
+            {
+                await reached.Task.WaitAsync(WaitBudget, TestContext.Current.CancellationToken);
+            }
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"the active profile never reached {description}. {await DescribeAsync(context)}");
+        }
+        finally
+        {
+            viewModel.PropertyChanged -= OnPropertyChanged;
+        }
+    }
+
+    /// <summary>
     /// Everything a stalled wait needs to say why, gathered from both ends of the round-trip:
     /// the revision each side holds, whether the connection is still up and what it last
-    /// complained about, what the view model is showing the user, and whether the machine the
-    /// wait ran on had any threads left to run it on.
+    /// complained about, what the view model is showing the user - including the active
+    /// profile's mappings, whose enabled state is what proves an adoption finished rather
+    /// than stopping between the snapshot setter and the profile apply - and whether the
+    /// machine the wait ran on had any threads left to run it on.
     /// </summary>
     private static async Task<string> DescribeAsync(DaemonTestContext context)
     {
@@ -315,6 +390,7 @@ public sealed class MainWindowViewModelProfileLoadTests
             $"connection {controller.State} (controller revision {controller.Revision}, " +
             $"last error {controller.LastError ?? "none"}), " +
             $"transfer error {viewModel.IsTransferError} (\"{viewModel.TransferMessage}\"), " +
+            $"active profile {DescribeProfile(viewModel.ActiveProfile)}, " +
             $"mappings in view {viewModel.Mappings.Count}, " +
             $"thread pool threads {System.Threading.ThreadPool.ThreadCount} " +
             $"pending {System.Threading.ThreadPool.PendingWorkItemCount}";
@@ -336,6 +412,17 @@ public sealed class MainWindowViewModelProfileLoadTests
 
     private static string Describe(long? revision)
         => revision?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none";
+
+    /// <summary>
+    /// The active profile's mappings, each named by whether it is enabled: the disabled
+    /// mapping is the visible end state of the toggle, and the empty list is the end state
+    /// of the delete, so a stalled wait that prints this shows which of the two the view
+    /// model had actually reached.
+    /// </summary>
+    private static string DescribeProfile(GamepadProfile? profile)
+        => profile is null
+            ? "none"
+            : $"{profile.Mappings.Count} mapping(s) [{string.Join(", ", profile.Mappings.Select(mapping => mapping.Enabled ? "enabled" : "disabled"))}]";
 
     private sealed record DaemonTestContext(
         MainWindowViewModel ViewModel,
