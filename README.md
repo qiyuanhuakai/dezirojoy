@@ -95,11 +95,15 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
 可在设置页「后台服务」卡片的「输入后端」一节切换到「SDL3 统一后端（实验性）」，
 点击「保存并重启常驻服务」后生效（daemon 启动时读取，无热切换）；显式选择启动失败时
 不会静默回退。SDL3 识别的标准 Gamepad 输入归一化后复用同一套映射、预设、临时层与输出，
-设备身份为独立的 `sdl:` 前缀 ID。该后端**未经真机验收**。0.0.5-alpha.2 起带**保守
-旧配置迁移**：首次为 SDL3 设备运行时，把 XInput／evdev 名下用户自己的预设逐槽复制
-过去（旧文件只读不动、只覆盖空白或未改动的默认槽、新旧一对一且布局无反证时才迁移、
-多设备歧义整体跳过、持久记录防止重复复制或回填已删除的槽）。启用方式、设备身份、
-迁移规则、探针、诊断与升级回退见 [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
+设备身份为独立的 `sdl:` 前缀 ID。0.0.5-alpha.2 起带**保守旧配置迁移**：首次为 SDL3
+设备运行时，把 XInput／evdev 名下用户自己的预设逐槽复制过去（旧文件只读不动、只覆盖
+空白或未改动的默认槽、新旧一对一且布局无反证时才迁移、多设备歧义整体跳过、持久记录
+防止重复复制或回填已删除的槽）。只能作普通 Joystick 枚举、没有标准映射的设备，可用
+独立探针的 `map` 流程逐键取证生成映射（保存到配置根目录 `sdl-mappings.json`，重启
+常驻服务后生效）。SDL3 设备在配置界面使用数据驱动的通用控件面板（0.0.5-alpha.3 起，
+U1／U2：固定分区、按输入定位、显示策略；真实未知型号待复验）。该后端**未经完整真机
+验收**（用户已实测 Xbox／NS 全部按键可用，属有限证据）。启用方式、设备身份、迁移规则、
+映射补充、探针、诊断与升级回退见 [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
 
 Linux 实验性说明：
 
@@ -135,10 +139,10 @@ Linux 实验性说明：
 > **升级提示**：`0.0.2-beta.3` 及更早版本的应用内自动更新存在缺陷，从这些版本升级请
 > 到发布页**手动下载**安装 `0.0.2-beta.4` 或更新版本；自 beta.4 起自动更新恢复正常。
 
-> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.2`
-> 是 SDL3 统一输入后端的实验性 alpha——默认后端不变、未经真机验收；不想升级 alpha 的
+> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.3`
+> 是 SDL3 统一输入后端的实验性 alpha——默认后端不变、未经完整真机验收；不想升级 alpha 的
 > 用户请关闭设置页的自动检查／自动下载，或到发布页手动选择版本。发布说明见
-> [docs/RELEASE-0.0.5-alpha.2.md](docs/RELEASE-0.0.5-alpha.2.md)。
+> [docs/RELEASE-0.0.5-alpha.3.md](docs/RELEASE-0.0.5-alpha.3.md)。
 
 ### Windows
 
@@ -286,9 +290,10 @@ tests/
 
 - [ROADMAP.md](ROADMAP.md) — SDL3 统一输入后端、GameInput、原生 PS／NS 与完善屏幕键盘输入能力的阶段计划。
 - [DESIGN.md](DESIGN.md) — 界面设计系统、交互模型与常驻架构基准。
-- [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md) — SDL3 输入后端（实验性）：启用、旧配置迁移、探针、诊断与升级回退。
+- [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md) — SDL3 输入后端（实验性）：启用、旧配置迁移、映射补充、探针、诊断与升级回退。
 - [docs/RELEASE-0.0.5-alpha.1.md](docs/RELEASE-0.0.5-alpha.1.md) — 0.0.5-alpha.1 发布说明。
 - [docs/RELEASE-0.0.5-alpha.2.md](docs/RELEASE-0.0.5-alpha.2.md) — 0.0.5-alpha.2 发布说明。
+- [docs/RELEASE-0.0.5-alpha.3.md](docs/RELEASE-0.0.5-alpha.3.md) — 0.0.5-alpha.3 发布说明。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。

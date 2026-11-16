@@ -303,7 +303,8 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
         IUpdateService? service = null,
         InstallKind kind = InstallKind.Deb,
         IReadOnlyList<IUpdateInstaller>? installers = null,
-        HttpMessageHandler? handler = null)
+        HttpMessageHandler? handler = null,
+        Task<bool>? stopDaemon = null)
     {
         var (name, url) = AssetFor(kind);
         var payload = PatternedPayload();
@@ -320,15 +321,28 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
             service ?? new FakeUpdateService(UpdateCheckResult.Available(ReleaseWithPackage(name, url))),
             _downloader,
             installers ?? [new RecordingInstaller()],
-            detectInstall: () => new InstallKindInfo(kind, "linux-x64"),
-            stopDaemon: _ => Task.FromResult(true),
+            detectInstall: () => new InstallKindInfo(kind, RidFor(kind)),
+            stopDaemon: stopDaemon is null
+                ? _ => Task.FromResult(true)
+                : _ => stopDaemon,
             askTrayExit: (_, _) => Task.FromResult(true));
     }
 
     /// <summary>The package this install form downloads, named the way the release names it.</summary>
-    private static (string Name, string Url) AssetFor(InstallKind kind) => kind == InstallKind.AppImage
-        ? ("DeziroJoy-0.0.2-x86_64.AppImage", "https://example.invalid/DeziroJoy-0.0.2-x86_64.AppImage")
-        : (PackageName, PackageUrl);
+    private static (string Name, string Url) AssetFor(InstallKind kind) => kind switch
+    {
+        InstallKind.AppImage => (
+            "DeziroJoy-0.0.2-x86_64.AppImage",
+            "https://example.invalid/DeziroJoy-0.0.2-x86_64.AppImage"),
+        InstallKind.WindowsInstall => (
+            "DeziroJoy-0.0.2-win-x64-setup.exe",
+            "https://example.invalid/DeziroJoy-0.0.2-win-x64-setup.exe"),
+        _ => (PackageName, PackageUrl),
+    };
+
+    /// <summary>The RID this install form is detected with; the release assets are named for it.</summary>
+    private static string RidFor(InstallKind kind)
+        => kind == InstallKind.WindowsInstall ? "win-x64" : "linux-x64";
 
     /// <summary>
     /// A payload past the downloader's 80 KiB buffer, so the progress sink sees at least one
@@ -526,8 +540,144 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task The_AppImage_Restart_Starts_A_Detached_Chain_That_Waits_For_This_Process_To_Exit()
+    public async Task The_Windows_Install_Notice_Names_Every_Stage_Before_The_Click()
     {
+        var vm = Card(null, Orchestrator(kind: InstallKind.WindowsInstall));
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        Assert.True(vm.CanInstall);
+        Assert.True(vm.HasInstallNotice);
+
+        // Every stage has to be readable before the click: this process closes seconds after
+        // it, so a stage that was only described afterwards was never described at all.
+        Assert.Contains("守护进程", vm.InstallNotice);
+        Assert.Contains("托盘", vm.InstallNotice);
+        Assert.Contains("关闭本程序", vm.InstallNotice);
+        Assert.Contains("安装进度", vm.InstallNotice);
+        Assert.Contains("自动重启", vm.InstallNotice);
+        Assert.Contains("诊断日志", vm.InstallNotice);
+
+        // And the failure destination is the real one, not a promise: the watchdog opens the
+        // log it writes there.
+        Assert.Contains(WindowsUpdateWatchdog.ResolveLogDirectory(), vm.InstallNotice!);
+    }
+
+    [Fact]
+    public async Task The_Stop_Stages_Keep_Their_Own_Wording_While_The_Daemon_And_The_Tray_Are_Stopped()
+    {
+        // The install has not started yet: what the card says is what is happening now, which
+        // on Windows is the daemon going down - not the handoff line that comes after it.
+        var stop = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = Card(
+            null,
+            Orchestrator(kind: InstallKind.WindowsInstall, stopDaemon: stop.Task));
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        var install = vm.InstallUpdateCommand.ExecuteAsync(null);
+
+        Assert.True(vm.IsInstalling);
+        Assert.Contains("守护进程", vm.ResultText);
+        Assert.DoesNotContain("安装程序显示安装进度", vm.ResultText);
+        Assert.True(vm.HasInstallNotice, "the sequence stays readable through the stop stages");
+
+        stop.SetResult(true);
+        await install;
+    }
+
+    [Fact]
+    public async Task The_Windows_Installing_Line_Says_The_Setup_Shows_The_Progress_And_Restarts()
+    {
+        var installer = new RecordingInstaller(
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        var vm = Card(null, Orchestrator(kind: InstallKind.WindowsInstall, installers: [installer]));
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        var install = vm.InstallUpdateCommand.ExecuteAsync(null);
+
+        // The last line this GUI ever shows: the setup takes the progress over from here, and
+        // it is the one that restarts the app once it has finished.
+        Assert.True(vm.IsInstalling);
+        Assert.True(vm.IsProgressVisible, "the bar stays up while the install runs");
+        Assert.Contains("安装程序显示安装进度", vm.ResultText);
+        Assert.Contains("自动重启", vm.ResultText);
+        Assert.True(vm.HasInstallNotice, "the sequence stays on screen until the restart is under way");
+
+        installer.Release();
+        await install;
+    }
+
+    [Fact]
+    public async Task The_Progress_Bar_Is_Offered_Only_While_Work_Is_Running()
+    {
+        var vm = Card(null, Orchestrator(handler: new GatedHandler()));
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+
+        // Idle: a progress bar with nothing to report is noise.
+        Assert.False(vm.IsProgressVisible);
+
+        var download = vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        Assert.True(vm.IsDownloading);
+        Assert.True(vm.IsProgressVisible);
+        Assert.False(vm.IsInstalling, "the download's bar is the determinate one");
+
+        vm.CancelUpdateCommand.Execute(null);
+        await download;
+
+        Assert.False(vm.IsProgressVisible);
+    }
+
+    [Fact]
+    public async Task A_Package_Form_Gets_The_Generic_Install_Notice()
+    {
+        var vm = Card(null, Orchestrator());
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        Assert.True(vm.HasInstallNotice);
+        Assert.Contains("SHA256", vm.InstallNotice);
+
+        // The Windows sequence - stop the daemon, close, let the setup show its progress - is
+        // not what a Linux package update does.
+        Assert.DoesNotContain("安装进度", vm.InstallNotice);
+    }
+
+    [Fact]
+    public async Task The_Windows_Install_Hands_The_Work_To_The_Watchdog_And_Asks_The_Host_To_Exit()
+    {
+        var launcher = new RecordingLauncher();
+        var watchdog = new WindowsUpdateInstaller(
+            launcher,
+            () => SuccessorPid,
+            () => _directory,
+            () => Path.Combine(_directory, "logs"));
+        var vm = Card(
+            null,
+            Orchestrator(kind: InstallKind.WindowsInstall, installers: [watchdog]),
+            launcher: launcher);
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        var restarted = 0;
+        vm.RestartRequested += (_, _) => restarted++;
+        await vm.InstallUpdateCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, restarted);
+        Assert.Equal(UpdatePhase.Restarting, vm.Orchestrator.Phase);
+        Assert.True(vm.Orchestrator.RelaunchHandled);
+
+        // Exactly one process is started, and it is the watchdog rather than the setup: the
+        // host neither runs the installer itself nor starts a successor of its own, so nothing
+        // it holds stays locked through the install.
+        var start = Assert.Single(launcher.Calls);
+        Assert.Equal("powershell.exe", Path.GetFileName(start.FileName));
+    }
+
+    [Fact]
+    public async Task The_AppImage_Restart_Starts_A_Detached_Chain_That_Waits_For_This_Process_To_Exit()    {
         var image = Path.Combine(_directory, "DeziroJoy-0.0.2-x86_64.AppImage");
         File.WriteAllText(image, "NEW IMAGE");
         var launcher = new RecordingLauncher();
@@ -746,7 +896,8 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
     {
         public List<string> Calls { get; } = [];
 
-        public bool Supports(InstallKind kind) => kind is InstallKind.Deb or InstallKind.AppImage;
+        public bool Supports(InstallKind kind) =>
+            kind is InstallKind.Deb or InstallKind.AppImage or InstallKind.WindowsInstall;
 
         public void Release() => gate!.TrySetResult();
 

@@ -148,7 +148,7 @@ internal static class ProbeFormat
         Console.WriteLine($"{descriptor.Name} ({descriptor.DeviceId}): 按钮 {buttons}{extras} | 左摇杆 {left} 右摇杆 {right} | 扳机 左 {leftTrigger} 右 {rightTrigger}");
     }
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
         // Guidance and sensor names are Chinese; the relaxed encoder keeps them readable
@@ -176,6 +176,8 @@ internal static class ProbeFormat
         mappingSource = device.MappingSource,
         faceButtonLabels = device.FaceButtonLabels.ToArray(),
         declaredButtonCount = device.DeclaredButtonCount,
+        declaredButtons = device.DeclaredButtons.ToArray(),
+        declaredAxes = device.DeclaredAxes.ToArray(),
         touchpads = device.TouchpadFingerCounts.Select(fingers => new { fingers }).ToArray(),
         sensors = device.Sensors.ToArray(),
     };
@@ -197,6 +199,7 @@ internal static class ProbeFormat
         Console.WriteLine($"    映射        : {Or(device.Mapping, "无")}");
         Console.WriteLine($"    面键标签    : {string.Join(" ", device.FaceButtonLabels)}");
         Console.WriteLine($"    声明按钮数  : {device.DeclaredButtonCount}");
+        Console.WriteLine($"    声明控件    : 按钮 [{string.Join(" ", device.DeclaredButtons)}]，轴 [{string.Join(" ", device.DeclaredAxes)}]");
         Console.WriteLine($"    触摸板      : {DescribeTouchpads(device)}");
         Console.WriteLine($"    传感器      : {DescribeSensors(device)}");
         Console.WriteLine();

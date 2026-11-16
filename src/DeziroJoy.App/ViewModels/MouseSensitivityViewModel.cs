@@ -539,6 +539,20 @@ public partial class MouseSensitivityViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Reports the precision key the profile actually carries, as the panel's two labels.
+    /// The mouse mapping's own precision fields are migration-only: once the profile carries
+    /// a precision special key the engine reads that key and ignores the fields, and
+    /// migration leaves the fields at their defaults - so a panel that read only the fields
+    /// showed the default while the engine ran the special key. This is still a label, not a
+    /// selection: the key is changed on the mapping surface.
+    /// </summary>
+    public void ShowPrecisionKey(GamepadButton button, PrecisionMode mode)
+    {
+        PrecisionButton = button;
+        PrecisionMode = mode;
+    }
+
+    /// <summary>
     /// Whether live stick input is available for the preview to reflect. The scripted sweep
     /// and the real samples are both stand-ins gated on this: while it is false the panel
     /// decays to rest instead of previewing until the window closes.

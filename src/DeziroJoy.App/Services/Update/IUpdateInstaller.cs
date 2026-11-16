@@ -23,11 +23,11 @@ public sealed record UpdateInstallResult
     public required bool Succeeded { get; init; }
 
     /// <summary>
-    /// Whether this installer arranged the relaunch itself. Windows does it from the setup
-    /// program's conditional [Run] entry (Restart Manager closes the updating process mid
-    /// install), the Linux packages from a detached chain that survives this process, and an
-    /// AppImage by starting the renamed file - so the orchestrator never starts a successor
-    /// on its own and never races one.
+    /// Whether this installer arranged the relaunch itself. Windows does it from the external
+    /// watchdog that runs its setup (Restart Manager closes the updating process mid install),
+    /// the Linux packages from a detached chain that survives this process, and an AppImage by
+    /// starting the renamed file - so the orchestrator never starts a successor on its own and
+    /// never races one.
     /// </summary>
     public bool RelaunchHandled { get; init; }
 

@@ -339,6 +339,18 @@ public sealed class DaemonController : IAsyncDisposable
         => MutateAsync(requestId => new SetInjectionSuspendedMessage(requestId, suspended), cancellationToken);
 
     /// <summary>
+    /// Takes or releases this connection's input-capture lease on one device - the mapping
+    /// editor's "press the button you want to configure" flow. A null device id releases the
+    /// lease, which is what a cancel, a timeout and an editor close send. The daemon keeps
+    /// polling and publishing the device's samples while captured, so the UI still highlights
+    /// it; only its mapping dispatch stops. A refusal - another window already holds a lease -
+    /// is reported in the result rather than thrown, so the editor can say why the capture did
+    /// not start instead of failing silently.
+    /// </summary>
+    public Task<MutationResult> SetInputCaptureDeviceAsync(string? deviceId, CancellationToken cancellationToken)
+        => MutateAsync(requestId => new SetInputCaptureDeviceMessage(requestId, deviceId), cancellationToken);
+
+    /// <summary>
     /// Pauses or resumes keyboard and mouse mapping for native gamepad input - the pause a
     /// foreground rule asks for, distinct from the user's own pause and from this connection's
     /// hijack lease. A refused or unknown outcome is reported in the result rather than thrown,

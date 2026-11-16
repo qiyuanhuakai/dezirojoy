@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using DeziroJoy.App.Services;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
@@ -21,6 +22,9 @@ public static class DaemonErrorCodes
 
     /// <summary>No connected device, so the daemon has no output channel to inject through.</summary>
     public const string NoInjectionRuntime = "no-injection-runtime";
+
+    /// <summary>Another connection already holds the input-capture lease on a device.</summary>
+    public const string InputCaptureActive = "input-capture-active";
 }
 
 /// <summary>
@@ -71,6 +75,19 @@ public interface IDaemonHost
 
     void SetInjectionSuspended(bool suspended);
 
+    /// <summary>
+    /// Takes or releases this connection's input-capture lease on one device - the mapping
+    /// editor's way of saying "the user is binding a button on this pad, so stop running its
+    /// mappings while they press it". The host keeps polling and publishing the device's
+    /// samples; only its mapping dispatch stops. A null device id releases the lease, which is
+    /// what a cancel, a timeout and an editor close send.
+    /// <para>
+    /// Defaulted to a no-op so a host that predates the capture - or a fake in a test - still
+    /// compiles: the request is acked and simply suppresses nothing.
+    /// </para>
+    /// </summary>
+    void SetInputCaptureDevice(string? deviceId) { }
+
     /// <summary>Whether mapping is paused so the program in front reads the gamepad itself.</summary>
     bool IsNativeGamepadPaused { get; }
 
@@ -119,7 +136,25 @@ public interface IDaemonHost
     string? InputBackendError => null;
 }
 
-public sealed record ConnectedDeviceSnapshot(string DeviceId, string Name, GamepadLayout Layout);
+/// <summary>
+/// One connected device as the wire carries it: stable identity, display name and the logical
+/// layout the UI groups it by.
+/// </summary>
+/// <param name="Controls">
+/// Generic descriptions of the controls this device declares, in the fixed zone order, or null
+/// when its platform has written no description yet. The U1 generic panel builds itself from
+/// these, which is what lets an unknown model be configured without a per-model drawing. A
+/// description is a declaration, not an observation - it says what the device's mapping claims,
+/// never what has been pressed - and an absent description is "not described yet", never "no
+/// controls". Omitted from the JSON entirely when null, so a daemon on a platform that
+/// describes nothing writes exactly the bytes it always did.
+/// </param>
+public sealed record ConnectedDeviceSnapshot(
+    string DeviceId,
+    string Name,
+    GamepadLayout Layout,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<GamepadControlDescriptor>? Controls = null);
 
 /// <summary>Time source, injected so the daemon instance id is deterministic under test.</summary>
 public interface IClock

@@ -31,9 +31,11 @@ public sealed partial class DaemonServer
     private const string EmptyInjectionErrorCode = DaemonErrorCodes.EmptyInjection;
     private const string OversizedInjectionErrorCode = DaemonErrorCodes.OversizedInjection;
     private const string NoInjectionRuntimeErrorCode = DaemonErrorCodes.NoInjectionRuntime;
+    private const string InputCaptureActiveErrorCode = DaemonErrorCodes.InputCaptureActive;
     private readonly Lock _sync = new();
     private readonly Lock _inputGate = new();
     private readonly Dictionary<string, InputSampleMessage> _lastInputSamples = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _inputCaptureByConnection = new(StringComparer.Ordinal);
     private readonly DaemonState? _restored;
     private readonly HashSet<string> _injectionSuspensions = new(StringComparer.Ordinal);
 
@@ -250,6 +252,14 @@ public sealed partial class DaemonServer
         lock (_sync)
         {
             UpdateInjectionSuspension(connectionId, suspended: false);
+
+            // A window that vanishes while holding the input-capture lease releases it: the
+            // daemon must not keep a device's mapping silenced for a GUI that is no longer
+            // there, and the user cannot cancel an editor that is already gone.
+            if (_inputCaptureByConnection.Remove(connectionId))
+            {
+                _host.SetInputCaptureDevice(null);
+            }
         }
     }
 
@@ -277,6 +287,9 @@ public sealed partial class DaemonServer
 
             case SetInjectionSuspendedMessage setSuspended:
                 return HandleSetInjectionSuspended(setSuspended, connectionId);
+
+            case SetInputCaptureDeviceMessage captureDevice:
+                return HandleSetInputCaptureDevice(captureDevice, connectionId);
 
             case SetNativeGamepadPausedMessage nativePaused:
                 return HandleSetNativeGamepadPaused(nativePaused);
@@ -909,6 +922,60 @@ public sealed partial class DaemonServer
         lock (_sync)
         {
             UpdateInjectionSuspension(connectionId, request.Suspended);
+            return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+        }
+    }
+
+    /// <summary>
+    /// Takes or releases this connection's input-capture lease on one device - the mapping
+    /// editor's "press the button you want to configure" flow. The lease is per connection,
+    /// exactly like the hijack lease: it is this window's own editor state, so it is acked
+    /// without publishing and no other window's mapping is silenced by it.
+    /// <para>
+    /// One lease at a time. A request naming a device while another connection already holds
+    /// one is refused rather than silently displacing an editor that believes its device is
+    /// still isolated - suppressing a mapping too little is the dangerous direction, because
+    /// the button being configured would fire its action. A re-request of the same device from
+    /// the holding connection is acked as-is, and a null device id releases: a cancel, a
+    /// timeout and an editor close all send null, and none of them is an error.
+    /// </para>
+    /// </summary>
+    private MutationAckMessage HandleSetInputCaptureDevice(SetInputCaptureDeviceMessage request, string connectionId)
+    {
+        lock (_sync)
+        {
+            if (request.DeviceId is null)
+            {
+                // Releasing a lease this connection never took is still a success: cancel is
+                // idempotent, and the GUI sends null on every exit path.
+                if (_inputCaptureByConnection.Remove(connectionId))
+                {
+                    _host.SetInputCaptureDevice(null);
+                }
+
+                return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+            }
+
+            if (_inputCaptureByConnection.TryGetValue(connectionId, out var held))
+            {
+                if (string.Equals(held, request.DeviceId, StringComparison.Ordinal))
+                {
+                    return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
+                }
+            }
+            else if (_inputCaptureByConnection.Count > 0)
+            {
+                return new MutationAckMessage(
+                    request.RequestId,
+                    false,
+                    _revision,
+                    _sequence,
+                    InputCaptureActiveErrorCode,
+                    "另一个窗口正在捕获输入，请先取消它的绑定操作。");
+            }
+
+            _inputCaptureByConnection[connectionId] = request.DeviceId;
+            _host.SetInputCaptureDevice(request.DeviceId);
             return new MutationAckMessage(request.RequestId, true, _revision, _sequence);
         }
     }

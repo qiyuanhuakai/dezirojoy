@@ -10,8 +10,10 @@ namespace DeziroJoy.Tools.Sdl3Probe;
 /// sensor capabilities, and what the legacy XInput/evdev backends see alongside - then
 /// releases SDL again. <c>watch</c> keeps the provider open and prints hot-plug transitions
 /// plus the normalized state (buttons, dual sticks, triggers) the engine would consume.
+/// <c>joysticks</c> lists the devices SDL only knows as plain joysticks, and <c>map</c> walks
+/// one of them through the mapping-supplement flow and saves a standard SDL mapping.
 /// <para>
-/// Exit codes: 0 success, 1 SDL runtime unavailable, 2 usage error.
+/// Exit codes: 0 success, 1 SDL runtime unavailable (or a save SDL refused), 2 usage error.
 /// </para>
 /// </summary>
 internal static class Program
@@ -26,6 +28,8 @@ internal static class Program
         var json = false;
         var intervalMs = 100;
         double? durationSeconds = null;
+        string? guidFilter = null;
+        string? mappingFilePath = null;
 
         foreach (var arg in args)
         {
@@ -36,6 +40,12 @@ internal static class Program
                     break;
                 case "watch":
                     command = "watch";
+                    break;
+                case "joysticks":
+                    command = "joysticks";
+                    break;
+                case "map":
+                    command = "map";
                     break;
                 case "--json":
                     json = true;
@@ -60,24 +70,44 @@ internal static class Program
                         break;
                     }
 
+                    if (arg.StartsWith("--guid=", StringComparison.Ordinal)
+                        && arg["--guid=".Length..].Trim().Length > 0)
+                    {
+                        guidFilter = arg["--guid=".Length..].Trim();
+                        break;
+                    }
+
+                    if (arg.StartsWith("--file=", StringComparison.Ordinal)
+                        && arg["--file=".Length..].Trim().Length > 0)
+                    {
+                        mappingFilePath = arg["--file=".Length..].Trim();
+                        break;
+                    }
+
                     Console.Error.WriteLine($"未知参数: {arg}");
                     PrintUsage();
                     return ExitUsage;
             }
         }
 
-        return command == "watch"
-            ? RunWatch(json, intervalMs, durationSeconds)
-            : RunList(json);
+        return command switch
+        {
+            "watch" => RunWatch(json, intervalMs, durationSeconds),
+            "joysticks" => RunJoysticks(json),
+            "map" => JoystickMappingFlow.Run(guidFilter, mappingFilePath, json),
+            _ => RunList(json),
+        };
     }
 
     /// <summary>
     /// One-shot scan through the provider's own probe path, so what the CLI prints is exactly
-    /// what the daemon's scan would report for the same devices.
+    /// what the daemon's scan would report for the same devices. The persisted mapping file is
+    /// loaded the same way the daemon loads it, so a device the <c>map</c> flow mapped shows up
+    /// here as a standard gamepad instead of silently disappearing from both surfaces.
     /// </summary>
     private static int RunList(bool json)
     {
-        var diagnostic = Sdl3GamepadProvider.ProbeOnce();
+        var diagnostic = Sdl3GamepadProvider.ProbeOnce(new Sdl3MappingFileSource());
         var legacy = LegacyBackendCrossCheck.Collect();
 
         if (json)
@@ -90,6 +120,29 @@ internal static class Program
         }
 
         return diagnostic.Outcome == Sdl3ScanOutcome.SdlUnavailable ? ExitSdlUnavailable : ExitOk;
+    }
+
+    /// <summary>
+    /// Plain-joystick scan: the devices SDL only knows as joysticks, with the raw control counts
+    /// a mapping is written against. This is the non-interactive half of the mapping flow - what
+    /// a user (or a script) runs to see whether a mapping is still missing, without touching
+    /// stdin.
+    /// </summary>
+    private static int RunJoysticks(bool json)
+    {
+        var scan = Sdl3JoystickCatalog.Scan();
+
+        if (json)
+        {
+            JoystickFormat.PrintJson(scan);
+        }
+        else
+        {
+            JoystickFormat.PrintText(scan);
+            JoystickFormat.PrintMappings(Sdl3MappingFile.Load(Sdl3MappingFile.DefaultPath), Sdl3MappingFile.DefaultPath);
+        }
+
+        return scan.Initialized ? ExitOk : ExitSdlUnavailable;
     }
 
     private static int RunWatch(bool json, int intervalMs, double? durationSeconds)
@@ -259,12 +312,19 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("usage: Sdl3Probe [list|watch] [--json] [--interval=<ms>] [--duration=<s>]");
+        Console.WriteLine("usage: Sdl3Probe [list|watch|joysticks|map] [--json] [--interval=<ms>] [--duration=<s>]");
+        Console.WriteLine("                [--guid=<guid>] [--file=<path>]");
         Console.WriteLine();
-        Console.WriteLine("  list    一次性枚举并报告 SDL3 运行时、设备身份、映射与能力（默认）");
-        Console.WriteLine("  watch   持续监听热插拔并打印归一化输入状态");
-        Console.WriteLine("  --json  以 JSON 输出（list 为单个对象，watch 每轮一个对象）");
+        Console.WriteLine("  list       一次性枚举并报告 SDL3 运行时、设备身份、映射与能力（默认）");
+        Console.WriteLine("  watch      持续监听热插拔并打印归一化输入状态");
+        Console.WriteLine("  joysticks  只列出只能作普通 Joystick 枚举、无标准 Gamepad 映射的设备");
+        Console.WriteLine("  map        为这样的设备交互式逐键生成标准 SDL 映射并保存到配置根目录");
+        Console.WriteLine("  --json     以 JSON 输出（list/joysticks 为单个对象，watch 每轮一个对象）");
         Console.WriteLine("  --interval=<ms>   watch 刷新间隔，默认 100");
         Console.WriteLine("  --duration=<s>    watch 运行秒数，到时自动退出（脚本化验证用）");
+        Console.WriteLine("  --guid=<guid>     map：直接映射该 GUID 的设备，跳过设备选择");
+        Console.WriteLine("  --file=<path>     map：映射文件路径，默认为配置根目录的 sdl-mappings.json");
+        Console.WriteLine();
+        Console.WriteLine("map 需要交互式终端；标准输入被重定向时会打印待映射设备并退出，不会阻塞。");
     }
 }

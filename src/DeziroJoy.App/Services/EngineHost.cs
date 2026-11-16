@@ -49,6 +49,14 @@ public sealed class TickFailedEventArgs : EventArgs
 /// the floating screen keyboard sends - goes straight through, because suspending injection
 /// for an input lease must not also silence the keyboard that lease was taken for.
 /// </para>
+/// <para>
+/// A fourth, narrower gate: <see cref="SetInputCaptureDevice"/> silences one device's mapping
+/// while the mapping editor is binding a button on it. The three switches above pause every
+/// device; the capture pauses exactly one, keeps polling and publishing its samples so the UI
+/// can still highlight it, and releases the device's held outputs when it starts and when it
+/// ends - the latter without letting a button held throughout the capture fire a fake press
+/// edge on the first tick after.
+/// </para>
 /// </summary>
 public sealed class EngineHost : IDisposable
 {
@@ -97,6 +105,14 @@ public sealed class EngineHost : IDisposable
     private volatile bool _nativeGamepadPaused;
     private volatile int _injectionVerdict;
     private int _presenceVersion;
+
+    /// <summary>
+    /// The device the mapping editor is currently binding, or null when no capture is held.
+    /// Callers of <see cref="TickOnce"/> still poll it and still publish its samples; only its
+    /// mapping dispatch stops, so pressing the button being configured never fires the action
+    /// that button is bound to. Guarded by <c>_sync</c> like every other dispatch gate.
+    /// </summary>
+    private string? _capturedDeviceId;
 
     /// <summary>
     /// When the loop last reported a tick failure, read on the loop's own clock, or null
@@ -327,7 +343,8 @@ public sealed class EngineHost : IDisposable
 
                 _lastStates[descriptor.DeviceId] = state;
 
-                if (IsMappingEnabled && !_injectionSuspended && !_nativeGamepadPaused)
+                if (IsMappingEnabled && !_injectionSuspended && !_nativeGamepadPaused
+                    && !IsCaptured(descriptor.DeviceId))
                 {
                     if (MappingEngine.IsSamplingGap((float)delta.TotalSeconds))
                     {
@@ -478,6 +495,119 @@ public sealed class EngineHost : IDisposable
     /// never resume an injection the user or the editor asked to stop.
     /// </summary>
     public bool IsNativeGamepadPaused => _nativeGamepadPaused;
+
+    /// <summary>
+    /// The device the mapping editor is binding right now, or null when no capture is held.
+    /// While a device is captured its mappings stop dispatching - pressing the button being
+    /// configured must not fire the action that button is bound to - but it keeps being polled
+    /// and keeps raising <see cref="Sampled"/> and <see cref="PresenceSampled"/>, so the UI can
+    /// still highlight it and navigate by physical button. Every other device maps untouched,
+    /// and an explicitly requested output (<see cref="InjectText"/>, <see cref="TapKey"/>) still
+    /// goes through: the capture gates mapping dispatch only, exactly as the three pauses do.
+    /// </summary>
+    public string? CapturedDeviceId
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _capturedDeviceId;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes or releases the input-capture lease on one device - the daemon-side half of the
+    /// mapping editor's "press the button you want to configure" flow.
+    /// <para>
+    /// Taking the lease releases everything that device's mappings currently hold, so a key the
+    /// user was holding when the editor opened is lifted rather than staying stuck down for the
+    /// whole capture. Releasing it - the editor's cancel, its close, or the lease's owning
+    /// connection disconnecting - resets the engine and adopts the device's latest polled state
+    /// as the new edge baseline, so a button held throughout the capture does not fabricate a
+    /// fresh press edge on the first tick after: it fires again only on a real release and
+    /// re-press. A null device id, or a device id equal to the one already captured, changes
+    /// nothing beyond the release.
+    /// </para>
+    /// <para>
+    /// The other gates are deliberately untouched: the user's own pause, the hijack lease and
+    /// the foreground rule all keep their state, and the injection mutex is never involved -
+    /// this gates what one device's mapping asks for, nothing else. A device that is not
+    /// connected yet is remembered all the same: when it connects, its runtime is suppressed
+    /// from the first tick, which is the safe order for a capture taken before the pad appears.
+    /// </para>
+    /// </summary>
+    public void SetInputCaptureDevice(string? deviceId)
+    {
+        lock (_sync)
+        {
+            if (string.Equals(_capturedDeviceId, deviceId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (_capturedDeviceId is { } previous
+                && _runtimes.TryGetValue(previous, out var capturedRuntime))
+            {
+                ReleaseCaptureLocked(capturedRuntime);
+            }
+
+            _capturedDeviceId = deviceId;
+
+            if (deviceId is { } target
+                && _runtimes.TryGetValue(target, out var runtime))
+            {
+                // Whatever the device's mappings held is lifted now: the capture exists so the
+                // user can press the button they are binding without it executing, and a key
+                // left held down would defeat that on the very first tick.
+                runtime.Dispatcher.ReleaseAll();
+                runtime.Engine.Reset();
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when this device's mapping is silenced by the editor's capture lease. The tick's
+    /// dispatch gate, and the one place the lease is read on the hot path.
+    /// </summary>
+    private bool IsCaptured(string deviceId)
+        => _capturedDeviceId is not null
+            && string.Equals(_capturedDeviceId, deviceId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Lifts a device's capture lease: release whatever its mappings hold, clear the engine's
+    /// press edges, and adopt the device's latest polled state as the new baseline. The
+    /// baseline is what keeps the release honest - a button the user has held since before the
+    /// capture would otherwise read as a fresh press on the first tick after it and re-fire the
+    /// very action the capture was suppressing. Callers hold <c>_sync</c>.
+    /// </summary>
+    private void ReleaseCaptureLocked(ControllerRuntime runtime)
+    {
+        runtime.Dispatcher.ReleaseAll();
+        runtime.Engine.Reset();
+
+        if (_lastStates.TryGetValue(runtime.Descriptor.DeviceId, out var last))
+        {
+            runtime.Engine.AdoptBaseline(last);
+        }
+    }
+
+    /// <summary>
+    /// Drops whatever capture lease this host holds, releasing the captured device exactly as
+    /// <see cref="SetInputCaptureDevice"/>'s release path does. Callers hold <c>_sync</c>. Stop
+    /// funnels through here, so no shutdown path leaves a device captured - or a key stuck
+    /// down. A no-op when no lease is held, which is the common case for Stop.
+    /// </summary>
+    private void ClearCaptureLocked()
+    {
+        if (_capturedDeviceId is { } held
+            && _runtimes.TryGetValue(held, out var runtime))
+        {
+            ReleaseCaptureLocked(runtime);
+        }
+
+        _capturedDeviceId = null;
+    }
 
     /// <summary>
     /// Pauses or resumes injection for the program in front. Pausing releases everything
@@ -815,6 +945,14 @@ public sealed class EngineHost : IDisposable
     {
         if (!_running)
         {
+            // A capture taken while the loop was stopped - the editor binds buttons with the
+            // mapping off too - is still a lease this host holds, and Stop is the caller
+            // saying this host is finished with it.
+            lock (_sync)
+            {
+                ClearCaptureLocked();
+            }
+
             return;
         }
 
@@ -829,6 +967,8 @@ public sealed class EngineHost : IDisposable
                 runtime.Engine.Reset();
                 runtime.Dispatcher.ReleaseAll();
             }
+
+            ClearCaptureLocked();
         }
     }
 
@@ -1148,6 +1288,16 @@ public sealed class EngineHost : IDisposable
                 _publishedSamples.Remove(deviceId);
                 _lastAnalogSamples.Remove(deviceId);
                 _presenceVersion++;
+
+                // A captured device that vanishes takes its lease with it: the capture exists
+                // to silence a pad the user is binding, and a pad that is gone cannot be bound.
+                // The release above already lifted whatever it held, so only the lease itself
+                // is left to clear - and a pad that reconnects maps again from its first tick,
+                // which is the safe order for a capture that outlived its device.
+                if (string.Equals(_capturedDeviceId, deviceId, StringComparison.Ordinal))
+                {
+                    _capturedDeviceId = null;
+                }
             }
         }
     }

@@ -36,7 +36,11 @@ public static class InstallKindDetector
     /// install of that AppId, so the key exists exactly when this user installed DeziroJoy
     /// through the setup program.
     /// </summary>
-    private const string WindowsUninstallKeyPath =
+    /// <remarks>
+    /// Internal because the Windows update installer reads the same key: it takes the install
+    /// directory the setup recorded from it rather than guessing one from the running process.
+    /// </remarks>
+    internal const string WindowsUninstallKeyPath =
         @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{E565E61E-24C0-4A2C-9DFF-4B8D02DD7382}_is1";
 
     /// <summary>Detects the install form of this copy, reading the real system.</summary>

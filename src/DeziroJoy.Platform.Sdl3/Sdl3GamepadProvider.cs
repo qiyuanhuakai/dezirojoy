@@ -39,10 +39,14 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     private readonly Lock _sync = new();
     private readonly List<Device> _devices = [];
     private readonly ISdl3Api _api;
+    private readonly ISdl3MappingSource? _mappingSource;
     private readonly long _rescanIntervalTicks;
     private long _nextScanTimestamp;
     private string? _initError;
     private bool _initialized;
+    private bool _mappingsLoaded;
+    private int _mappingsApplied;
+    private string? _mappingLoadError;
     private bool _disposed;
 
     /// <summary>
@@ -53,18 +57,27 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     /// engine calls it every tick; 250 ms keeps hot-plug latency imperceptible while leaving
     /// SDL calls off the hot path. A shorter interval suits a diagnostic watch loop.
     /// </param>
-    public Sdl3GamepadProvider(TimeSpan? scanInterval = null)
-        : this(new Sdl3Api(), scanInterval)
+    /// <param name="mappingSource">
+    /// Persisted SDL mappings to hand to SDL before the first enumeration - the mapping file a
+    /// device with no standard layout was mapped into. Null means "no persistent mappings",
+    /// which is what a diagnostic scan of the built-in database wants; the daemon and the probe
+    /// pass the config-root file so a mapped device is visible to both.
+    /// </param>
+    public Sdl3GamepadProvider(TimeSpan? scanInterval = null, ISdl3MappingSource? mappingSource = null)
+        : this(new Sdl3Api(), scanInterval, mappingSource)
     {
     }
 
     /// <summary>
     /// Test seam: the same provider over an injected api, so enumeration, hot-plug, remap,
-    /// failure and cleanup paths run deterministically without SDL or a device.
+    /// failure and cleanup paths run deterministically without SDL or a device. The mapping
+    /// source is injected the same way, so "which mappings were handed to SDL, and in what
+    /// order relative to enumeration" is asserted without a file on disk.
     /// </summary>
-    internal Sdl3GamepadProvider(ISdl3Api api, TimeSpan? scanInterval = null)
+    internal Sdl3GamepadProvider(ISdl3Api api, TimeSpan? scanInterval = null, ISdl3MappingSource? mappingSource = null)
     {
         _api = api;
+        _mappingSource = mappingSource;
         var interval = scanInterval ?? DefaultRescanInterval;
         ScanInterval = interval;
         _rescanIntervalTicks = (long)(interval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
@@ -133,6 +146,7 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
                 .Select(device => new GamepadDescriptor(device.Identity.DeviceId, device.Info.Name)
                 {
                     ButtonCount = device.ButtonCount,
+                    Controls = device.Controls,
                 })
                 .ToList();
         }
@@ -211,22 +225,20 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     }
 
     /// <summary>
-    /// One-shot diagnostic scan: initializes SDL if needed, enumerates, reports, and releases
-    /// everything again - keeping no open handles. The GUI is a client of the daemon and owns
-    /// no devices itself, so this is how it explains an empty device table with the same
-    /// evidence the daemon's own scan produces; it is also what the CLI probe prints.
+    /// One-shot diagnostic scan over the real SDL runtime, with the persisted mapping file the
+    /// daemon uses, so what the CLI prints is exactly what the daemon's scan would report for the
+    /// same devices - including a device the <c>map</c> flow mapped into a standard gamepad.
     /// </summary>
-    public static Sdl3ScanDiagnostic ProbeOnce()
-    {
-        using var provider = new Sdl3GamepadProvider();
-        provider.GetConnected();
-        return provider.LastScanDiagnostic ?? UnscannedDiagnostic();
-    }
+    public static Sdl3ScanDiagnostic ProbeOnce(ISdl3MappingSource? mappingSource = null)
+        => ProbeOnce(new Sdl3Api(), mappingSource);
 
-    /// <summary>Test seam: the same one-shot scan over an injected api.</summary>
-    internal static Sdl3ScanDiagnostic ProbeOnce(ISdl3Api api)
+    /// <summary>
+    /// Test seam: the same one-shot scan over an injected api. The mapping source is injected
+    /// the same way, so a scan's mapping evidence is deterministic without a file on disk.
+    /// </summary>
+    internal static Sdl3ScanDiagnostic ProbeOnce(ISdl3Api api, ISdl3MappingSource? mappingSource = null)
     {
-        using var provider = new Sdl3GamepadProvider(api);
+        using var provider = new Sdl3GamepadProvider(api, null, mappingSource);
         provider.GetConnected();
         return provider.LastScanDiagnostic ?? UnscannedDiagnostic();
     }
@@ -272,6 +284,8 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
                 .Select(device => device.Info.InstanceId)
                 .ToList(),
             OpenFailures = openFailures,
+            AppliedMappingCount = _mappingsApplied,
+            MappingLoadError = _mappingLoadError,
         };
     }
 
@@ -301,7 +315,49 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
         }
 
         _initialized = _api.TryEnsureInitialized(out _initError);
+        if (_initialized)
+        {
+            // Persisted mappings go in before the first enumeration: SDL decides whether a
+            // joystick is a standard gamepad while building its gamepad list, so a mapping
+            // added afterwards would leave the device unrecognized until the next scan.
+            LoadPersistedMappings();
+        }
+
         return _initialized;
+    }
+
+    /// <summary>
+    /// Hands the persisted mappings to SDL once, the first time the subsystem comes up. A file
+    /// that cannot be read is remembered and reported - the scan then runs on SDL's built-in
+    /// database alone and says so - because a mapping the daemon silently dropped is
+    /// indistinguishable from a device that was never mapped.
+    /// </summary>
+    private void LoadPersistedMappings()
+    {
+        if (_mappingsLoaded || _mappingSource is null)
+        {
+            return;
+        }
+
+        _mappingsLoaded = true;
+
+        var snapshot = _mappingSource.Load();
+        // A file that read whole but carries mappings SDL will not honour is reported too: a
+        // device that is only partly mapped must be visible as such, not discovered one dead
+        // button at a time.
+        _mappingLoadError = snapshot.Problem
+            ?? (snapshot.Problems.Count > 0 ? string.Join("；", snapshot.Problems) : null);
+
+        var applied = 0;
+        foreach (var entry in snapshot.Mappings)
+        {
+            if (_api.TryAddGamepadMapping(entry.Mapping, out _))
+            {
+                applied++;
+            }
+        }
+
+        _mappingsApplied = applied;
     }
 
     /// <summary>
@@ -335,7 +391,10 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
                 case Sdl3GamepadEventType.Remapped:
                     if (device is not null)
                     {
+                        // A remap changes what the mapping declares, so the description is
+                        // rebuilt from the new evidence rather than kept from the old mapping.
                         device.Info = _api.ReadInfo(device.Handle);
+                        device.Controls = Sdl3ControlSet.Build(device.Info);
                         device.Tracker.Reset();
                     }
 
@@ -383,6 +442,7 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
                 Identity = Sdl3GamepadIdentity.Compose(info),
                 Tracker = new Sdl3GamepadStateTracker(),
                 ButtonCount = info.DeclaredButtonCount,
+                Controls = Sdl3ControlSet.Build(info),
             });
         }
 
@@ -420,5 +480,13 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
         public required Sdl3GamepadStateTracker Tracker { get; init; }
 
         public required int ButtonCount { get; init; }
+
+        /// <summary>
+        /// The device's described controls, built once when it opens and rebuilt on a remap.
+        /// Built here rather than per <see cref="GetConnected"/> because it is a function of the
+        /// declaration, which does not change between scans - and the engine calls
+        /// GetConnected every tick.
+        /// </summary>
+        public required IReadOnlyList<GamepadControlDescriptor> Controls { get; set; }
     }
 }

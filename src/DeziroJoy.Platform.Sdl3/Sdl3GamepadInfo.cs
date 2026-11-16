@@ -89,4 +89,24 @@ public sealed record Sdl3GamepadInfo
     /// the UI policy (U2), not to this count.
     /// </summary>
     public required int DeclaredButtonCount { get; init; }
+
+    /// <summary>
+    /// The standard SDL buttons this device's mapping declares, by SDL's own mapping key
+    /// ("a", "dpup", "paddle1", ...) - the same vocabulary a mapping string uses, so a declared
+    /// control and a mapped one are the same thing spelled the same way.
+    /// <para>
+    /// This is the raw declaration the generic control description is built from: the
+    /// <c>HasButton</c> answer for every standard button. It is a claim about the mapping,
+    /// not proof that a physical control sits behind it.
+    /// </para>
+    /// </summary>
+    public required IReadOnlyList<string> DeclaredButtons { get; init; }
+
+    /// <summary>
+    /// The standard SDL axes this device's mapping declares, by SDL's own mapping key
+    /// ("leftx", "lefttrigger", ...). A declared stick axis pair is what makes a stick
+    /// describable as a two-axis control; a declared trigger axis is what makes it describable
+    /// as a single-axis one.
+    /// </summary>
+    public required IReadOnlyList<string> DeclaredAxes { get; init; }
 }

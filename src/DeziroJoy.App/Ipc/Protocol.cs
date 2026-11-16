@@ -58,6 +58,7 @@ public static class IpcErrorCodes
 [JsonDerivedType(typeof(StopMessage), "stop")]
 [JsonDerivedType(typeof(SetMappingEnabledMessage), "set-mapping-enabled")]
 [JsonDerivedType(typeof(SetInjectionSuspendedMessage), "set-injection-suspended")]
+[JsonDerivedType(typeof(SetInputCaptureDeviceMessage), "set-input-capture-device")]
 [JsonDerivedType(typeof(SetNativeGamepadPausedMessage), "set-native-gamepad-paused")]
 [JsonDerivedType(typeof(SetForegroundLockedMessage), "set-foreground-locked")]
 [JsonDerivedType(typeof(SwitchPresetSlotMessage), "switch-preset-slot")]
@@ -128,6 +129,27 @@ public sealed record SetMappingEnabledMessage(string RequestId, bool Enabled) : 
 
 /// <summary>GUI to daemon: suspend dispatch while this connection's explicit hijack lease owns input.</summary>
 public sealed record SetInjectionSuspendedMessage(string RequestId, bool Suspended) : IpcMessage;
+
+/// <summary>
+/// GUI to daemon: take or release this connection's input-capture lease on one device. The
+/// mapping editor's "press the button you want to configure" flow asks for the device it is
+/// binding: the daemon keeps polling and publishing that device's samples, but dispatches no
+/// mapping for it, so configuring a button can never fire the action that button is bound to.
+/// Every other device keeps mapping untouched.
+/// <para>
+/// Like <see cref="SetInjectionSuspendedMessage"/>, the lease is per connection by definition
+/// and is never published in a snapshot - it is this window's own editor state, and a second
+/// window configuring a different device must not be silenced by it. Only one connection can
+/// hold a lease at a time: a request naming a different device while another connection holds
+/// one is refused rather than silently displacing an editor that believes its device is still
+/// isolated. <see cref="DeviceId"/> null releases this connection's lease - what a cancel, a
+/// timeout and an editor close send - and a disconnect releases it exactly as
+/// <see cref="SetInjectionSuspendedMessage"/> does, so a vanished window can never leave a
+/// device captured forever. The screen keyboard's explicit output is deliberately untouched:
+/// the capture gates mapping dispatch only.
+/// </para>
+/// </summary>
+public sealed record SetInputCaptureDeviceMessage(string RequestId, string? DeviceId) : IpcMessage;
 
 /// <summary>
 /// GUI to daemon: pause or resume keyboard and mouse mapping so the program in front reads the

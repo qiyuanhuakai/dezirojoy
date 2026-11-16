@@ -207,6 +207,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Editor = new MappingEditorViewModel(_guideButtonSupported);
         MouseSensitivity = new MouseSensitivityViewModel();
         ScrollSensitivity = new ScrollSensitivityViewModel();
+        GenericPanel = new GenericGamepadPanelViewModel
+        {
+            OpenControlRequested = OpenGenericControl,
+            RequestStickModeChange = (item, mode) => SetStickDirectionMode(item.Stick!.Value, mode),
+        };
+        Editor.PropertyChanged += OnEditorPropertyChanged;
         Visualizer = new GamepadVisualizerViewModel();
         Appearance = new AppearanceViewModel();
         DaemonSettings = new DaemonSettingsViewModel(
@@ -356,7 +362,61 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public ScrollSensitivityViewModel ScrollSensitivity { get; }
 
+    /// <summary>
+    /// The data-driven gamepad panel: one card per control the connected device declares, in
+    /// the Core's five fixed zones. It is the default mapping surface for a device that
+    /// declares its controls; the hand-drawn model stays available as the alternative, and is
+    /// the surface for a device that declares nothing. The panel never owns the editor - a
+    /// card click opens the mapping settings for that control's source exactly as a click on
+    /// the model does - and the profile rewrites a stick's execution mode asks for run through
+    /// <see cref="SetStickDirectionMode"/>.
+    /// </summary>
+    public GenericGamepadPanelViewModel GenericPanel { get; }
+
     public GamepadVisualizerViewModel Visualizer { get; }
+
+    /// <summary>
+    /// Which mapping surface the stage shows: the data-driven generic panel, or the
+    /// hand-drawn model. A device that declares its controls starts on the panel; a device
+    /// that declares none has no panel to start on. Once the user picks, the choice stands
+    /// for the session - the model stays the alternative for every backend - and nothing
+    /// persists it, because it is a view of this session's device rather than a preference
+    /// about the app.
+    /// </summary>
+    public bool IsGenericPanelMode
+    {
+        get => _isGenericPanelMode;
+        private set
+        {
+            if (_isGenericPanelMode == value)
+            {
+                return;
+            }
+
+            _isGenericPanelMode = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SurfaceToggleLabel));
+        }
+    }
+
+    /// <summary>Whether the connected device gives the panel anything to show at all.</summary>
+    public bool CanUseGenericPanel => GenericPanel.HasItems;
+
+    /// <summary>What the surface switch says, and what pressing it will do.</summary>
+    public string SurfaceToggleLabel => IsGenericPanelMode ? "手柄模型" : "通用面板";
+
+    /// <summary>Switches the stage between the generic panel and the hand-drawn model.</summary>
+    [RelayCommand]
+    private void ToggleMappingSurface()
+    {
+        if (!CanUseGenericPanel)
+        {
+            return;
+        }
+
+        _surfaceChosenByUser = true;
+        IsGenericPanelMode = !IsGenericPanelMode;
+    }
 
     public AppearanceViewModel Appearance { get; }
 
@@ -407,6 +467,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private long _profileBaselineRevision = -1;
     private string? _profileDaemonInstanceId;
     private string? _profileBaselineDeviceId;
+
+    // Which mapping surface the stage shows, the editor's button-capture lifecycle, and
+    // the device the generic panel was last built for.
+    private bool _isGenericPanelMode;
+    private bool _surfaceChosenByUser;
+    private InputBinding? _genericCaptureTarget;
+    private DateTime _captureDeadline;
+    private string? _genericPanelDeviceId;
 
     [ObservableProperty]
     private ControllerRuntime? _activeController;
@@ -2088,6 +2156,18 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         var settings = MouseSensitivity.BuildSettings();
+
+        // The precision key belongs to the special-key mapping, not to the mouse mapping's
+        // legacy fields: the engine reads the special key and ignores the fields once one
+        // exists. They are still written - from the special key, never from the panel - so
+        // the body stays self-consistent if the key is ever removed, and applying
+        // sensitivity can never move the key the engine runs. The special-key mapping itself
+        // is not in the rewrite below and is left exactly as it is.
+        if (PrecisionKeyOf(ActiveProfile.Mappings) is { } precision)
+        {
+            settings = settings with { PrecisionButton = precision.Button, PrecisionMode = precision.Mode };
+        }
+
         var mappings = ActiveProfile.Mappings
             .Select(m => m is { Source: StickBinding { Stick: GamepadStick.Right }, Target: MouseMoveTarget }
                 ? m with { Target = new MouseMoveTarget(settings) }
@@ -2726,6 +2806,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Visualizer.Update(args.State);
         Visualizer.SetConnected(true);
+        UpdateGenericPanel(args.State, args.Runtime.Descriptor.DeviceId);
 
         // The sensitivity panels' real-input calibration reads the same samples the visualizer
         // does: latest sample wins between preview ticks, and a panel that is not calibrating
@@ -2751,6 +2832,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         Visualizer.Update(args.State);
         Visualizer.SetConnected(true);
+        UpdateGenericPanel(args.State, args.Runtime.Descriptor.DeviceId);
 
         // The presence poll is a sample like any other, so the calibration sees the pad while
         // the mapping loop is off exactly as it does while it runs.
@@ -2773,10 +2855,20 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         _daemonInputDeviceId = sample.DeviceId;
+
+        // The panel is one device's surface, so when the device in scope moves - the
+        // profile's device, or before any profile the pad being touched - the panel follows
+        // it there rather than showing one device's cards lit by another's presses.
+        if (_genericPanelDeviceId != ScopedDeviceId())
+        {
+            RefreshGenericControls();
+        }
+
         var state = sample.ToGamepadState();
         Navigate(state, sample.DeviceId);
         Visualizer.Update(state);
         Visualizer.SetConnected(true);
+        UpdateGenericPanel(state, sample.DeviceId);
 
         // The daemon's samples are the only input a render process sees, so the sensitivity
         // panels' real-input calibration is fed from here exactly as from the host's samples.
@@ -2879,6 +2971,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     /// </summary>
     private void Navigate(IGamepadState state, string? deviceId)
     {
+        // The capture budget is enforced before anything else reads the sample: a capture
+        // that outlived it must not also spend this press.
+        EnforceButtonCaptureBudget();
+
         if (ScreenKeyboard.IsOpen)
         {
             NavigateScreenKeyboard(state, deviceId);
@@ -2893,12 +2989,24 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        deviceId ??= ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
+
         if (!GamepadNavigationEnabled)
         {
+            // Off hands every press back to the active mapping - with one exception: an
+            // armed button capture. The user asked for that press to name a mapping's
+            // source, and the capture lease already keeps it out of the game, so the
+            // press completes the capture whoever armed it and navigates nowhere - the
+            // hijack stays off, so nothing jumps.
+            if (IsEditing && Editor.IsCapturingButton && !Editor.IsCapturingKey)
+            {
+                CaptureGamepadSample(state, deviceId);
+                RememberNavigation(state, deviceId);
+            }
+
             return;
         }
 
-        deviceId ??= ActiveController?.Descriptor.DeviceId ?? _daemonInputDeviceId;
         if (IsEditing)
         {
             // Keyboard capture owns the input while it is armed. A gamepad button is not a
@@ -2917,6 +3025,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 RememberNavigation(state, deviceId);
                 return;
             }
+
+            // And a press the capture declined is spent here too: the scoped device's every
+            // edge is taken above, so what is left is a second pad's press - which must not
+            // navigate the editor away from the binding the user just started, exactly as a
+            // keyboard capture's presses are swallowed.
+            if (Editor.IsCapturingButton)
+            {
+                RememberNavigation(state, deviceId);
+                return;
+            }
         }
 
         NavigateByPhysicalInput(state, deviceId);
@@ -2927,6 +3045,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         if (!Editor.IsCapturingButton || deviceId is null)
         {
             return Editor.CaptureGamepadSample(state);
+        }
+
+        // The capture answers the device being bound and no other. A press on a second pad
+        // must not spend it - that pad was never isolated, so its press still belongs to its
+        // own mapping - and it falls through to navigation like any other press would.
+        if (deviceId != ScopedDeviceId())
+        {
+            return false;
         }
 
         var previous = _navigationBaselines.GetValueOrDefault(deviceId, GamepadState.Neutral);
@@ -3285,6 +3411,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
                 RefreshSpecialKeys([]);
                 MouseSensitivity.Reset();
                 ScrollSensitivity.Reset();
+
+                // The pad the capture waited for is gone, so the capture ends here rather
+                // than on its budget - and with no device there are no declared controls,
+                // so the panel empties and the model takes the stage back.
+                EndButtonCapture("设备已断开，按键捕获已取消。");
+                GenericPanel.Clear();
+                RefreshGenericControls();
+                IsGenericPanelMode = false;
             }
 
             HasController = false;
@@ -3444,6 +3578,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         MigrateLegacyLeader(runtime.Descriptor.DeviceId);
         ReconcilePresetSlots(runtime.Descriptor.DeviceId);
         MarkActivePresetSlot(ActivePresetSlot);
+
+        // The device's own declaration is what the generic panel shows; detection is latched
+        // from the samples below, so there is nothing to seed here. A device that declares
+        // nothing leaves the panel empty and the hand-drawn model as the surface.
+        //
+        // A different device is a different panel: the latches, hides and switches belong to
+        // the pad that reported them, so they are cleared rather than carried over - the
+        // same-device refreshes (a daemon snapshot) keep them, which is what the panel's own
+        // reuse is for.
+        GenericPanel.Clear();
+        RefreshGenericControls();
     }
 
     internal async Task<bool> ApplyProfile(GamepadProfile updated)
@@ -3550,6 +3695,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(MappingOwnerDescription));
         OnPropertyChanged(nameof(CanRelaunchElevated));
         RelaunchElevatedCommand.NotifyCanExecuteChanged();
+
+        // A render process never sees the pad itself: the daemon's snapshot is the device's
+        // declaration, so the panel is refreshed from the snapshot and not from the
+        // presentation host's empty table. Detection stays latched from the samples.
+        RefreshGenericControls();
     }
 
     private void OnDaemonSnapshot(StateSnapshot snapshot)
@@ -3731,6 +3881,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IsMappingEnabled = false;
         MappingOwner = MappingOwner.None;
 
+        // A capture armed for a device that is gone spends nothing: the pad it waits for
+        // will not answer, so the capture ends here rather than on its budget.
+        EndButtonCapture("设备已断开，按键捕获已取消。");
+
+        // No device means no declared controls, so the panel empties and the hand-drawn
+        // model - the surface that needs no declaration - takes the stage back.
+        GenericPanel.Clear();
+        RefreshGenericControls();
+        IsGenericPanelMode = false;
+
         // No snapshot means no active layer, so the hint empties and the overlay hides.
         RefreshLayerHint();
         SetTransferError("守护进程连接已断开；映射状态未知，未启用本地注入回退。");
@@ -3853,6 +4013,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _host.SetInjectionSuspended(false);
         }
 
+        Editor.PropertyChanged -= OnEditorPropertyChanged;
+
         // Released before the daemon connection goes, so a pause a foreground rule left behind
         // is lifted while the engine that holds it is still reachable - and with it the platform
         // foreground source the watcher opened. In daemon mode the pause was never this window's
@@ -3890,12 +4052,22 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // The engine sources the precision key from the profile's special-key mapping once
+        // one exists and ignores the mouse mapping's own fields, which migration leaves at
+        // their defaults - so the panel reports the special key, and only a profile without
+        // one falls back to the fields, which is what an un-migrated profile still runs on.
+        var precision = PrecisionKeyOf(ActiveProfile.Mappings);
+
         foreach (var mapping in ActiveProfile.Mappings)
         {
             switch (mapping.Target)
             {
                 case MouseMoveTarget mouse when mapping.Source is StickBinding { Stick: GamepadStick.Right }:
                     MouseSensitivity.LoadFrom(mouse.Settings);
+                    if (precision is { } key)
+                    {
+                        MouseSensitivity.ShowPrecisionKey(key.Button, key.Mode);
+                    }
                     break;
                 case WheelScrollTarget wheel when mapping.Source is StickBinding { Stick: GamepadStick.Left }:
                     ScrollSensitivity.LoadFrom(wheel.Settings);
@@ -3903,6 +4075,442 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             }
         }
     }
+
+    /// <summary>
+    /// The precision key the engine actually reads, as the sensitivity panel reports it: the
+    /// profile's precision special key - its own target or one of the source gesture's two
+    /// actions, the positions the engine registers from - when it is enabled and its source
+    /// names a button. Null when the profile carries no such key, and the caller then falls
+    /// back to the mouse mapping's own legacy fields: a disabled key is not registered by the
+    /// engine either, and a deflected stick also engages a special key, a shape the panel's
+    /// button label cannot name.
+    /// </summary>
+    private static (GamepadButton Button, PrecisionMode Mode)? PrecisionKeyOf(IReadOnlyList<MappingEntry> mappings)
+    {
+        foreach (var entry in mappings)
+        {
+            if (!entry.Enabled || entry.Source is not ButtonBinding binding)
+            {
+                continue;
+            }
+
+            if (SpecialKeyConflicts.KeyOf(entry) is { Kind: SpecialKeyKind.Precision } key)
+            {
+                return (binding.Button, key.PrecisionMode);
+            }
+        }
+
+        return null;
+    }
+
+    // ---- The generic panel -------------------------------------------------------
+
+    /// <summary>
+    /// How long the editor's button capture stays armed before it cancels itself. A capture
+    /// the user walked away from would otherwise spend every later press on a draft nobody
+    /// is watching; the budget is generous enough to reach for the pad and press, and short
+    /// enough that a forgotten capture cannot linger. Settable so a test can watch the
+    /// budget expire without waiting out the real one - per window, so tests running beside
+    /// each other never borrow one another's clock.
+    /// </summary>
+    internal TimeSpan ButtonCaptureTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// The clock the capture budget reads, so a test can walk one past its deadline without
+    /// waiting out the real seconds. Production reads the wall clock.
+    /// </summary>
+    internal Func<DateTime> CaptureClock { get; set; } = () => DateTime.UtcNow;
+
+    /// <summary>
+    /// Opens the mapping settings for one generic-panel control, exactly as a click on the
+    /// hand-drawn model does. The control is remembered as the capture target, so the panel
+    /// can mark it while the editor's button capture is armed for it.
+    /// </summary>
+    private void OpenGenericControl(GenericControlItem item)
+    {
+        _genericCaptureTarget = item.Source;
+        OpenEditorForSource(item.Source);
+    }
+
+    private void OnEditorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(MappingEditorViewModel.IsCapturingButton))
+        {
+            return;
+        }
+
+        if (Editor.IsCapturingButton)
+        {
+            _captureDeadline = CaptureClock() + ButtonCaptureTimeout;
+            GenericPanel.UpdateCapture(isCapturing: true, _genericCaptureTarget);
+        }
+        else
+        {
+            GenericPanel.UpdateCapture(isCapturing: false, null);
+        }
+
+        // The capture lease follows the capture itself: the device being bound stops
+        // dispatching its mappings - only that device - while the user reaches for the
+        // button, and every way the capture ends releases the lease with it.
+        ApplyInputCaptureDevice();
+    }
+
+    /// <summary>
+    /// Takes or releases the editor's input-capture lease on the device being bound. Locally
+    /// the host holds the lease and pauses exactly that device's mapping dispatch - the other
+    /// pads keep mapping - while still polling and publishing its samples; in daemon mode the
+    /// same request travels over IPC, because there the resident daemon owns the dispatch.
+    /// The keyboard and hijack leases are separate pauses and are untouched by this one.
+    /// </summary>
+    private void ApplyInputCaptureDevice()
+    {
+        var deviceId = Editor.IsCapturingButton ? ScopedDeviceId() : null;
+
+        if (_daemon is null)
+        {
+            _host.SetInputCaptureDevice(deviceId);
+            return;
+        }
+
+        _ = ApplyDaemonInputCaptureAsync(_daemon, deviceId);
+    }
+
+    private async Task ApplyDaemonInputCaptureAsync(DaemonController daemon, string? deviceId)
+    {
+        try
+        {
+            var result = await daemon.SetInputCaptureDeviceAsync(deviceId, _lifetime.Token);
+            if (result.Outcome != MutationOutcome.Accepted)
+            {
+                ReportMutationFailure(result, "输入捕获");
+
+                if (deviceId is not null)
+                {
+                    // A lease the daemon refused is a capture that is not happening: the pad
+                    // was never isolated, so its presses still belong to the active mapping
+                    // and waiting for one would spend them on a draft nobody is binding.
+                    // Standing down releases the local lease with it, exactly as a
+                    // successful end does.
+                    EndButtonCapture("输入捕获租约被拒绝，捕获已取消。");
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+        {
+            ReportDaemonUnavailable(exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Ends the editor's button capture, saying why on the status line when the user did not
+    /// ask for it. Besides a successful press there are three ways out: the budget running
+    /// out, the device going away, and the editor closing - a capture armed for an editor
+    /// that is no longer open would spend the next press on a draft nobody sees.
+    /// </summary>
+    private void EndButtonCapture(string? reason)
+    {
+        if (!Editor.IsCapturingButton)
+        {
+            return;
+        }
+
+        Editor.IsCapturingButton = false;
+
+        // The control the capture waited for is nobody's target any more: the panel's mark
+        // is cleared by the property change below, and the remembered source goes with it,
+        // so a later capture can never mark a control left over from an earlier one.
+        _genericCaptureTarget = null;
+
+        if (reason is not null)
+        {
+            StatusMessage = reason;
+        }
+    }
+
+    /// <summary>
+    /// The capture budget, checked on the sample stream - the one clock that is already
+    /// running while a capture is armed - so a capture that outlives its budget ends on the
+    /// next sample rather than on a timer of its own. The window's sync tick calls it too:
+    /// a pad nobody is touching produces no samples, so a forgotten capture would otherwise
+    /// never expire, and the 300 ms UI clock is what ends it without waiting for input.
+    /// </summary>
+    internal void EnforceButtonCaptureBudget()
+    {
+        // A deadline nobody set is not an expired one: the check runs on the UI's clock and
+        // on the sample stream, and a capture armed a heartbeat ago must not be ended by a
+        // read that raced the arming.
+        if (Editor.IsCapturingButton && _captureDeadline != default && CaptureClock() >= _captureDeadline)
+        {
+            EndButtonCapture("按键捕获已超时取消，请重试。");
+        }
+    }
+
+    partial void OnIsEditingChanged(bool value)
+    {
+        if (!value)
+        {
+            EndButtonCapture(reason: null);
+        }
+    }
+
+    partial void OnActiveProfileChanged(GamepadProfile? value)
+    {
+        // The declaration itself moves with the profile: a source the device never declared
+        // gains its first mapping - or loses its last - so the panel's items follow without
+        // a reload that would drop every detection latch and hide.
+        GenericPanel.SyncDeclarations(DeviceControls(), IsControlBound);
+
+        // The panel's bound state is derived from the profile, so every adoption and apply
+        // moves a control between the panel and 更多输入 - display only, the mappings
+        // themselves are untouched - and each stick's mode selector follows the mappings the
+        // profile really carries, including after a reload from the daemon.
+        GenericPanel.ApplyBindings(IsControlBound);
+
+        if (value is { } profile)
+        {
+            GenericPanel.SyncStickModes(profile.Mappings);
+        }
+    }
+
+    private bool IsControlBound(InputBinding source)
+        => ActiveProfile is { } profile && profile.Mappings.Any(entry => SamePhysicalSource(entry.Source, source));
+
+    /// <summary>
+    /// Brings the generic panel to the device's own declaration. The declaration is the
+    /// device's - the active controller's descriptor, or the daemon snapshot's entry for the
+    /// device in scope - and it is the only source of the panel's items: a device whose
+    /// platform has written no description produces none, and the hand-drawn model stays the
+    /// mapping surface for it.
+    /// <para>
+    /// The items themselves are reused where the declaration still names them, so a snapshot
+    /// that re-describes the same device keeps every latch, hide and switch the panel holds;
+    /// what the declaration gained or lost is all that moves.
+    /// </para>
+    /// </summary>
+    private void RefreshGenericControls()
+    {
+        var descriptors = DeviceControls();
+        GenericPanel.Load(descriptors, IsControlBound);
+
+        // A reused item keeps the mode its mappings last said, and a reload - or another
+        // client's edit - can have moved the mappings under it, so the selector is re-derived
+        // from the profile rather than trusted to remember.
+        if (ActiveProfile is { } profile)
+        {
+            GenericPanel.SyncStickModes(profile.Mappings);
+        }
+
+        if (descriptors.Count == 0)
+        {
+            IsGenericPanelMode = false;
+        }
+        else if (!_surfaceChosenByUser)
+        {
+            // A device that describes its controls starts on the panel; the model stays one
+            // switch away for anyone who prefers it.
+            IsGenericPanelMode = true;
+        }
+
+        _genericPanelDeviceId = ScopedDeviceId();
+        OnPropertyChanged(nameof(CanUseGenericPanel));
+    }
+
+    /// <summary>
+    /// Paints one sample onto the generic panel - the panel of the device in scope, and no
+    /// other. A second pad's press must not light the first pad's cards or latch its
+    /// detections, exactly as its capture only answers the device being bound: the panel is
+    /// one device's surface, whichever device produced the sample.
+    /// </summary>
+    private void UpdateGenericPanel(IGamepadState state, string? deviceId)
+    {
+        if (deviceId is not null && deviceId == ScopedDeviceId())
+        {
+            GenericPanel.Update(state);
+        }
+    }
+
+    /// <summary>
+    /// The controls the device in scope declares, as the Core's descriptors. Locally that is
+    /// the active controller's own declaration; in daemon mode a render process never sees the
+    /// pad, so it is the snapshot's entry for the device the samples come from (falling back
+    /// to the snapshot's first device before any sample has named one).
+    /// <para>
+    /// A profile can also carry sources the declaration never names - a config written before
+    /// the device described itself, a raw code, a control a future backend adds. A bound
+    /// control is always shown, so those join the panel as extensions rather than sitting
+    /// invisible in the profile: they are appended after the declared ones in the profile's
+    /// own fixed order, and the match against what is already there is physical - the same
+    /// control whatever direction or gesture a mapping configures on it - so a declared stick
+    /// is not appended a second time because one of its four directions is bound. A device
+    /// that declares nothing stays declarationless: the hand-drawn model is its surface, and
+    /// a legacy profile is not a reason to build a panel for it.
+    /// </para>
+    /// </summary>
+    private IReadOnlyList<GamepadControlDescriptor> DeviceControls()
+    {
+        var declared = _daemon is null
+            ? ActiveController?.Descriptor.Controls ?? []
+            : CurrentDaemonDevice()?.Controls ?? [];
+
+        if (declared.Count == 0 || ActiveProfile is not { } profile)
+        {
+            return declared;
+        }
+
+        var merged = new List<GamepadControlDescriptor>(declared);
+        foreach (var entry in profile.Mappings)
+        {
+            if (merged.Any(descriptor => SamePhysicalSource(descriptor.Source, entry.Source)))
+            {
+                continue;
+            }
+
+            merged.Add(new GamepadControlDescriptor(
+                entry.Source,
+                BoundSourceLabel(entry.Source),
+                GamepadControlKind.Other,
+                GamepadControlZone.Extensions));
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// What the panel calls a bound control the device never declared. The Core's own naming
+    /// where it has a case - a standard button, a stick, a raw code by its ordinal - and the
+    /// source's own description where it does not, so an unsupported binding a newer build
+    /// wrote still reads as itself.
+    /// </summary>
+    private static string BoundSourceLabel(InputBinding source) => source switch
+    {
+        ButtonBinding { Button: GamepadButton.Extra } extra => GamepadControlLabels.Generic(extra.Code),
+        ButtonBinding button => GamepadControlLabels.Button(button.Button),
+        StickBinding stick => GamepadControlLabels.Stick(stick.Stick),
+        _ => source.ToString() ?? "未知输入",
+    };
+
+    /// <summary>
+    /// The daemon snapshot's device the window is currently scoped to: the one the profile
+    /// being edited belongs to, so the panel, its highlights and the capture all follow the
+    /// device the user is actually configuring. Until a profile names one, the device the
+    /// user is touching - the last to send a sample - is, and the snapshot's first is the
+    /// last resort before any sample has arrived.
+    /// </summary>
+    private ConnectedDeviceSnapshot? CurrentDaemonDevice()
+    {
+        if (DaemonSnapshot is not { } snapshot || snapshot.Devices.Count == 0)
+        {
+            return null;
+        }
+
+        if (ActiveProfile is { } profile
+            && !string.IsNullOrWhiteSpace(profile.DeviceId)
+            && snapshot.Devices.FirstOrDefault(device => device.DeviceId == profile.DeviceId) is { } profileDevice)
+        {
+            return profileDevice;
+        }
+
+        if (_daemonInputDeviceId is { } sampled
+            && snapshot.Devices.FirstOrDefault(device => device.DeviceId == sampled) is { } lastSampled)
+        {
+            return lastSampled;
+        }
+
+        return snapshot.Devices[0];
+    }
+
+    /// <summary>
+    /// The device the window is scoped to - the one the capture leases, the one the capture
+    /// answers, and the one the generic panel shows. Locally that is the active controller;
+    /// in daemon mode a render process never sees the pad, so it is the snapshot's device
+    /// for the profile in hand.
+    /// </summary>
+    private string? ScopedDeviceId()
+        => _daemon is null
+            ? ActiveController?.Descriptor.DeviceId
+            : CurrentDaemonDevice()?.DeviceId;
+
+    /// <summary>
+    /// Rewrites one stick's mappings between the continuous axis and the four directions.
+    /// The user picks the mode on the panel; nothing about the device or the model picks it,
+    /// and an axis resting near an edge never switches anything on its own.
+    /// <para>
+    /// Four-way keeps every direction mapping the profile already carries - a direction the
+    /// user configured is never overwritten - and gives the directions that have none the
+    /// default directional key, because a stick driving a digital target must say which
+    /// deflection presses it. Continuous collapses the four into one omnidirectional
+    /// mapping, keeping a continuous target the directions already carried - mouse move
+    /// with the settings tuned on it - and otherwise the canonical default, which is what a
+    /// fresh stick mapping is.
+    /// </para>
+    /// </summary>
+    internal async Task<bool> SetStickDirectionMode(GamepadStick stick, GenericStickMode mode)
+    {
+        if (ActiveProfile is not { } profile)
+        {
+            return false;
+        }
+
+        if (IsEditing)
+        {
+            // The editor holds an unconfirmed draft of this profile. Converting the mode
+            // rewrites the mappings under it, and committing the draft afterwards would
+            // silently overwrite the conversion - so the switch waits for the user to
+            // confirm or cancel what is open, and the panel's selector rolls back.
+            StatusMessage = "请先确定或取消当前编辑，再切换摇杆执行方式。";
+            return false;
+        }
+
+        var mappings = profile.Mappings.ToList();
+        var others = mappings
+            .Where(entry => entry.Source is not StickBinding binding || binding.Stick != stick)
+            .ToList();
+        var directional = mappings
+            .Where(entry => entry.Source is StickBinding { Direction: { } } binding && binding.Stick == stick)
+            .ToList();
+
+        var rebuilt = new List<MappingEntry>();
+        if (mode == GenericStickMode.FourWay)
+        {
+            foreach (var direction in new[]
+                     {
+                         InputDirection.Up, InputDirection.Down, InputDirection.Left, InputDirection.Right,
+                     })
+            {
+                var existing = directional.FirstOrDefault(
+                    entry => entry.Source is StickBinding { Direction: { } } binding && binding.Direction == direction);
+                rebuilt.Add(existing ?? new MappingEntry
+                {
+                    Source = new StickBinding(stick) { Direction = direction },
+                    Target = new KeyPressTarget(DefaultDirectionKey(direction)),
+                });
+            }
+        }
+        else
+        {
+            var carried = directional
+                .Select(entry => entry.Target)
+                .OfType<MouseMoveTarget>()
+                .FirstOrDefault();
+            rebuilt.Add(new MappingEntry
+            {
+                Source = new StickBinding(stick),
+                Target = carried ?? new MouseMoveTarget(new MouseStickSettings()),
+            });
+        }
+
+        others.AddRange(rebuilt);
+        return await ApplyProfile(profile with { Mappings = others });
+    }
+
+    private static GamepadKey DefaultDirectionKey(InputDirection direction) => direction switch
+    {
+        InputDirection.Up => GamepadKey.ArrowUp,
+        InputDirection.Down => GamepadKey.ArrowDown,
+        InputDirection.Left => GamepadKey.ArrowLeft,
+        InputDirection.Right => GamepadKey.ArrowRight,
+        _ => GamepadKey.ArrowUp,
+    };
 
     private void RefreshMappings()
     {

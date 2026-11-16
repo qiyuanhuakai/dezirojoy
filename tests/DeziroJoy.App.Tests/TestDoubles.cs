@@ -13,8 +13,16 @@ internal sealed class FakeGamepadProvider : IGamepadProvider
     private readonly Dictionary<string, IGamepadState> _states = [];
 
     public void Add(string deviceId, string name)
+        => Add(deviceId, name, []);
+
+    /// <summary>
+    /// Adds a device with the controls it declares - the platform layer's own answer, which
+    /// is what the generic panel builds itself from. An empty declaration means "this
+    /// platform has not written a description yet", which is what the legacy backends report.
+    /// </summary>
+    public void Add(string deviceId, string name, IReadOnlyList<GamepadControlDescriptor> controls)
     {
-        _devices[deviceId] = new GamepadDescriptor(deviceId, name);
+        _devices[deviceId] = new GamepadDescriptor(deviceId, name) { Controls = controls };
     }
 
     public void Remove(string deviceId) => _devices.Remove(deviceId);

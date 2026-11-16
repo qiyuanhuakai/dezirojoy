@@ -684,7 +684,12 @@ public static class DaemonHost
             => _composition.Host.Controllers.Select(runtime => new ConnectedDeviceSnapshot(
                 runtime.Descriptor.DeviceId,
                 runtime.Descriptor.Name,
-                runtime.Descriptor.Layout)).ToList();
+                runtime.Descriptor.Layout,
+                // A platform that has written no description reports an empty set, and empty
+                // means "not described yet" - never "no controls" - so it travels as null and
+                // is omitted from the JSON: a device nobody has described keeps writing exactly
+                // the snapshot bytes it always did.
+                runtime.Descriptor.Controls is { Count: > 0 } controls ? controls : null)).ToList();
 
         public event Action? DevicesChanged
         {
@@ -705,6 +710,14 @@ public static class DaemonHost
         public void SetMappingEnabled(bool enabled) => _composition.Host.SetMappingEnabled(enabled);
 
         public void SetInjectionSuspended(bool suspended) => _composition.Host.SetInjectionSuspended(suspended);
+
+        /// <summary>
+        /// The mapping editor's capture lease, forwarded straight to the engine host: the host
+        /// is the one that keeps polling the captured device and stops dispatching its
+        /// mappings, so there is nothing for the adapter to translate.
+        /// </summary>
+        public void SetInputCaptureDevice(string? deviceId)
+            => _composition.Host.SetInputCaptureDevice(deviceId);
 
         public bool IsNativeGamepadPaused => _composition.Host.IsNativeGamepadPaused;
 

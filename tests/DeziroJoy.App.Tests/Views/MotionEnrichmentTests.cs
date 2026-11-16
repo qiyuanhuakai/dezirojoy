@@ -83,7 +83,7 @@ public sealed class MotionEnrichmentTests
 
         var model = window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
         var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
-        var lift = Assert.IsType<TranslateTransform>(viewbox.RenderTransform);
+        var lift = ModelMotion.Lift(viewbox);
         var transition = Assert.Single(
             lift.Transitions!.OfType<DoubleTransition>(),
             candidate => candidate.Property == TranslateTransform.YProperty);
@@ -227,7 +227,8 @@ public sealed class MotionEnrichmentTests
     // ---- Reduced-motion posture ---------------------------------------------
 
     [AvaloniaFact]
-    public void New_Motion_Never_Moves_A_Surface_So_It_Stays_Reduced_Motion_Safe()    {
+    public void New_Motion_Never_Moves_A_Surface_So_It_Stays_Reduced_Motion_Safe()
+    {
         // Avalonia 12.1.4 exposes no prefers-reduced-motion API (PlatformSettings carries only
         // colour values and hotkeys; the feature is open issue #19405), so the design rule is:
         // the NEW hover/press/outline motion must not translate or scale anything. Only colour,

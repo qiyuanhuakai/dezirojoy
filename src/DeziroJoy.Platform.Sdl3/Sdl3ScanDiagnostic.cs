@@ -56,6 +56,28 @@ public sealed record Sdl3ScanDiagnostic
     public IReadOnlyList<Sdl3OpenFailure> OpenFailures { get; init; } = [];
 
     /// <summary>
+    /// How many persisted SDL mappings were handed to SDL before this scan enumerated. Zero
+    /// means none were loaded - which is the normal state for an install that has never mapped
+    /// a plain joystick - not that none were needed.
+    /// </summary>
+    public int AppliedMappingCount { get; init; }
+
+    /// <summary>
+    /// Why the persisted mapping file's mappings were not all applied, or null when they were:
+    /// the file could not be read, or an entry in it describes a mapping SDL will not honour.
+    /// A device mapped through the <c>map</c> flow that still does not appear as a gamepad is
+    /// the signature of the first; a device that works except for one dead button is the
+    /// signature of the second.
+    /// </summary>
+    public string? MappingLoadError { get; init; }
+
+    /// <summary>
+    /// Whether any persisted mapping is in force, so a surface can distinguish "no mapping file
+    /// exists" from "one exists but was not applied".
+    /// </summary>
+    public bool HasAppliedMappings => AppliedMappingCount > 0;
+
+    /// <summary>
     /// One-line hint sized for the GUI status area, which trims to a single line. Empty once
     /// a gamepad was found - there is nothing to guide the user towards.
     /// </summary>
@@ -87,7 +109,8 @@ public sealed record Sdl3ScanDiagnostic
                 Sdl3ScanOutcome.NoGamepads =>
                     "SDL3 已初始化，但没有任何设备被识别为标准 Gamepad。" +
                     "能以普通 Joystick 枚举、却没有可靠 SDL Gamepad 映射的设备需要先补充映射，" +
-                    "不能当作已有标准布局使用。",
+                    "不能当作已有标准布局使用。用 Sdl3Probe 的 map 流程逐键生成映射并保存到配置根目录的 " +
+                    "sdl-mappings.json，随后重启常驻服务即可生效。",
                 Sdl3ScanOutcome.OpenFailed =>
                     "SDL3 报告了标准 Gamepad 设备，但打开全部失败。",
                 _ => string.Empty,
@@ -111,6 +134,13 @@ public sealed record Sdl3ScanDiagnostic
                 sections.Add(
                     $"以下手柄既无序列号也无路径，身份回退为本次运行内的实例 ID（{unstable}）：" +
                     "同一型号的多只手柄在本运行内仍可区分，但重启后配置可能无法自动重新关联。");
+            }
+
+            if (MappingLoadError is not null)
+            {
+                sections.Add(
+                    $"持久 SDL 映射文件（sdl-mappings.json）问题：{MappingLoadError}。" +
+                    "本次运行只使用 SDL 内置映射库与文件中可用的部分，map 流程生成的映射没有完全生效。");
             }
 
             return string.Join('\n', sections);

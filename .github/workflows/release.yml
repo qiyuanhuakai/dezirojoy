@@ -199,11 +199,20 @@ jobs:
       # Inno Setup 6 ships on the windows-latest image. The script is driven entirely
       # by ISCC /D defines, so the step only passes the version, the RID and the two
       # absolute paths. The script itself resolves everything from its own location,
-      # so the call works from any working directory. The script compiles the published
-      # setup.exe WITH /DDeziroJoyUpdateRun (carrying the in-app updater's relaunch
-      # entry) and, for win-x64, a SECOND define-free setup that the silent install /
-      # verify / uninstall cycle runs against in a throwaway directory - the loop must
-      # never relaunch the app, so it installs the build without the update-run entry. A
+      # so the call works from any working directory. The script compiles ONE setup,
+      # and it is the artefact that is uploaded: DeziroJoy.iss carries no relaunch
+      # entry of its own, because the in-app updater hands the install to an external
+      # watchdog (a temporary Windows PowerShell script that src/DeziroJoy.App/
+      # Services/Update/WindowsUpdateInstaller.cs starts) which waits for the old GUI
+      # to exit, runs this setup /SILENT, waits for its exit code and then starts the
+      # installed DeziroJoy.exe itself. The same build is therefore also the one the
+      # silent install / verify / uninstall cycle runs against for win-x64, in a
+      # throwaway directory - which is what that loop always had to prove: no relaunch,
+      # no second instance, nothing left behind. (An earlier revision compiled a
+      # second, define-free setup for that loop, because the release build then carried
+      # a conditional [Run] relaunch entry under /DDeziroJoyUpdateRun that omitted
+      # skipifsilent; the watchdog owns the relaunch now, and build-and-verify.ps1
+      # asserts the [Run] section stays free of one.) A
       # win-arm64 setup.exe is the same x86 bootstrap Inno Setup always emits - the
       # loader is architecture-neutral whatever the payload is (verified 0x014C on
       # both Windows RIDs in beta.1 run 42670117262), so it would execute on the x64

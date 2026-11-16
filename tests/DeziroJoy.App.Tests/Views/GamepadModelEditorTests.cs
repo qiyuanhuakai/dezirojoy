@@ -57,8 +57,8 @@ public sealed class GamepadModelEditorTests
 
     /// <summary>
     /// Detaches the mapping surface's motion - the editor card's fade and slide and the
-    /// model's lift - so a test sees each property's bound end value immediately instead of
-    /// a transition headless never advances.
+    /// model's zoom and lift - so a test sees each property's bound end value immediately
+    /// instead of a transition headless never advances.
     /// </summary>
     private static void DetachEditorMotion(MainWindow window)
     {
@@ -72,11 +72,8 @@ public sealed class GamepadModelEditorTests
             }
         }
 
-        var lift = Model(window).GetVisualAncestors().OfType<Viewbox>().FirstOrDefault();
-        if (lift?.RenderTransform is TranslateTransform liftTransform)
-        {
-            liftTransform.Transitions = null;
-        }
+        // The model's two motions share one transform group; see ModelMotion.
+        ModelMotion.Detach(Model(window).GetVisualAncestors().OfType<Viewbox>().First());
     }
 
     private static void ConnectPad(FakeGamepadProvider provider, GamepadButtonMask buttons = default)
@@ -496,28 +493,111 @@ public sealed class GamepadModelEditorTests
 
         var model = Model(window);
         var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
-        var lift = Assert.IsType<TranslateTransform>(viewbox.RenderTransform);
+
+        // The model's motion is one group: the zoom scale and the lift share it, and each
+        // carries its own transition.
+        var lift = ModelMotion.Lift(viewbox);
+        var zoom = ModelMotion.Zoom(viewbox);
 
         // The lift is animated, not an instant property flip.
-        var transition = Assert.Single(
+        var liftTransition = Assert.Single(
             lift.Transitions!.OfType<DoubleTransition>(),
             candidate => candidate.Property == TranslateTransform.YProperty);
-        Assert.InRange(transition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+        Assert.InRange(liftTransition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+
+        // The zoom is animated too, on both axes: one uniform scale, not two timings.
+        foreach (var property in new[] { ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty })
+        {
+            var zoomTransition = Assert.Single(
+                zoom.Transitions!.OfType<DoubleTransition>(),
+                candidate => candidate.Property == property);
+            Assert.InRange(zoomTransition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
+        }
 
         Assert.Equal(0d, lift.Y);
+        Assert.Equal(1d, zoom.ScaleX);
+        Assert.Equal(1d, zoom.ScaleY);
 
         // Headless runs no clock, so a transitioned property never leaves its start value
-        // here. Detaching the transition lets the bound value apply directly, which makes the
-        // animation's TARGET observable without depending on a ticking clock.
+        // here. Detaching the transitions lets the bound values apply directly, which makes
+        // the animation's TARGETS observable without depending on a ticking clock.
         lift.Transitions = null;
+        zoom.Transitions = null;
 
         Click(model.FindControl<Control>("ButtonA")!, window);
         Assert.True(viewModel.IsEditing);
         Assert.True(lift.Y < 0d, $"the model must lift while the editor is open, Y was {lift.Y}");
+        Assert.True(zoom.ScaleX < 1d, $"the model must shrink while the editor is open, scale was {zoom.ScaleX}");
+        Assert.Equal(zoom.ScaleX, zoom.ScaleY);
 
         window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
         Assert.False(viewModel.IsEditing);
         Assert.Equal(0d, lift.Y);
+        Assert.Equal(1d, zoom.ScaleX);
+        Assert.Equal(1d, zoom.ScaleY);
+    }
+
+    [AvaloniaFact]
+    public void Opening_The_Editor_Shrinks_The_Model_Without_Re_Laying_It_Out()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+        var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+        var zoom = ModelMotion.Zoom(viewbox);
+
+        // At rest the model is full size, and its layout slot is what the fixed 420 stage
+        // row gives it - the zoom is a render transform, so the slot never re-measures.
+        var restSize = viewbox.Bounds.Size;
+        Assert.Equal(1d, zoom.ScaleX);
+        Assert.Equal(1d, zoom.ScaleY);
+
+        Click(model.FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        // Uniform and centred: both axes carry the same scale, and the model's own size is
+        // untouched - the stage the card shares is what the model gives back by rendering
+        // smaller, not by being laid out again. (The slot's position can shift by a
+        // rounding pixel as the stage's star row re-divides around the card; the model
+        // itself is neither re-measured nor re-scaled in layout.)
+        Assert.Equal(0.65d, zoom.ScaleX, 3);
+        Assert.Equal(zoom.ScaleX, zoom.ScaleY);
+        Assert.Equal(restSize, viewbox.Bounds.Size);
+
+        window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+        Assert.False(viewModel.IsEditing);
+
+        // Closing restores the size with nothing left behind: the scale is exactly 1 again,
+        // not the residue of an animation frame headless never finished.
+        Assert.Equal(1d, zoom.ScaleX);
+        Assert.Equal(1d, zoom.ScaleY);
+        Assert.Equal(restSize, viewbox.Bounds.Size);
+    }
+
+    [AvaloniaFact]
+    public void The_Shrunken_Model_Still_Opens_The_Element_That_Is_Clicked()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+
+        // Open the settings for one element: the model shrinks under the open card.
+        Click(model.FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(GamepadButton.A, viewModel.Editor.SelectedButton);
+
+        // The zoom is a render transform, so hit testing rides the same matrix: clicking
+        // another element while the card is open still reaches that element at its scaled
+        // position and moves the settings to it - the model stays the editor it always was.
+        Click(model.FindControl<Control>("ButtonB")!, window);
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(GamepadButton.B, viewModel.Editor.SelectedButton);
     }
 
     [AvaloniaFact]

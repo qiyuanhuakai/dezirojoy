@@ -53,7 +53,7 @@ public enum UpdatePhase
 /// </para>
 /// <para>
 /// The restart is deliberately not this class's job. The platform installers arrange it -
-/// Windows from the setup program's conditional [Run] entry, the Linux packages from a
+/// Windows from the external watchdog that runs its setup, the Linux packages from a
 /// detached chain that outlives this process, an AppImage by starting the file it renamed
 /// into place - and the relaunched process simply re-runs the instance arbitration
 /// (<see cref="GuiInstanceGuard"/>), which it now wins because the old holder is gone. That
@@ -67,6 +67,14 @@ public enum UpdatePhase
 /// </remarks>
 public sealed class UpdateOrchestrator : IDisposable
 {
+    /// <summary>
+    /// The status of the install stage itself, as opposed to the two stop stages before it.
+    /// A constant because the update card reads it: on Windows the GUI is about to exit for
+    /// good, and it has to say what happens next - the setup program takes the progress over
+    /// and restarts the app - without losing the stop stages' own wording on the way there.
+    /// </summary>
+    internal const string InstallStartingStatus = "正在安装更新…";
+
     private readonly IUpdateService _updateService;
     private readonly UpdateDownloader _downloader;
     private readonly IReadOnlyList<IUpdateInstaller> _installers;
@@ -151,9 +159,9 @@ public sealed class UpdateOrchestrator : IDisposable
     /// <summary>
     /// Whether the installer that just ran arranged the relaunch itself. Set before
     /// <see cref="RestartRequested"/> fires, so the handler knows whether it has to start the
-    /// successor: Windows relaunches from the setup program's conditional [Run] entry, the
-    /// Linux packages from a detached chain, an AppImage by starting the file it renamed into
-    /// place - and an installer that did none of that leaves the work to the host.
+    /// successor: Windows relaunches from the watchdog that runs its setup, the Linux packages
+    /// from a detached chain, an AppImage by starting the file it renamed into place - and an
+    /// installer that did none of that leaves the work to the host.
     /// </summary>
     public bool RelaunchHandled { get; private set; }
 
@@ -373,7 +381,7 @@ public sealed class UpdateOrchestrator : IDisposable
                 return false;
             }
 
-            Enter(UpdatePhase.Installing, "正在安装更新…");
+            Enter(UpdatePhase.Installing, InstallStartingStatus);
 
             var request = new UpdateInstallRequest(
                 install.Kind,

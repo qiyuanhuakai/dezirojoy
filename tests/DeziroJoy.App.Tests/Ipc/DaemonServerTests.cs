@@ -98,10 +98,11 @@ internal sealed class FakeDaemonHost : IDaemonHost
     public void AddDevice(
         string deviceId,
         string name = "Test Controller",
-        GamepadLayout layout = GamepadLayout.Xbox)
+        GamepadLayout layout = GamepadLayout.Xbox,
+        IReadOnlyList<GamepadControlDescriptor>? controls = null)
     {
         _deviceIds.Add(deviceId);
-        _devices[deviceId] = new ConnectedDeviceSnapshot(deviceId, name, layout);
+        _devices[deviceId] = new ConnectedDeviceSnapshot(deviceId, name, layout, controls);
         DevicesChanged?.Invoke();
     }
 
@@ -136,6 +137,22 @@ internal sealed class FakeDaemonHost : IDaemonHost
     {
         IsInjectionSuspended = suspended;
         InjectionSuspensionChanged?.Invoke(suspended);
+    }
+
+    /// <summary>The input-capture lease as the daemon last held it: the device being bound, or null.</summary>
+    public string? CapturedDeviceId { get; private set; }
+
+    /// <summary>The device the input-capture lease currently names, as the daemon last set it.</summary>
+    public string? CapturedDevice { get; private set; }
+
+    /// <summary>How many capture requests reached this host, so idempotence is observable.</summary>
+    public int CaptureCalls { get; private set; }
+
+    public void SetInputCaptureDevice(string? deviceId)
+    {
+        CapturedDevice = deviceId;
+        CapturedDeviceId = deviceId;
+        CaptureCalls++;
     }
 
     public void SetNativeGamepadPaused(bool paused) => IsNativeGamepadPaused = paused;

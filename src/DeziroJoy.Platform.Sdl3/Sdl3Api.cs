@@ -41,7 +41,10 @@ internal sealed class Sdl3Api : ISdl3Api
 
         try
         {
-            if (!SDL.Init(SDL.InitFlags.Gamepad))
+            // SDL_INIT_GAMEPAD implies the joystick subsystem; the flag is requested explicitly
+            // anyway so the plain-joystick enumeration the mapping flow needs is covered by the
+            // same initialization rather than depending on that implication.
+            if (!SDL.Init(SDL.InitFlags.Gamepad | SDL.InitFlags.Joystick))
             {
                 error = Describe(SDL.GetError(), "SDL_Init(SDL_INIT_GAMEPAD) 失败");
                 return false;
@@ -248,7 +251,9 @@ internal sealed class Sdl3Api : ISdl3Api
             TouchpadCount = Safe(() => SDL.GetNumGamepadTouchpads(pointer)),
             TouchpadFingerCounts = ReadTouchpadFingerCounts(pointer),
             Sensors = ReadSensors(pointer),
+            DeclaredButtons = ReadDeclaredButtons(pointer),
             DeclaredButtonCount = CountDeclaredButtons(pointer),
+            DeclaredAxes = ReadDeclaredAxes(pointer),
             FaceButtonLabels = ReadFaceButtonLabels(pointer),
         };
     }
@@ -258,6 +263,267 @@ internal sealed class Sdl3Api : ISdl3Api
 
     public short GetAxis(Sdl3GamepadHandle handle, SDL.GamepadAxis axis)
         => Safe(() => SDL.GetGamepadAxis(handle.Pointer, axis));
+
+    public bool TryAddGamepadMapping(string mapping, out string? error)
+    {
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(mapping))
+        {
+            error = "映射字符串为空。";
+            return false;
+        }
+
+        try
+        {
+            var result = SDL.AddGamepadMapping(mapping);
+            if (result < 0)
+            {
+                error = Describe(SDL.GetError(), "SDL_AddGamepadMapping 拒绝了该映射");
+                return false;
+            }
+
+            return true;
+        }
+        catch (DllNotFoundException)
+        {
+            error = "找不到原生 SDL3 运行时。";
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            error = "原生 SDL3 运行时版本过旧，缺少 SDL_AddGamepadMapping。";
+            return false;
+        }
+    }
+
+    public IReadOnlyList<Sdl3JoystickInfo> GetJoysticks()
+    {
+        if (!_initialized)
+        {
+            return Array.Empty<Sdl3JoystickInfo>();
+        }
+
+        try
+        {
+            var ids = SDL.GetJoysticks(out _);
+            if (ids is null || ids.Length == 0)
+            {
+                return Array.Empty<Sdl3JoystickInfo>();
+            }
+
+            // SDL shares one id space between joysticks and gamepads, so a joystick that already
+            // has a standard mapping appears in both lists. That is the honest test for "this
+            // device does not need a hand-written mapping", and it costs one enumeration.
+            var gamepadIds = new HashSet<uint>(SDL.GetGamepads(out _) ?? Array.Empty<uint>());
+            var joysticks = new List<Sdl3JoystickInfo>(ids.Length);
+
+            foreach (var instanceId in ids)
+            {
+                if (gamepadIds.Contains(instanceId))
+                {
+                    // Already a standard gamepad: the per-ID queries are enough, and opening it
+                    // here would collide with the provider's own open of the same device.
+                    joysticks.Add(DescribeFromId(instanceId, hasStandardMapping: true));
+                    continue;
+                }
+
+                var pointer = SDL.OpenJoystick(instanceId);
+                if (pointer == nint.Zero)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    joysticks.Add(ReadJoystickInfo(instanceId, pointer, hasStandardMapping: true));
+                }
+                finally
+                {
+                    SDL.CloseJoystick(pointer);
+                }
+            }
+
+            return joysticks;
+        }
+        catch (DllNotFoundException)
+        {
+            return Array.Empty<Sdl3JoystickInfo>();
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return Array.Empty<Sdl3JoystickInfo>();
+        }
+    }
+
+    public Sdl3JoystickHandle? OpenJoystick(uint instanceId, out string? error)
+    {
+        error = null;
+
+        try
+        {
+            var pointer = SDL.OpenJoystick(instanceId);
+            if (pointer == nint.Zero)
+            {
+                error = Describe(SDL.GetError(), "SDL_OpenJoystick 失败");
+                return null;
+            }
+
+            return new Sdl3JoystickHandle(pointer);
+        }
+        catch (DllNotFoundException)
+        {
+            error = "找不到原生 SDL3 运行时。";
+            return null;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            error = "原生 SDL3 运行时版本过旧，缺少 SDL_OpenJoystick。";
+            return null;
+        }
+    }
+
+    public void CloseJoystick(Sdl3JoystickHandle handle)
+    {
+        var pointer = handle.Pointer;
+        if (pointer == IntPtr.Zero)
+        {
+            return;
+        }
+
+        handle.MarkClosed();
+
+        try
+        {
+            SDL.CloseJoystick(pointer);
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+    }
+
+    public Sdl3JoystickSnapshot ReadJoystick(Sdl3JoystickHandle handle)
+    {
+        var pointer = handle.Pointer;
+        if (pointer == IntPtr.Zero)
+        {
+            return Sdl3JoystickSnapshot.Empty;
+        }
+
+        try
+        {
+            var buttons = Math.Max(SDL.GetNumJoystickButtons(pointer), 0);
+            var axes = Math.Max(SDL.GetNumJoystickAxes(pointer), 0);
+            var hats = Math.Max(SDL.GetNumJoystickHats(pointer), 0);
+
+            var buttonStates = new bool[buttons];
+            for (var i = 0; i < buttons; i++)
+            {
+                buttonStates[i] = SDL.GetJoystickButton(pointer, i);
+            }
+
+            var axisStates = new short[axes];
+            for (var i = 0; i < axes; i++)
+            {
+                axisStates[i] = SDL.GetJoystickAxis(pointer, i);
+            }
+
+            var hatStates = new byte[hats];
+            for (var i = 0; i < hats; i++)
+            {
+                hatStates[i] = (byte)SDL.GetJoystickHat(pointer, i);
+            }
+
+            return new Sdl3JoystickSnapshot(buttonStates, axisStates, hatStates);
+        }
+        catch (DllNotFoundException)
+        {
+            return Sdl3JoystickSnapshot.Empty;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return Sdl3JoystickSnapshot.Empty;
+        }
+    }
+
+    /// <summary>
+    /// The joystick record of one device SDL already maps as a gamepad, read through the
+    /// per-instance-id queries so nothing has to be opened. Counts stay zero: the mapping flow
+    /// never offers these devices, and a gamepad's raw control counts are not its standard
+    /// layout anyway.
+    /// </summary>
+    private static Sdl3JoystickInfo DescribeFromId(uint instanceId, bool hasStandardMapping)
+    {
+        var guid = Safe(() => SDL.GetJoystickGUIDForID(instanceId));
+        var type = Safe(() => SDL.GetJoystickTypeForID(instanceId));
+
+        return new Sdl3JoystickInfo
+        {
+            InstanceId = instanceId,
+            Name = Coalesce(Safe(() => SDL.GetJoystickNameForID(instanceId))),
+            GuidString = GuidToString(guid),
+            Vendor = Safe(() => SDL.GetJoystickVendorForID(instanceId)),
+            Product = Safe(() => SDL.GetJoystickProductForID(instanceId)),
+            ProductVersion = Safe(() => SDL.GetJoystickProductVersionForID(instanceId)),
+            Serial = string.Empty,
+            Path = Coalesce(Safe(() => SDL.GetJoystickPathForID(instanceId))),
+            ButtonCount = 0,
+            AxisCount = 0,
+            HatCount = 0,
+            TypeName = type.ToString(),
+            HasStandardMapping = hasStandardMapping,
+        };
+    }
+
+    public string? GetMappingForGuid(string guidString)
+    {
+        if (!_initialized || string.IsNullOrWhiteSpace(guidString))
+        {
+            return null;
+        }
+
+        try
+        {
+            return SDL.GetGamepadMappingForGUID(SDL.StringToGUID(guidString));
+        }
+        catch (DllNotFoundException)
+        {
+            return null;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The joystick record of one open plain joystick, including the serial and the raw
+    /// button/axis/hat counts a mapping has to be written against.
+    /// </summary>
+    private static Sdl3JoystickInfo ReadJoystickInfo(uint instanceId, nint pointer, bool hasStandardMapping)
+    {
+        var type = Safe(() => SDL.GetJoystickType(pointer));
+
+        return new Sdl3JoystickInfo
+        {
+            InstanceId = instanceId,
+            Name = Coalesce(Safe(() => SDL.GetJoystickName(pointer))),
+            GuidString = GuidToString(Safe(() => SDL.GetJoystickGUID(pointer))),
+            Vendor = Safe(() => SDL.GetJoystickVendor(pointer)),
+            Product = Safe(() => SDL.GetJoystickProduct(pointer)),
+            ProductVersion = Safe(() => SDL.GetJoystickProductVersion(pointer)),
+            Serial = Coalesce(Safe(() => SDL.GetJoystickSerial(pointer))),
+            Path = Coalesce(Safe(() => SDL.GetJoystickPath(pointer))),
+            ButtonCount = Math.Max(Safe(() => SDL.GetNumJoystickButtons(pointer)), 0),
+            AxisCount = Math.Max(Safe(() => SDL.GetNumJoystickAxes(pointer)), 0),
+            HatCount = Math.Max(Safe(() => SDL.GetNumJoystickHats(pointer)), 0),
+            TypeName = type.ToString(),
+            HasStandardMapping = hasStandardMapping,
+        };
+    }
 
     private static List<int> ReadTouchpadFingerCounts(nint pointer)
     {
@@ -352,6 +618,50 @@ internal sealed class Sdl3Api : ISdl3Api
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// The declared standard buttons, by mapping key. The raw evidence the generic control
+    /// description is built from, so a surface can say "SDL declares these" without re-querying
+    /// the device and without guessing which ones matter.
+    /// </summary>
+    private static List<string> ReadDeclaredButtons(nint pointer)
+    {
+        var declared = new List<string>();
+        foreach (var button in Enum.GetValues<SDL.GamepadButton>())
+        {
+            if (button is SDL.GamepadButton.Invalid or SDL.GamepadButton.Count)
+            {
+                continue;
+            }
+
+            if (Safe(() => SDL.GamepadHasButton(pointer, button)))
+            {
+                declared.Add(Sdl3ControlNames.Key(button));
+            }
+        }
+
+        return declared;
+    }
+
+    /// <summary>The declared standard axes, by mapping key - the same role as the buttons.</summary>
+    private static List<string> ReadDeclaredAxes(nint pointer)
+    {
+        var declared = new List<string>();
+        foreach (var axis in Enum.GetValues<SDL.GamepadAxis>())
+        {
+            if (axis is SDL.GamepadAxis.Invalid or SDL.GamepadAxis.Count)
+            {
+                continue;
+            }
+
+            if (Safe(() => SDL.GamepadHasAxis(pointer, axis)))
+            {
+                declared.Add(Sdl3ControlNames.Key(axis));
+            }
+        }
+
+        return declared;
     }
 
     /// <summary>

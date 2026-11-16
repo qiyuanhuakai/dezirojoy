@@ -566,11 +566,11 @@ public sealed class MappingSurfaceTests
         // top lands exactly on its own row's top edge and the stage header stays clear.
         Assert.Equal(new Thickness(0, 24, 0, 0), viewbox.Margin);
 
-        var lift = Assert.IsType<TranslateTransform>(viewbox.RenderTransform);
+        var lift = ModelMotion.Lift(viewbox);
 
         // Headless runs no clock, so the animated lift never leaves its start value here;
         // detaching the transition makes the animation's TARGET observable.
-        lift.Transitions = null;
+        ModelMotion.Detach(viewbox);
 
         Click(ModelElement(window, "ButtonA"), window);
         Assert.True(viewModel.IsEditing);

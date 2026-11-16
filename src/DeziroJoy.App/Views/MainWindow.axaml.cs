@@ -657,8 +657,15 @@ public partial class MainWindow : Window
         ViewModel.ScrollSensitivity.IsLive = live;
     }
 
-    private void OnSyncTick(object? sender, EventArgs e)
-        => ViewModel.SyncControllers();
+    internal void OnSyncTick(object? sender, EventArgs e)
+    {
+        // The capture budget rides the one clock that always runs: a capture the user walked
+        // away from must expire even when the pad is quiet, and no sample will ever arrive
+        // to check it. 300 ms is well inside any budget a user would notice.
+        ViewModel.EnforceButtonCaptureBudget();
+
+        ViewModel.SyncControllers();
+    }
 
     private void TitleBarPointerPressed(object? sender, PointerPressedEventArgs e)
     {

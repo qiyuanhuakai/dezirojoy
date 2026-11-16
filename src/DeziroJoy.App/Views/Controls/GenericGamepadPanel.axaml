@@ -1,0 +1,156 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+             x:Class="DeziroJoy.App.Views.Controls.GenericGamepadPanel"
+             x:DataType="vm:GenericGamepadPanelViewModel">
+    <!--
+        The data-driven gamepad panel. Every control is one item from the device's own
+        declaration - there is no型号图 here and nothing is drawn for a control the device
+        did not name. The five zones are the Core's fixed arrangement: 方向 on the left,
+        主按钮 on the right, 肩键与扳机 across the top, 功能键 and 扩展 in their own strips.
+        Order inside a zone is the declaration order, so a control being detected or hidden
+        never re-arranges its neighbours.
+
+        The panel is sized to the stage's logical box and lives inside the stage's Viewbox,
+        so the editor's lift and zoom apply to it exactly as they do to the hand-drawn
+        model - including hit testing, which rides the same transform.
+    -->
+    <UserControl.Resources>
+        <!-- One control: the card that opens its mapping settings, the hide affordance
+             beside it (bound controls refuse one), and - for a stick - the two independent
+             switches below it. Appearance says how the control is drawn and changes nothing
+             about mappings; the execution mode is rewritten as mappings. They are separate
+             buttons because they are separate questions. -->
+        <DataTemplate x:Key="ControlCard" x:DataType="vm:GenericControlItem">
+            <Border Margin="2">
+                <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto">
+                    <Button Grid.Row="0" Grid.Column="0" Classes="genericCard"
+                            Classes.live="{Binding IsLive}"
+                            Classes.pressed="{Binding IsPressed}"
+                            Classes.capture="{Binding IsCaptureTarget}"
+                            Command="{Binding OpenCommand}">
+                        <StackPanel>
+                            <!-- The stick's glyph: the round pad or the cross, whichever the
+                                 appearance switch says. Appearance only - it draws the
+                                 control and changes nothing about what a mapping does. -->
+                            <Panel IsVisible="{Binding IsStick}" Height="20" HorizontalAlignment="Center">
+                                <Ellipse Width="18" Height="18" Stroke="{DynamicResource StickRingBrush}"
+                                         StrokeThickness="1.5" Fill="{DynamicResource PadIdleBrush}"
+                                         IsVisible="{Binding IsStickGlyph}" />
+                                <Path Width="18" Height="18" Fill="{DynamicResource PadIdleBrush}"
+                                      Stroke="{DynamicResource StickRingBrush}" StrokeThickness="1"
+                                      Data="M7,1 L11,1 L11,7 L17,7 L17,11 L11,11 L11,17 L7,17 L7,11 L1,11 L1,7 L7,7 Z"
+                                      IsVisible="{Binding IsDpadGlyph}" />
+                            </Panel>
+                            <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding StickModeLabel}" FontSize="10" HorizontalAlignment="Center"
+                                       Foreground="{DynamicResource HintTextBrush}"
+                                       IsVisible="{Binding IsStick}" />
+                        </StackPanel>
+                    </Button>
+                    <Button Grid.Row="0" Grid.Column="1" Classes="genericMinor" VerticalAlignment="Top"
+                            Command="{Binding HideCommand}"
+                            IsVisible="{Binding CanHide}"
+                            Content="×"
+                            ToolTip.Tip="隐藏此输入（仅影响显示，可恢复）" />
+                    <Button Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Classes="genericMinor"
+                            HorizontalAlignment="Center"
+                            Command="{Binding SwitchAppearanceCommand}"
+                            IsVisible="{Binding IsStick}"
+                            Content="{Binding StickAppearanceLabel}" />
+                    <Button Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Classes="genericMinor"
+                            HorizontalAlignment="Center"
+                            Command="{Binding SwitchStickModeCommand}"
+                            IsVisible="{Binding IsStick}"
+                            Content="切换执行方式" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <UserControl.Styles>
+        <!-- One control card. The classes carry the live state rather than separate
+             templates: bound is the resting look, live is the device's own answer that the
+             control has been seen, pressed is the sample-time highlight, and capture marks
+             the control the editor's button capture is armed for. -->
+        <Style Selector="Button.genericCard">
+            <Setter Property="Background" Value="{DynamicResource SubtleBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="MinWidth" Value="52" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.genericCard.live">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+        </Style>
+        <Style Selector="Button.genericCard.pressed">
+            <Setter Property="Background" Value="{DynamicResource PadPressedBrush}" />
+        </Style>
+        <Style Selector="Button.genericCard.capture">
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentPressedBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="Button.genericMinor">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="4,2" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.zoneTitle">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource HintTextBrush}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+    </UserControl.Styles>
+
+    <Grid Width="620" Height="380" RowDefinitions="Auto,*,Auto,Auto,Auto" HorizontalAlignment="Center">
+
+        <!-- 肩键与扳机: the top strip, in the device's declaration order. -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Classes="zoneTitle" Text="肩键与扳机" />
+            <ItemsControl ItemsSource="{Binding ShoulderItems}" ItemTemplate="{StaticResource ControlCard}" />
+        </StackPanel>
+
+        <!-- 方向 on the left, 主按钮 on the right - the two zones the hands live on. -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*" Margin="0,10,0,10">
+            <StackPanel Grid.Column="0" Width="210" Margin="0,0,12,0">
+                <TextBlock Classes="zoneTitle" Text="方向" />
+                <ItemsControl ItemsSource="{Binding DirectionItems}" ItemTemplate="{StaticResource ControlCard}" />
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+                <TextBlock Classes="zoneTitle" Text="主按钮" />
+                <ItemsControl ItemsSource="{Binding MainButtonItems}" ItemTemplate="{StaticResource ControlCard}" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 功能键: back, start, guide and the stick clicks. -->
+        <StackPanel Grid.Row="2">
+            <TextBlock Classes="zoneTitle" Text="功能键" />
+            <ItemsControl ItemsSource="{Binding FunctionItems}" ItemTemplate="{StaticResource ControlCard}" />
+        </StackPanel>
+
+        <!-- 扩展: everything with no standard position - misc keys, paddles, the touchpad. -->
+        <StackPanel Grid.Row="3">
+            <TextBlock Classes="zoneTitle" Text="扩展" />
+            <ItemsControl ItemsSource="{Binding ExtensionItems}" ItemTemplate="{StaticResource ControlCard}" />
+        </StackPanel>
+
+        <!-- The 更多输入 bar: controls the device declares but that have never been detected
+             wait here, in their fixed order. 显示全部输入 promotes them onto the panel for a
+             full inspection; 恢复 brings back anything the user hid. -->
+        <Grid Grid.Row="4" ColumnDefinitions="Auto,Auto,*,Auto" Margin="0,8,0,0">
+            <Button Grid.Column="0" Classes="genericMinor"
+                    Command="{Binding ToggleShowAllCommand}"
+                    Content="{Binding ShowAllLabel}" />
+            <Button Grid.Column="1" Classes="genericMinor"
+                    Command="{Binding RestoreHiddenCommand}"
+                    IsVisible="{Binding HasHidden}"
+                    Content="恢复隐藏的输入" />
+            <TextBlock Grid.Column="3" Classes="zoneTitle" Margin="8,0,0,0"
+                       Text="{Binding MoreInputCount, StringFormat='更多输入 {0} 项'}" />
+        </Grid>
+    </Grid>
+</UserControl>

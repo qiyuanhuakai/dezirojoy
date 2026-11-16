@@ -32,6 +32,13 @@ namespace DeziroJoy.App.ViewModels;
 /// driven from one thread per operation but never promises the UI thread - so the properties
 /// here are plain notifications, exactly as the orchestrator's own progress forwarding is.
 /// </para>
+/// <para>
+/// The Windows install is the one that ends this process: the watchdog
+/// (<see cref="WindowsUpdateWatchdog"/>) takes over the moment it is launched, so the card's
+/// job there is to have said everything before the click - which is what
+/// <see cref="InstallNotice"/> is for - and to hand the restart to the watchdog rather than
+/// starting a successor of its own.
+/// </para>
 /// </remarks>
 public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
 {
@@ -160,6 +167,17 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _installGuidance;
 
+    /// <summary>
+    /// What the install click is about to do on this form, or null while there is nothing to
+    /// install. This is the only place the whole sequence can be spelled out: on Windows the
+    /// GUI closes within moments of the click and never reads its own UI again, so every stage
+    /// - stop the daemon and the tray, close, let the setup show its progress and restart, and
+    /// where a failure is reported - has to be on screen before the click, not after it.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasInstallNotice))]
+    private string? _installNotice;
+
     private bool _suppressAutoCheckChange;
 
     private bool _suppressAutoDownloadChange;
@@ -167,6 +185,15 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
     public bool HasResult => ResultText.Length > 0;
 
     public bool HasInstallGuidance => InstallGuidance is { Length: > 0 };
+
+    public bool HasInstallNotice => InstallNotice is { Length: > 0 };
+
+    /// <summary>
+    /// Whether the progress bar is offered: a download in flight, or an install running. The
+    /// install's half is indeterminate - there is no percentage to report once the package is
+    /// on disk - so the bar says "still working" rather than pretending to measure.
+    /// </summary>
+    public bool IsProgressVisible => IsDownloading || IsInstalling;
 
     /// <summary>Whether the download button is offered: a release is known and this form has a package.</summary>
     public bool CanDownload =>
@@ -325,6 +352,7 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
         IsResultError = phase == UpdatePhase.Failed;
 
         RefreshInstallGuidance();
+        OnPropertyChanged(nameof(IsProgressVisible));
         OnPropertyChanged(nameof(CanDownload));
         OnPropertyChanged(nameof(CanCancelDownload));
         OnPropertyChanged(nameof(CanInstall));
@@ -359,6 +387,15 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
             case UpdatePhase.UpToDate:
                 return "已是最新版本。";
 
+            case UpdatePhase.Installing when _orchestrator.Install.Kind == InstallKind.WindowsInstall
+                && _orchestrator.StatusText == UpdateOrchestrator.InstallStartingStatus:
+                // The Windows install hands the work to an external watchdog and then exits,
+                // so the last line this GUI ever shows has to say what happens next: the setup
+                // program takes the progress over and restarts the app once it is done. The
+                // two stop stages keep their own wording - they are what the card says while
+                // the daemon and the tray are still on their way out.
+                return "正在启动安装程序，本程序即将关闭；随后由安装程序显示安装进度并自动重启。";
+
             case UpdatePhase.Failed:
                 return _orchestrator.ErrorMessage ?? "更新失败。";
 
@@ -371,9 +408,11 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Reads the install form once the flow has a reason to care and names what it cannot do.
-    /// The detection runs behind the orchestrator's cached property, so a machine pays for it
-    /// at most once, and only after a check actually found something.
+    /// Reads the install form once the flow has a reason to care: names what this form cannot
+    /// do by itself, and spells out what the install click is about to do. The detection runs
+    /// behind the orchestrator's cached property, so a machine pays for it at most once, and
+    /// only after a check actually found something. Both lines are refreshed here, because
+    /// both are a function of the same phase and the same form.
     /// </summary>
     private void RefreshInstallGuidance()
     {
@@ -384,13 +423,46 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
             _ => null,
         };
 
-        if (InstallGuidance == guidance)
+        if (InstallGuidance != guidance)
         {
-            return;
+            InstallGuidance = guidance;
+            OnPropertyChanged(nameof(HasInstallGuidance));
         }
 
-        InstallGuidance = guidance;
-        OnPropertyChanged(nameof(HasInstallGuidance));
+        var notice = _orchestrator.Phase switch
+        {
+            // Every phase up to and including the restart: once the Windows install starts
+            // this process is on its way out, so the sequence has to stay readable for as
+            // long as there is a window to read it in.
+            UpdatePhase.ReadyToInstall or UpdatePhase.Installing or UpdatePhase.Restarting
+                => NoticeFor(_orchestrator.Install.Kind),
+            _ => null,
+        };
+
+        if (InstallNotice != notice)
+        {
+            InstallNotice = notice;
+            OnPropertyChanged(nameof(HasInstallNotice));
+        }
+    }
+
+    /// <summary>
+    /// What the install click does, per form. The Windows wording is the whole point of this
+    /// line: the GUI closes seconds after the click, so the sequence - stop the daemon and the
+    /// tray, close, let the setup show its progress and restart, and where a failure lands -
+    /// has to be readable before it happens. The failure destination is the watchdog's log
+    /// directory, which the watchdog opens itself: a GUI that has exited cannot open anything.
+    /// </summary>
+    private static string? NoticeFor(InstallKind kind)
+    {
+        if (kind == InstallKind.WindowsInstall)
+        {
+            return
+                "点击“立即安装并重启”后将停止守护进程与托盘并关闭本程序，随后由安装程序显示安装进度，完成后自动重启应用。"
+                + $"若安装失败，会自动打开诊断日志：{WindowsUpdateWatchdog.ResolveLogDirectory()}";
+        }
+
+        return "安装后自动重启应用；更新包已经 SHA256 校验，未经代码签名。";
     }
 
     private static string? GuidanceFor(InstallKind kind) => kind switch
@@ -410,13 +482,13 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// The installer just put the new version in place. When it arranged the relaunch itself -
-    /// the Windows setup program's conditional run entry, the Linux package chain - this process
-    /// is on its way out anyway and nothing is started here. When it did not - the AppImage
-    /// swap - the successor is started through a detached chain that waits for this process to
-    /// exit first: the old GUI holds the per-user/session instance lease for as long as it
-    /// lives, so a successor started any earlier loses the arbitration and exits again. That is
-    /// exactly the failure the AppImage installer used to have when it started the new image
-    /// itself, while its own host still held the lease.
+    /// the Windows watchdog that runs the setup, the Linux package chain - this process is on
+    /// its way out anyway and nothing is started here. When it did not - the AppImage swap -
+    /// the successor is started through a detached chain that waits for this process to exit
+    /// first: the old GUI holds the per-user/session instance lease for as long as it lives, so
+    /// a successor started any earlier loses the arbitration and exits again. That is exactly
+    /// the failure the AppImage installer used to have when it started the new image itself,
+    /// while its own host still held the lease.
     /// </summary>
     private void OnRestartRequested()
     {

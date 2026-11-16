@@ -46,4 +46,37 @@ internal interface ISdl3Api
     bool GetButton(Sdl3GamepadHandle handle, SDL.GamepadButton button);
 
     short GetAxis(Sdl3GamepadHandle handle, SDL.GamepadAxis axis);
+
+    /// <summary>
+    /// Hands one mapping string to <c>SDL_AddGamepadMapping</c>. Returns false - with SDL's own
+    /// error text - when SDL rejects it, so the caller can refuse to persist a mapping that
+    /// would not take effect. SDL answering "already mapped" counts as success: the mapping is
+    /// in force either way.
+    /// </summary>
+    bool TryAddGamepadMapping(string mapping, out string? error);
+
+    /// <summary>
+    /// Every joystick SDL currently sees, each carrying whether SDL already recognizes it as a
+    /// standard gamepad. The mapping-supplement flow filters to the ones where that is false.
+    /// </summary>
+    IReadOnlyList<Sdl3JoystickInfo> GetJoysticks();
+
+    /// <summary>
+    /// Opens one plain joystick for raw reading. Returns null - with SDL's error text - when
+    /// the open fails; the caller records that instead of throwing.
+    /// </summary>
+    Sdl3JoystickHandle? OpenJoystick(uint instanceId, out string? error);
+
+    /// <summary>Closes one open joystick; closing twice is a no-op.</summary>
+    void CloseJoystick(Sdl3JoystickHandle handle);
+
+    /// <summary>Reads the raw button, axis and hat state of one open joystick.</summary>
+    Sdl3JoystickSnapshot ReadJoystick(Sdl3JoystickHandle handle);
+
+    /// <summary>
+    /// What SDL's mapping database answers for one GUID, or null when it answers nothing. This
+    /// is the confirmation that a mapping is registered: unlike the gamepad list, it is not
+    /// cached per instance id, so it stays truthful after a mapping is added mid-process.
+    /// </summary>
+    string? GetMappingForGuid(string guidString);
 }

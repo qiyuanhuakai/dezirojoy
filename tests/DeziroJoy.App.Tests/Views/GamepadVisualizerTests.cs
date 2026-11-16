@@ -359,7 +359,7 @@ public sealed class GamepadVisualizerTests
 
         // The hit-target contract is tested at the settled lifted position, without the lift
         // transform moving between coordinate measurement and the input event.
-        Assert.IsType<TranslateTransform>(Stage(Model(window)).RenderTransform).Transitions = null;
+        ModelMotion.Detach(Stage(Model(window)));
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
@@ -950,7 +950,7 @@ public sealed class GamepadVisualizerTests
         var model = Model(window);
         // The hit-target contract is tested at the settled lifted position, without the
         // transform moving between coordinate measurement and the input event.
-        Assert.IsType<TranslateTransform>(Stage(model).RenderTransform).Transitions = null;
+        ModelMotion.Detach(Stage(model));
 
         // The editor stays open across every click, so each element is hit while the model
         // is lifted out of the way and the previous element is still outlined: a target that

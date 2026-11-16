@@ -8,17 +8,15 @@
   Every path is resolved from the script's own location ($PSScriptRoot), never from
   the caller's working directory, so the invocation works from anywhere.
 
-  Two setups are compiled, deliberately (M64 leftover, wired for the 0.0.1 release):
-    * The published setup.exe is compiled WITH /DDeziroJoyUpdateRun, so it carries the
-      conditional [Run] relaunch entry in DeziroJoy.iss. The in-app updater relaunches
-      this setup /VERYSILENT; that entry omits skipifsilent so Setup - not the updater,
-      which the Restart Manager closes mid-install - restarts the app once the new files
-      are in place. This is the artefact the workflow uploads.
-    * The silent install / verify / uninstall loop compiles and installs a SECOND,
-      define-free setup. The relaunch entry above would launch the app during a
-      /VERYSILENT install, so the loop must run against a build that does not carry it:
-      same .iss, same payload, same RID, only the update-run entry differs. The
-      verification behaviour is therefore exactly what it has always been.
+  One setup is compiled, and it is the artefact that is uploaded: it carries no relaunch
+  entry of its own (DeziroJoy.iss [Run]), because the in-app updater hands the install to
+  an external watchdog that starts the new version after it has seen this setup's exit
+  code. The same build is therefore also the one the silent install / verify / uninstall
+  loop below runs against - which is what it always had to prove: no relaunch, no second
+  instance, nothing left behind. (An earlier revision compiled a second, define-free setup
+  for that loop, because the release build then carried a conditional relaunch entry that
+  omitted skipifsilent. With the relaunch gone from the script there is nothing left to
+  keep the two builds apart.)
 
   What is verified here:
     * ISCC is resolved to the real Inno compiler: the directory the Chocolatey
@@ -49,6 +47,13 @@
       the uninstall registry key and the shortcuts asserted gone. Any install
       failure or missing artefact prints the Inno install log tail and every
       directory the payload could have landed in before failing.
+    * The .iss carries no relaunch of its own. The in-app updater's watchdog starts
+      the new version after it has seen this setup's exit code, so a [Run] entry that
+      skipped the silent flag would start the app a second time - and one that did not
+      wait for the old GUI to release the instance lease lost the arbitration and
+      exited again. Every [Run] entry must therefore be skipifsilent, and the update-run
+      define that used to compile the second entry in must stay gone; both are asserted
+      before the compile.
 
   Inno Setup 6 compiles a 32-bit x86 setup bootstrap for every architecture: the
   loader is architecture-neutral, and the payload plus ArchitecturesAllowed decide
@@ -251,6 +256,33 @@ if ($issText -notmatch 'Description:\s*"\{cm:LaunchProgram,\{#MyAppName\}\}"') {
 }
 Write-Host "installer languages: english (fallback) + chinesesimplified; custom texts via {cm:CreateDesktopIcon} / {cm:LaunchProgram}"
 
+# --- verify the installer relaunches nothing (the update watchdog owns it) -------------
+# The in-app updater hands the install to an external watchdog: a temporary PowerShell
+# script started by src/DeziroJoy.App/Services/Update/WindowsUpdateInstaller.cs, which waits
+# for the old GUI to exit, runs this setup /SILENT, waits for its exit code and then starts
+# the installed DeziroJoy.exe itself. A [Run] entry here would be a second relaunch, and the
+# one that used to live here (compiled only under /DDeziroJoyUpdateRun) was the failure: it
+# omitted skipifsilent, so it fired the moment the new files were in place - not necessarily
+# after the old GUI had released the per-user instance lease - and the successor lost the
+# arbitration and exited again, which the user saw as "I clicked update and the app never
+# came back". Both halves of that entry must therefore stay out of the script: the define
+# that compiled it, and any [Run] entry that would run during a silent install.
+if ($issText -match 'DeziroJoyUpdateRun') {
+  throw "DeziroJoy.iss: the update-run define must stay gone - the watchdog started by the in-app updater performs the relaunch, and an entry compiled under it would start the app a second time"
+}
+$runSection = [regex]::Match($issText, '(?ms)^\[Run\][ \t]*\r?\n(.*?)(?=^\[|\z)').Groups[1].Value
+if (-not $runSection) {
+  throw "DeziroJoy.iss: no [Run] section found"
+}
+foreach ($entry in ($runSection -split "`n")) {
+  # Comments and blank lines are not entries.
+  if ($entry -match '^\s*(;|$)') { continue }
+  if ($entry -notmatch 'skipifsilent') {
+    throw "DeziroJoy.iss: every [Run] entry must carry skipifsilent, found: $($entry.Trim()) (the update watchdog performs the relaunch; an entry that runs during a silent install would start the app a second time)"
+  }
+}
+Write-Host "[Run]: no relaunch of its own - every entry is skipifsilent, the update watchdog restarts the app"
+
 # --- resolve ISCC ------------------------------------------------------------------
 # windows-latest ships Inno Setup 6 on PATH, but a PATH hit is not necessarily the
 # real compiler: the Chocolatey ISCC shim at C:\ProgramData\Chocolatey\bin\ISCC.exe
@@ -347,13 +379,14 @@ foreach ($message in @('CreateDesktopIcon', 'LaunchProgram')) {
 Write-Host "ChineseSimplified.isl: $zhIsl (defines CreateDesktopIcon and LaunchProgram)"
 
 # --- compile helper ----------------------------------------------------------------
-# Drives ISCC with the full /D set the .iss requires. -WithUpdateRun adds
-# /DDeziroJoyUpdateRun, which compiles in the conditional [Run] relaunch entry the
-# in-app updater relies on (DeziroJoy.iss). That entry omits skipifsilent so the
-# updater's silent update run restarts the app - which is exactly why only the
-# release artefact may carry it, and the verification loop below compiles a second,
-# define-free setup instead.
-function Invoke-Compile([string]$OutputDir, [switch]$WithUpdateRun) {
+# Drives ISCC with the full /D set the .iss requires. One build, and it is the artefact the
+# workflow uploads as well as the one the verification loop below installs: the script
+# carries no relaunch entry, so the release build and the verified build are the same thing.
+# (An earlier revision added /DDeziroJoyUpdateRun here to compile a conditional [Run] relaunch
+# for the in-app updater and then compiled a second, define-free setup for the loop. The
+# relaunch now belongs to the watchdog the app starts, and the [Run] check above keeps it out
+# of the script - so there is no second build to keep apart.)
+function Invoke-Compile([string]$OutputDir) {
   $defines = @(
     "/DDeziroJoyVersion=$Version"
     "/DDeziroJoyRid=$Rid"
@@ -361,34 +394,28 @@ function Invoke-Compile([string]$OutputDir, [switch]$WithUpdateRun) {
     "/DDeziroJoyIconFile=$icon"
     "/DDeziroJoyOutputDir=$OutputDir"
   )
-  if ($WithUpdateRun) { $defines += "/DDeziroJoyUpdateRun" }
   # ISCC's own progress output is left on the success stream on purpose: the callers
   # run this as a statement (never assigning its result), so it stays visible in the
   # CI log. Nothing is returned - the compiled path is deterministic and the caller
   # reads it back from $OutputDir + $setupExeName.
   & $iscc $iss @defines
   if ($LASTEXITCODE -ne 0) {
-    throw "ISCC failed with exit code $LASTEXITCODE (OutputDir=$OutputDir, WithUpdateRun=$WithUpdateRun)"
+    throw "ISCC failed with exit code $LASTEXITCODE (OutputDir=$OutputDir)"
   }
   $built = Join-Path $OutputDir $setupExeName
   if (-not (Test-Path $built)) {
     throw "ISCC reported success but $setupExeName is missing from $OutputDir"
   }
-  if ($WithUpdateRun) {
-    Write-Host "compiled $setupExeName into $OutputDir WITH the in-app updater relaunch entry (/DDeziroJoyUpdateRun), $((Get-Item $built).Length) bytes"
-  }
-  else {
-    Write-Host "compiled $setupExeName into $OutputDir define-free (no updater relaunch entry), $((Get-Item $built).Length) bytes"
-  }
+  Write-Host "compiled $setupExeName into $OutputDir, $((Get-Item $built).Length) bytes"
 }
 
 # --- compile the release artefact --------------------------------------------------
-# The published setup.exe is built WITH /DDeziroJoyUpdateRun so it carries the
-# conditional [Run] relaunch entry: when the in-app updater relaunches this setup
-# /VERYSILENT, Setup restarts the app once the new files are in place (the updater
-# itself is closed mid-install by the Restart Manager, CloseApplications=yes, so the
-# relaunch has to come from Setup). This is the artefact the workflow uploads.
-Invoke-Compile -OutputDir $repoRoot -WithUpdateRun
+# The published setup.exe is the only one compiled, and it relaunches nothing: the in-app
+# updater's watchdog starts the new version after it has seen this setup's exit code. This
+# is the artefact the workflow uploads, and it is also what the silent install / verify /
+# uninstall loop below installs - which is what that loop always had to prove, that a silent
+# install of the shipped setup leaves no relaunch and no second instance behind.
+Invoke-Compile -OutputDir $repoRoot
 $setupExePath = Join-Path $repoRoot $setupExeName
 
 # --- verify the compiled bootstrap ----------------------------------------------------
@@ -432,13 +459,13 @@ $installPollMilliseconds = 250
 $installDir = Join-Path $env:TEMP ("DeziroJoy-Install-{0}" -f [guid]::NewGuid().ToString('N'))
 $installLog = Join-Path $env:TEMP ("DeziroJoy-Install-{0}.log" -f [guid]::NewGuid().ToString('N'))
 $uninstallLog = Join-Path $env:TEMP ("DeziroJoy-Uninstall-{0}.log" -f [guid]::NewGuid().ToString('N'))
-# The verification loop installs a SECOND, define-free setup rather than the release
-# artefact compiled above: the release build carries the in-app updater relaunch entry,
-# which omits skipifsilent and would launch the app during a /VERYSILENT install. The
-# loop must observe exactly the behaviour it always has - no relaunch - so it compiles
-# and installs this define-free setup instead (same .iss, payload and RID; only the
-# update-run entry differs, and only the release build is meant to carry it).
-$verifyDir = Join-Path $env:TEMP ("DeziroJoy-Verify-{0}" -f [guid]::NewGuid().ToString('N'))
+# The verification loop installs the release artefact compiled above. It used to compile a
+# second, define-free setup for this, because the release build then carried a conditional
+# [Run] relaunch entry that omitted skipifsilent and would have launched the app during a
+# /VERYSILENT install. The relaunch is the in-app updater's watchdog's job now and the
+# [Run] check above keeps it out of the script, so the shipped setup is exactly the build
+# this loop must observe: a silent install that relaunches nothing and leaves nothing
+# behind.
 $exe = Join-Path $installDir 'DeziroJoy.exe'
 
 function Show-InnoLogTail([string]$LogPath, [string]$What) {
@@ -513,18 +540,21 @@ function Test-InstallCompleted {
 }
 
 try {
-  # Compile the define-free verification setup here (see $verifyDir above): the release
-  # artefact carries the updater relaunch entry and must not be the one installed here.
-  New-Item -ItemType Directory -Path $verifyDir -Force | Out-Null
-  Invoke-Compile -OutputDir $verifyDir
-  $verifySetup = Join-Path $verifyDir $setupExeName
-
-  Invoke-InnoSilent $verifySetup @(
+  # Install the release artefact itself (see $exe above): the shipped setup is the one this
+  # loop has to prove installs, verifies and uninstalls cleanly, and it relaunches nothing.
+  #
+  # /DIR and /LOG carry their own quotes for the same reason the update watchdog's do:
+  # Start-Process -ArgumentList joins entries with spaces and, on Windows PowerShell 5.1,
+  # quotes nothing itself - and $env:TEMP sits under a profile path that contains a space on
+  # any machine whose user name does. Unquoted, Inno would only see /DIR=C:\Users\John and
+  # install into a directory nobody looks at. The same values are quoted for the uninstall
+  # below.
+  Invoke-InnoSilent $setupExePath @(
     '/VERYSILENT'
     '/SUPPRESSMSGBOXES'
     '/NORESTART'
-    "/DIR=$installDir"
-    "/LOG=$installLog"
+    "/DIR=`"$installDir`""
+    "/LOG=`"$installLog`""
   ) $installLog 'silent install' -Diagnose
 
   # Second wait: the install itself, not just the process that launched it. The
@@ -581,11 +611,14 @@ try {
     Select-Object -First 1
   if (-not $uninstaller) { throw "unins*.exe missing in $installDir" }
 
+  # /LOG is quoted for the same reason as above: Start-Process -ArgumentList adds no quoting
+  # of its own on Windows PowerShell 5.1, and the log lives under a profile path that may
+  # contain a space.
   Invoke-InnoSilent $uninstaller.FullName @(
     '/VERYSILENT'
     '/SUPPRESSMSGBOXES'
     '/NORESTART'
-    "/LOG=$uninstallLog"
+    "/LOG=`"$uninstallLog`""
   ) $uninstallLog 'silent uninstall'
 
   if (Test-Path $installDir) {
@@ -612,9 +645,7 @@ finally {
   # Every failure path above prints its log tails and directory listings before this
   # runs. The throwaway install directory is removed here as well, so a failed or
   # interrupted run does not leave a half-installed payload or uninstaller behind;
-  # after a successful uninstall it is already gone and this is a no-op. The
-  # define-free verification setup is dropped the same way.
+  # after a successful uninstall it is already gone and this is a no-op.
   Remove-Item -Path $installLog, $uninstallLog -ErrorAction SilentlyContinue
   Remove-Item -Path $installDir -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-Item -Path $verifyDir -Recurse -Force -ErrorAction SilentlyContinue
 }

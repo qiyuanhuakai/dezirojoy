@@ -121,7 +121,10 @@
                         platform actions a view model deliberately does not perform - opening
                         the release page and exiting the process for a restart - are raised as
                         events the code-behind answers, the same "view model raises, view
-                        answers" pattern the profile import/export dialogs use.
+                        answers" pattern the profile import/export dialogs use. The install
+                        line (UpdateInstallNoticeText) is the view model's own per-form wording:
+                        on Windows it is the last thing this window can say before it closes and
+                        the setup program's progress window takes over.
                     -->
                     <Border Classes="card">
                         <StackPanel>
@@ -149,13 +152,23 @@
                                         Content="前往下载" IsVisible="{Binding Update.HasUpdate}"
                                         Command="{Binding Update.OpenReleasePageCommand}" />
                             </WrapPanel>
+                            <!--
+                                One bar for the whole flow. A download reports its own
+                                percentage; the install has none to report once the package is
+                                on disk - the work has moved to the setup program - so the bar
+                                turns indeterminate there and says "still working" rather than
+                                pretending to measure. On Windows it is also the last thing this
+                                window shows before it closes and the setup's own progress
+                                window takes over.
+                            -->
                             <ProgressBar x:Name="UpdateDownloadProgressBar" Margin="0,10,0,0"
-                                         IsVisible="{Binding Update.IsDownloading}"
+                                         IsVisible="{Binding Update.IsProgressVisible}"
+                                         IsIndeterminate="{Binding Update.IsInstalling}"
                                          Minimum="0" Maximum="1"
                                          Value="{Binding Update.DownloadProgress}" />
-                            <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
-                                       IsVisible="{Binding Update.CanInstall}"
-                                       Text="安装后自动重启应用；Windows 会先停止 daemon，Linux 更新保留映射 daemon。更新包已经 SHA256 校验，未经代码签名。" />
+                            <TextBlock x:Name="UpdateInstallNoticeText" Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       IsVisible="{Binding Update.HasInstallNotice}"
+                                       Text="{Binding Update.InstallNotice}" />
                             <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
                                        IsVisible="{Binding Update.HasResult}"
                                        Foreground="{Binding Update.IsResultError, Converter={StaticResource TransferMessageBrush}}"

@@ -496,6 +496,9 @@ public sealed class MainWindowViewModelDaemonTests
         daemonHost.AddDevice("pad-1", "Controller One");
         daemonHost.AddDevice("pad-2", "Controller Two");
         var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Controller One"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
         var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
         var serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var acceptTask = DaemonHost.ServePipeAsync(server, serverCancellation.Token, pipeName);
@@ -533,12 +536,25 @@ public sealed class MainWindowViewModelDaemonTests
             daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
             await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.A && !viewModel.Editor.IsCapturingButton);
 
-            viewModel.Editor.ToggleCaptureButtonCommand.Execute(null);
-            daemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
-            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.None, 0.5f, 0, 0, 0));
-            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, 0.6f, 0, 0, 0));
-            await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.B && !viewModel.Editor.IsCapturingButton);
+            // Pad-2 presses last, so it is the pad that sampled most recently - but the
+            // profile names pad-1, and the capture belongs to the profile's device. The wait
+            // on this jump is also what drains the sample stream: arming while a press is
+            // still in flight is what let that press spend the capture the test just armed.
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.B);
 
+            viewModel.Editor.ToggleCaptureButtonCommand.Execute(null);
+            await WaitForCondition(() => daemonHost.CapturedDevice == "pad-1");
+
+            // The second pad's press is spent on nothing: not the capture, and not a
+            // navigation away from it either. The scoped device's press completes it.
+            daemonHost.PublishInputSample("pad-2", GamepadState.Create(GamepadButtonMask.X, 0, 0, 0, 0));
+            daemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.X, 0, 0, 0, 0));
+            await WaitForCondition(() => viewModel.Editor.SelectedButton == GamepadButton.X && !viewModel.Editor.IsCapturingButton);
+
+            // Pad-2's press moved nothing: the window is still scoped to the element pad-2's
+            // own press jumped to, and the lease the capture took was pad-1's.
+            Assert.Equal(new ButtonBinding(GamepadButton.B), viewModel.SelectedSource);
             Assert.True(daemonHost.IsInjectionSuspended);
         }
         finally
@@ -982,7 +998,9 @@ public sealed class MainWindowViewModelDaemonTests
 
     private static async Task WaitForCondition(Func<bool> condition)
     {
-        for (var attempt = 0; attempt < 200 && !condition(); attempt++)
+        // A real daemon over a real pipe, polled while the rest of the suite runs beside it:
+        // the budget is generous so a loaded machine costs time, not a failure.
+        for (var attempt = 0; attempt < 1000 && !condition(); attempt++)
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
@@ -1240,6 +1258,67 @@ public sealed class MainWindowViewModelDaemonTests
                 await pipe.DisposeAsync();
                 throw;
             }
+        }
+    }
+
+    [Fact]
+    public async Task A_Refused_Capture_Lease_Stands_The_Capture_Down()
+    {
+        // Two windows on one daemon, each on its own pipe so the daemon sees two
+        // connections: the second one's capture lease is refused while the first holds it,
+        // and a refused lease is a capture that is not happening - the pad was never
+        // isolated, so its presses still belong to the active mapping.
+        var pipeA = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var pipeB = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1");
+        var store = new InMemoryProfileStore();
+        var presets = new PresetStore(store);
+        presets.EnsureDefaults(new GamepadDescriptor("pad-1", "Xbox Wireless Controller"));
+        daemonHost.Reload("pad-1", presets.LoadSlot("pad-1", 1)!);
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var cancellationA = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationB = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var acceptA = DaemonHost.ServePipeAsync(server, cancellationA.Token, pipeA);
+        var acceptB = DaemonHost.ServePipeAsync(server, cancellationB.Token, pipeB);
+        await using var controllerA = new DaemonController(new PipeEndpoint(pipeA));
+        await using var controllerB = new DaemonController(new PipeEndpoint(pipeB));
+
+        try
+        {
+            await controllerA.ConnectAsync(TestContext.Current.CancellationToken);
+            await controllerB.ConnectAsync(TestContext.Current.CancellationToken);
+
+            using var presentationA = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+            using var presentationB = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+            await using var clientA = new MainWindowViewModel(presentationA, store, daemon: controllerA, daemonRequired: true);
+            await using var clientB = new MainWindowViewModel(presentationB, store, daemon: controllerB, daemonRequired: true);
+
+            // The first window arms a capture and the daemon holds the lease for it.
+            clientA.OpenEditorForSource(new ButtonBinding(GamepadButton.A));
+            clientA.Editor.IsCapturingButton = true;
+            await WaitForCondition(() => daemonHost.CapturedDevice == "pad-1");
+
+            // The second window asks for the same lease: refused, so its capture stands down
+            // with the reason on the status line instead of waiting for a press that would
+            // name a source on a pad that was never isolated.
+            clientB.OpenEditorForSource(new ButtonBinding(GamepadButton.B));
+            clientB.Editor.IsCapturingButton = true;
+            await WaitForCondition(() => !clientB.Editor.IsCapturingButton);
+
+            Assert.Contains("拒绝", clientB.StatusMessage);
+            Assert.True(clientA.Editor.IsCapturingButton, "the other window's capture is untouched");
+            Assert.Equal("pad-1", daemonHost.CapturedDevice);
+        }
+        finally
+        {
+            await cancellationA.CancelAsync();
+            await cancellationB.CancelAsync();
+            await acceptA;
+            await acceptB;
+            cancellationA.Dispose();
+            cancellationB.Dispose();
         }
     }
 

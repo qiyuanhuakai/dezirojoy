@@ -33,9 +33,12 @@
         <!-- Motion targets for the mapping surface. Each drives one animated property, so the
              animation lives in a DoubleTransition on the target and these only say where the
              property has to end up:
+               EditorZoom  the model shrinks while the editor is open, leaving the stage to
+                           the settings card
                EditorLift  the model rises while the editor is open, clearing the card below
                EditorSlide the editor card settles up into its slot as it appears
                EditorFade  the editor card's opacity, 0 at rest and 1 while open -->
+        <conv:BoolToDoubleConverter x:Key="EditorZoom" TrueValue="0.65" FalseValue="1" />
         <conv:BoolToDoubleConverter x:Key="EditorLift" TrueValue="-24" FalseValue="0" />
         <conv:BoolToDoubleConverter x:Key="EditorSlide" TrueValue="0" FalseValue="14" />
         <conv:BoolToDoubleConverter x:Key="EditorFade" TrueValue="1" FalseValue="0" />
@@ -562,7 +565,8 @@
                         <Grid.RowDefinitions>
                             <!-- The model stage is a fixed-height row: opening the editor below
                                  must not re-lay the model out, or it would jump before the lift
-                                 animation even starts. The only motion is the animated lift.
+                                 animation even starts. The only motion is the animated lift and
+                                 zoom, both render transforms on the model itself.
                                  The stage is 420 rather than 480 (DESIGN 4.3.7): the released
                                  60px go to the editor card below, which is the surface that
                                  actually needs the room. -->
@@ -572,7 +576,8 @@
 
                         <!-- The model stage. No card wraps the model: it is the surface itself,
                              enlarged and centred by default. While a mapping is being edited it
-                             lifts, clearing room for the card that slides in below it.
+                             lifts, clearing room for the card that slides in below it, and
+                             shrinks, so the stage reads as the card's while the card is open.
 
                              The stage is split so the title and the instructions own a header
                              row and the model owns the rest. The lift is a render transform,
@@ -595,31 +600,79 @@
                                     <TextBlock Classes="hint" Margin="0,4,0,0" TextAlignment="Center" TextWrapping="Wrap"
                                                Text="点击任意按键或摇杆即可编辑它的映射；连接手柄后，按下的按键会实时高亮。" />
                                 </StackPanel>
-                                <!-- The temporary gamepad-hijack switch, beside the model it governs.
-                                     It is session-only (never persisted): on, a press drives the UI
-                                     and mapping injection is suspended; off, a press follows the
-                                     active mapping again. It carries the same lease the old
-                                     settings checkbox did, without writing to the preferences. -->
-                                <ToggleButton Grid.Column="1" x:Name="GamepadHijackToggle" Classes="rowToggle"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"
-                                              FontSize="11" Padding="10,6"
-                                              ToolTip.Tip="手柄劫持（临时）：开启时手柄按键用于界面导航与编辑——按下哪个按键就跳转到哪个按键的映射配置，映射注入暂停；关闭时手柄按键继续映射注入。仅本次会话生效，重启后恢复为关闭。"
-                                              IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}">
-                                    <TextBlock Text="手柄劫持（临时）" />
-                                </ToggleButton>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <!-- The surface switch: the data-driven generic panel for a
+                                         device that declares its controls, the hand-drawn model
+                                         otherwise. It only exists when the device gives the
+                                         panel something to show, and it is a view of this
+                                         session's device - nothing is persisted about it. -->
+                                    <Button Classes="caption" Margin="0,0,6,0" FontSize="11" Padding="10,6"
+                                            IsVisible="{Binding CanUseGenericPanel}"
+                                            Command="{Binding ToggleMappingSurfaceCommand}"
+                                            Content="{Binding SurfaceToggleLabel}"
+                                            ToolTip.Tip="在手柄模型与通用输入面板之间切换：通用面板按设备声明的控件排列，手柄模型是按型号绘制的图示。" />
+                                    <!-- The temporary gamepad-hijack switch, beside the model it governs.
+                                         It is session-only (never persisted): on, a press drives the UI
+                                         and mapping injection is suspended; off, a press follows the
+                                         active mapping again. It carries the same lease the old
+                                         settings checkbox did, without writing to the preferences. -->
+                                    <ToggleButton x:Name="GamepadHijackToggle" Classes="rowToggle"
+                                                  VerticalAlignment="Center"
+                                                  FontSize="11" Padding="10,6"
+                                                  ToolTip.Tip="手柄劫持（临时）：开启时手柄按键用于界面导航与编辑——按下哪个按键就跳转到哪个按键的映射配置，映射注入暂停；关闭时手柄按键继续映射注入。仅本次会话生效，重启后恢复为关闭。"
+                                                  IsChecked="{Binding GamepadNavigationEnabled, Mode=TwoWay}">
+                                        <TextBlock Text="手柄劫持（临时）" />
+                                    </ToggleButton>
+                                </StackPanel>
                             </Grid>
                             <Viewbox Grid.Row="1" Stretch="Uniform" MaxHeight="380" MaxWidth="620"
                                      HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,24,0,0">
                                 <Viewbox.RenderTransform>
-                                    <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
-                                        <TranslateTransform.Transitions>
-                                            <Transitions>
-                                                <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
-                                            </Transitions>
-                                        </TranslateTransform.Transitions>
-                                    </TranslateTransform>
+                                    <TransformGroup>
+                                        <!-- The stage surface - model or panel - shrinks while
+                                             the editor is open: the stage row is a fixed 420
+                                             and hands its height to the settings card's star
+                                             row either way, so the room is won by the
+                                             surface occupying less of the stage. Uniform and
+                                             centred - the transform origin is the centre - so
+                                             the surface keeps its proportions and stays
+                                             centred, and it is a render transform, so hit
+                                             testing rides the same matrix and every element
+                                             stays clickable exactly where it is drawn.
+                                             Closing returns the scale to 1 with nothing left
+                                             behind. The lift rides in the same group so the
+                                             two motions compose instead of overriding. -->
+                                        <ScaleTransform ScaleX="{Binding IsEditing, Converter={StaticResource EditorZoom}}"
+                                                        ScaleY="{Binding IsEditing, Converter={StaticResource EditorZoom}}">
+                                            <ScaleTransform.Transitions>
+                                                <Transitions>
+                                                    <DoubleTransition Property="ScaleX" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
+                                                    <DoubleTransition Property="ScaleY" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
+                                                </Transitions>
+                                            </ScaleTransform.Transitions>
+                                        </ScaleTransform>
+                                        <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
+                                            <TranslateTransform.Transitions>
+                                                <Transitions>
+                                                    <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
+                                                </Transitions>
+                                            </TranslateTransform.Transitions>
+                                        </TranslateTransform>
+                                    </TransformGroup>
                                 </Viewbox.RenderTransform>
-                                <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}" />
+                                <!-- The two mapping surfaces share the stage's Viewbox, so the
+                                     lift and the zoom apply to both and hit testing rides the
+                                     same transform on either. Which one shows is the device's
+                                     answer and then the user's: a device that declares its
+                                     controls starts on the data-driven panel, and the
+                                     hand-drawn model - the surface for a device that declares
+                                     nothing - stays one switch away. -->
+                                <Grid>
+                                    <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}"
+                                                                IsVisible="{Binding DataContext.(vm:MainWindowViewModel).IsGenericPanelMode, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource Not}}" />
+                                    <controls:GenericGamepadPanel DataContext="{Binding GenericPanel}"
+                                                                  IsVisible="{Binding DataContext.(vm:MainWindowViewModel).IsGenericPanelMode, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                </Grid>
                             </Viewbox>
                         </Grid>
 

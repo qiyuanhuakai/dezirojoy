@@ -147,27 +147,35 @@ public sealed class MappingRowKeyboardTests
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
 
-        var lift = Assert.IsType<TranslateTransform>(ModelViewbox(window).RenderTransform);
+        var viewbox = ModelViewbox(window);
+        var lift = ModelMotion.Lift(viewbox);
+        var zoom = ModelMotion.Zoom(viewbox);
 
-        // Headless runs no clock, so the animated lift never leaves its start value here.
-        // Detaching the transition makes the animation's TARGET observable, exactly as
+        // Headless runs no clock, so the animated motions never leave their start values
+        // here. Detaching the transitions makes the TARGETS observable, exactly as
         // Opening_The_Editor_Lifts_The_Model_With_An_Animated_Transform does.
-        lift.Transitions = null;
+        ModelMotion.Detach(viewbox);
 
         var header = HeaderRect(window);
-        var restTop = ModelRect(window).Top;
 
         Click(ModelElement(window, "ButtonA"), window);
         Assert.True(viewModel.IsEditing);
 
-        // The fix reserves room for the lift; it must not remove the motion itself.
-        Assert.True(lift.Y < 0d, $"the model must still lift while the editor is open, Y was {lift.Y}");
+        // Both motions land, and they compose in one group: the lift still carries the
+        // model up by its full 24, and the zoom shrinks it about its centre - the rendered
+        // size that produces is pinned by the dedicated zoom test, which measures the
+        // transform rather than this helper's layout-sized rectangle.
+        Assert.Equal(-24d, lift.Y);
+        Assert.Equal(0.65d, zoom.ScaleX, 3);
+        Assert.Equal(zoom.ScaleX, zoom.ScaleY);
 
-        var liftedTop = ModelRect(window).Top;
-        Assert.True(liftedTop < restTop, "the lift must actually carry the model upward");
+        var lifted = ModelRect(window);
 
-        Assert.True(liftedTop >= header.Bottom,
-            $"the lifted model (top {liftedTop}) overlaps the stage header (bottom {header.Bottom})");
+        // The fix reserves room for the lift; it must not remove the motion itself, and the
+        // zoom only adds clearance: the model's top never reaches the stage header - the
+        // inset the lift was reserved against is still what keeps the header clear.
+        Assert.True(lifted.Top >= header.Bottom,
+            $"the open model (top {lifted.Top}) overlaps the stage header (bottom {header.Bottom})");
     }
 
     // ---- A row is a keyboard activation target --------------------------------

@@ -37,13 +37,84 @@ internal sealed class FakeSdl3Api : ISdl3Api
         public bool Enumerated { get; set; } = true;
     }
 
+    /// <summary>One scripted plain joystick: its reported info plus its live raw state.</summary>
+    public sealed class FakeJoystick
+    {
+        public required uint InstanceId { get; init; }
+
+        public required string Name { get; init; }
+
+        public required string GuidString { get; init; }
+
+        public ushort Vendor { get; set; } = 0x0079;
+
+        public ushort Product { get; set; } = 0x0006;
+
+        public ushort ProductVersion { get; set; } = 0x0100;
+
+        public string Serial { get; set; } = string.Empty;
+
+        public string Path { get; set; } = string.Empty;
+
+        public string TypeName { get; set; } = "Unknown";
+
+        /// <summary>Live pressed state per raw button index.</summary>
+        public List<bool> Buttons { get; } = [];
+
+        /// <summary>Live value per raw axis index.</summary>
+        public List<short> Axes { get; } = [];
+
+        /// <summary>Live SDL hat mask per hat index.</summary>
+        public List<byte> Hats { get; } = [];
+
+        /// <summary>True while SDL still enumerates this device.</summary>
+        public bool Enumerated { get; set; } = true;
+
+        /// <summary>Builds a joystick with the given raw control counts, all at rest.</summary>
+        public static FakeJoystick Make(
+            uint instanceId,
+            int buttons,
+            int axes,
+            int hats,
+            string name = "Generic USB Joystick",
+            string guidString = "03000000790000000006000000000000")
+        {
+            var joystick = new FakeJoystick
+            {
+                InstanceId = instanceId,
+                Name = name,
+                GuidString = guidString,
+            };
+
+            joystick.Buttons.AddRange(Enumerable.Repeat(false, buttons));
+            joystick.Axes.AddRange(Enumerable.Repeat((short)0, axes));
+            joystick.Hats.AddRange(Enumerable.Repeat((byte)0, hats));
+            return joystick;
+        }
+
+        public void Press(int button) => Buttons[button] = true;
+
+        public void Release(int button) => Buttons[button] = false;
+
+        public void Move(int axis, short value) => Axes[axis] = value;
+
+        public void Turn(int hat, byte mask) => Hats[hat] = mask;
+    }
+
     private readonly List<Sdl3GamepadHandle> _openHandles = [];
     private readonly Dictionary<Sdl3GamepadHandle, FakeDevice> _handleDevices = [];
+    private readonly Dictionary<Sdl3JoystickHandle, FakeJoystick> _joystickHandles = [];
     private readonly List<Sdl3GamepadEvent> _queuedEvents = [];
     private int _nextPointer = 0x1000;
 
     /// <summary>Devices SDL currently knows about, in enumeration order.</summary>
     public List<FakeDevice> Devices { get; } = [];
+
+    /// <summary>
+    /// Plain joysticks SDL currently knows about, in enumeration order. A joystick that is also
+    /// in <see cref="Devices"/> is one SDL reads as a standard gamepad.
+    /// </summary>
+    public List<FakeJoystick> Joysticks { get; } = [];
 
     /// <summary>Lifecycle events that the next <see cref="PumpEvents"/> delivers.</summary>
     public List<Sdl3GamepadEvent> QueuedEvents => _queuedEvents;
@@ -86,8 +157,17 @@ internal sealed class FakeSdl3Api : ISdl3Api
         string serial = "",
         string path = "",
         int type = 3,
-        int declaredButtonCount = 15)
+        int declaredButtonCount = 15,
+        IReadOnlyList<string>? declaredButtons = null,
+        IReadOnlyList<string>? declaredAxes = null,
+        IReadOnlyList<string>? faceButtonLabels = null)
     {
+        // A standard pad by default: the fifteen standard buttons and all six axes declared.
+        // A test that wants a narrower - or richer - declaration says so, and the control
+        // description follows the declaration rather than the device name.
+        var buttons = declaredButtons ?? DefaultButtonKeys;
+        var axes = declaredAxes ?? StandardAxisKeys;
+
         var info = new Sdl3GamepadInfo
         {
             InstanceId = instanceId,
@@ -107,8 +187,10 @@ internal sealed class FakeSdl3Api : ISdl3Api
             TouchpadCount = 0,
             TouchpadFingerCounts = [],
             Sensors = [],
+            DeclaredButtons = buttons,
             DeclaredButtonCount = declaredButtonCount,
-            FaceButtonLabels = ["A", "B", "X", "Y"],
+            DeclaredAxes = axes,
+            FaceButtonLabels = faceButtonLabels ?? ["A", "B", "X", "Y"],
         };
 
         return new FakeDevice
@@ -122,13 +204,53 @@ internal sealed class FakeSdl3Api : ISdl3Api
         };
     }
 
+    /// <summary>The fifteen standard buttons a plain Xbox-layout pad declares.</summary>
+    public static readonly string[] DefaultButtonKeys =
+    [
+        "a", "b", "x", "y", "back", "guide", "start",
+        "leftstick", "rightstick", "leftshoulder", "rightshoulder",
+        "dpup", "dpdown", "dpleft", "dpright",
+    ];
+
+    /// <summary>Every standard SDL button key, including the positionless cluster.</summary>
+    public static readonly string[] AllStandardButtonKeys =
+    [
+        .. DefaultButtonKeys,
+        "misc1", "misc2", "misc3", "misc4", "misc5", "misc6",
+        "paddle1", "paddle2", "paddle3", "paddle4", "touchpad",
+    ];
+
+    /// <summary>Every standard SDL axis key, in SDL's own order.</summary>
+    public static readonly string[] StandardAxisKeys =
+        ["leftx", "lefty", "rightx", "righty", "lefttrigger", "righttrigger"];
+
     public FakeDevice AddDevice(FakeDevice device)
     {
         Devices.Add(device);
         return device;
     }
 
+    public FakeJoystick AddJoystick(FakeJoystick joystick)
+    {
+        Joysticks.Add(joystick);
+        return joystick;
+    }
+
     public void Queue(Sdl3GamepadEventType type, uint instanceId) => _queuedEvents.Add(new Sdl3GamepadEvent(type, instanceId));
+
+    /// <summary>Mappings handed to SDL so far, in order - the observable for "loaded before enumerating".</summary>
+    public List<string> AddedMappings { get; } = [];
+
+    /// <summary>When false, <see cref="TryAddGamepadMapping"/> rejects with <see cref="MappingRejection"/>.</summary>
+    public bool MappingAccepted { get; set; } = true;
+
+    public string MappingRejection { get; set; } = "映射格式非法（测试）";
+
+    /// <summary>What <see cref="GetMappingForGuid"/> answers, keyed by GUID.</summary>
+    public Dictionary<string, string> RegisteredMappings { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Joystick opens that failed, by instance id, with SDL's own error text.</summary>
+    public Dictionary<uint, string> JoystickOpenFailures { get; } = [];
 
     public Sdl3RuntimeInfo? GetRuntimeInfo() => Runtime;
 
@@ -209,6 +331,87 @@ internal sealed class FakeSdl3Api : ISdl3Api
 
     public short GetAxis(Sdl3GamepadHandle handle, SDL.GamepadAxis axis)
         => _handleDevices.TryGetValue(handle, out var device) ? device.Axes[(int)axis] : (short)0;
+
+    public bool TryAddGamepadMapping(string mapping, out string? error)
+    {
+        AddedMappings.Add(mapping);
+        error = MappingAccepted ? null : MappingRejection;
+        return MappingAccepted;
+    }
+
+    public string? GetMappingForGuid(string guidString)
+        => RegisteredMappings.TryGetValue(guidString, out var mapping) ? mapping : null;
+
+    public IReadOnlyList<Sdl3JoystickInfo> GetJoysticks()
+    {
+        var gamepadIds = Devices.Where(device => device.Enumerated).Select(device => device.InstanceId).ToHashSet();
+        return Joysticks
+            .Where(joystick => joystick.Enumerated)
+            .Select(joystick => new Sdl3JoystickInfo
+            {
+                InstanceId = joystick.InstanceId,
+                Name = joystick.Name,
+                GuidString = joystick.GuidString,
+                Vendor = joystick.Vendor,
+                Product = joystick.Product,
+                ProductVersion = joystick.ProductVersion,
+                Serial = joystick.Serial,
+                Path = joystick.Path,
+                ButtonCount = joystick.Buttons.Count,
+                AxisCount = joystick.Axes.Count,
+                HatCount = joystick.Hats.Count,
+                TypeName = joystick.TypeName,
+                HasStandardMapping = gamepadIds.Contains(joystick.InstanceId),
+            })
+            .ToList();
+    }
+
+    public Sdl3JoystickHandle? OpenJoystick(uint instanceId, out string? error)
+    {
+        error = null;
+
+        if (JoystickOpenFailures.TryGetValue(instanceId, out var failure))
+        {
+            error = failure;
+            return null;
+        }
+
+        var joystick = Joysticks.FirstOrDefault(item => item.InstanceId == instanceId && item.Enumerated);
+        if (joystick is null)
+        {
+            error = $"Joystick #{instanceId} 不存在";
+            return null;
+        }
+
+        var handle = new Sdl3JoystickHandle(_nextPointer++);
+        _joystickHandles[handle] = joystick;
+        return handle;
+    }
+
+    public void CloseJoystick(Sdl3JoystickHandle handle)
+    {
+        // The same guard the real api has: closing an already-closed handle is a no-op.
+        if (handle.IsClosed)
+        {
+            return;
+        }
+
+        ClosedJoystickHandles.Add(handle);
+        _joystickHandles.Remove(handle);
+        handle.MarkClosed();
+    }
+
+    public Sdl3JoystickSnapshot ReadJoystick(Sdl3JoystickHandle handle)
+        => _joystickHandles.TryGetValue(handle, out var joystick)
+            ? new Sdl3JoystickSnapshot(joystick.Buttons, joystick.Axes, joystick.Hats)
+            : Sdl3JoystickSnapshot.Empty;
+
+    /// <summary>Joystick handles closed so far, in order.</summary>
+    public List<Sdl3JoystickHandle> ClosedJoystickHandles { get; } = [];
+
+    /// <summary>Counts how many times one joystick handle was closed - idempotency assertions.</summary>
+    public int JoystickCloseCount(Sdl3JoystickHandle handle)
+        => ClosedJoystickHandles.Count(item => ReferenceEquals(item, handle));
 
     /// <summary>Counts how many times one handle was closed - idempotency assertions.</summary>
     public int CloseCount(Sdl3GamepadHandle handle) => ClosedHandles.Count(h => ReferenceEquals(h, handle));

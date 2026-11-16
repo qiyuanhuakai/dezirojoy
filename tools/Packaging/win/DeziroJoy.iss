@@ -80,7 +80,8 @@ SolidCompression=yes
 WizardStyle=modern
 ; DeziroJoy is a tray-resident app, so it is usually running when the user upgrades.
 ; Let Setup close it through the Restart Manager instead of deadlocking on its own
-; executable; nothing is restarted automatically afterwards.
+; executable; nothing is restarted automatically afterwards - the in-app updater's
+; watchdog starts the new version once it has seen this setup's exit code (see [Run]).
 CloseApplications=yes
 
 [Languages]
@@ -109,20 +110,21 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-; Offer to launch after install, but never during the workflow's silent install.
+; Offer to launch after install, but never during a silent install.
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
-; The in-app updater's relaunch, compiled only when the build passes /DDeziroJoyUpdateRun. The
-; updater launches this setup /VERYSILENT and then exits immediately, releasing the DeziroJoy.exe
-; / DLL handles it holds (CloseApplications=yes above), so the relaunch cannot come from the
-; updater - it must come from Setup, once the new files are in place. The CI silent
-; install/uninstall loop and an ordinary release build never pass the define, so they keep
-; exactly the single skipifsilent offer above and never relaunch on their own. This entry
-; deliberately omits skipifsilent so the silent update run performs the relaunch, and omits a
-; Description so it runs without a check box.
-#ifdef DeziroJoyUpdateRun
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait postinstall
-#endif
+; There is deliberately no relaunch entry here - not one, and not a conditional one either.
+; The in-app updater hands the install to an external watchdog (a temporary PowerShell script
+; that src/DeziroJoy.App/Services/Update/WindowsUpdateInstaller starts and that outlives the
+; GUI): the watchdog waits for the old GUI to exit, runs this setup /SILENT, waits for its exit
+; code and only then starts {app}\{#MyAppExeName} itself. An entry compiled in here would race
+; that one, and it used to: [Run] fires the moment the new files are in place, which is not
+; necessarily after the old GUI has released the per-user instance lease, so the successor
+; lost the arbitration and exited again - the user's report was "I clicked update, the app
+; closed and never came back". Setup's own Restart Manager restart is not a second race: the
+; watchdog waits for the old process to be gone before it starts this setup, so there is
+; nothing for the Restart Manager to close and nothing for it to restart. build-and-verify.ps1
+; asserts this section stays free of a relaunch.
 
 [UninstallRun]
 ; Ask the installed app to hand the per-user ms-gamebar no-op protocol handler back

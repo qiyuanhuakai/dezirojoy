@@ -78,6 +78,38 @@ public sealed class MainWindowGuiTests
         Assert.False(viewModel.ScrollSensitivity.IsLive);
     }
 
+    [AvaloniaFact]
+    public void The_Sync_Tick_Expires_A_Forgotten_Capture_Without_Any_Input()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.A));
+
+        // An already-expired budget stands in for the real one, and no sample is ever fed:
+        // the window's 300 ms sync tick is the clock that ends a capture the pad is too
+        // quiet to end, so the check is driven from there rather than from the input stream.
+        var budget = viewModel.ButtonCaptureTimeout;
+        viewModel.ButtonCaptureTimeout = TimeSpan.Zero;
+        try
+        {
+            viewModel.Editor.IsCapturingButton = true;
+            Assert.Equal(DeviceId, host.CapturedDeviceId);
+
+            window.OnSyncTick(null, EventArgs.Empty);
+
+            Assert.False(viewModel.Editor.IsCapturingButton);
+            Assert.Contains("超时", viewModel.StatusMessage);
+            Assert.Null(host.CapturedDeviceId);
+        }
+        finally
+        {
+            viewModel.ButtonCaptureTimeout = budget;
+        }
+    }
+
     private static Color ColorOf(IBrush? brush)
         => Assert.IsType<ISolidColorBrush>(brush, exactMatch: false).Color;
 
