@@ -90,8 +90,16 @@ public sealed class MainWindowViewModelProfileLoadTests
         Assert.Contains("hapticPattern", afterEdit.Snapshot.ProfileJson);
 
         // And the row still deletes: the mapping this build cannot read is removable like
-        // any other, which is what an unreadable target used to make impossible.
+        // any other, which is what an unreadable target used to make impossible. The delete
+        // is a second fire-and-forget round-trip and gets the same two-sided wait as the
+        // toggle: the daemon's publication of revision 3, the view model's adoption of it,
+        // and only then the table's final count. Waiting for the count alone accepted a
+        // transient empty - the delete's local apply refresh empties the table before the
+        // daemon's own snapshot has been adopted, and on a loaded runner that snapshot can
+        // land late and put the row back after the wait had already passed.
         row.DeleteCommand.Execute(null);
+        await WaitForDaemonRevision(context, 3);
+        await WaitForRevision(context, 3);
         await WaitForMappings(context, 0);
 
         var afterDelete = Assert.IsType<StateChangedMessage>(
@@ -116,7 +124,13 @@ public sealed class MainWindowViewModelProfileLoadTests
         var row = Assert.Single(viewModel.Mappings);
         Assert.Contains("Enter", row.TargetText);
 
+        // The delete gets the same two-sided wait as the toggle above: the restored body
+        // was adopted at revision 4, so the delete lands as revision 5, and the table's
+        // final count only means "deleted" once the view model has adopted that revision -
+        // a count seen earlier can be the pre-delete table mid-refresh.
         row.DeleteCommand.Execute(null);
+        await WaitForDaemonRevision(context, 5);
+        await WaitForRevision(context, 5);
         await WaitForMappings(context, 0);
 
         var afterDelete = Assert.IsType<StateChangedMessage>(

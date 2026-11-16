@@ -29,7 +29,8 @@ public sealed class GamepadModelEditorTests
 {
     private const string DeviceId = "pad-01";
 
-    private static (MainWindow Window, MainWindowViewModel ViewModel, EngineHost Host, FakeGamepadProvider Provider) BuildWindow()
+    private static (MainWindow Window, MainWindowViewModel ViewModel, EngineHost Host, FakeGamepadProvider Provider) BuildWindow(
+        bool animatedMotion = false)
     {
         var provider = new FakeGamepadProvider();
         var sink = new RecordingOutputSink();
@@ -38,7 +39,44 @@ public sealed class GamepadModelEditorTests
         var viewModel = new MainWindowViewModel(host, store);
         var window = new MainWindow(viewModel, host);
         window.Show();
+
+        // Headless runs no clock, so a transitioned property never reaches its target:
+        // the editor card would sit at a mid-animation opacity, slide and hit area for the
+        // rest of the test, and a click aimed at the model while the previous card is still
+        // fading out can land on the card. These tests are about which element a click
+        // reaches, not about the motion, so the transitions are detached here and every
+        // bound value applies directly - production keeps the animation. The two tests
+        // that pin the motion itself opt back in and detach after asserting it.
+        if (!animatedMotion)
+        {
+            DetachEditorMotion(window);
+        }
+
         return (window, viewModel, host, provider);
+    }
+
+    /// <summary>
+    /// Detaches the mapping surface's motion - the editor card's fade and slide and the
+    /// model's lift - so a test sees each property's bound end value immediately instead of
+    /// a transition headless never advances.
+    /// </summary>
+    private static void DetachEditorMotion(MainWindow window)
+    {
+        var editor = window.FindControl<Border>("EditorPanel");
+        if (editor is not null)
+        {
+            editor.Transitions = null;
+            if (editor.RenderTransform is TranslateTransform slide)
+            {
+                slide.Transitions = null;
+            }
+        }
+
+        var lift = Model(window).GetVisualAncestors().OfType<Viewbox>().FirstOrDefault();
+        if (lift?.RenderTransform is TranslateTransform liftTransform)
+        {
+            liftTransform.Transitions = null;
+        }
     }
 
     private static void ConnectPad(FakeGamepadProvider provider, GamepadButtonMask buttons = default)
@@ -59,10 +97,15 @@ public sealed class GamepadModelEditorTests
         // The shoulder buttons overlap the triggers behind them, so a click only lands on the
         // intended element once layout has fully settled and that element is the topmost hit at
         // its own centre. BringIntoView can leave a scroll/arrange pass pending, so settle and
-        // confirm the hit before pressing rather than clicking through a transition - retrying
-        // the settle is what keeps this deterministic on a slow runner. A genuinely unclickable
-        // element still fails: the retries exhaust and the assertion below catches it.
+        // confirm the press will reach the element before pressing - retrying the settle is
+        // what keeps this deterministic on a slow runner.
+        //
+        // The confirmation runs a pointer move through the input system's own routing rather
+        // than a visual-tree hit test: the hit-test APIs (InputHitTest, GetVisualAt) ignore
+        // layout offsets in this Avalonia version and report misses exactly where the press
+        // lands, while PointerOver is maintained by the routing that delivers the press.
         var point = default(Point);
+        var landed = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             window.UpdateLayout();
@@ -72,17 +115,37 @@ public sealed class GamepadModelEditorTests
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
             point = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window) ?? default;
-            if (window.InputHitTest(point) is Visual hit
-                && (ReferenceEquals(hit, target) || target.GetVisualDescendants().Contains(hit)))
+            window.MouseMove(point);
+            Dispatcher.UIThread.RunJobs();
+            landed = target.IsPointerOver
+                || target.GetVisualDescendants().OfType<InputElement>().Any(over => over.IsPointerOver);
+            if (landed)
             {
                 break;
             }
         }
 
+        // A press that misses is not a click: say where the point actually reached instead of
+        // pressing blindly and failing an unrelated assertion later with nothing to say about
+        // the miss.
+        Assert.True(landed,
+            $"the click never reached {DescribeVisual(target)}: after settling, the point {point} " +
+            $"(the target's centre, bounds {target.Bounds}, at " +
+            $"{target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)}) " +
+            $"is over neither the target nor anything inside it, so the press would land elsewhere. " +
+            $"Ancestors: [{string.Join(" > ", target.GetVisualAncestors().Select(a => $"{a.GetType().Name}(bounds={a.Bounds},visible={a.IsVisible})"))}]");
+
         window.MouseDown(point, Avalonia.Input.MouseButton.Left);
         window.MouseUp(point, Avalonia.Input.MouseButton.Left);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
+
+        static string DescribeVisual(object? visual) => visual switch
+        {
+            null => "nothing",
+            Control control => $"{control.GetType().Name}(Name={control.Name ?? "<unnamed>"}, Bounds={control.Bounds})",
+            _ => visual.GetType().Name
+        };
     }
 
     private static readonly string[] ExpectedKeyCategories =
@@ -194,8 +257,14 @@ public sealed class GamepadModelEditorTests
             // must be fully settled first: the settings row collapses to zero height and the
             // elements below it shift up. Clicking through that transition is what made this
             // flaky on Windows, where the failing element was always a few positions in.
+            // The motion transitions are detached in BuildWindow, so the card leaves the
+            // layout the moment IsEditing drops - waiting for that fact rather than for a
+            // fixed number of dispatcher passes is what makes the settle real.
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
+            Assert.False(
+                window.FindControl<Border>("EditorPanel")!.IsVisible,
+                $"the editor card must leave the layout before the next element is clicked, {name}");
         }
     }
 
@@ -418,7 +487,9 @@ public sealed class GamepadModelEditorTests
     [AvaloniaFact]
     public void Opening_The_Editor_Lifts_The_Model_With_An_Animated_Transform()
     {
-        var (window, viewModel, host, provider) = BuildWindow();
+        // This test pins the motion itself, so it keeps the transitions attached until it
+        // has asserted them and detached them below.
+        var (window, viewModel, host, provider) = BuildWindow(animatedMotion: true);
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
@@ -452,7 +523,9 @@ public sealed class GamepadModelEditorTests
     [AvaloniaFact]
     public void The_Editor_Card_Slides_Up_And_Fades_In_When_It_Opens()
     {
-        var (window, viewModel, host, provider) = BuildWindow();
+        // This test pins the motion itself, so it keeps the transitions attached until it
+        // has asserted them and detached them below.
+        var (window, viewModel, host, provider) = BuildWindow(animatedMotion: true);
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
