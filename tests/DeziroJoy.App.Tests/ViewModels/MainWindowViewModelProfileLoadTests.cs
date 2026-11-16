@@ -66,7 +66,7 @@ public sealed class MainWindowViewModelProfileLoadTests
             new ApplyConfigurationMessage("req-1", 0, "future", FutureTargetJson)));
         Assert.True(applied.Accepted);
 
-        await WaitForMappings(viewModel, 1);
+        await WaitForMappings(context, 1);
 
         var row = Assert.Single(viewModel.Mappings);
         Assert.Contains("不支持的映射", row.TargetText);
@@ -75,8 +75,15 @@ public sealed class MainWindowViewModelProfileLoadTests
 
         // An unrelated edit re-saves the profile through the daemon: the unknown target has
         // to survive that trip, or the user's mapping would be gone on the next restart.
+        // The toggle commits fire-and-forget, so the daemon's own publication is the
+        // authoritative signal that the round-trip completed. Waiting on it - before waiting
+        // for the view model to catch up - splits the one blind wait into the two things that
+        // can actually break: the edit never reaching the daemon, and the daemon answering
+        // while the view never adopts it. A timeout now names which half failed instead of
+        // expiring with nothing to say.
         row.IsEnabled = false;
-        await WaitForRevision(viewModel, 2);
+        await WaitForDaemonRevision(context, 2);
+        await WaitForRevision(context, 2);
 
         var afterEdit = Assert.IsType<StateChangedMessage>(
             await context.Server.ProcessAsync(new GetStateMessage("probe")));
@@ -85,7 +92,7 @@ public sealed class MainWindowViewModelProfileLoadTests
         // And the row still deletes: the mapping this build cannot read is removable like
         // any other, which is what an unreadable target used to make impossible.
         row.DeleteCommand.Execute(null);
-        await WaitForMappings(viewModel, 0);
+        await WaitForMappings(context, 0);
 
         var afterDelete = Assert.IsType<StateChangedMessage>(
             await context.Server.ProcessAsync(new GetStateMessage("probe")));
@@ -110,7 +117,7 @@ public sealed class MainWindowViewModelProfileLoadTests
         Assert.Contains("Enter", row.TargetText);
 
         row.DeleteCommand.Execute(null);
-        await WaitForMappings(viewModel, 0);
+        await WaitForMappings(context, 0);
 
         var afterDelete = Assert.IsType<StateChangedMessage>(
             await context.Server.ProcessAsync(new GetStateMessage("probe")));
@@ -130,8 +137,7 @@ public sealed class MainWindowViewModelProfileLoadTests
         Assert.Empty(viewModel.Mappings);
     }
 
-    private static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost Host, ServerChannel Channel, DaemonServer Server)>
-        CreateDaemonViewModel(DaemonState? restored = null)
+    private static async Task<DaemonTestContext> CreateDaemonViewModel(DaemonState? restored = null)
     {
         var daemonHost = new FakeDaemonHost { HasController = false };
         var store = new InMemoryProfileStore();
@@ -158,17 +164,20 @@ public sealed class MainWindowViewModelProfileLoadTests
             store,
             daemon: controller,
             daemonRequired: true);
-        return (viewModel, daemonHost, channel, server);
+        return new DaemonTestContext(viewModel, daemonHost, channel, server, controller);
     }
 
     // The daemon round-trip is marshalled back through the test's synchronization context and
     // runs on the thread pool; on a loaded CI runner those continuations can be delayed well
     // past a tight fuse. The budget is generous so the wait absorbs scheduler contention rather
-    // than failing a correct flow - a revision that never arrives still times out and fails.
+    // than failing a correct flow - a revision that never arrives still times out and fails,
+    // and the wait that expires now reports which half of the round-trip stalled instead of
+    // raising a bare TimeoutException.
     private static readonly TimeSpan WaitBudget = TimeSpan.FromSeconds(30);
 
-    private static async Task WaitForMappings(MainWindowViewModel viewModel, int count)
+    private static async Task WaitForMappings(DaemonTestContext context, int count)
     {
+        var viewModel = context.ViewModel;
         // The mapping table is an ObservableCollection, so a refresh reports
         // CollectionChanged rather than a property change: the wait hangs off the collection.
         var filled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -188,6 +197,11 @@ public sealed class MainWindowViewModelProfileLoadTests
                 await filled.Task.WaitAsync(WaitBudget, TestContext.Current.CancellationToken);
             }
         }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"the mapping table never showed {count} row(s). {await DescribeAsync(context)}");
+        }
         finally
         {
             viewModel.Mappings.CollectionChanged -= OnCollectionChanged;
@@ -196,8 +210,53 @@ public sealed class MainWindowViewModelProfileLoadTests
         Assert.Equal(count, viewModel.Mappings.Count);
     }
 
-    private static async Task WaitForRevision(MainWindowViewModel viewModel, long revision)
+    /// <summary>
+    /// Waits until the daemon itself has published a snapshot at or past <paramref name="revision"/>.
+    /// This is the authoritative half of an edit's round-trip: the server publishes from the
+    /// thread that processed the request, before the receive loop, the controller and the view
+    /// model ever see it, so completing here proves the edit landed and was answered - it says
+    /// nothing about whether the GUI caught up, which is what the view-model wait is for.
+    /// </summary>
+    private static async Task WaitForDaemonRevision(DaemonTestContext context, long revision)
     {
+        var published = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged(StateChangedMessage message)
+        {
+            if (message.Snapshot.Revision >= revision)
+            {
+                published.TrySetResult();
+            }
+        }
+
+        context.Server.StateChanged += OnStateChanged;
+        try
+        {
+            // Seed from the daemon's own state before waiting: a revision that was published
+            // before this call - one that landed while earlier steps were still running - must
+            // not be waited for a second time.
+            var current = Assert.IsType<StateChangedMessage>(
+                await context.Server.ProcessAsync(new GetStateMessage("wait-seed")));
+            if (current.Snapshot.Revision >= revision)
+            {
+                return;
+            }
+
+            await published.Task.WaitAsync(WaitBudget, TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"the daemon never published revision {revision}: the edit did not round-trip. {await DescribeAsync(context)}");
+        }
+        finally
+        {
+            context.Server.StateChanged -= OnStateChanged;
+        }
+    }
+
+    private static async Task WaitForRevision(DaemonTestContext context, long revision)
+    {
+        var viewModel = context.ViewModel;
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
         {
@@ -216,11 +275,60 @@ public sealed class MainWindowViewModelProfileLoadTests
             OnPropertyChanged(viewModel, new System.ComponentModel.PropertyChangedEventArgs(nameof(MainWindowViewModel.DaemonSnapshot)));
             await reached.Task.WaitAsync(WaitBudget, TestContext.Current.CancellationToken);
         }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException(
+                $"the view model never adopted revision {revision}. {await DescribeAsync(context)}");
+        }
         finally
         {
             viewModel.PropertyChanged -= OnPropertyChanged;
         }
     }
+
+    /// <summary>
+    /// Everything a stalled wait needs to say why, gathered from both ends of the round-trip:
+    /// the revision each side holds, whether the connection is still up and what it last
+    /// complained about, what the view model is showing the user, and whether the machine the
+    /// wait ran on had any threads left to run it on.
+    /// </summary>
+    private static async Task<string> DescribeAsync(DaemonTestContext context)
+    {
+        var viewModel = context.ViewModel;
+        var controller = context.Controller;
+        return $"daemon revision {await ProbeDaemonRevisionAsync(context)}, " +
+            $"view model revision {Describe(viewModel.DaemonSnapshot?.Revision)}, " +
+            $"connection {controller.State} (controller revision {controller.Revision}, " +
+            $"last error {controller.LastError ?? "none"}), " +
+            $"transfer error {viewModel.IsTransferError} (\"{viewModel.TransferMessage}\"), " +
+            $"mappings in view {viewModel.Mappings.Count}, " +
+            $"thread pool threads {System.Threading.ThreadPool.ThreadCount} " +
+            $"pending {System.Threading.ThreadPool.PendingWorkItemCount}";
+    }
+
+    private static async Task<string> ProbeDaemonRevisionAsync(DaemonTestContext context)
+    {
+        try
+        {
+            var probe = Assert.IsType<StateChangedMessage>(
+                await context.Server.ProcessAsync(new GetStateMessage("diagnostic")));
+            return probe.Snapshot.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (Exception exception)
+        {
+            return $"unreadable ({exception.Message})";
+        }
+    }
+
+    private static string Describe(long? revision)
+        => revision?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none";
+
+    private sealed record DaemonTestContext(
+        MainWindowViewModel ViewModel,
+        FakeDaemonHost Host,
+        ServerChannel Channel,
+        DaemonServer Server,
+        DaemonController Controller);
 
     private sealed class ServerEndpoint(ServerChannel channel) : IDaemonEndpoint
     {
