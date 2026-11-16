@@ -870,6 +870,16 @@ public sealed class MainWindowViewModelDaemonTests
         await WaitForCondition(() => viewModel.DaemonSnapshot?.Devices is { Count: 1 } devices
             && devices[0].DeviceId == "pad-2");
 
+        // The snapshot handler runs inline on the controller's receive loop, and the wait
+        // above lights up as soon as it has written the snapshot - its tail (AdoptDaemonProfile
+        // included) may still be executing. CancelEditor runs on this thread and clears
+        // IsEditing, which is exactly what lets that tail enter AdoptDaemonProfile beside
+        // this thread's own call: the two RefreshMappings would then race the shared Mappings
+        // collection and a torn ObservableCollection surfaces as a null row. A state
+        // round-trip is a deterministic drain: the receive loop answers it only after every
+        // handler of every earlier push has run to completion.
+        await controller.GetStateAsync(TestContext.Current.CancellationToken);
+
         Assert.Equal(revisionBeforeDisconnect, viewModel.DaemonSnapshot.Revision);
         Assert.True(viewModel.IsEditing);
         Assert.Equal("pad-1", viewModel.ActiveProfile.DeviceId);
