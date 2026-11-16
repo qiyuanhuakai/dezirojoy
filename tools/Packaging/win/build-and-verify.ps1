@@ -133,6 +133,30 @@ if ($payloadMachine -ne $expectedMachine) {
 }
 Write-Host ("payload machine type: 0x{0:X4} (as expected for {1})" -f $payloadMachine, $Rid)
 
+# --- verify the SDL3 assets ride the payload -----------------------------------------
+# The SDL3 input backend ships as a managed binding assembly plus the RID's
+# native library, both flattened into the publish root by dotnet publish, and
+# the [Files] section below copies the publish output wholesale - so a publish
+# output without them would compile into a setup whose SDL3 backend silently
+# does not run. This is the same contract tools/Packaging/verify-sdl3-assets.sh
+# asserts for the Linux legs, kept in PowerShell so this script needs no bash.
+# The native library's machine type is checked like the payload exe's above, so
+# a mislabeled publish directory fails before the compile.
+$sdl3Payload = @(Get-ChildItem -LiteralPath $publish -File | Where-Object { $_.Name -like 'SDL3*' })
+$sdl3Native = @($sdl3Payload | Where-Object { $_.Name -eq 'SDL3.dll' })
+$sdl3Managed = @($sdl3Payload | Where-Object { $_.Name -ne 'SDL3.dll' -and $_.Name -like '*.dll' })
+if ($sdl3Native.Count -lt 1) {
+  throw "SDL3.dll (the native SDL3 library) is missing from the publish output: $publish"
+}
+$sdl3NativeMachine = Get-PeMachineType $sdl3Native[0].FullName
+if ($sdl3NativeMachine -ne $expectedMachine) {
+  throw "unexpected SDL3.dll machine type 0x{0:X4} for $Rid, expected 0x{1:X4}: {2}" -f $sdl3NativeMachine, $expectedMachine, $sdl3Native[0].FullName
+}
+if ($sdl3Managed.Count -lt 1) {
+  throw "the SDL3 managed binding assembly (SDL3*.dll) is missing from the publish output: $publish"
+}
+Write-Host ("SDL3 assets in publish output: native SDL3.dll (machine 0x{0:X4}) + managed {1}" -f $sdl3NativeMachine, (($sdl3Managed | ForEach-Object { $_.Name }) -join ', '))
+
 # Walk the RID -> ArchitecturesAllowed mapping in the .iss the way the Inno
 # preprocessor resolves it, so the branch that matches this RID is the one checked,
 # and both [Setup] directives must reference that mapping rather than a literal.
@@ -531,6 +555,19 @@ try {
   if ($productVersion -notlike "$Version*") {
     throw "installed version mismatch: $productVersion (expected $Version*)"
   }
+
+  # The [Files] section copies the complete publish output, so the SDL3 assets
+  # the pre-compile check passed must be present in the installed tree as well:
+  # the Windows counterpart of the Linux legs' package-content assertions in
+  # release.yml. Inno installs flat under {app}; -Recurse costs nothing.
+  $installedSdl3 = @(Get-ChildItem -Path $installDir -Recurse -File | Where-Object { $_.Name -like 'SDL3*' })
+  if (@($installedSdl3 | Where-Object { $_.Name -eq 'SDL3.dll' }).Count -lt 1) {
+    throw "the installed payload is missing SDL3.dll (the native SDL3 library): $installDir"
+  }
+  if (@($installedSdl3 | Where-Object { $_.Name -ne 'SDL3.dll' -and $_.Name -like '*.dll' }).Count -lt 1) {
+    throw "the installed payload is missing the SDL3 managed binding assembly (SDL3*.dll): $installDir"
+  }
+  Write-Host "installed SDL3 assets: $(($installedSdl3 | ForEach-Object { $_.Name }) -join ', ')"
 
   # Per-user Start Menu entry (PrivilegesRequired=lowest, group page disabled).
   $programsRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'

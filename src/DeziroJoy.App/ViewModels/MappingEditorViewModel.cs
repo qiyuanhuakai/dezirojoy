@@ -2730,7 +2730,26 @@ public partial class MappingEditorViewModel : ObservableObject
     /// <summary>What the model element being edited is called, e.g. "左肩键 LB".</summary>
     public string SourceDescription => MappingDescriptions.Source(BuildSource());
 
-    public bool GuideButtonSupported { get; }
+    public bool GuideButtonSupported { get; private set; }
+
+    /// <summary>
+    /// Moves Guide support when the running backend changes under a live window: SDL3 reports
+    /// the Guide button on platforms whose native backend has no such bit, so the hint and
+    /// the picker warning follow the daemon's own answer instead of the OS the window opened
+    /// on. A no-op when the answer did not move.
+    /// </summary>
+    public void UpdateGuideButtonSupport(bool supported)
+    {
+        if (GuideButtonSupported == supported)
+        {
+            return;
+        }
+
+        GuideButtonSupported = supported;
+        OnPropertyChanged(nameof(GuideButtonSupported));
+        OnPropertyChanged(nameof(ShowGuideUnavailableHint));
+        OnPropertyChanged(nameof(GuideUnavailableHint));
+    }
 
     public bool ShowGuideUnavailableHint => !GuideButtonSupported
         && !SourceIsStick

@@ -93,6 +93,43 @@
                 </StackPanel>
             </Border>
 
+            <!-- The input backend: platform XInput/evdev stays the default, SDL3 is opt-in.
+                 A switch persists the selection and safely restarts the daemon - the provider
+                 is built at daemon startup and cannot be hot-swapped - and the running
+                 backend the daemon reports is shown beside it, so a selection that has not
+                 taken effect (or a start that failed) is visible instead of implied. -->
+            <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0">
+                <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="输入后端" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               x:Name="BackendIntroText"
+                               Text="默认使用平台后端（Windows 为 XInput，Linux 为 evdev）。SDL3 是实验性的统一后端，需手动启用；切换后会安全重启常驻服务，重启失败时保持原后端并说明原因，不会静默更换。" />
+                    <RadioButton Margin="0,8,0,0" Content="平台默认（XInput / evdev）"
+                                 x:Name="PlatformBackendOption"
+                                 IsChecked="{Binding IsPlatformBackendSelected, Mode=TwoWay}" />
+                    <RadioButton Margin="0,4,0,0" Content="SDL3 统一后端（实验性）"
+                                 x:Name="Sdl3BackendOption"
+                                 IsChecked="{Binding IsSdl3BackendSelected, Mode=TwoWay}" />
+                    <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                               x:Name="RunningBackendText" Text="{Binding RunningBackendText}" />
+                    <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                               x:Name="RunningBackendErrorText"
+                               IsVisible="{Binding HasRunningBackendError}"
+                               Text="{Binding RunningBackendErrorText}" />
+                    <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                               x:Name="BackendMismatchText"
+                               IsVisible="{Binding HasBackendMismatch}"
+                               Text="{Binding BackendMismatchText}" />
+                    <Button Classes="ghost" Margin="0,8,0,0" Padding="10,4"
+                            Content="保存并重启常驻服务" x:Name="ApplyBackendButton"
+                            Command="{Binding ApplyBackendCommand}" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               x:Name="BackendStatusText"
+                               IsVisible="{Binding HasBackendStatusMessage}"
+                               Text="{Binding BackendStatusMessage}" />
+                </StackPanel>
+            </Border>
+
             <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
                        x:Name="DaemonStatusText"
                        IsVisible="{Binding HasStatusMessage}"

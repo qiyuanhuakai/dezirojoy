@@ -19,5 +19,14 @@
       is compiled against (3.2.2). Pin the 3.x line until Avalonia updates.
     -->
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <!--
+      SDL3 bindings ship the managed wrapper and the native runtime as separate packages:
+      SDL3-CS is the wrapper, SDL3-CS.<Platform> carries libSDL3 (Linux) / SDL3.dll
+      (Windows) for every RID the app targets, so a publish only carries the natives of
+      its own platform - the same per-RID native-asset mechanism SkiaSharp already uses.
+    -->
+    <PackageVersion Include="SDL3-CS" Version="3.4.20" />
+    <PackageVersion Include="SDL3-CS.Linux" Version="3.4.20" />
+    <PackageVersion Include="SDL3-CS.Windows" Version="3.4.20" />
   </ItemGroup>
 </Project>

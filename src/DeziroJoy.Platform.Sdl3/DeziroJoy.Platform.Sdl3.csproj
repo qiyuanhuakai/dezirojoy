@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>DeziroJoy.Platform.Sdl3</AssemblyName>
+    <RootNamespace>DeziroJoy.Platform.Sdl3</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DeziroJoy.Platform.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DeziroJoy.Core\DeziroJoy.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="SDL3-CS" />
+    <!-- Native SDL3 runtime per platform family; RID-specific assets keep each publish slim. -->
+    <PackageReference Include="SDL3-CS.Linux" />
+    <PackageReference Include="SDL3-CS.Windows" />
+  </ItemGroup>
+</Project>

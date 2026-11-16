@@ -3,6 +3,7 @@
     <Project Path="src/DeziroJoy.App/DeziroJoy.App.csproj" />
     <Project Path="src/DeziroJoy.Core/DeziroJoy.Core.csproj" />
     <Project Path="src/DeziroJoy.Platform.Linux/DeziroJoy.Platform.Linux.csproj" />
+    <Project Path="src/DeziroJoy.Platform.Sdl3/DeziroJoy.Platform.Sdl3.csproj" />
     <Project Path="src/DeziroJoy.Platform.Windows/DeziroJoy.Platform.Windows.csproj" />
   </Folder>
   <Folder Name="/tests/">

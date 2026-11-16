@@ -85,6 +85,13 @@ for required in "$icon256" "$ico" "$helper" "$apprun" "$desktop"; do
   fi
 done
 
+# The SDL3 backend's runtime assets - the managed binding assembly and the RID's
+# native library - must ride the publish output: this image stages it wholesale,
+# so a publish output without them would become a silently broken install for
+# any caller of this script, not just the release workflow (which checks the
+# same contract at publish time). The asset names live in the shared verifier.
+"$repo_root/tools/Packaging/verify-sdl3-assets.sh" "$rid" "$publish"
+
 # appimagetool refuses to start without desktop-file-validate; fail here with the
 # package to install rather than mid-build with the tool's one-line complaint.
 if ! command -v desktop-file-validate >/dev/null 2>&1; then

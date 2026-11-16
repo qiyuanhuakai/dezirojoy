@@ -81,14 +81,23 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
 
 ## 平台支持
 
-| 平台 | 输入 | 输出 | 状态 |
+| 平台 | 输入（默认） | 输出 | 状态 |
 |---|---|---|---|
 | Windows 10/11 | XInput | SendInput（提权守护进程） | 主要目标 |
 | Linux（X11 / Wayland） | evdev (`/dev/input`) | uinput (`/dev/uinput`) | 实验性 |
 
-当前产品输入后端没有改变。Windows 的 [GameInput v4 验证程序](tools/GameInputProbe/README.md)
-用于按设备核实 Guide／Share、后台输入和 XInput 槽位关联；[原生 PS／NS 接入路线](docs/NATIVE-GAMEPAD-ROADMAP.md)
-建议以独立 SDL3 provider 探针扩展覆盖，均不代表这些后端已经接入产品。
+默认输入后端没有改变。Windows 的 [GameInput v4 验证程序](tools/GameInputProbe/README.md)
+用于按设备核实 Guide／Share、后台输入和 XInput 槽位关联，未接入产品；
+[原生 PS／NS 接入路线](docs/NATIVE-GAMEPAD-ROADMAP.md) 记录了 SDL3 统一后端的阶段计划
+与验收标准。
+
+0.0.5-alpha.1 起新增 **SDL3 输入后端（实验性，显式启用）**：默认仍为 XInput／evdev，
+可在设置页「后台服务」卡片的「输入后端」一节切换到「SDL3 统一后端（实验性）」，
+点击「保存并重启常驻服务」后生效（daemon 启动时读取，无热切换）；显式选择启动失败时
+不会静默回退。SDL3 识别的标准 Gamepad 输入归一化后复用同一套映射、预设、临时层与输出，
+设备身份为独立的 `sdl:` 前缀 ID。该后端**未经真机验收**，旧配置不会自动迁移到新设备
+身份。启用方式、设备身份、探针、诊断与升级回退见
+[docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
 
 Linux 实验性说明：
 
@@ -123,6 +132,11 @@ Linux 实验性说明：
 
 > **升级提示**：`0.0.2-beta.3` 及更早版本的应用内自动更新存在缺陷，从这些版本升级请
 > 到发布页**手动下载**安装 `0.0.2-beta.4` 或更新版本；自 beta.4 起自动更新恢复正常。
+
+> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.1`
+> 是 SDL3 统一输入后端的实验性 alpha——默认后端不变、未经真机验收；不想升级 alpha 的
+> 用户请关闭设置页的自动检查／自动下载，或到发布页手动选择版本。发布说明见
+> [docs/RELEASE-0.0.5-alpha.1.md](docs/RELEASE-0.0.5-alpha.1.md)。
 
 ### Windows
 
@@ -243,6 +257,7 @@ src/
   DeziroJoy.Core/             # 领域内核：输入模型、映射模型、确定性引擎、默认配置库
   DeziroJoy.Platform.Windows/ # XInput 读取 + SendInput 输出 + 前台检测（P/Invoke）
   DeziroJoy.Platform.Linux/   # evdev 读取 + uinput 输出 + X11 前台检测（实验性）
+  DeziroJoy.Platform.Sdl3/    # SDL3 统一输入 provider（实验性，显式启用，见 docs/SDL3-BACKEND.md）
   DeziroJoy.App/              # Avalonia UI（MVVM）+ 引擎宿主 + 配置存储 + daemon
 tests/
   DeziroJoy.Core.Tests/  DeziroJoy.Platform.Tests/  DeziroJoy.App.Tests/  # 含 headless GUI
@@ -254,7 +269,7 @@ tests/
 ## 测试
 
 引擎为纯函数式设计（显式时间步进、无时钟、无平台调用），全部映射语义可在无手柄环境下
-确定性测试。合计 **2400+ 测试**，`dotnet test` 一条命令全绿：
+确定性测试。合计 **2700+ 测试**，`dotnet test` 一条命令全绿：
 
 - **Core**：输入归一化、映射模型与 JSON 序列化 / 容错、确定性引擎（死区 / 曲线 / 平滑 /
   精准 / 亚像素 / 手势 / 临时层 / 输出所有权 / 采样间断）、DSL、前台规则、配置迁移。
@@ -267,8 +282,10 @@ tests/
 
 ## 文档
 
-- [ROADMAP.md](ROADMAP.md) — GameInput、原生 PS／NS 与完善屏幕键盘输入能力的阶段计划。
+- [ROADMAP.md](ROADMAP.md) — SDL3 统一输入后端、GameInput、原生 PS／NS 与完善屏幕键盘输入能力的阶段计划。
 - [DESIGN.md](DESIGN.md) — 界面设计系统、交互模型与常驻架构基准。
+- [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md) — SDL3 输入后端（实验性）：启用、探针、诊断与升级回退。
+- [docs/RELEASE-0.0.5-alpha.1.md](docs/RELEASE-0.0.5-alpha.1.md) — 0.0.5-alpha.1 发布说明。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。

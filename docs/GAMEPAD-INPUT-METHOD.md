@@ -173,7 +173,7 @@ RimeSharp，但社区采用度极低，等于自担维护风险。
 
 ### 当前限制与待验证路线：Windows 上 Guide 键
 
-**当前产品后端仍是 XInput**。XInput 的 `wButtons` 位图没有 Guide 位（代码中的
+**当前产品后端仍是 XInput**（默认）。XInput 的 `wButtons` 位图没有 Guide 位（代码中的
 `XInputNative.Guide = 0x0400` 是占位常量，恒 0），`Windows.Gaming.Input.GamepadButtons`
 同样没有 Guide，因此现有 Windows XInput 通道不会报告 Guide 按下——可视化器 Guide 元素常灭、
 Guide 映射不触发均为当前后端的可解释状态。Linux 侧 evdev 经 `BTN_MODE`(0x13c) 正常识别
@@ -190,6 +190,10 @@ Raw Input **不再是唯一可能路线**。GameInput v4 已提供 `GameInputKin
 Game Bar 缺失导致的 `ms-gamebar` 系统弹窗仍在设置页的「Windows 手柄兼容性」卡片处理：
 写入当前 Windows 用户的“允许控制器打开 Game Bar”关闭值后会重新读取核验，也可直接打开
 系统游戏设置；该功能本身不会把 Guide 变成可读输入。
+
+0.0.5-alpha.1 起可在设置中显式启用 SDL3 输入后端（默认仍为 XInput）；SDL3 下 Guide／
+Share 的可用性取决于设备与 SDL 映射，尚未实测，默认后端的上述限制不变。详见
+[docs/SDL3-BACKEND.md](SDL3-BACKEND.md)。
 
 ## 参考链接
 

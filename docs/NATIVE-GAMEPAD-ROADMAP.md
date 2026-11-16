@@ -2,8 +2,11 @@
 
 ## 结论与边界
 
-当前产品的 Windows 输入后端仍是 **XInput**，Linux 是 **evdev**。本文是下一项通用兼容能力的
-实施路线，不表示原生 PS／NS provider 已经接入。
+当前产品的 Windows 输入后端仍是 **XInput**，Linux 是 **evdev**；这仍是默认后端。
+0.0.5-alpha.1 已交付本文推荐的 SDL3 路线首段成果——独立探针（S1）与可显式启用的初始
+统一 provider（S2 初始）——但未经真机验收，也未改变默认后端；本文的阶段划分与验收标准
+继续有效，作为后续推进依据。SDL3 后端的使用、诊断与升级回退见
+[docs/SDL3-BACKEND.md](SDL3-BACKEND.md)。
 
 原厂 DualShock 4、DualSense、Switch Pro 和 Joy-Con 本身就足以构成接入价值：它们可以不依赖
 额外转换程序进入现有“输入 → 分层／手势／DSL → 键鼠注入”管线。价值不取决于能找到多少

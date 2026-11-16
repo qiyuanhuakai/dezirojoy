@@ -326,6 +326,38 @@ internal sealed class DaemonSupervisor : IDisposable
     }
 
     /// <summary>
+    /// Stops the daemon and brings a fresh one up: the safe restart a backend switch needs.
+    /// The provider is built into the daemon's composition at startup and there is no hot
+    /// swap of a live one, so a new selection only takes effect on a new process - and the
+    /// stop is the graceful IPC one, which releases every held key before the new daemon
+    /// starts. Whichever surface owns the daemon brings the replacement up: the elevated
+    /// relaunch on Windows, the systemd user unit where it is installed, and the owned child
+    /// everywhere else.
+    /// <para>
+    /// A stop that never confirmed the old daemon's exit fails the whole restart: a
+    /// replacement started beside it would compete for the injection mutex, and the caller
+    /// keeps the running daemon - and the backend it runs - rather than claiming a switch
+    /// that did not happen. The return value is also never proof of the requested backend:
+    /// that answer lives in the new daemon's own startup line and in the snapshot it serves,
+    /// so a caller reports the two separately.
+    /// </para>
+    /// </summary>
+    public bool Restart()
+    {
+        if (!Stop())
+        {
+            // The old daemon never confirmed its exit. Starting a replacement beside it
+            // would compete for the injection mutex and double every input, so this is a
+            // failed restart and is reported as one: the caller keeps the old daemon - and
+            // the backend it runs - instead of claiming a switch that did not happen.
+            return false;
+        }
+
+        EnsureRunning();
+        return IsRunning || SafeIsDaemonReachable();
+    }
+
+    /// <summary>
     /// How long one connect attempt waits for the daemon's mapping pipe to answer - the same
     /// budget the daemon itself uses to detect a peer. The daemon holds the pipe open for its
     /// whole life, so a connect that cannot complete in this window means no daemon is there.

@@ -67,7 +67,8 @@ public partial class App : Application
             daemon: controller,
             settings: themes,
             foregroundRuleStore: foregroundRules,
-            schemeImportRecoveryStore: recovery);
+            schemeImportRecoveryStore: recovery,
+            restartDaemon: DesktopLauncher.RestartDaemonAsync);
 
         var services = new ServiceCollection();
         services.AddSingleton<IGamepadProvider>(provider);

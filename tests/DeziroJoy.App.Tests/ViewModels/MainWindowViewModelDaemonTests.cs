@@ -1123,9 +1123,29 @@ public sealed class MainWindowViewModelDaemonTests
         return (viewModel, presets);
     }
 
-    private static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost DaemonHost, ServerChannel Channel, DaemonServer Server)> CreateDaemonViewModel()
+    [Fact]
+    public async Task The_Settings_Card_Sees_The_Backend_The_Daemon_Reports_Running()
+    {
+        var context = await CreateDaemonViewModel(host =>
+        {
+            host.ActiveInputBackend = InputBackend.Sdl3;
+            host.InputBackendError = "SDL3 输入后端初始化失败：libSDL3.so 缺失";
+        });
+        await using var viewModel = context.ViewModel;
+
+        // The snapshot the window adopted on connect is what the card shows: the daemon's
+        // own answer about which backend is in charge, including a start that failed.
+        Assert.Contains("SDL3", viewModel.DaemonSettings.RunningBackendText);
+        Assert.Contains("libSDL3.so", viewModel.DaemonSettings.RunningBackendErrorText);
+        Assert.True(viewModel.DaemonSettings.HasBackendMismatch);
+    }
+
+    internal static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost DaemonHost, ServerChannel Channel, DaemonServer Server)> CreateDaemonViewModel(
+        Action<FakeDaemonHost>? configureHost = null,
+        bool? guideButtonSupported = null)
     {
         var daemonHost = new FakeDaemonHost();
+        configureHost?.Invoke(daemonHost);
         var store = new InMemoryProfileStore();
         var statePath = Path.Combine(
             Path.GetTempPath(),
@@ -1144,7 +1164,8 @@ public sealed class MainWindowViewModelDaemonTests
             presentation,
             store,
             daemon: controller,
-            daemonRequired: true);
+            daemonRequired: true,
+            guideButtonSupported: guideButtonSupported);
         // The navigation/lease tests need the temporary hijack armed; it ships off by default.
         viewModel.SetGamepadNavigationEnabled(true);
         return (viewModel, daemonHost, channel, server);
@@ -1173,7 +1194,7 @@ public sealed class MainWindowViewModelDaemonTests
         }
     }
 
-    private sealed class ServerEndpoint(ServerChannel channel) : IDaemonEndpoint
+    internal sealed class ServerEndpoint(ServerChannel channel) : IDaemonEndpoint
     {
         public bool Ready { get; set; } = true;
 
@@ -1183,7 +1204,7 @@ public sealed class MainWindowViewModelDaemonTests
             => Task.FromResult<IDaemonChannel>(channel);
     }
 
-    private sealed class ServerChannel(DaemonServer server) : IDaemonChannel
+    internal sealed class ServerChannel(DaemonServer server) : IDaemonChannel
     {
         private readonly object _gate = new();
         private readonly Queue<IpcMessage> _incoming = new();

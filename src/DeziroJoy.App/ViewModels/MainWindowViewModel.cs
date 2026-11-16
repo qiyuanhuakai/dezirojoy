@@ -100,8 +100,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private readonly IGameBarPopupGuard _gameBarPopupGuard;
 
-    private readonly bool _guideButtonSupported;
+    private bool _guideButtonSupported;
 
+    /// <summary>
+    /// The platform answer the window was built with: XInput has no Guide bit, evdev can
+    /// report BTN_MODE, and an explicitly injected value stands in for either. The running
+    /// backend is additive on top of it - SDL3 reports Guide everywhere - so a snapshot
+    /// naming anything else returns to this answer rather than to a recomputed OS one.
+    /// </summary>
+    private readonly bool _platformGuideAnswer;
     private readonly bool _ownsUpdateService;
 
     /// <summary>
@@ -168,7 +175,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         bool? guideButtonSupported = null,
         IGameBarPopupGuard? gameBarPopupGuard = null,
         IForegroundRuleStore? foregroundRuleStore = null,
-        ISchemeImportRecoveryStore? schemeImportRecoveryStore = null)
+        ISchemeImportRecoveryStore? schemeImportRecoveryStore = null,
+        Func<Task<bool>>? restartDaemon = null)
     {
         _host = host;
         _daemon = daemon;
@@ -184,7 +192,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         _ownsUpdateService = updateService is null;
         _runtimeHints = runtimeHints ?? LinuxRuntimeProbe.Probe;
         _sinkError = sinkError;
-        _guideButtonSupported = guideButtonSupported ?? PlatformFactory.GuideButtonSupported;
+        _platformGuideAnswer = guideButtonSupported ?? PlatformFactory.GuideButtonSupported;
+        _guideButtonSupported = _platformGuideAnswer;
         _gameBarPopupGuard = gameBarPopupGuard ?? new GameBarPopupGuard();
         try
         {
@@ -200,7 +209,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ScrollSensitivity = new ScrollSensitivityViewModel();
         Visualizer = new GamepadVisualizerViewModel();
         Appearance = new AppearanceViewModel();
-        DaemonSettings = new DaemonSettingsViewModel();
+        DaemonSettings = new DaemonSettingsViewModel(
+            restartDaemon: daemon is not null ? restartDaemon : null);
         Update = new UpdateSettingsViewModel(_updateService, _settings);
         LayerHint = new LayerHintViewModel();
 
@@ -1247,7 +1257,40 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     public string GuidePlatformNote => _guideButtonSupported
         ? string.Empty
-        : "Windows · XInput 无法读取 Guide 键：模型不会高亮，Guide 映射和界面导航都不会触发。请改用其他按键。";
+        : "Windows · XInput 无法读取 Guide 键：模型不会高亮，Guide 映射和界面导航都不会触发。请改用其他按键；守护进程切换到 SDL3 后端后即可绑定 Guide。";
+
+    /// <summary>
+    /// Whether the Guide button can be bound and fires. The running backend is additive on
+    /// top of the platform answer: SDL3 reports the Guide button on every platform, so a
+    /// daemon snapshot naming SDL3 makes it available on Windows too, while XInput has no
+    /// bit for it and an evdev Linux keeps the answer it started with. Starts at the
+    /// platform answer before the first snapshot.
+    /// </summary>
+    public bool GuideButtonSupported
+    {
+        get => _guideButtonSupported;
+        private set
+        {
+            if (_guideButtonSupported == value)
+            {
+                return;
+            }
+
+            _guideButtonSupported = value;
+            OnPropertyChanged(nameof(GuideButtonSupported));
+            OnPropertyChanged(nameof(ShowGuidePlatformNote));
+            OnPropertyChanged(nameof(GuidePlatformNote));
+            Editor.UpdateGuideButtonSupport(value);
+        }
+    }
+
+    /// <summary>
+    /// Applies what the daemon's snapshot says about the running backend: SDL3 adds Guide
+    /// everywhere, anything else - the platform default, or an older daemon that never
+    /// named its backend - returns to the platform answer this window was built with.
+    /// </summary>
+    private void ApplyRunningBackendGuideSupport(InputBackend? runningBackend)
+        => GuideButtonSupported = runningBackend == InputBackend.Sdl3 || _platformGuideAnswer;
 
     public bool ShowGameBarPopupGuard => _gameBarPopupGuard.IsSupported;
 
@@ -3331,6 +3374,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SyncPresetSlotsForDaemon();
         MappingOwner = snapshot.Running ? MappingOwner.ResidentDaemon : MappingOwner.None;
         AdoptDaemonProfile(snapshot);
+
+        // The backend the daemon is really running, with the reason a selected one could not
+        // start. The settings card shows it beside the saved selection, so a backend switch
+        // is only ever reported as done once the daemon's own snapshot says so.
+        DaemonSettings.ReportRunningBackend(snapshot.ActiveInputBackend, snapshot.InputBackendError);
+
+        // The same answer decides Guide: SDL3 reports the button on Windows too, XInput has
+        // no bit for it, and a snapshot that names its backend is the only surface that
+        // knows which of the two is live right now.
+        ApplyRunningBackendGuideSupport(snapshot.ActiveInputBackend);
         if (!string.IsNullOrWhiteSpace(snapshot.LastError))
         {
             SetTransferError(snapshot.LastError);

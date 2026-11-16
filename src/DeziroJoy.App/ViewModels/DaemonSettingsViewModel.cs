@@ -19,18 +19,42 @@ public partial class DaemonSettingsViewModel : ObservableObject
     private readonly IDaemonService _service;
     private readonly IDeviceAccessFixer _deviceAccessFixer;
     private readonly IDeviceAccessProbe _deviceAccessProbe;
+    private readonly IInputBackendStore _backendStore;
+    private readonly Func<Task<bool>>? _restartDaemon;
     private DeviceAccessSnapshot? _deviceAccess;
     private string? _deviceAccessProbeError;
     private bool _suppressAutostartChange;
 
+    /// <summary>
+    /// What the daemon last reported as its running backend, or null when no daemon has
+    /// said. Kept beside the selection so the card can show the two apart: a saved
+    /// selection the daemon has not adopted yet is a pending restart, not a running fact.
+    /// </summary>
+    private InputBackend? _runningBackend;
+
+    /// <summary>Why the daemon's backend could not start, as the daemon itself reported it.</summary>
+    private string? _runningBackendError;
+
     public DaemonSettingsViewModel(
         IDaemonService? service = null,
         IDeviceAccessFixer? deviceAccessFixer = null,
-        IDeviceAccessProbe? deviceAccessProbe = null)
+        IDeviceAccessProbe? deviceAccessProbe = null,
+        IInputBackendStore? backendStore = null,
+        Func<Task<bool>>? restartDaemon = null)
     {
         _service = service ?? PlatformFactory.CreateDaemonService();
         _deviceAccessFixer = deviceAccessFixer ?? new DeviceAccessFixer();
         _deviceAccessProbe = deviceAccessProbe ?? new LinuxDeviceAccessProbe();
+        _backendStore = backendStore ?? new InputBackendStore();
+        _restartDaemon = restartDaemon;
+        _selectedBackend = _backendStore.Load();
+        if (_backendStore.LastError is { } backendReadError)
+        {
+            // A damaged file reads as the platform default; the card says so on its own
+            // status line instead of silently showing a selection nobody chose.
+            BackendStatusMessage = backendReadError;
+        }
+
         RefreshFromService();
     }
 
@@ -268,6 +292,139 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _autostartEnabled;
+
+    /// <summary>
+    /// The persisted input-backend selection. The platform backend stays the default; SDL3
+    /// is opt-in, and a change here is only a request until <see cref="ApplyBackend"/>
+    /// persists it and the daemon restarts onto it.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPlatformBackendSelected))]
+    [NotifyPropertyChangedFor(nameof(IsSdl3BackendSelected))]
+    [NotifyPropertyChangedFor(nameof(HasBackendMismatch))]
+    [NotifyPropertyChangedFor(nameof(BackendMismatchText))]
+    private InputBackend _selectedBackend;
+
+    /// <summary>True while the radio for the platform backend must read as checked.</summary>
+    public bool IsPlatformBackendSelected
+    {
+        get => SelectedBackend == InputBackend.Platform;
+        set
+        {
+            if (value)
+            {
+                SelectedBackend = InputBackend.Platform;
+            }
+        }
+    }
+
+    /// <summary>True while the radio for the SDL3 backend must read as checked.</summary>
+    public bool IsSdl3BackendSelected
+    {
+        get => SelectedBackend == InputBackend.Sdl3;
+        set
+        {
+            if (value)
+            {
+                SelectedBackend = InputBackend.Sdl3;
+            }
+        }
+    }
+
+    /// <summary>The backend the daemon last reported, or null when none has.</summary>
+    public string RunningBackendText => _runningBackend is { } backend
+        ? $"运行中的后端：{PlatformFactory.DescribeBackend(backend)}"
+        : "运行中的后端：未知（尚未连接常驻服务）";
+
+    /// <summary>
+    /// Why the daemon's backend could not start, as the daemon reported it. A selection that
+    /// failed is shown here beside the running backend - never silently swapped for another
+    /// one - so the user sees which backend is actually in charge and why.
+    /// </summary>
+    public string? RunningBackendErrorText => _runningBackendError is { } error
+        ? $"后端启动失败：{error}（未切换回其他后端，当前不读取手柄输入）"
+        : null;
+
+    public bool HasRunningBackendError => RunningBackendErrorText is not null;
+
+    /// <summary>
+    /// True when the saved selection and the running backend are known to differ - the state
+    /// between saving and the daemon actually restarting onto the new backend.
+    /// </summary>
+    public bool HasBackendMismatch => _runningBackend is { } backend && backend != SelectedBackend;
+
+    public string BackendMismatchText => HasBackendMismatch
+        ? $"设置已改为 {PlatformFactory.DescribeBackend(SelectedBackend)}，重启常驻服务后生效。"
+        : string.Empty;
+
+    /// <summary>The outcome of the last apply, kept on its own line so it reads as a result.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasBackendStatusMessage))]
+    private string _backendStatusMessage = string.Empty;
+
+    public bool HasBackendStatusMessage => BackendStatusMessage.Length > 0;
+
+    /// <summary>
+    /// Records what the daemon reported about the backend it is running. Called from every
+    /// snapshot, so a restart onto the new selection - or a failed start that kept the
+    /// daemon on no provider at all - reaches the card without a manual refresh.
+    /// </summary>
+    public void ReportRunningBackend(InputBackend? backend, string? error)
+    {
+        _runningBackend = backend;
+        _runningBackendError = error;
+        OnPropertyChanged(nameof(RunningBackendText));
+        OnPropertyChanged(nameof(RunningBackendErrorText));
+        OnPropertyChanged(nameof(HasRunningBackendError));
+        OnPropertyChanged(nameof(HasBackendMismatch));
+        OnPropertyChanged(nameof(BackendMismatchText));
+    }
+
+    /// <summary>
+    /// Persists the selection and asks for the safe restart that makes it take effect. The
+    /// daemon builds its provider at startup and there is no hot swap, so the restart is the
+    /// only honest way to apply a switch: the daemon stops gracefully - releasing every held
+    /// key - and the replacement reads the saved selection.
+    /// <para>
+    /// The status line never claims the new backend is running: it says the restart was
+    /// requested, and the running-backend line above - fed by the daemon's own snapshots -
+    /// is what tells the user which backend is actually in charge, including a start that
+    /// failed on the new selection.
+    /// </para>
+    /// </summary>
+    [RelayCommand]
+    private async Task ApplyBackend()
+    {
+        var requested = SelectedBackend;
+        _backendStore.Save(requested);
+
+        if (_restartDaemon is null)
+        {
+            // No daemon to restart here (a card constructed without the seam): the selection
+            // is persisted, and the line says what still has to happen instead of implying
+            // it already did.
+            BackendStatusMessage = "已保存输入后端设置；重启常驻服务后生效。";
+            return;
+        }
+
+        BackendStatusMessage = "正在安全重启常驻服务以应用新的输入后端…";
+
+        bool restarted;
+        try
+        {
+            restarted = await _restartDaemon();
+        }
+        catch (Exception exception)
+        {
+            restarted = false;
+            BackendStatusMessage = $"重启常驻服务时出错：{exception.Message}。设置已保存，请手动重启常驻服务。";
+            return;
+        }
+
+        BackendStatusMessage = restarted
+            ? "已保存并重启常驻服务；上方“运行中的后端”显示守护进程实际使用的后端。"
+            : "已保存设置，但重启常驻服务失败：请手动重启。重启前守护进程仍在原后端上运行，不会静默切换。";
+    }
 
     /// <summary>Re-reads the scheduler and token, then republishes every derived property.</summary>
     public void RefreshFromService()

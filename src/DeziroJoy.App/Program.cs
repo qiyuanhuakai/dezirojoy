@@ -339,6 +339,15 @@ internal static class DesktopLauncher
         }
     }
 
+    /// <summary>
+    /// The safe restart the input-backend switch asks for: the supervisor stops the daemon
+    /// gracefully - which releases every held key - and brings the replacement up through
+    /// the same start path the window opened with, so the new daemon reads the saved
+    /// selection. Off the UI thread because the stop waits on the daemon's shutdown budget.
+    /// </summary>
+    internal static Task<bool> RestartDaemonAsync()
+        => Task.Run(() => Daemon?.Restart() ?? false);
+
     internal static bool EnsureTrayRunning()
     {
         var identity = GuiInstanceIdentity.ForCurrentProcess(GuiInstanceRole.Tray);

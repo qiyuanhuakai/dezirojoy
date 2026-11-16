@@ -15,12 +15,30 @@ public sealed class EngineComposition : IDisposable
     public EngineComposition(
         IProfileStore? profileStore = null,
         IElevationService? elevationService = null,
-        bool presentationOnly = false)
+        bool presentationOnly = false,
+        InputBackend? backend = null)
     {
         _elevationService = elevationService ?? new ElevationService();
 
         ProfileStore = profileStore ?? new FileProfileStore();
-        Provider = PlatformFactory.TryCreateProvider(out var provider) ? provider : new NoGamepadProvider();
+
+        var selection = backend ?? InputBackend.Platform;
+        Backend = selection;
+        if (PlatformFactory.TryCreateProvider(selection, out var created, out var providerError))
+        {
+            Provider = created;
+            ProviderError = null;
+        }
+        else
+        {
+            // The selection was explicit and could not be honoured, so the composition says so
+            // instead of quietly reading through the platform backend: a user who asked for
+            // SDL3 and silently got evdev would be mapping through a backend they never chose.
+            // The daemon's startup line and the settings card both quote this error.
+            Provider = new NoGamepadProvider();
+            ProviderError = providerError ?? "输入后端不可用";
+        }
+
         if (Provider is VirtualGamepadProvider virtualProvider)
         {
             virtualProvider.SeedProfiles(ProfileStore);
@@ -61,6 +79,16 @@ public sealed class EngineComposition : IDisposable
     public IProfileStore ProfileStore { get; }
 
     public EngineHost Host { get; }
+
+    /// <summary>The backend this composition was built for, whether or not it started.</summary>
+    public InputBackend Backend { get; }
+
+    /// <summary>
+    /// Why the requested input provider could not be created, or null when it was. Set only
+    /// for an explicit selection that failed - the composition then runs a no-gamepad
+    /// provider rather than falling back to the platform backend.
+    /// </summary>
+    public string? ProviderError { get; }
 
     /// <summary>Why the real output sink could not be created, or null when it was.</summary>
     public string? SinkError { get; private set; }

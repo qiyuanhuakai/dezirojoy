@@ -1170,6 +1170,8 @@ public sealed partial class DaemonServer
             NativeGamepadPaused = _host.IsNativeGamepadPaused,
             ScreenKeyboardOpen = _screenKeyboardOpen,
             ForegroundState = CurrentForegroundState(),
+            ActiveInputBackend = _host.ActiveInputBackend,
+            InputBackendError = _host.InputBackendError,
         };
     }
 }

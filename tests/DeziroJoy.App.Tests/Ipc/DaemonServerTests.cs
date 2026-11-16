@@ -52,6 +52,12 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public long BlockedEvents { get; set; } = 2;
 
+    /// <summary>The backend this fake daemon reports running; Platform unless a test says otherwise.</summary>
+    public InputBackend ActiveInputBackend { get; set; } = InputBackend.Platform;
+
+    /// <summary>Why the selected backend could not start, as the daemon would report it.</summary>
+    public string? InputBackendError { get; set; }
+
     /// <summary>When set, <see cref="Start"/> refuses exactly as a held mutex would.</summary>
     public bool RefuseStart { get; set; }
 
@@ -477,6 +483,36 @@ public class DaemonServerTests
     }
 
     [Fact]
+    public void A_Snapshot_From_A_Daemon_That_Never_Named_Its_Backend_Reads_As_Unknown()
+    {
+        // A daemon that predates the backend selection writes neither field. The window
+        // keeps its platform answer instead of claiming a backend it was never told about.
+        var restored = Assert.IsType<StateChangedMessage>(IpcSerializer.Deserialize(
+            """{"kind":"state-changed","DaemonInstanceId":"daemon-old","Snapshot":{"Sequence":1,"Revision":0,"Running":true,"MappingEnabled":true,"InjectorPid":1,"ProfileName":"P"}}"""));
+
+        Assert.Null(restored.Snapshot.ActiveInputBackend);
+        Assert.Null(restored.Snapshot.InputBackendError);
+    }
+
+    [Fact]
+    public void A_Snapshot_Naming_The_Running_Backend_Round_Trips_Both_Fields()
+    {
+        var message = new StateChangedMessage(
+            "daemon-1",
+            new StateSnapshot(1, 0, true, true, 1, null, "P", null, 0, 0, false)
+            {
+                ActiveInputBackend = InputBackend.Sdl3,
+                InputBackendError = "SDL3 输入后端初始化失败：libSDL3.so 缺失",
+            });
+
+        var restored = Assert.IsType<StateChangedMessage>(
+            IpcSerializer.Deserialize(IpcSerializer.Serialize(message)));
+
+        Assert.Equal(InputBackend.Sdl3, restored.Snapshot.ActiveInputBackend);
+        Assert.Contains("libSDL3.so", restored.Snapshot.InputBackendError);
+    }
+
+    [Fact]
     public async Task GetState_Returns_A_Full_Snapshot_Carrying_The_Instance_Id_And_Injector_Surface()
     {
         var (server, _, host) = CreateRunning();
@@ -493,6 +529,26 @@ public class DaemonServerTests
         Assert.Equal(2, snapshot.Snapshot.BlockedEvents);
         Assert.True(snapshot.Snapshot.HasController);
         Assert.False(snapshot.Snapshot.Running);
+    }
+
+    [Fact]
+    public async Task GetState_Carries_The_Backend_The_Daemon_Reports_Running()
+    {
+        var (server, _, host) = CreateRunning();
+
+        // The default: a daemon that predates the selection reports the platform backend.
+        var platformSnapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-platform")));
+        Assert.Equal(InputBackend.Platform, platformSnapshot.Snapshot.ActiveInputBackend);
+        Assert.Null(platformSnapshot.Snapshot.InputBackendError);
+
+        host.ActiveInputBackend = InputBackend.Sdl3;
+        host.InputBackendError = "SDL3 输入后端初始化失败：libSDL3.so 缺失";
+
+        var sdl3Snapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-sdl3")));
+        Assert.Equal(InputBackend.Sdl3, sdl3Snapshot.Snapshot.ActiveInputBackend);
+        Assert.Contains("libSDL3.so", sdl3Snapshot.Snapshot.InputBackendError);
     }
 
     [Fact]

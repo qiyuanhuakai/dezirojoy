@@ -369,15 +369,16 @@ UI 的存在性路径（`RefreshPresence` / `SamplePresence`，300ms 节拍）
   默认 `%LOCALAPPDATA%\Programs\DeziroJoy`）；win-x64 在 runner 上静默安装到临时
   目录、断言 `DeziroJoy.exe` 与版本、静默卸载后断言安装目录 / 卸载注册项 / 快捷
   方式全部清理；ISCC 从 PATH 或标准安装路径解析，缺失时报错列出全部尝试过的位置
-- Windows：安装界面为简体中文（Inno Setup 自带的 `ChineseSimplified.isl`，
-  LanguageID $0804，位于编译器 `Languages` 子目录，以
-  `compiler:Languages\ChineseSimplified.isl` 引用，不引入外部翻译文件），英文作为
+- Windows：安装界面为简体中文，翻译用仓库自带的
+  `tools/Packaging/win/Languages/ChineseSimplified.isl`（Inno Setup 官方翻译，
+  LanguageID $0804，6.5.0 起未变），在 `.iss` 中相对引用
+  `Languages\ChineseSimplified.isl`，不再依赖编译器安装目录自带的语言文件，英文作为
   回退保留。静态断言：`.iss` `[Languages]` 同时声明 `compiler:Default.isl` 与
-  `compiler:Languages\ChineseSimplified.isl`；任务 / 运行项的自定义文本（桌面图标、
+  `Languages\ChineseSimplified.isl`；任务 / 运行项的自定义文本（桌面图标、
   安装后运行）经 `{cm:CreateDesktopIcon}` / `{cm:LaunchProgram,...}` 引用语言
-  文件而非硬编码英文；ISCC 目录 `Languages` 子目录下的 `ChineseSimplified.isl`
-  真实存在且定义上述消息键。release.yml 在发布前另有 `.iss` 侧的静态检查，失败
-  不进入编译
+  文件而非硬编码英文；仓库的 `Languages\ChineseSimplified.isl` 真实存在且定义
+  上述消息键（build-and-verify.ps1 在编译前校验）。release.yml 在发布前另有
+  `.iss` 侧的静态检查，失败不进入编译
 - Linux `.deb`：`dpkg-deb` 构建 `.deb`（control 含版本 / amd64|arm64 / 依赖），校验
   元数据与 payload（完整 `/opt/dezirojoy`、`dezirojoy.ico`、desktop 入口），
   断言依赖含版本化 `libicu` 备选项（应用未启用 InvariantGlobalization，缺 ICU
@@ -562,3 +563,58 @@ uinput 写入口——沙箱内注入功能在默认桌面上不可用。应用�
   另一只的 Ctrl 不抬起；最后一只松开才抬起
   （由 `OutputOwnershipTests` 的同序列化副本测试钉住）
 - [ ] 配置文件里的映射 ID 保持稳定（导入导出不因运行期身份变化而改写）
+
+## 23. SDL3 输入后端（0.0.5-alpha.1，实验性，需真机验收）
+
+本节是 SDL3 初始统一 provider 的真机清单。该 provider 有自动化测试覆盖（输入归一化、
+部署与生命周期语义），但**未经真机验收**；默认仍为平台后端（XInput／evdev），启用与回退
+步骤见 [docs/SDL3-BACKEND.md](SDL3-BACKEND.md)。每项记录实际设备型号、连接方式
+（USB／蓝牙）、SDL 版本与探针输出。
+
+### 启用与默认行为
+
+- [ ] 设置页「后台服务」卡片的「输入后端」一节存在，默认选中「平台默认（XInput / evdev）」，
+  未做任何选择时行为与 0.0.2 一致
+- [ ] 选择「SDL3 统一后端（实验性）」后点击「保存并重启常驻服务」：配置目录根部出现
+      `input-backend.json`（内容为 `sdl3`），daemon 安全重启（释放所有按住的键）后按
+      SDL3 枚举设备；无运行中热切换，必须经保存并重启生效
+- [ ] 保存后、daemon 重启前：卡片提示“设置已改为 …，重启常驻服务后生效。”，「运行中的
+      后端」一行仍显示旧后端（来自 daemon 快照，不谎称新后端已在运行）
+- [ ] 把 `input-backend.json` 改成无法识别的内容：daemon 按平台默认读取，启动摘要给出
+      回退原因，不崩溃
+- [ ] 显式选择 SDL3 但运行时不可用时：卡片显示「后端启动失败：…（未切换回其他后端，
+      当前不读取手柄输入）」，daemon **不**回落到平台后端
+- [ ] 重启常驻服务失败时：设置已保存，但 daemon 仍在原后端上运行并提示手动重启，
+      不静默更换
+- [ ] 随时切回「平台默认（XInput / evdev）」并再次保存重启：映射、预设、临时层、前台
+      规则与输出恢复原状，无卡键
+- [ ] 切到 SDL3 后同一只手柄被识别为 `sdl:` 身份的新设备并使用默认配置；切回平台默认
+      后端后原配置完好（身份自动迁移尚未实现，属已知边界而非配置丢失）
+
+### 标准输入（每只实测设备）
+
+- [ ] 「连接」卡片与可视化器显示 SDL3 报告的设备名、类型与布局，按键／摇杆／扳机实时反映
+- [ ] 默认映射可用：右摇杆=鼠标、左摇杆=滚轮、十字键=方向键、B=Enter、A=Esc、
+  X=Ctrl+C、Y=Ctrl+V
+- [ ] 死区、曲线、平滑与精准模式在手感上与默认后端一致（同一配置、同一输出管线）
+- [ ] 探针报告的该设备 SDL 类型、GUID、VID／PID、序列号与映射来源，和产品侧识别的
+      设备身份一致
+
+### 生命周期
+
+- [ ] 拔出手柄：状态区与 daemon 摘要正确报告断开，可视化器显示未连接，无卡键
+- [ ] 重新插拔：设备恢复，配置按 SDL3 身份恢复
+- [ ] 映射运行中切换前台应用／失焦：映射继续，不产生重复输出
+- [ ] 无线手柄休眠后按电源键唤醒：连接恢复（参考第 17 节的休眠语义）
+- [ ] 同型号双设备同时连接：两只手柄各自独立状态与配置，不串配置
+
+### 覆盖与矩阵（按实测结果填写，未测不勾）
+
+- [ ] Xbox 布局手柄（USB／蓝牙至少一种）
+- [ ] PlayStation 布局手柄（DS4／DS5 至少一种）
+- [ ] Switch 布局手柄（Switch Pro／Joy-Con 至少一种）
+- [ ] 第三方／通用手柄至少一种
+- [ ] 只能作为普通 Joystick 枚举、无标准 Gamepad 映射的设备：产品明确标记而非假装有标准布局
+
+以上各项均**未**在本 alpha 发布前验证；自动化测试只覆盖归一化、部署与生命周期语义，
+不代表上述真机场景已通过。

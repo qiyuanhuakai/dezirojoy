@@ -7,6 +7,7 @@ using System.Security.Principal;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Platform.Linux.Evdev;
+using DeziroJoy.Platform.Sdl3;
 using DeziroJoy.Platform.Windows.Output;
 
 namespace DeziroJoy.App.Services;
@@ -86,7 +87,19 @@ public static class DaemonHost
             return 0;
         }
 
-        using var composition = new EngineComposition();
+        // The backend is a persisted GUI setting, read once here: the provider is built into
+        // the composition below and there is no hot swap of a live provider. A damaged file
+        // falls back to the platform default with the reason in the journal, and the chosen
+        // backend - or the failure that kept it from starting - is printed in the summary.
+        var backendStore = new InputBackendStore();
+        var backend = backendStore.Load();
+
+        using var composition = new EngineComposition(backend: backend);
+
+        if (backendStore.LastError is { } backendReadError)
+        {
+            Console.WriteLine($"[DeziroJoy] input backend settings: {backendReadError}");
+        }
 
         if (composition.Sink is SendInputOutputSink sendInputSink)
         {
@@ -347,9 +360,19 @@ public static class DaemonHost
         {
             "[DeziroJoy] daemon starting · no UI stack loaded",
             $"[DeziroJoy] platform: {EngineComposition.PlatformName}",
+            $"[DeziroJoy] input backend: {PlatformFactory.DescribeBackend(composition.Backend)}",
             $"[DeziroJoy] output sink: {sink}{sinkNote}",
             $"[DeziroJoy] devices detected: {devices}",
         };
+
+        if (composition.ProviderError is { } providerError)
+        {
+            // The user asked for this backend and it did not start. The daemon keeps running
+            // without a provider rather than silently reading through the platform backend,
+            // and the reason - a missing native runtime, an unsupported platform - is the
+            // whole diagnosis, so it gets its own line instead of a parenthetical.
+            lines.Add($"[DeziroJoy] input backend error: {providerError}（未切换回其他后端，当前不读取手柄输入）");
+        }
 
         if (deviceNote is not null)
         {
@@ -372,12 +395,39 @@ public static class DaemonHost
     /// </summary>
     private static string? BuildDeviceNote(EngineComposition composition)
     {
-        if (composition.Provider is not EvdevGamepadProvider evdev)
+        if (composition.Provider is EvdevGamepadProvider evdev)
+        {
+            return BuildDeviceNote(evdev.LastScanDiagnostic, composition.Host.Controllers.Count);
+        }
+
+        if (composition.Provider is Sdl3GamepadProvider sdl3)
+        {
+            return BuildDeviceNote(sdl3.LastScanDiagnostic, composition.Host.Controllers.Count);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The SDL3 scan's guidance for the pad count the host is actually serving, or null when
+    /// there is nothing to say. The same quoting rule the evdev note follows: a diagnostic
+    /// that disagrees with the devices in view - a stale scan still reading "nothing
+    /// recognized" beside a connected pad - says nothing rather than contradicting them,
+    /// while a zero count keeps the full guidance because "SDL unavailable", "no gamepad
+    /// recognized" and "open failed" need three different fixes.
+    /// </summary>
+    internal static string? BuildDeviceNote(Sdl3ScanDiagnostic? diagnostic, int controllerCount)
+    {
+        if (diagnostic is null)
         {
             return null;
         }
 
-        return BuildDeviceNote(evdev.LastScanDiagnostic, composition.Host.Controllers.Count);
+        var quoteable = controllerCount == 0 || diagnostic.Outcome == Sdl3ScanOutcome.GamepadsFound;
+
+        return quoteable && !string.IsNullOrEmpty(diagnostic.Guidance)
+            ? diagnostic.Guidance
+            : null;
     }
 
     /// <summary>
@@ -651,6 +701,16 @@ public static class DaemonHost
         public bool IsNativeGamepadPaused => _composition.Host.IsNativeGamepadPaused;
 
         public void SetNativeGamepadPaused(bool paused) => _composition.Host.SetNativeGamepadPaused(paused);
+
+        /// <summary>
+        /// The backend this daemon was built for, and the reason it could not start when it
+        /// could not. The snapshot carries both so a window shows the backend really in
+        /// charge - including an opt-in selection that failed - rather than the one it asked
+        /// for last.
+        /// </summary>
+        public InputBackend ActiveInputBackend => _composition.Backend;
+
+        public string? InputBackendError => _composition.ProviderError;
 
         public void Reload(string deviceId, GamepadProfile profile) => _composition.Host.Reload(deviceId, profile);
 

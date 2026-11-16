@@ -5,6 +5,7 @@ using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Profiles;
 using DeziroJoy.Platform.Linux.Evdev;
+using DeziroJoy.Platform.Sdl3;
 using DeziroJoy.Platform.Windows.Output;
 using Xunit;
 
@@ -292,7 +293,8 @@ public class DaemonHostTests
     [InlineData(1)]
     public void A_Null_Diagnostic_Says_Nothing(int controllerCount)
     {
-        Assert.Null(DaemonHost.BuildDeviceNote(null, controllerCount));
+        Assert.Null(DaemonHost.BuildDeviceNote((EvdevScanDiagnostic?)null, controllerCount));
+        Assert.Null(DaemonHost.BuildDeviceNote((Sdl3ScanDiagnostic?)null, controllerCount));
     }
 
     private static EvdevScanDiagnostic Diagnostic(

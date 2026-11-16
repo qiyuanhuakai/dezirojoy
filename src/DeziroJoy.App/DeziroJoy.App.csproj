@@ -21,6 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\DeziroJoy.Core\DeziroJoy.Core.csproj" />
+    <ProjectReference Include="..\DeziroJoy.Platform.Sdl3\DeziroJoy.Platform.Sdl3.csproj" />
     <ProjectReference Include="..\DeziroJoy.Platform.Windows\DeziroJoy.Platform.Windows.csproj" />
     <ProjectReference Include="..\DeziroJoy.Platform.Linux\DeziroJoy.Platform.Linux.csproj" />
   </ItemGroup>

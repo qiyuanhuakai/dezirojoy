@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Sdl3Probe</AssemblyName>
+    <RootNamespace>DeziroJoy.Tools.Sdl3Probe</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DeziroJoy.Core\DeziroJoy.Core.csproj" />
+    <ProjectReference Include="..\..\src\DeziroJoy.Platform.Sdl3\DeziroJoy.Platform.Sdl3.csproj" />
+    <!-- Read-only cross-check: what the legacy backends currently enumerate, so the same
+         physical device seen by both SDL and XInput/evdev can be identified. -->
+    <ProjectReference Include="..\..\src\DeziroJoy.Platform.Linux\DeziroJoy.Platform.Linux.csproj" />
+    <ProjectReference Include="..\..\src\DeziroJoy.Platform.Windows\DeziroJoy.Platform.Windows.csproj" />
+  </ItemGroup>
+</Project>

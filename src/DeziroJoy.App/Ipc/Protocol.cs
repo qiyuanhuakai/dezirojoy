@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DeziroJoy.App.Services;
 using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 
@@ -330,6 +331,20 @@ public sealed record StateSnapshot(
     /// evaluation rather than mirroring nothing.
     /// </summary>
     public ForegroundStateSnapshot? ForegroundState { get; init; }
+
+    /// <summary>
+    /// The input backend the daemon is running, or null from a daemon that predates the
+    /// backend selection. A window treats null as the platform default and says nothing,
+    /// rather than claiming a backend it was never told about.
+    /// </summary>
+    public InputBackend? ActiveInputBackend { get; init; }
+
+    /// <summary>
+    /// Why the daemon's selected backend could not start, or null when it did. Quoted beside
+    /// the running backend: an opt-in selection that failed is reported here instead of
+    /// being silently replaced by another backend.
+    /// </summary>
+    public string? InputBackendError { get; init; }
 }
 
 /// <summary>
