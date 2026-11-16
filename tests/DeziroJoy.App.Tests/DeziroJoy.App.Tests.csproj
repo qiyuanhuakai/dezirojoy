@@ -12,6 +12,16 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Serializes the test collections: these tests share process-wide surfaces - the
+         Avalonia dispatcher, named pipes, temp state - and are only isolated from each
+         other by scheduling. Parallel collections turned a loaded runner into flaky
+         timing (pipe listeners missing tight connect budgets, UI tests interleaving on
+         the dispatcher), so the assembly opts out of collection parallelism and runs one
+         collection at a time. Tests that exercise concurrency do so inside themselves
+         and are unaffected. -->
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\DeziroJoy.App\DeziroJoy.App.csproj" />
   </ItemGroup>
 </Project>

@@ -20,8 +20,15 @@ public sealed class GuiInstanceGuardTests
             $"DeziroJoy.Test.Gui.Activation.{id}");
     }
 
+    // The connect budget covers the winner's startup window: it takes the instance lease
+    // microseconds before it publishes the channel, and on Windows the named-pipe listener
+    // under a loaded runner - CI, or a machine mid-build - can take far longer than a
+    // desktop-fast timeout to become connectable. 400ms measured a machine with nothing
+    // else running; a second launch that cannot reach a live winner still fails, it just
+    // fails after a budget that describes the worst case rather than the best one. The
+    // activation tests drive the same 5s connect budget for the same reason.
     private static readonly GuiActivationOptions FastOptions = new(
-        TimeSpan.FromMilliseconds(400),
+        TimeSpan.FromSeconds(5),
         TimeSpan.FromSeconds(5));
 
     [Fact]
