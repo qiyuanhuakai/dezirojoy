@@ -1607,7 +1607,10 @@ public sealed class MainWindowViewModelDaemonTests
             clientB.Editor.IsCapturingButton = true;
             await WaitForCondition(() => !clientB.Editor.IsCapturingButton);
 
-            Assert.Contains("拒绝", clientB.StatusMessage);
+            // A device snapshot may refresh StatusMessage back to the controller name. The
+            // refusal is the persistent transfer error, not that transient connection status.
+            Assert.Contains("拒绝", clientB.TransferMessage);
+            Assert.True(clientB.IsTransferError);
             Assert.True(clientA.Editor.IsCapturingButton, "the other window's capture is untouched");
             Assert.Equal("pad-1", daemonHost.CapturedDevice);
         }
