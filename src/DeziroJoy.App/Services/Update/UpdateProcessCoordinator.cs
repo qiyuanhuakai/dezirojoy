@@ -127,6 +127,12 @@ internal static class UpdateProcessCoordinator
     /// Waits for the daemon process to be gone, not merely for its pipe. The PID is the one the
     /// daemon's own handshake snapshot reported; without one the pipe's vanish is all the
     /// evidence there is, and a bounded grace stands in for the process that cannot be named.
+    /// <para>
+    /// A named process that cannot be opened is a failure, not a grace case: the caller either
+    /// escalates through the supervisor's stop-for-update chain or reports an honest stop
+    /// failure, because an unproven daemon is one that can still be holding the install
+    /// directory's files.
+    /// </para>
     /// </summary>
     private static async Task<bool> AwaitDaemonExitAsync(
         int? processId,
@@ -141,24 +147,41 @@ internal static class UpdateProcessCoordinator
             return true;
         }
 
-        return await (awaitProcessExit ?? AwaitProcessExitAsync)(pid, DaemonExitBudget, cancellationToken)
+        if (awaitProcessExit is null)
+        {
+            return await AwaitProcessExitAsync(pid, DaemonExitBudget, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return await awaitProcessExit(pid, DaemonExitBudget, cancellationToken)
             .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// The production daemon-exit wait: the real process the daemon named, bounded. A process
-    /// that is already gone is a success - that is the goal state, reached before the wait began
-    /// - and one this process cannot open falls back to the same bounded grace an unnamed daemon
-    /// gets, because the pipe is gone either way.
+    /// The production daemon-exit wait: the real process the daemon named, bounded. Only a
+    /// process this caller could open and that is no longer running counts as gone - the goal
+    /// state - and so does a process that was already gone when the wait began. A process this
+    /// caller cannot open is <em>not</em> success: an elevated daemon a medium-integrity GUI
+    /// cannot query is exactly that case, and reporting it as stopped is what let the update
+    /// start the installer while the daemon still held <c>clrjit.dll</c> open, so the setup's
+    /// DeleteFile failed with access denied (error 5) and rolled back.
     /// </summary>
-    private static async Task<bool> AwaitProcessExitAsync(
+    /// <param name="openProcess">
+    /// Opens the process to wait on. Production uses the process table; a test passes an opener
+    /// that raises the exception a real elevated daemon raises, so the permission-denied
+    /// regression is asserted rather than reasoned about.
+    /// </param>
+    internal static async Task<bool> AwaitProcessExitAsync(
         int processId,
         TimeSpan budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<int, Process>? openProcess = null)
     {
+        openProcess ??= Process.GetProcessById;
+
         try
         {
-            using var process = Process.GetProcessById(processId);
+            using var process = openProcess(processId);
 
             // WaitForExitAsync has no budget of its own, so the budget is a linked token: a
             // timeout and the caller's own cancellation are told apart by the token, exactly as
@@ -185,11 +208,16 @@ internal static class UpdateProcessCoordinator
         catch (Exception exception) when (exception
             is InvalidOperationException or Win32Exception)
         {
-            // No handle for it - an elevated daemon a medium-integrity GUI may not be able to
-            // open, or a process this user may not query. The pipe is already gone, so the grace
-            // is what is left to give.
-            await Task.Delay(DaemonExitGrace, cancellationToken).ConfigureAwait(false);
-            return true;
+            // There is a process there - the handle open failed, it did not report "no such
+            // process" - and this caller has no way to tell whether it is exiting or still
+            // holding the install directory's files. That is a failure, never a success: the
+            // caller escalates (the supervisor's identity-confirmed end, the owner's own
+            // service, the elevated stop-only copy) or tells the user the update was cancelled,
+            // and either way the installer is not started against a daemon nobody proved gone.
+            // A grace period would only delay the same answer, so none is taken here.
+            Trace.WriteLine(
+                $"[DeziroJoy] update: the daemon process {processId} could not be opened to wait for its exit ({exception.GetType().Name}: {exception.Message}); treating the stop as unproven");
+            return false;
         }
     }
 

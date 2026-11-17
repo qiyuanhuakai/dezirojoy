@@ -7,6 +7,14 @@ namespace DeziroJoy.App.ViewModels;
 /// <summary>Chinese display text for mappings (the UI is Chinese-first).</summary>
 public static class MappingDescriptions
 {
+    /// <summary>
+    /// Chinese display text for mappings (the UI is Chinese-first).
+    /// <para>
+    /// A raw extra code reads exactly as the generic panel reads it -
+    /// <see cref="GamepadControlLabels.Generic"/> - so the mapping card and the panel card
+    /// for one physical control never disagree about its name.
+    /// </para>
+    /// </summary>
     public static string Button(GamepadButton button, int code = 0) => button switch
     {
         GamepadButton.A => "A 键",
@@ -26,7 +34,7 @@ public static class MappingDescriptions
         GamepadButton.DPadDown => "十字键 ↓",
         GamepadButton.DPadLeft => "十字键 ←",
         GamepadButton.DPadRight => "十字键 →",
-        GamepadButton.Extra => code > 0 ? $"按键 {code}" : "扩展按键",
+        GamepadButton.Extra => code > 0 ? GamepadControlLabels.Generic(code) : "扩展按键",
         _ => button.ToString(),
     };
 

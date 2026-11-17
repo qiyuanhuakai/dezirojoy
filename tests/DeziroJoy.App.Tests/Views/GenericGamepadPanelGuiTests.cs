@@ -98,13 +98,17 @@ public sealed class GenericGamepadPanelGuiTests
 
     private static Button CardFor(GenericGamepadPanel panel, string label)
         => panel.GetVisualDescendants().OfType<Button>()
-            .Single(button => button.Content is StackPanel stack
-                && stack.Children.OfType<TextBlock>().Any(text => text.Text == label));
+            .Single(button => button.Classes.Contains("genericCard")
+                && button.GetVisualDescendants().OfType<TextBlock>().Any(text => text.Text == label));
 
-    private static Button AffordanceFor(GenericGamepadPanel panel, string content, GenericControlItem item)
+    /// <summary>
+    /// One of the action bar's contextual buttons, named by its own content. These act on
+    /// the control the editor has open, so they hang off the panel's own data context
+    /// rather than off a card's item.
+    /// </summary>
+    private static Button BarButtonFor(GenericGamepadPanel panel, string content)
         => panel.GetVisualDescendants().OfType<Button>()
-            .Single(button => button.Content as string == content
-                && ReferenceEquals(button.DataContext, item));
+            .Single(button => button.Content as string == content);
 
     [AvaloniaFact]
     public void The_Panel_Renders_The_Cores_Five_Zones_From_The_Devices_Declaration()
@@ -145,12 +149,16 @@ public sealed class GenericGamepadPanelGuiTests
     public void The_Hide_Affordance_Takes_A_Control_Off_The_Panel_Without_Touching_Its_Mapping()
     {
         var viewModel = PanelWith();
-        var (_, panel, _) = Host(viewModel);
+        var (window, panel, _) = Host(viewModel);
 
+        // The action bar acts on the control the editor has open - hiding is a display
+        // question about one control, so it lives with that control's settings flow rather
+        // than as a badge on every card.
         var lb = viewModel.Items.Single(item => item.Label == "LB");
-        var hide = AffordanceFor(panel, "×", lb);
+        viewModel.SetEditorControl(lb);
+        var hide = BarButtonFor(panel, "隐藏此输入");
 
-        Click(hide, panel.GetVisualAncestors().OfType<Window>().First());
+        Click(hide, window);
 
         Assert.True(lb.IsUserHidden);
         Assert.DoesNotContain(lb, viewModel.ShoulderItems);
@@ -163,34 +171,37 @@ public sealed class GenericGamepadPanelGuiTests
     }
 
     [AvaloniaFact]
-    public void The_Hide_Affordance_Never_Covers_The_Card_It_Sits_On()
+    public void The_Action_Bar_Never_Sits_On_A_Card_And_The_Cards_Are_Single_Buttons()
     {
         var viewModel = PanelWith();
         var (window, panel, _) = Host(viewModel);
 
         var lb = viewModel.Items.Single(item => item.Label == "LB");
-        var card = CardFor(panel, "LB");
-        var hide = AffordanceFor(panel, "×", lb);
-        var frame = card.GetVisualAncestors().OfType<Border>().First();
+        viewModel.SetEditorControl(lb);
+        var cards = panel.GetVisualDescendants().OfType<Button>()
+            .Where(button => button.Classes.Contains("genericCard"))
+            .ToList();
+        var hide = BarButtonFor(panel, "隐藏此输入");
 
-        var cardRect = RectIn(card, panel);
+        // A card is one button: the small actions that used to share its row - and once
+        // overlapped it - are gone from the card entirely.
+        foreach (var card in cards)
+        {
+            Assert.Empty(card.GetVisualDescendants().OfType<Button>());
+        }
+
+        // The bar's action is the panel's own, below the scroll region: it never lands on a
+        // card, whatever the card count.
         var hideRect = RectIn(hide, panel);
-        var frameRect = RectIn(frame, panel);
-
-        // The badge has its own column beside the card: it never steals the card's width,
-        // so the two never overlap - the fixed 64px card sharing one row between them used
-        // to sit the × on top of the button - and neither runs past the frame that sizes it.
-        Assert.False(cardRect.Intersects(hideRect), $"the × {hideRect} overlaps the card {cardRect}");
-        Assert.True(hideRect.Left >= cardRect.Right - 0.5,
-            $"the × must sit beside the card, it starts at {hideRect.Left} of a card ending at {cardRect.Right}");
-        Assert.True(cardRect.Right <= frameRect.Right + 0.5,
-            $"the card {cardRect} overruns its frame {frameRect}");
-        Assert.True(hideRect.Right <= frameRect.Right + 0.5,
-            $"the × {hideRect} overruns its frame {frameRect}");
+        foreach (var card in cards)
+        {
+            Assert.False(RectIn(card, panel).Intersects(hideRect),
+                $"the bar action {hideRect} sits on a card {RectIn(card, panel)}");
+        }
     }
 
     [AvaloniaFact]
-    public void A_Long_Label_Wraps_Inside_The_Card_Instead_Of_Overflowing_It()
+    public void A_Long_Label_Ellipsises_Inside_The_Card_Instead_Of_Overflowing_It()
     {
         // The label is the device's own text, and a description is free to be long: the Core
         // names Back "Back / Select" and Start "Start / Options", which no one-line card
@@ -214,25 +225,24 @@ public sealed class GenericGamepadPanelGuiTests
         var card = CardFor(panel, "Back / Select");
         var label = card.GetVisualDescendants().OfType<TextBlock>()
             .Single(text => text.Text == "Back / Select");
-        var frame = card.GetVisualAncestors().OfType<Border>().First();
 
         var cardRect = RectIn(card, panel);
         var labelRect = RectIn(label, panel);
-        var frameRect = RectIn(frame, panel);
 
-        // The label wraps - and ellipsises at its second line - inside the card, and the
-        // card stays inside its frame: nothing spills over the card's edge, over the frame,
-        // or onto the neighbour beside it.
-        Assert.Equal(TextWrapping.Wrap, label.TextWrapping);
+        // The card is one compact single line: the label ellipsises inside it rather than
+        // wrapping the card tall or spilling over its edge, and the full text is one hover
+        // away on the card's own tooltip - nothing is silently clipped.
+        Assert.Equal(TextWrapping.NoWrap, label.TextWrapping);
         Assert.Equal(TextTrimming.CharacterEllipsis, label.TextTrimming);
+        Assert.Equal("Back / Select", ToolTip.GetTip(card));
         Assert.True(labelRect.Left >= cardRect.Left - 0.5,
             $"the label {labelRect} spills left of the card {cardRect}");
         Assert.True(labelRect.Right <= cardRect.Right + 0.5,
             $"the label {labelRect} spills right of the card {cardRect}");
         Assert.True(labelRect.Bottom <= cardRect.Bottom + 0.5,
             $"the label {labelRect} spills below the card {cardRect}");
-        Assert.True(cardRect.Right <= frameRect.Right + 0.5,
-            $"the card {cardRect} overruns its frame {frameRect}");
+        Assert.True(card.Bounds.Height <= 30 + 0.5,
+            $"a one-line card must stay compact, it is {card.Bounds.Height} tall");
     }
 
     private static Rect RectIn(Control control, Control host)
@@ -245,16 +255,18 @@ public sealed class GenericGamepadPanelGuiTests
     public void The_Appearance_Switch_Redraws_The_Stick_And_Leaves_Its_Mode_Alone()
     {
         var viewModel = PanelWith();
-        var (_, panel, _) = Host(viewModel);
+        var (window, panel, _) = Host(viewModel);
 
+        // Both switches act on the control the editor has open, from the action bar.
         var stick = viewModel.Items.Single(item => item.IsStick);
-        var appearance = AffordanceFor(panel, "摇杆示意", stick);
-        var mode = AffordanceFor(panel, "切换执行方式", stick);
+        viewModel.SetEditorControl(stick);
+        var appearance = BarButtonFor(panel, "摇杆示意");
+        var mode = BarButtonFor(panel, "切换执行方式");
 
         Assert.Equal(GenericStickAppearance.Stick, stick.StickAppearance);
         Assert.Equal(GenericStickMode.Continuous, stick.StickMode);
 
-        Click(appearance, panel.GetVisualAncestors().OfType<Window>().First());
+        Click(appearance, window);
 
         // The glyph flipped and the button re-labelled itself...
         Assert.Equal(GenericStickAppearance.Dpad, stick.StickAppearance);
@@ -266,11 +278,59 @@ public sealed class GenericGamepadPanelGuiTests
         Assert.Equal(GenericStickMode.Continuous, stick.StickMode);
 
         // The mode switch is its own button, with its own effect.
-        Click(mode, panel.GetVisualAncestors().OfType<Window>().First());
+        Click(mode, window);
 
         Assert.Equal(GenericStickMode.FourWay, stick.StickMode);
         Assert.Equal("四方向", stick.StickModeLabel);
         Assert.Equal(GenericStickAppearance.Dpad, stick.StickAppearance);
+    }
+
+    private static readonly string[] FaceLabels = ["A", "B", "X", "Y"];
+
+    [AvaloniaFact]
+    public void The_Face_Buttons_Form_A_Two_By_Two_Block()
+    {
+        var viewModel = new GenericGamepadPanelViewModel
+        {
+            OpenControlRequested = _ => { },
+            RequestStickModeChange = (_, _) => Task.FromResult(true),
+        };
+        viewModel.Load(
+            [
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.A), "A", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.B), "B", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.X), "X", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.Y), "Y", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+            ],
+            _ => true);
+        var (window, panel, _) = Host(viewModel);
+
+        var cards = FaceLabels
+            .Select(label => RectIn(CardFor(panel, label), panel))
+            .ToArray();
+
+        // Four face buttons read as the pad's own diamond: two columns, two rows, the
+        // block square instead of four cards stretched across the stage's whole width.
+        var columns = cards.Select(rect => rect.Left).Distinct().Count();
+        var rows = cards.Select(rect => rect.Top).Distinct().Count();
+        Assert.Equal(2, columns);
+        Assert.Equal(2, rows);
+
+        // Every card the same size, and no two sharing a cell.
+        foreach (var rect in cards)
+        {
+            Assert.Equal(cards[0].Width, rect.Width);
+            Assert.Equal(cards[0].Height, rect.Height);
+        }
+
+        for (var i = 0; i < cards.Length; i++)
+        {
+            for (var j = i + 1; j < cards.Length; j++)
+            {
+                Assert.False(cards[i].Intersects(cards[j]),
+                    $"cards {i} and {j} overlap: {cards[i]} vs {cards[j]}");
+            }
+        }
     }
 
     [AvaloniaFact]

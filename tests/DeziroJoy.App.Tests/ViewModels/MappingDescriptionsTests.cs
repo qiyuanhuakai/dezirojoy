@@ -476,4 +476,20 @@ public class MappingDescriptionsTests
         Assert.DoesNotContain("TextStep", MappingDescriptions.ComplexShortcutSteps(
             ComplexShortcutDsl.Parse("text hi")));
     }
+
+    [Fact]
+    public void A_Raw_Extra_Code_Reads_Exactly_As_The_Generic_Panel_Reads_It()
+    {
+        // The mapping card and the panel card for one physical control never disagree about
+        // its name: both read the Core's own generic naming, ordinal plus one, so a user
+        // reading "按钮 306" on the panel finds the same control in the mapping row.
+        Assert.Equal(
+            GamepadControlLabels.Generic(305),
+            MappingDescriptions.Source(new ButtonBinding(GamepadButton.Extra, 305)));
+
+        // A device that declares the control keeps its own label on the panel instead - the
+        // panel follows the device's glyphs, the mapping binds the logical position, and the
+        // two are not the same question.
+        Assert.Equal("按钮 306", MappingDescriptions.Button(GamepadButton.Extra, 305));
+    }
 }

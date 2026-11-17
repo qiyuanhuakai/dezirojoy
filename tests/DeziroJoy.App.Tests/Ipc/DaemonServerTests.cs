@@ -52,8 +52,8 @@ internal sealed class FakeDaemonHost : IDaemonHost
 
     public long BlockedEvents { get; set; } = 2;
 
-    /// <summary>The backend this fake daemon reports running; Platform unless a test says otherwise.</summary>
-    public InputBackend ActiveInputBackend { get; set; } = InputBackend.Platform;
+    /// <summary>The backend this fake daemon reports running; the S3 default unless a test says otherwise.</summary>
+    public InputBackend ActiveInputBackend { get; set; } = InputBackendText.Default;
 
     /// <summary>Why the selected backend could not start, as the daemon would report it.</summary>
     public string? InputBackendError { get; set; }
@@ -553,11 +553,11 @@ public class DaemonServerTests
     {
         var (server, _, host) = CreateRunning();
 
-        // The default: a daemon that predates the selection reports the platform backend.
-        var platformSnapshot = Assert.IsType<StateChangedMessage>(
-            await server.ProcessAsync(new GetStateMessage("req-platform")));
-        Assert.Equal(InputBackend.Platform, platformSnapshot.Snapshot.ActiveInputBackend);
-        Assert.Null(platformSnapshot.Snapshot.InputBackendError);
+        // The default: a daemon that predates the selection reports the default backend.
+        var defaultSnapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-default")));
+        Assert.Equal(InputBackendText.Default, defaultSnapshot.Snapshot.ActiveInputBackend);
+        Assert.Null(defaultSnapshot.Snapshot.InputBackendError);
 
         host.ActiveInputBackend = InputBackend.Sdl3;
         host.InputBackendError = "SDL3 输入后端初始化失败：libSDL3.so 缺失";
@@ -566,6 +566,16 @@ public class DaemonServerTests
             await server.ProcessAsync(new GetStateMessage("req-sdl3")));
         Assert.Equal(InputBackend.Sdl3, sdl3Snapshot.Snapshot.ActiveInputBackend);
         Assert.Contains("libSDL3.so", sdl3Snapshot.Snapshot.InputBackendError);
+
+        // The legacy fallback is carried too: a daemon the user rolled back reports it, and
+        // the window shows the backend that is really reading the pads.
+        host.ActiveInputBackend = InputBackend.Legacy;
+        host.InputBackendError = null;
+
+        var legacySnapshot = Assert.IsType<StateChangedMessage>(
+            await server.ProcessAsync(new GetStateMessage("req-legacy")));
+        Assert.Equal(InputBackend.Legacy, legacySnapshot.Snapshot.ActiveInputBackend);
+        Assert.Null(legacySnapshot.Snapshot.InputBackendError);
     }
 
     [Fact]

@@ -68,9 +68,9 @@ public sealed class GuideButtonBackendTests
         await using var viewModel = context.ViewModel;
         Assert.True(viewModel.GuideButtonSupported);
 
-        // The daemon restarts onto the platform backend: the next snapshot says so and the
+        // The daemon restarts onto the legacy fallback: the next snapshot says so and the
         // hint returns, so the window never keeps promising a button the engine cannot read.
-        context.DaemonHost.ActiveInputBackend = InputBackend.Platform;
+        context.DaemonHost.ActiveInputBackend = InputBackend.Legacy;
         context.DaemonHost.AddDevice("pad-1");
         await WaitForSnapshot(viewModel);
 

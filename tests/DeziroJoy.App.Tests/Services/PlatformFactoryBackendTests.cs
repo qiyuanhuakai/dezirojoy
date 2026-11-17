@@ -8,28 +8,54 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Services;
 
 /// <summary>
-/// The backend-aware provider selection. The platform backend stays the default; SDL3 is
-/// opt-in; the provider-layer virtual pad keeps priority over both; and a requested SDL3
-/// that cannot start is reported instead of silently falling back to the platform backend.
+/// The backend-aware provider selection. SDL3 is the default since S3, the legacy backend is
+/// the explicit fallback, the provider-layer virtual pad keeps priority over both - one
+/// provider per pad, never two - and a requested backend that cannot start is reported
+/// instead of silently reading through the other one.
 /// </summary>
 public class PlatformFactoryBackendTests
 {
     [Fact]
-    public void The_Platform_Backend_Is_The_Default()
+    public void The_Default_Backend_Is_Sdl3()
     {
-        Assert.True(PlatformFactory.TryCreateProvider(out var provider));
-
-        AssertPlatformProvider(provider);
+        var previousProbe = PlatformFactory.VirtualProviderProbe;
+        PlatformFactory.VirtualProviderProbe = static () => null;
+        try
+        {
+            var created = PlatformFactory.TryCreateProvider(out var provider);
+            try
+            {
+                if (created)
+                {
+                    Assert.IsType<Sdl3GamepadProvider>(provider);
+                }
+                else
+                {
+                    // The native runtime is missing on this machine: the default failed with no
+                    // provider substituted, exactly as an explicit selection would.
+                    Assert.Null(provider);
+                }
+            }
+            finally
+            {
+                (provider as IDisposable)?.Dispose();
+            }
+        }
+        finally
+        {
+            PlatformFactory.VirtualProviderProbe = previousProbe;
+        }
     }
 
     [Fact]
-    public void The_Explicit_Platform_Selection_Matches_The_Default()
+    public void The_Explicit_Legacy_Selection_Reaches_The_Platform_Provider()
     {
-        var created = PlatformFactory.TryCreateProvider(InputBackend.Platform, out var provider, out var error);
+        var created = PlatformFactory.TryCreateProvider(InputBackend.Legacy, out var provider, out var error);
 
         Assert.True(created);
         Assert.Null(error);
         AssertPlatformProvider(provider);
+        (provider as IDisposable)?.Dispose();
     }
 
     [Fact]
@@ -44,8 +70,11 @@ public class PlatformFactoryBackendTests
             Assert.Same(probe, sdl3Selection);
             Assert.Null(sdl3Error);
 
-            Assert.True(PlatformFactory.TryCreateProvider(InputBackend.Platform, out var platformSelection, out _));
-            Assert.Same(probe, platformSelection);
+            Assert.True(PlatformFactory.TryCreateProvider(InputBackend.Legacy, out var legacySelection, out _));
+            Assert.Same(probe, legacySelection);
+
+            Assert.True(PlatformFactory.TryCreateProvider(out var defaultSelection));
+            Assert.Same(probe, defaultSelection);
         }
         finally
         {
@@ -54,7 +83,7 @@ public class PlatformFactoryBackendTests
     }
 
     [Fact]
-    public void The_Sdl3_Selection_Never_Falls_Back_To_The_Platform_Backend()
+    public void The_Sdl3_Selection_Never_Falls_Back_To_The_Legacy_Backend()
     {
         var created = PlatformFactory.TryCreateProvider(InputBackend.Sdl3, out var provider, out var error);
         try
@@ -81,11 +110,22 @@ public class PlatformFactoryBackendTests
     }
 
     [Fact]
-    public void The_Backend_Description_Names_The_Opt_In_Status()
+    public void The_Backend_Description_Names_The_Default_And_The_Fallback()
     {
         Assert.Contains("SDL3", PlatformFactory.DescribeBackend(InputBackend.Sdl3));
-        Assert.Contains("实验性", PlatformFactory.DescribeBackend(InputBackend.Sdl3));
-        Assert.Contains("平台默认", PlatformFactory.DescribeBackend(InputBackend.Platform));
+        Assert.Contains("默认", PlatformFactory.DescribeBackend(InputBackend.Sdl3));
+        Assert.Contains("回退", PlatformFactory.DescribeBackend(InputBackend.Legacy));
+
+        // The fallback names the platform backend the user is falling back to.
+        var legacy = PlatformFactory.DescribeBackend(InputBackend.Legacy);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("XInput", legacy);
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            Assert.Contains("evdev", legacy);
+        }
     }
 
     private static void AssertPlatformProvider(IGamepadProvider provider)

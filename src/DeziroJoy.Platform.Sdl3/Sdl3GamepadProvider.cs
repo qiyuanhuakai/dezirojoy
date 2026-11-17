@@ -394,8 +394,14 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
                         // A remap changes what the mapping declares, so the description is
                         // rebuilt from the new evidence rather than kept from the old mapping.
                         device.Info = _api.ReadInfo(device.Handle);
+                        device.FaceButtons = Sdl3FaceButtonMap.From(device.Info);
                         device.Controls = Sdl3ControlSet.Build(device.Info);
+                        // The tracker is replaced rather than reset: the new mapping may put a
+                        // different glyph in each slot, so which logical button a position means
+                        // has changed, and a held button from the old layout must not survive
+                        // into the new one under a different name.
                         device.Tracker.Reset();
+                        device.Tracker = new Sdl3GamepadStateTracker(device.FaceButtons);
                     }
 
                     break;
@@ -435,12 +441,14 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
             }
 
             var info = _api.ReadInfo(handle);
+            var faceButtons = Sdl3FaceButtonMap.From(info);
             _devices.Add(new Device
             {
                 Handle = handle,
                 Info = info,
                 Identity = Sdl3GamepadIdentity.Compose(info),
-                Tracker = new Sdl3GamepadStateTracker(),
+                Tracker = new Sdl3GamepadStateTracker(faceButtons),
+                FaceButtons = faceButtons,
                 ButtonCount = info.DeclaredButtonCount,
                 Controls = Sdl3ControlSet.Build(info),
             });
@@ -477,9 +485,16 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
 
         public required Sdl3GamepadIdentity Identity { get; init; }
 
-        public required Sdl3GamepadStateTracker Tracker { get; init; }
+        public required Sdl3GamepadStateTracker Tracker { get; set; }
 
         public required int ButtonCount { get; init; }
+
+        /// <summary>
+        /// Which logical button each of this device's face positions is, read from the glyphs SDL
+        /// reports for it. The tracker is built from it, so it has to be replaced together with
+        /// the tracker when a remap changes what the glyphs mean.
+        /// </summary>
+        public required Sdl3FaceButtonMap FaceButtons { get; set; }
 
         /// <summary>
         /// The device's described controls, built once when it opens and rebuilt on a remap.

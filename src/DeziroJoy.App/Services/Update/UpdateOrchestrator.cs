@@ -361,9 +361,15 @@ public sealed class UpdateOrchestrator : IDisposable
                 Enter(UpdatePhase.Installing, "正在停止守护进程…");
                 if (!await _stopDaemon(cancellationToken).ConfigureAwait(false))
                 {
+                    // The stop is the update's gate, and it is a gate on proof rather than on
+                    // a request: a daemon that is still resident when the setup begins holds
+                    // the install directory's files open, and the setup's DeleteFile fails
+                    // with access denied (error 5) and rolls back. So this says what is true -
+                    // the daemon could not be confirmed gone - and leaves mapping running,
+                    // rather than naming a stop that was merely attempted.
                     Fail(
                         "安装失败。",
-                        "无法停止守护进程，更新已取消；映射功能不受影响，请重试。");
+                        "无法确认守护进程已退出，更新已取消；映射功能不受影响，请重试。");
                     return false;
                 }
             }

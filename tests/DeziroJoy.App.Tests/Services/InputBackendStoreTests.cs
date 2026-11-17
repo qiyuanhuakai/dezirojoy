@@ -4,19 +4,21 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Services;
 
 /// <summary>
-/// The persisted input-backend selection. A missing file is the platform default every
-/// existing install starts from, and a damaged one costs the selection and nothing else -
-/// the same rules the foreground rule table follows, pinned here so a build that never
-/// writes the file keeps reading through XInput or evdev exactly as it did.
+/// The persisted input-backend selection. Since S3 a missing file is the SDL3 default - a
+/// new install and an upgrade that never chose both start there - while a file naming the
+/// legacy backend, under its current name or the <c>platform</c> name alpha.1–alpha.4 wrote,
+/// is an explicit legacy choice that survives the upgrade. A damaged file costs the
+/// selection and nothing else, the same rules the foreground rule table follows.
 /// </summary>
 public class InputBackendStoreTests
 {
     [Fact]
-    public void A_Missing_File_Is_The_Platform_Default_And_Says_Nothing()
+    public void A_Missing_File_Is_The_Sdl3_Default_And_Says_Nothing()
     {
         var store = new InputBackendStore(Path.Combine(Path.GetTempPath(), $"dezirojoy-backend-{Guid.NewGuid():N}.json"));
 
-        Assert.Equal(InputBackend.Platform, store.Load());
+        Assert.Equal(InputBackend.Sdl3, store.Load());
+        Assert.Equal(InputBackendText.Default, store.Load());
         Assert.Null(store.LastError);
     }
 
@@ -31,9 +33,51 @@ public class InputBackendStoreTests
             Assert.Equal(InputBackend.Sdl3, new InputBackendStore(path).Load());
             Assert.Contains("sdl3", File.ReadAllText(path));
 
-            new InputBackendStore(path).Save(InputBackend.Platform);
+            new InputBackendStore(path).Save(InputBackend.Legacy);
 
-            Assert.Equal(InputBackend.Platform, new InputBackendStore(path).Load());
+            Assert.Equal(InputBackend.Legacy, new InputBackendStore(path).Load());
+            Assert.Contains("legacy", File.ReadAllText(path));
+        }
+        finally
+        {
+            Delete(path);
+        }
+    }
+
+    [Fact]
+    public void The_Legacy_Name_Alpha4_Wrote_Still_Reads_As_Legacy()
+    {
+        // An upgrade that explicitly chose the platform backend under alpha.1–alpha.4 saved
+        // "platform". S3 renamed the option, not the choice: the old name keeps reading as
+        // the legacy fallback rather than silently moving the user to the new default.
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-backend-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """{"backend":"platform"}""");
+
+            var store = new InputBackendStore(path);
+
+            Assert.Equal(InputBackend.Legacy, store.Load());
+            Assert.Null(store.LastError);
+        }
+        finally
+        {
+            Delete(path);
+        }
+    }
+
+    [Fact]
+    public void An_Empty_Body_Is_The_Default_And_Says_Nothing()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-backend-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "{}");
+
+            var store = new InputBackendStore(path);
+
+            Assert.Equal(InputBackend.Sdl3, store.Load());
+            Assert.Null(store.LastError);
         }
         finally
         {
@@ -51,7 +95,7 @@ public class InputBackendStoreTests
 
             var store = new InputBackendStore(path);
 
-            Assert.Equal(InputBackend.Platform, store.Load());
+            Assert.Equal(InputBackend.Sdl3, store.Load());
             Assert.Contains("无法解析", store.LastError);
         }
         finally
@@ -70,7 +114,7 @@ public class InputBackendStoreTests
 
             var store = new InputBackendStore(path);
 
-            Assert.Equal(InputBackend.Platform, store.Load());
+            Assert.Equal(InputBackend.Sdl3, store.Load());
             Assert.Contains("无法识别", store.LastError);
         }
         finally
@@ -108,11 +152,11 @@ public class InputBackendStoreTests
     {
         var store = new InMemoryInputBackendStore();
 
-        Assert.Equal(InputBackend.Platform, store.Load());
-
-        store.Save(InputBackend.Sdl3);
-
         Assert.Equal(InputBackend.Sdl3, store.Load());
+
+        store.Save(InputBackend.Legacy);
+
+        Assert.Equal(InputBackend.Legacy, store.Load());
         Assert.Null(store.LastError);
     }
 

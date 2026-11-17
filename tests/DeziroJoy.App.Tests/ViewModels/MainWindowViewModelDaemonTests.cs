@@ -1502,7 +1502,9 @@ public sealed class MainWindowViewModelDaemonTests
         // own answer about which backend is in charge, including a start that failed.
         Assert.Contains("SDL3", viewModel.DaemonSettings.RunningBackendText);
         Assert.Contains("libSDL3.so", viewModel.DaemonSettings.RunningBackendErrorText);
-        Assert.True(viewModel.DaemonSettings.HasBackendMismatch);
+        // The card opened on the SDL3 default and the daemon named the same backend, so no
+        // restart is pending; a daemon on a different backend is what raises the mismatch.
+        Assert.False(viewModel.DaemonSettings.HasBackendMismatch);
     }
 
     internal static async Task<(MainWindowViewModel ViewModel, FakeDaemonHost DaemonHost, ServerChannel Channel, DaemonServer Server)> CreateDaemonViewModel(

@@ -178,12 +178,10 @@
                                        Text="{Binding Update.InstallGuidance}" />
                             <CheckBox x:Name="AutoCheckUpdatesBox" Content="启动时自动检查" Margin="0,12,0,0"
                                       IsChecked="{Binding Update.AutoCheckEnabled, Mode=TwoWay}" />
-                            <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="开启后每次启动应用时自动检查一次新版本；仅检查，不会自动下载或安装更新。" />
                             <CheckBox x:Name="AutoDownloadUpdatesBox" Content="发现新版本后自动下载" Margin="0,12,0,0"
                                       IsChecked="{Binding Update.AutoDownloadEnabled, Mode=TwoWay}" />
                             <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="开启后检查到新版本会自动下载并校验；安装更新仍需一次点击，不会自动安装或重启。" />
+                                       Text="安装更新仍需手动确认，不会自动重启。" />
                         </StackPanel>
                     </Border>
 
@@ -202,7 +200,7 @@
                             <CheckBox x:Name="ShowLayerHintBox" Content="显示临时层提示" Margin="0,12,0,0"
                                       IsChecked="{Binding ShowLayerHint, Mode=TwoWay}" />
                             <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="按住临时层 Leader 键时，在屏幕上浮出该层每个按键的作用。关闭后即使按住 Leader 也不再显示；浮层为点击穿透、无法直接在上面点击关闭，故在此开关。" />
+                                       Text="浮层点击穿透，无法直接点击关闭，故在此开关。" />
                             <TextBlock Classes="fieldLabel" Margin="0,14,0,0" Text="浮层位置" />
                             <StackPanel Margin="0,6,0,0">
                                 <RadioButton Content="固定位置" IsChecked="{Binding IsOverlayFollowMouse, Converter={StaticResource Not}, Mode=TwoWay}" />
@@ -221,7 +219,7 @@
                                 <ComboBoxItem Content="右侧居中" />
                             </ComboBox>
                             <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="固定位置停靠在所选屏幕边缘或角落；跟随鼠标在按住 Leader 时出现在指针旁（需可读取指针位置，纯 Wayland 会话下回退为固定位置）。" />
+                                       Text="纯 Wayland 会话下「跟随鼠标」回退为固定位置。" />
                         </StackPanel>
                     </Border>
 
@@ -231,11 +229,11 @@
                             <CheckBox x:Name="CloseToTrayBox" Content="关闭后退出到托盘" Margin="0,12,0,0"
                                       IsChecked="{Binding CloseToTrayEnabled, Mode=TwoWay}" />
                             <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="开启时关闭窗口并显示托盘图标，daemon 与浮层继续运行；关闭时完整退出 GUI、托盘与 daemon。" />
+                                       Text="关闭时完整退出 GUI、托盘与 daemon。" />
                             <CheckBox x:Name="MinimizeToTrayBox" Content="最小化后退出到托盘" Margin="0,12,0,0"
                                       IsChecked="{Binding MinimizeToTrayEnabled, Mode=TwoWay}" />
                             <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Text="开启时最小化会完全销毁 GUI 并显示托盘图标；浮层不受影响。关闭时仅执行普通最小化。" />
+                                       Text="关闭时仅执行普通最小化。" />
                         </StackPanel>
                     </Border>
 

@@ -100,6 +100,10 @@ dotnet run --project tools/Sdl3Probe -- list
   `Sdl3MappingFile.Validate` 也会把 `south:`／`east:` 这类位置名作为非法映射点名，而不是
   等用户发现某个键没有反应。
 - 生成后先本地校验、再交给 `SDL_AddGamepadMapping`：被拒绝的映射**不会**写入文件。
+- 捕获流程的提示项用 SDL 的**位置**键（`a` = 南位、`b` = 东位、`x` = 西位、`y` = 北位），因为映射
+  字符串只能按位置寻址。映射生效后，控件面板显示的名字来自设备自己报的字形（任天堂设备是
+  B/A/Y/X），所以"提示时按下的那个键"和"面板上点亮的那个键"是同一个物理键。详见下面的
+  《面键语义》。
 - 保存前会明确列出跳过了哪些项；跳过的必需项会在结尾再次点名，映射因此是不完整但诚实的
   描述，不会把设备伪装成已有完整标准布局。
 - 同一 GUID 重复映射是**更新**而非追加：文件按 GUID 排序、同 GUID 只保留最后一条。
@@ -107,6 +111,38 @@ dotnet run --project tools/Sdl3Probe -- list
 - 保存后立即用 `SDL_GetGamepads` 复核：报告本次运行中 SDL 是否已把该设备识别为标准
   Gamepad。SDL 的映射库是**进程全局**的，因此 `map` 的复核结论对同一进程内的后续枚举也成立；
   但也因为全局，测试与工具不要复用同一个 VID/PID 去映射两台不同的设备。
+
+## 面键语义：字形决定逻辑按键
+
+SDL 的 south/east/west/north 是菱形里的四个**位置**，而每个位置上印的字因手柄而异：Xbox 和
+DualSense 都是"南=A/叉、东=B/圈、西=X/方、北=Y/三角"，任天堂是"南=B、东=A、西=Y、北=X"，
+GameCube 是"南=A、东=X、西=B、北=Y"。
+
+**逻辑按键按字形决定，不按位置决定。** `Sdl3FaceButtonMap.From(info)` 读 SDL 报给这台设备的
+字形（`SDL_GetGamepadButtonLabel`，记录在 `Sdl3GamepadInfo.FaceButtonLabels`，按
+south/east/west/north 序），据此得出每个位置对应哪个 `GamepadButton`：
+
+| 设备 | south | east | west | north |
+|---|---|---|---|---|
+| Xbox / DualShock | A | B | X | Y |
+| 任天堂（SDL 报 BAYX） | B | A | Y | X |
+| GameCube（SDL 报 AXBY） | A | X | B | Y |
+| SDL 读不到字形 | A | B | X | Y（位置回退） |
+
+Tracker 在 open 和 remap 时都用这张表，控件描述也用同一张表，所以"面板上叫 X 的控件"绑定
+的就是"按下物理 X 产生的那次输入"。此前按位置固定映射的做法，在任天堂手柄上会把物理 X
+（北位）当成逻辑 Y——面板显示 X、映射执行 Y；只改显示不改语义是治标。
+
+几个边界：
+
+- SDL 一次只给一台设备一个 face style，所以实际要么四个字形都读得到，要么四个都读不到；
+  部分可读是手写证据记录才会出现的情况。某个位置读不到时该位置取位置回退；若回退值与已读出
+  的字形冲突（任天堂手柄上必然如此），整表回退到位置语义，避免两个位置挤到同一个逻辑键、
+  另一个按键永远绑不上。
+- 字形表是 SDL 的转写，`Sdl3FaceButtonSemanticTests` 用虚拟手柄 + `type:switchpro` 的映射让
+  **真实 SDL 自己回答** `SDL_GetGamepadButtonLabel` 并按下真实按键验证，而不是只信任转写。
+- 映射字符串本身仍是位置寻址（`a:b0` 绑定南位），这一点没变：DInput 补充流程产出的映射在
+  任何语义下都正确，因为"按下哪个物理键"和"映射绑定哪个位置"始终一致。
 
 ## sdl-mappings.json
 

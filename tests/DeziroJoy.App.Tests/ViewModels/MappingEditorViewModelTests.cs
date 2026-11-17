@@ -1139,7 +1139,10 @@ public class MappingEditorViewModelTests
         Assert.Contains("扩展按键", headers);
         var option = Assert.Single(extra);
         Assert.Equal(305, option.Code);
-        Assert.Equal("按键 305", option.Label);
+        // The raw code reads exactly as the generic panel reads it - the Core's own generic
+        // naming, ordinal plus one - so the picker, the mapping card and the panel card for
+        // one physical control can never disagree about its name.
+        Assert.Equal("按钮 306", option.Label);
     }
 
     [Fact]

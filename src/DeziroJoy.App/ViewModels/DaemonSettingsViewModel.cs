@@ -64,7 +64,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
         _selectedBackend = _backendStore.Load();
         if (_backendStore.LastError is { } backendReadError)
         {
-            // A damaged file reads as the platform default; the card says so on its own
+            // A damaged file reads as the default backend; the card says so on its own
             // status line instead of silently showing a selection nobody chose.
             BackendStatusMessage = backendReadError;
         }
@@ -310,26 +310,26 @@ public partial class DaemonSettingsViewModel : ObservableObject
     private bool _autostartEnabled;
 
     /// <summary>
-    /// The persisted input-backend selection. The platform backend stays the default; SDL3
-    /// is opt-in, and a change here is only a request until <see cref="ApplyBackend"/>
-    /// persists it and the daemon restarts onto it.
+    /// The persisted input-backend selection. SDL3 is the default since S3; the legacy
+    /// XInput/evdev backend is the explicit fallback. A change here is only a request until
+    /// <see cref="ApplyBackend"/> persists it and the daemon restarts onto it.
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPlatformBackendSelected))]
+    [NotifyPropertyChangedFor(nameof(IsLegacyBackendSelected))]
     [NotifyPropertyChangedFor(nameof(IsSdl3BackendSelected))]
     [NotifyPropertyChangedFor(nameof(HasBackendMismatch))]
     [NotifyPropertyChangedFor(nameof(BackendMismatchText))]
     private InputBackend _selectedBackend;
 
-    /// <summary>True while the radio for the platform backend must read as checked.</summary>
-    public bool IsPlatformBackendSelected
+    /// <summary>True while the radio for the legacy fallback backend must read as checked.</summary>
+    public bool IsLegacyBackendSelected
     {
-        get => SelectedBackend == InputBackend.Platform;
+        get => SelectedBackend == InputBackend.Legacy;
         set
         {
             if (value)
             {
-                SelectedBackend = InputBackend.Platform;
+                SelectedBackend = InputBackend.Legacy;
             }
         }
     }

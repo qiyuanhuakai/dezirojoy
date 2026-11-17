@@ -564,6 +564,30 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Stop_That_Cannot_Prove_The_Daemon_Gone_Cancels_The_Install_And_Says_So()
+    {
+        // The update's gate is a proof, not a request: a daemon that is still resident when the
+        // setup begins holds the install directory's files open and the setup's DeleteFile fails
+        // with access denied (error 5). So the card says exactly that - the daemon could not be
+        // confirmed gone - and mapping keeps working, rather than naming a stop that was merely
+        // attempted.
+        var vm = Card(
+            null,
+            Orchestrator(kind: InstallKind.WindowsInstall, stopDaemon: Task.FromResult(false)));
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        var restarted = 0;
+        vm.RestartRequested += (_, _) => restarted++;
+        await vm.InstallUpdateCommand.ExecuteAsync(null);
+
+        Assert.True(vm.IsResultError);
+        Assert.Contains("无法确认守护进程已退出", vm.ResultText);
+        Assert.Contains("映射功能不受影响", vm.ResultText);
+        Assert.Equal(0, restarted); // nothing is installed and nothing is restarted
+    }
+
+    [Fact]
     public async Task The_Stop_Stages_Keep_Their_Own_Wording_While_The_Daemon_And_The_Tray_Are_Stopped()
     {
         // The install has not started yet: what the card says is what is happening now, which
@@ -704,7 +728,40 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
         Assert.Equal("-c", start.ArgumentList[0]);
         var script = start.ArgumentList[1];
         Assert.Contains($"kill -0 {SuccessorPid}", script);
-        Assert.Contains($"exec \"{image}\"", script);
+        Assert.Contains($"exec '{image}'", script);
+    }
+
+    [Fact]
+    public async Task The_AppImage_Successor_Chain_Escapes_The_Image_Path_It_Execs()
+    {
+        // $APPIMAGE is a path the user chose. A value with a quote or a dollar sign in it
+        // must never be parsed as script by the chain that relaunches the app.
+        var image = Path.Combine(_directory, "a b'c$(id)`d.AppImage");
+        File.WriteAllText(image, "NEW IMAGE");
+        var launcher = new RecordingLauncher();
+        var vm = Card(
+            null,
+            Orchestrator(
+                kind: InstallKind.AppImage,
+                installers: [new RecordingInstaller(relaunchHandled: false)]),
+            appImagePath: () => image,
+            launcher: launcher);
+        await vm.CheckForUpdatesAsync(TestContext.Current.CancellationToken);
+        await vm.DownloadUpdateCommand.ExecuteAsync(null);
+
+        var restarted = 0;
+        vm.RestartRequested += (_, _) => restarted++;
+        await vm.InstallUpdateCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, restarted);
+
+        // Close, escape and reopen around the embedded quote: the rest stays literal, so the
+        // chain execs exactly that path and runs nothing the path happens to contain.
+        var expected =
+            "'" + Path.GetDirectoryName(image) + "/a b'\\''c$(id)`d.AppImage'";
+        var script = Assert.Single(launcher.Calls).ArgumentList[1];
+        Assert.Contains($"exec {expected}", script);
+        Assert.Contains($"kill -0 {SuccessorPid}", script);
     }
 
     [Fact]

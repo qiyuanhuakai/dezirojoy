@@ -69,6 +69,50 @@ public sealed partial class GenericGamepadPanelViewModel : ObservableObject
     /// <summary>Whether anything is hidden right now - what the 恢复 affordance hangs off.</summary>
     public bool HasHidden => HiddenCount > 0;
 
+    private GenericControlItem? _editorControl;
+
+    /// <summary>
+    /// The control the mapping editor is editing, pushed in by the window while the editor
+    /// is open. The per-control actions that are not "open the settings" - hide, and for a
+    /// stick the appearance and execution-mode switches - act on it from the bar below the
+    /// zones instead of crowding every card: the cards stay one even grid of single buttons
+    /// with no badge column to misalign them, and the actions stay reachable by pointer and
+    /// by gamepad navigation alike, which a hover-revealed badge would not be.
+    /// </summary>
+    public GenericControlItem? EditorControl
+    {
+        get => _editorControl;
+        private set
+        {
+            if (ReferenceEquals(_editorControl, value))
+            {
+                return;
+            }
+
+            _editorControl = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasEditorControl));
+            OnPropertyChanged(nameof(EditorControlCanHide));
+            OnPropertyChanged(nameof(EditorControlIsStick));
+        }
+    }
+
+    /// <summary>Whether the editor has a control on this panel open right now.</summary>
+    public bool HasEditorControl => _editorControl is not null;
+
+    /// <summary>Whether the open control may be hidden - a bound one may not, nor may one already hidden.</summary>
+    public bool EditorControlCanHide => _editorControl is { CanHide: true, IsUserHidden: false };
+
+    /// <summary>Whether the open control is a stick, which is what the two switches apply to.</summary>
+    public bool EditorControlIsStick => _editorControl is { IsStick: true };
+
+    /// <summary>
+    /// Points the bar's contextual actions at one control, or at none when the editor
+    /// closes. The window calls this as the editor's source moves; the panel never guesses
+    /// which control is being edited.
+    /// </summary>
+    public void SetEditorControl(GenericControlItem? item) => EditorControl = item;
+
     [ObservableProperty]
     private bool _showAllInputs;
 

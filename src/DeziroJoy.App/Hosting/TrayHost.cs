@@ -124,6 +124,24 @@ internal interface IDaemonRecovery
 }
 
 /// <summary>
+/// What this process can tell about a daemon process. The three cases are the whole point: a
+/// process that is not running is gone, one that is running is not, and one this token cannot
+/// open is neither - and collapsing that third case into either of the others is how an update
+/// came to start an installer against a daemon that was still holding its files.
+/// </summary>
+internal enum DaemonProcessLiveness
+{
+    /// <summary>No such process: the goal state.</summary>
+    Gone,
+
+    /// <summary>The process is there and this caller can see it.</summary>
+    Running,
+
+    /// <summary>The process is there and this caller cannot open it - the elevated daemon.</summary>
+    Unreadable,
+}
+
+/// <summary>
 /// Supervises the resident daemon. Disposing a supervisor only releases its process handle;
 /// explicit application exit is the sole path that asks the daemon to stop.
 /// <para>
@@ -138,6 +156,10 @@ internal interface IDaemonRecovery
 /// token, ends the old process and becomes the replacement. <see cref="Recover"/> is
 /// that bounded restart, and <see cref="Restart"/> is its boolean form for the
 /// backend switch.
+/// </para>
+/// <para>
+/// <see cref="StopForUpdate"/> is the third shape: a stop that has to be provable rather than
+/// merely requested, because the update that follows replaces the files the daemon holds open.
 /// </para>
 /// </summary>
 internal sealed class DaemonSupervisor : IDisposable
@@ -185,6 +207,8 @@ internal sealed class DaemonSupervisor : IDisposable
     private readonly Func<CancellationToken, Task<bool>> _requestShutdown;
     private readonly Func<bool> _isDaemonUnitInstalled;
     private readonly Func<bool> _startDaemonUnit;
+    private readonly Func<int, DaemonProcessLiveness> _probeProcessLiveness;
+    private readonly Func<int, DateTimeOffset, bool> _stopOnlyElevatedRecovery;
     private readonly TimeSpan _unitStartupWait;
     private readonly TimeSpan _stopTimeout;
     private readonly IDaemonRecovery _recovery;
@@ -214,7 +238,9 @@ internal sealed class DaemonSupervisor : IDisposable
         IDaemonRecovery? recovery = null,
         TimeSpan? releaseWait = null,
         TimeSpan? verifyWait = null,
-        TimeSpan? elevatedReplacementWait = null)
+        TimeSpan? elevatedReplacementWait = null,
+        Func<int, DaemonProcessLiveness>? probeProcessLiveness = null,
+        Func<int, DateTimeOffset, bool>? stopOnlyElevatedRecovery = null)
     {
         _elevation = elevation ?? new ElevationService();
         _launcher = launch ?? ProcessLauncher.Start;
@@ -229,6 +255,16 @@ internal sealed class DaemonSupervisor : IDisposable
         _releaseWait = releaseWait ?? DefaultReleaseWait;
         _verifyWait = verifyWait ?? DefaultRecoveryVerifyWait;
         _elevatedReplacementWait = elevatedReplacementWait ?? DefaultElevatedReplacementWait;
+
+        // A seam rather than an IDaemonRecovery member, so the existing recovery fakes keep
+        // compiling: the update's stop is the only caller, and its whole job is to tell
+        // "gone" from "cannot tell".
+        _probeProcessLiveness = probeProcessLiveness ?? ProbeProcessLiveness;
+
+        // The stop-only elevated copy: same identity, same token, no replacement daemon. A
+        // seam for the same reason - production launches a real elevated copy, tests record
+        // the request.
+        _stopOnlyElevatedRecovery = stopOnlyElevatedRecovery ?? DefaultStopOnlyElevatedRecovery;
     }
 
     public bool IsRunning => _daemon is { HasExited: false };
@@ -450,6 +486,95 @@ internal sealed class DaemonSupervisor : IDisposable
         _disposed = true;
         _daemon?.Dispose();
         _daemon = null;
+    }
+
+    /// <summary>
+    /// Stops the daemon for an update: the stop an installer can be started behind. The update
+    /// replaces the install directory, so a daemon that is still resident when the setup begins
+    /// holds <c>DeziroJoy.exe</c> and the libraries beside it open, and the setup's DeleteFile
+    /// fails with access denied (error 5) and rolls back - which is what a user saw after
+    /// clicking update: the app closed, nothing was installed, and nothing said why.
+    /// <para>
+    /// The chain is the graceful stop first, then the end the recovery performs - run directly,
+    /// because <see cref="Recover"/>'s own first step is a graceful stop, and a graceful stop
+    /// that finds the pipe already gone reports "nothing resident" and skips exactly the end
+    /// this chain needs. Then the recovery and its stop again: a daemon the owner's own service
+    /// put back (the unit's <c>Restart=on-failure</c>) is still a daemon, and the replacement
+    /// the recovery brings up must not linger either - an update that has to stop the same
+    /// daemon twice is a working update, and one that leaves the second instance running is the
+    /// failure this method exists to prevent.
+    /// </para>
+    /// <para>
+    /// The proof is the process, not the pipe. A daemon this caller cannot open - the elevated
+    /// one on Windows, whose handle a medium-integrity process is denied - is answered by the
+    /// stop-only elevated copy: it verifies the identity with its own token, ends the process
+    /// and exits without becoming the replacement, so no second injector is ever started and
+    /// nothing is ended without a confirmed identity. A daemon nobody could prove gone is a
+    /// failed stop, reported as one, and the caller keeps its UI alive instead of starting an
+    /// installer against a daemon that is still holding the files.
+    /// </para>
+    /// </summary>
+    public bool StopForUpdate()
+    {
+        if (_disposed)
+        {
+            LastError = "the supervisor is disposed";
+            return false;
+        }
+
+        // 1. The graceful stop, exactly as the exit path runs it.
+        Stop();
+        if (IsDaemonGoneForUpdate())
+        {
+            LastError = null;
+            return true;
+        }
+
+        // 2. The end the recovery performs, run here rather than through Recover(): its first
+        //    step is the graceful stop above, which for a daemon whose pipe is already gone
+        //    answers "nothing resident" and skips the identity-confirmed end - the very end
+        //    that reaches a daemon this process holds no handle to.
+        EndDaemonForUpdate();
+        if (IsDaemonGoneForUpdate())
+        {
+            LastError = null;
+            return true;
+        }
+
+        // 3. A daemon the owner's own service put back is still a daemon, and the update
+        //    replaces the install directory either way: recover, then stop the replacement.
+        Recover();
+        Stop();
+        if (IsDaemonGoneForUpdate())
+        {
+            LastError = null;
+            return true;
+        }
+
+        // 4. A daemon this caller still cannot prove gone is the elevated one no planned task
+        //    owns; the stop-only elevated copy is the end that reaches it.
+        RequestStopOnlyElevatedDaemon();
+        return WaitForDaemonGoneForUpdate();
+    }
+
+    /// <summary>
+    /// The end the recovery performs, without the restart that follows it: the owner's own
+    /// service end (the systemd user unit's stop, the Windows planned task's end) and the
+    /// identity-confirmed process end, and - for the daemon only an elevated token can reach -
+    /// the elevated copy's verified takeover. Nothing is started here, which is what makes this
+    /// the update's end rather than the recovery's.
+    /// </summary>
+    private void EndDaemonForUpdate()
+    {
+        var phases = new List<string>();
+        if (TryEndDaemon(phases, out _, out var elevatedRecoveryRequested)
+            && elevatedRecoveryRequested
+            && !WaitForElevatedReplacement(out _))
+        {
+            // The elevated copy took over the daemon: it is both the end and the replacement,
+            // so the stop that follows is what has to take that replacement down.
+            Trace.WriteLine("[DeziroJoy] daemon supervisor: the elevated replacement never answered; the stop that follows is what ends it");
+        }
     }
 
     /// <summary>
@@ -741,6 +866,163 @@ internal sealed class DaemonSupervisor : IDisposable
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The update's proof that no daemon is resident. Three things have to hold, because each
+    /// one alone is a state a dying daemon passes through: the mapping pipe answers for
+    /// nobody, the daemon a snapshot named is verifiably gone, and neither the instance slot
+    /// nor the injection mutex is held.
+    /// <para>
+    /// "Verifiably gone" is the part that was wrong before. A PID this caller cannot open is
+    /// not gone - it is an elevated daemon whose handle a medium-integrity process is denied,
+    /// and it can still be holding the install directory's files open. So the liveness probe
+    /// tells the three cases apart, and only <see cref="DaemonProcessLiveness.Gone"/> counts:
+    /// <see cref="DaemonProcessLiveness.Unreadable"/> sends the caller to the stop-only
+    /// elevated copy, which proves the end with a token that can see the process.
+    /// </para>
+    /// </summary>
+    private bool IsDaemonGoneForUpdate()
+    {
+        if (SafeIsDaemonReachable())
+        {
+            return false;
+        }
+
+        if (_daemonIdentity is not null
+            && _probeProcessLiveness(_daemonIdentity.ProcessId) != DaemonProcessLiveness.Gone)
+        {
+            return false;
+        }
+
+        // A daemon the owner's own service put back is not the recorded identity - it has a
+        // different PID - so the scan is what catches it. On Windows a cross-integrity scan
+        // finds nothing, which costs nothing: the pipe and the slots still have to answer.
+        if (_recovery.FindDaemonProcesses().Count > 0)
+        {
+            return false;
+        }
+
+        return SafeIsDaemonInstanceSlotFree() && SafeIsInjectionSlotFree();
+    }
+
+    /// <summary>Bounded wait for <see cref="IsDaemonGoneForUpdate"/> to hold.</summary>
+    private bool WaitForDaemonGoneForUpdate()
+    {
+        var elapsed = Stopwatch.StartNew();
+        do
+        {
+            if (IsDaemonGoneForUpdate())
+            {
+                LastError = null;
+                return true;
+            }
+
+            if (elapsed.Elapsed >= _releaseWait)
+            {
+                // The conclusive answer, whatever the escalation said on the way: an update
+                // that cannot prove the daemon gone must not start, and the user is told which
+                // of the two it was rather than a generic failure.
+                LastError = _probeProcessLiveness(_daemonIdentity?.ProcessId ?? 0) == DaemonProcessLiveness.Running
+                    ? "守护进程未在停止预算内退出，更新已取消；映射功能不受影响，请重试。"
+                    : "无法确认守护进程已退出（权限不足？），更新已取消；映射功能不受影响，请重试。";
+                return false;
+            }
+
+            Thread.Sleep(ProbeRetryDelay);
+        }
+        while (true);
+    }
+
+    /// <summary>
+    /// Hands the daemon that only an elevated token can end to an elevated copy of this product
+    /// that stops it and exits. It is not <see cref="Recover"/>'s copy: nothing is started here,
+    /// because an update has no use for a replacement daemon - the install directory is about to
+    /// be replaced - and a replacement would be a daemon this method has to stop again. The copy
+    /// re-verifies the same identity with its own token before ending anything, so the hand-off
+    /// is not a blind kill and a reused PID is never handed over.
+    /// </summary>
+    private void RequestStopOnlyElevatedDaemon()
+    {
+        if (!_isWindows() || _daemonIdentity is not { } identity)
+        {
+            return;
+        }
+
+        // A PID that was reused is never handed over, exactly as in TryEndDaemon.
+        if (!RecordedIdentityIsLiveAndNotReused())
+        {
+            return;
+        }
+
+        try
+        {
+            if (!_stopOnlyElevatedRecovery(identity.ProcessId, identity.SeenAtUtc))
+            {
+                LastError ??= "无法请求提权停止守护进程（用户取消了提权？）";
+            }
+        }
+        catch (Exception exception) when (exception is IOException or Win32Exception or InvalidOperationException)
+        {
+            LastError = exception.Message;
+        }
+    }
+
+    /// <summary>
+    /// The production stop-only elevated request: an elevated copy of this product, handed the
+    /// same identity, that ends the daemon with its own token and exits. It is the only end that
+    /// reaches a daemon this process cannot open - the elevated one on Windows that no planned
+    /// task owns - and it is deliberately not the recovery's copy: nothing is started, so an
+    /// update that needs the daemon gone does not get a replacement it would have to stop again.
+    /// </summary>
+    private static bool DefaultStopOnlyElevatedRecovery(int processId, DateTimeOffset seenAt)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        // Nothing but the identity travels, exactly as for the recovery's elevated copy - the
+        // PID and the moment it was last seen serving the daemon - plus the stop-only flag that
+        // tells the copy to end and exit instead of becoming the replacement.
+        var arguments =
+            $"{ElevatedDaemonRecovery.StopOnlyFlag} --pid {processId.ToString(CultureInfo.InvariantCulture)} "
+            + $"--seen-at {seenAt.UtcTicks.ToString(CultureInfo.InvariantCulture)}";
+        return WindowsProcessElevation.RelaunchElevated(arguments);
+    }
+
+    /// <summary>
+    /// The production liveness probe, and the reason the update's proof is honest: a process
+    /// that is not running answers <see cref="ArgumentException"/> from the process table, and a
+    /// process that is running but cannot be opened answers <see cref="Win32Exception"/>. The
+    /// two used to be one answer - "cannot tell, assume it exited" - and that assumption is what
+    /// let an update start an installer against a daemon that was still holding its files.
+    /// </summary>
+    private static DaemonProcessLiveness ProbeProcessLiveness(int processId)
+    {
+        if (processId <= 0)
+        {
+            return DaemonProcessLiveness.Gone;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.HasExited ? DaemonProcessLiveness.Gone : DaemonProcessLiveness.Running;
+        }
+        catch (ArgumentException)
+        {
+            // No such process: the goal state.
+            return DaemonProcessLiveness.Gone;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
+        {
+            // There is a process there and this token cannot open it. Not an answer either way,
+            // which is why it is its own case.
+            Trace.WriteLine(
+                $"[DeziroJoy] daemon supervisor: process {processId} could not be opened ({exception.GetType().Name}); liveness unknown");
+            return DaemonProcessLiveness.Unreadable;
+        }
     }
 
     /// <summary>
@@ -1654,7 +1936,11 @@ internal static class TrayHost
 
         try
         {
-            Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(Array.Empty<string>());
+            // The resident host is pinned to the Win32 software renderer by policy: it never
+            // closes, so the platform default would keep a GPU stack alive for the whole
+            // logon session on behalf of the tray icon and the two floating surfaces. Only an
+            // explicit DEZIROJOY_RENDER override can move it, and only for diagnostics.
+            Program.BuildTrayAvaloniaApp().StartWithClassicDesktopLifetime(Array.Empty<string>());
             return 0;
         }
         finally

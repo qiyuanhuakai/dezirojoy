@@ -22,7 +22,7 @@ public sealed class EngineComposition : IDisposable
 
         ProfileStore = profileStore ?? new FileProfileStore();
 
-        var selection = backend ?? InputBackend.Platform;
+        var selection = backend ?? InputBackendText.Default;
         Backend = selection;
         if (PlatformFactory.TryCreateProvider(selection, out var created, out var providerError))
         {
@@ -32,9 +32,10 @@ public sealed class EngineComposition : IDisposable
         else
         {
             // The selection was explicit and could not be honoured, so the composition says so
-            // instead of quietly reading through the platform backend: a user who asked for
-            // SDL3 and silently got evdev would be mapping through a backend they never chose.
-            // The daemon's startup line and the settings card both quote this error.
+            // instead of quietly reading through the other backend: a user who asked for SDL3
+            // and silently got evdev - or asked for the legacy fallback and silently got SDL3 -
+            // would be mapping through a backend they never chose. The daemon's startup line
+            // and the settings card both quote this error.
             Provider = new NoGamepadProvider();
             ProviderError = providerError ?? "输入后端不可用";
         }
@@ -93,7 +94,7 @@ public sealed class EngineComposition : IDisposable
     /// <summary>
     /// Why the requested input provider could not be created, or null when it was. Set only
     /// for an explicit selection that failed - the composition then runs a no-gamepad
-    /// provider rather than falling back to the platform backend.
+    /// provider rather than falling back to the other backend.
     /// </summary>
     public string? ProviderError { get; }
 

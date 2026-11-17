@@ -87,12 +87,11 @@ public sealed class DaemonStatusSettingsGuiTests
         Assert.True(start.IsEnabled);
         Assert.False(stop.IsEnabled);
 
-        // The Windows "needs administrator" sentence is gone: installing a systemd user unit
-        // needs no administrator, so the sentence would be false here.
+        // The Windows "needs administrator" sentence is the one limit the checkbox label
+        // cannot say; a systemd user unit needs no administrator, so Linux says nothing
+        // here at all.
         Assert.False(card.FindControl<TextBlock>("AutostartHintText")!.IsVisible);
-        var linuxHint = card.FindControl<TextBlock>("AutostartHintLinuxText")!;
-        Assert.True(linuxHint.IsVisible);
-        Assert.DoesNotContain("管理员", linuxHint.Text!);
+        Assert.Null(card.FindControl<TextBlock>("AutostartHintLinuxText"));
     }
 
     [AvaloniaFact]
@@ -191,11 +190,12 @@ public sealed class DaemonStatusSettingsGuiTests
         var (_, card) = ShowCard(new DaemonSettingsViewModel(
             new FakeDaemonService { IsDaemonInstalled = true }));
 
-        // The Windows wording stays exactly what it was, administrator sentence included.
+        // The Windows wording is the administrator limit alone: what the checkbox does is
+        // its own label's job, and that sentence would be false on a systemd user unit.
         var hint = card.FindControl<TextBlock>("AutostartHintText")!;
         Assert.True(hint.IsVisible);
-        Assert.Equal("登录后启动主程序；常驻服务负责后台映射。安装或卸载需要管理员权限。", hint.Text);
-        Assert.False(card.FindControl<TextBlock>("AutostartHintLinuxText")!.IsVisible);
+        Assert.Equal("安装或卸载需要管理员权限。", hint.Text);
+        Assert.Null(card.FindControl<TextBlock>("AutostartHintLinuxText"));
 
         // schtasks has no standalone start or stop, so the card exposes neither.
         Assert.False(card.FindControl<WrapPanel>("DaemonRuntimeRow")!.IsVisible);

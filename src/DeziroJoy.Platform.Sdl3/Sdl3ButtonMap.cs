@@ -4,15 +4,20 @@ using DeziroJoy.Core.Input;
 namespace DeziroJoy.Platform.Sdl3;
 
 /// <summary>
-/// Maps SDL's standard gamepad buttons onto the logical <see cref="GamepadButton"/> set.
+/// Maps SDL's standard gamepad buttons onto the logical <see cref="GamepadButton"/> set, by
+/// position.
 /// <para>
-/// SDL's south/east/west/north names describe the physical position in the face-button
-/// diamond - Xbox A/B/X/Y, PlayStation cross/circle/square/triangle and Switch B/A/Y/X all
-/// land on the same four positions. The mapping therefore follows position semantics, which
-/// is the one interpretation shared by every layout SDL recognizes; per-brand label
-/// rendering is a UI concern driven by <c>SDL_GetGamepadButtonLabel</c>, not something this
-/// table can express. The same rule is what keeps a single generic code path valid for
-/// Xbox, PlayStation, Switch and third-party pads alike.
+/// SDL's south/east/west/north names describe the physical position in the face-button diamond.
+/// This table is the positional answer - the Xbox convention, and the one interpretation shared
+/// by every layout SDL recognizes - and it is what a device whose glyphs SDL could not read gets.
+/// </para>
+/// <para>
+/// It is <em>not</em> the whole answer for a device SDL can read glyphs from. A Nintendo pad
+/// prints B in the south slot and X in the north slot, so the positional table would make the
+/// physical X execute logical Y while the panel called it X. Those devices are mapped by
+/// <see cref="Sdl3FaceButtonMap"/>, which reads the glyphs and is what the tracker and the
+/// control description both use. This table remains the fallback, and the answer for every
+/// non-face button, which has no glyph to read.
 /// </para>
 /// </summary>
 internal static class Sdl3ButtonMap

@@ -50,6 +50,15 @@ internal static class Program
             return ElevatedDaemonRecovery.Run(args);
         }
 
+        // The elevated stop-only entry, asked for by the update's stop chain for the same
+        // daemon: it ends exactly the identified daemon and exits instead of becoming the
+        // replacement, because the caller is an update that is about to replace the install
+        // directory and has no use for a daemon it would have to stop again.
+        if (HasFlag(args, ElevatedDaemonRecovery.StopOnlyFlag))
+        {
+            return ElevatedDaemonRecovery.Run(args, stopOnly: true);
+        }
+
         if (HasFlag(args, "--install-daemon"))
         {
             return InstallDaemon();
@@ -91,21 +100,42 @@ internal static class Program
     }
 
     /// <summary>
-    /// Builds the GUI application. The rendering backend is resolved here instead of being
-    /// pinned in the chain: the persisted selection, the <c>DEZIROJOY_RENDER</c> variable and
-    /// the <c>--render=</c> switch choose between the platform's own detection and the Win32
-    /// software mode, and the choice is fixed for the process - a live window cannot swap its
-    /// renderer, which is why the settings card asks for a restart rather than applying the
-    /// switch on the spot. Every source degrades to the platform default, so a launch that
-    /// names nothing, a settings file that names something unreadable, and a platform where
-    /// the software mode does not exist all start exactly as they did before the switch.
+    /// Builds the render window's application. The rendering backend is resolved here instead
+    /// of being pinned in the chain: the persisted selection, the <c>DEZIROJOY_RENDER</c>
+    /// variable and the <c>--render=</c> switch choose between the platform's own detection and
+    /// the Win32 software mode, and the choice is fixed for the process - a live window cannot
+    /// swap its renderer, which is why the settings card asks for a restart rather than
+    /// applying the switch on the spot. Every source degrades to the platform default, so a
+    /// launch that names nothing, a settings file that names something unreadable, and a
+    /// platform where the software mode does not exist all start exactly as they did before
+    /// the switch.
     /// </summary>
     public static AppBuilder BuildAvaloniaApp(string[]? args = null)
+        => BuildGui(args, new ThemeService().RenderMode);
+
+    /// <summary>
+    /// Builds the resident presentation host's application - the <c>--tray</c> process that
+    /// owns the tray icon and the floating layer-hint and screen-keyboard surfaces for the
+    /// whole session. Its baseline is <see cref="AppRenderModes.ResidentHostBaseline"/> rather
+    /// than the persisted selection: a host that never closes would otherwise keep a GPU stack
+    /// alive for the entire logon session on behalf of an icon and two small overlays, and the
+    /// user's rendering preference belongs to the window they work in, not to this process.
+    /// <para>
+    /// The one thing that can still move it is an explicit <c>DEZIROJOY_RENDER</c> override,
+    /// which exists for diagnostics only - comparing the two renderers on the tray surfaces -
+    /// and is never read from the settings file. Off Windows the pin is inert and the platform
+    /// default runs, exactly as before.
+    /// </para>
+    /// </summary>
+    public static AppBuilder BuildTrayAvaloniaApp(string[]? args = null)
+        => BuildGui(args, AppRenderModes.ResidentHostBaseline);
+
+    private static AppBuilder BuildGui(string[]? args, AppRenderMode baseline)
     {
         var builder = AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont().LogToTrace();
 
         var (renderMode, ignored) = AppRenderModes.Resolve(
-            new ThemeService().RenderMode,
+            baseline,
             CommandLineValue(args, AppRenderModes.CommandLineSwitch),
             Environment.GetEnvironmentVariable(AppRenderModes.EnvironmentVariable),
             OperatingSystem.IsWindows());
@@ -437,6 +467,14 @@ internal static class ElevatedDaemonRecovery
     /// <summary>The command-line flag that dispatches into this entry.</summary>
     public const string Flag = "--recover-daemon";
 
+    /// <summary>
+    /// The command-line flag that asks for the same identity-verified end without the
+    /// replacement. The update's stop chain uses it: an update replaces the install directory,
+    /// so a daemon that is merely replaced is a daemon the update has to stop again, and the
+    /// only token that can end an elevated daemon no planned task owns is an elevated one.
+    /// </summary>
+    public const string StopOnlyFlag = "--stop-daemon";
+
     private const string PidArgument = "--pid";
 
     private const string SeenAtArgument = "--seen-at";
@@ -455,12 +493,20 @@ internal static class ElevatedDaemonRecovery
     /// <summary>
     /// Runs the elevated recovery. The seams exist so no test ever ends a real process or
     /// starts a real daemon: production passes the defaults, a test passes recorders.
+    /// <para>
+    /// With <paramref name="stopOnly"/> the copy ends the daemon and exits instead of becoming
+    /// the replacement: the caller is an update that is about to replace the install directory,
+    /// so a replacement would be a daemon it has to stop again - and one that could re-lock the
+    /// files mid-install. Nothing is started either way until the identity is confirmed and the
+    /// old process is gone, so a stop-only run can never be a second injector.
+    /// </para>
     /// </summary>
     public static int Run(
         string[] args,
         IDaemonRecovery? recovery = null,
         Func<int>? runDaemon = null,
-        TimeSpan? releaseWait = null)
+        TimeSpan? releaseWait = null,
+        bool stopOnly = false)
     {
         recovery ??= new SystemDaemonRecovery();
         runDaemon ??= static () => DaemonHost.Run();
@@ -536,8 +582,24 @@ internal static class ElevatedDaemonRecovery
             Thread.Sleep(ReleaseProbeInterval);
         }
 
+        if (stopOnly)
+        {
+            return StopOnlyDone();
+        }
+
         Console.WriteLine("[DeziroJoy] 提权恢复：实例与注入槽位已释放，启动替代守护进程。");
         return runDaemon();
+    }
+
+    /// <summary>
+    /// The stop-only landing: the daemon is gone and the slots are free, so this copy reports
+    /// success and exits. Starting a replacement here would be the one thing the caller does not
+    /// want - it asked for an end, and the install directory it is about to replace is the reason.
+    /// </summary>
+    private static int StopOnlyDone()
+    {
+        Console.WriteLine("[DeziroJoy] 提权停止：守护进程已结束，槽位已释放，不启动替代进程。");
+        return 0;
     }
 
     private static int? ParsePid(string[] args)
@@ -653,6 +715,25 @@ internal static class DesktopLauncher
             false,
             [],
             "没有运行中的守护进程监督器"));
+
+    /// <summary>
+    /// The update's stop: the one the installer may be started behind. It is not the exit
+    /// path's stop, because the exit path only needs the pipe gone while the process is on
+    /// its way out anyway - an update needs the daemon *process* gone, since a daemon that
+    /// is still resident when the setup begins holds the install directory's files open and
+    /// the setup's DeleteFile fails with access denied (error 5) and rolls back.
+    /// <para>
+    /// The supervisor therefore proves the end instead of requesting it: the graceful stop,
+    /// then the recovery's own escalation (the systemd user unit's stop, the planned task's
+    /// end, the identity-confirmed process end, or a stop-only elevated copy that verifies
+    /// the same identity with its own token and starts no replacement), then the proof - and
+    /// a daemon nobody could prove gone is a failed stop, so the update is cancelled with
+    /// mapping still working rather than started against a live daemon. Off the UI thread
+    /// because every wait in it is bounded but real.
+    /// </para>
+    /// </summary>
+    internal static Task<bool> StopDaemonForUpdateAsync()
+        => Task.Run(() => Daemon?.StopForUpdate() ?? true);
 
     internal static bool EnsureTrayRunning()
     {

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using DeziroJoy.App.Ipc;
@@ -230,8 +231,53 @@ public sealed class UpdateProcessCoordinatorTests
     }
 
     [Fact]
-    public async Task A_Daemon_That_Named_No_Process_Still_Counts_As_Stopped()
+    public async Task A_Daemon_Process_That_Cannot_Be_Opened_Is_Not_Reported_As_Stopped()
     {
+        // The reported failure, as a test. The daemon closed its pipe - the shutdown is under
+        // way - but the process is elevated and this GUI's handle open is denied. The old code
+        // took that as success, the update started the installer, and the setup's DeleteFile
+        // failed with access denied (error 5) because the daemon was still holding clrjit.dll.
+        // "There is a process there and I cannot see it" is not an exit, so it is a failure.
+        var exit = await UpdateProcessCoordinator.AwaitProcessExitAsync(
+            DaemonPid,
+            TimeSpan.FromSeconds(5),
+            Cancellation,
+            _ => throw new Win32Exception("Access is denied."));
+
+        Assert.False(exit);
+    }
+
+    [Fact]
+    public async Task A_Daemon_Process_That_Is_Already_Gone_Still_Counts_As_Stopped()
+    {
+        // The goal state reached early: no such process is the one exception that proves the
+        // daemon is gone, so it must stay a success.
+        var exit = await UpdateProcessCoordinator.AwaitProcessExitAsync(
+            DaemonPid,
+            TimeSpan.FromSeconds(5),
+            Cancellation,
+            _ => throw new ArgumentException("Process not found"));
+
+        Assert.True(exit);
+    }
+
+    [Fact]
+    public async Task A_Daemon_Process_That_Will_Not_Exit_Within_The_Budget_Is_A_Failure()
+    {
+        // The other honest failure: the process is openable, it is alive, and the budget ran
+        // out. Installing now would race it for the files.
+        using var process = Process.GetCurrentProcess();
+        var exit = await UpdateProcessCoordinator.AwaitProcessExitAsync(
+            process.Id,
+            TimeSpan.FromMilliseconds(150),
+            Cancellation,
+            id => Process.GetProcessById(id));
+
+        Assert.False(exit);
+    }
+
+    [Fact]
+    public async Task A_Daemon_That_Named_No_Process_Still_Counts_As_Stopped()    {
         // A daemon that was already gone when the handshake ran named no process: its pipe is
         // gone, which is the same evidence a vanished process gives, and the bounded grace
         // stands in for the wait that could not be aimed at anything.

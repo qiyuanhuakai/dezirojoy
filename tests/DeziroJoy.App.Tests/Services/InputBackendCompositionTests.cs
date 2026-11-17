@@ -8,19 +8,30 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Services;
 
 /// <summary>
-/// The backend selection as the daemon and GUI compose it: the platform default stays the
-/// default, an SDL3 selection reaches the provider without a silent fallback, and the
-/// startup summary names the backend - with the reason a failed one could not start - so a
-/// headless install's journal is the diagnosis.
+/// The backend selection as the daemon and GUI compose it: SDL3 is the default since S3, an
+/// explicit legacy selection reaches the platform provider, an SDL3 selection reaches the
+/// provider without a silent fallback, and the startup summary names the backend - with the
+/// reason a failed one could not start - so a headless install's journal is the diagnosis.
 /// </summary>
 public class InputBackendCompositionTests
 {
     [Fact]
-    public void The_Default_Composition_Runs_The_Platform_Backend()
+    public void The_Default_Composition_Runs_Sdl3()
     {
         using var composition = new EngineComposition();
 
-        Assert.Equal(InputBackend.Platform, composition.Backend);
+        // The default is SDL3 whether or not this machine's native runtime came up: a
+        // machine without it fails the default diagnosably rather than reading legacy pads.
+        Assert.Equal(InputBackend.Sdl3, composition.Backend);
+        AssertSdl3ProviderOrDiagnosableFailure(composition.Provider, composition.ProviderError);
+    }
+
+    [Fact]
+    public void An_Explicit_Legacy_Selection_Reaches_The_Platform_Provider()
+    {
+        using var composition = new EngineComposition(backend: InputBackend.Legacy);
+
+        Assert.Equal(InputBackend.Legacy, composition.Backend);
         Assert.Null(composition.ProviderError);
         AssertPlatformProvider(composition.Provider);
     }
@@ -48,12 +59,50 @@ public class InputBackendCompositionTests
     }
 
     [Fact]
+    public void A_Default_Sdl3_That_Cannot_Start_Never_Falls_Back_To_Legacy()
+    {
+        // The S3 default is not a silent switch: a machine whose SDL3 runtime will not come
+        // up runs without a provider and says why, exactly as an explicit selection would -
+        // the daemon's journal and the settings card carry the reason either way.
+        var previous = Sdl3Backend.DiagnosticScan;
+        var previousProbe = PlatformFactory.VirtualProviderProbe;
+        Sdl3Backend.DiagnosticScan = _ => new Sdl3ScanDiagnostic
+        {
+            Outcome = Sdl3ScanOutcome.SdlUnavailable,
+            InitError = "找不到原生 SDL3 运行时（Linux: libSDL3.so）",
+            GamepadCount = 0,
+        };
+        PlatformFactory.VirtualProviderProbe = static () => null;
+
+        try
+        {
+            using var composition = new EngineComposition();
+
+            Assert.Equal(InputBackend.Sdl3, composition.Backend);
+            Assert.Contains("SDL3", composition.ProviderError!);
+            Assert.Contains("libSDL3.so", composition.ProviderError!);
+            Assert.IsType<NoGamepadProvider>(composition.Provider);
+            AssertPlatformProviderWasNotSubstituted(composition.Provider);
+
+            var summary = DaemonHost.BuildStartupSummary(composition, TimeSpan.FromMilliseconds(2));
+            Assert.Contains("input backend: SDL3", summary);
+            Assert.Contains("input backend error", summary);
+            Assert.Contains("未切换回其他后端", summary);
+        }
+        finally
+        {
+            Sdl3Backend.DiagnosticScan = previous;
+            PlatformFactory.VirtualProviderProbe = previousProbe;
+        }
+    }
+
+    [Fact]
     public void The_Startup_Summary_Names_The_Selected_Backend()
     {
-        using var platform = new EngineComposition();
-        var platformSummary = DaemonHost.BuildStartupSummary(platform, TimeSpan.FromMilliseconds(2));
-        Assert.Contains("input backend: 平台默认", platformSummary);
-        Assert.DoesNotContain("input backend error", platformSummary);
+        using var legacy = new EngineComposition(backend: InputBackend.Legacy);
+        var legacySummary = DaemonHost.BuildStartupSummary(legacy, TimeSpan.FromMilliseconds(2));
+        Assert.Contains("input backend: 旧后端回退", legacySummary);
+        Assert.DoesNotContain("input backend error", legacySummary);
 
         using var sdl3 = new EngineComposition(backend: InputBackend.Sdl3);
         var sdl3Summary = DaemonHost.BuildStartupSummary(sdl3, TimeSpan.FromMilliseconds(2));
@@ -125,6 +174,19 @@ public class InputBackendCompositionTests
     public void The_Device_Note_Is_Silent_Without_A_Scan()
     {
         Assert.Null(DaemonHost.BuildDeviceNote((Sdl3ScanDiagnostic?)null, controllerCount: 0));
+    }
+
+    private static void AssertSdl3ProviderOrDiagnosableFailure(IGamepadProvider provider, string? error)
+    {
+        if (error is null)
+        {
+            Assert.IsType<Sdl3GamepadProvider>(provider);
+        }
+        else
+        {
+            Assert.Contains("SDL3", error);
+            Assert.IsType<NoGamepadProvider>(provider);
+        }
     }
 
     private static void AssertPlatformProvider(IGamepadProvider provider)

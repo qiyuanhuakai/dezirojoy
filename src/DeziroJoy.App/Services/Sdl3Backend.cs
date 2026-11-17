@@ -9,7 +9,7 @@ namespace DeziroJoy.App.Services;
 /// so the factory runs that minimal scan here and only accepts a provider whose runtime
 /// actually came up. A missing native library or an unusable gamepad subsystem fails here
 /// with the reason, and <see cref="PlatformFactory"/> reports the failure instead of falling
-/// back to the platform backend. A runtime that came up with no gamepads is not a failure:
+/// back to the legacy backend. A runtime that came up with no gamepads is not a failure:
 /// that is a working backend with nothing plugged in yet, and its guidance reaches the user
 /// through the daemon's device note instead.
 /// <para>

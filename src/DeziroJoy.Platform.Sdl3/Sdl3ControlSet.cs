@@ -30,6 +30,11 @@ internal static class Sdl3ControlSet
     {
         ArgumentNullException.ThrowIfNull(info);
 
+        // The same map the tracker is built from: a control the panel labels "X" has to be bound
+        // to the input that pressing the physical X produces, or the description and the input
+        // disagree about which button the user touched.
+        var faceButtons = Sdl3FaceButtonMap.From(info);
+
         var buttons = GamepadButtonMask.None;
         var extras = new List<int>();
         var labels = new Dictionary<GamepadButton, string>();
@@ -41,7 +46,7 @@ internal static class Sdl3ControlSet
                 continue;
             }
 
-            if (!Sdl3ButtonMap.TryToLogical(declared, out var logical))
+            if (!faceButtons.TryLogical(declared, out var logical))
             {
                 // Misc keys, paddles and the touchpad have no logical position; they travel as
                 // raw SDL codes, so the descriptor addresses them the same way

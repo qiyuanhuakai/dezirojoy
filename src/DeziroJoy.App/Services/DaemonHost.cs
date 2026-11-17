@@ -89,7 +89,7 @@ public static class DaemonHost
 
         // The backend is a persisted GUI setting, read once here: the provider is built into
         // the composition below and there is no hot swap of a live provider. A damaged file
-        // falls back to the platform default with the reason in the journal, and the chosen
+        // falls back to the default backend with the reason in the journal, and the chosen
         // backend - or the failure that kept it from starting - is printed in the summary.
         var backendStore = new InputBackendStore();
         var backend = backendStore.Load();
@@ -368,9 +368,9 @@ public static class DaemonHost
         if (composition.ProviderError is { } providerError)
         {
             // The user asked for this backend and it did not start. The daemon keeps running
-            // without a provider rather than silently reading through the platform backend,
-            // and the reason - a missing native runtime, an unsupported platform - is the
-            // whole diagnosis, so it gets its own line instead of a parenthetical.
+            // without a provider rather than silently reading through the other backend, and
+            // the reason - a missing native runtime, an unsupported platform - is the whole
+            // diagnosis, so it gets its own line instead of a parenthetical.
             lines.Add($"[DeziroJoy] input backend error: {providerError}（未切换回其他后端，当前不读取手柄输入）");
         }
 

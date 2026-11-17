@@ -78,35 +78,36 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
 
 - 手柄模型即编辑器：点击模型上的键就地配置，实时高亮；浅色 / 深色主题。
 - SDL3 设备使用数据驱动的通用控件面板（固定分区、按输入定位、显示策略），不按型号绘图。
-- 实验性「界面渲染（仅 Windows）」：可强制 GUI 仅用 CPU 软件渲染（默认按平台检测；
-  见设置页）。daemon 失联时可在设置页（daemon 模式）「重新连接守护」。
+- 实验性「界面渲染（仅 Windows）」：主窗口可按需强制 CPU 软件渲染（默认按平台检测；
+  托盘常驻宿主固定软件渲染，见设置页与 docs/PERFORMANCE-BASELINE.md）。daemon 失联时
+  可在设置页（daemon 模式）「重新连接守护」。
 - 按需 GUI + 常驻呈现宿主：关窗 / 最小化即完全退出 GUI，托盘与浮层继续；GUI 显示时无托盘图标；daemon 是唯一注入权威。
 
 ## 平台支持
 
 | 平台 | 输入（默认） | 输出 | 状态 |
 |---|---|---|---|
-| Windows 10/11 | XInput | SendInput（提权守护进程） | 主要目标 |
-| Linux（X11 / Wayland） | evdev (`/dev/input`) | uinput (`/dev/uinput`) | 实验性 |
+| Windows 10/11 | SDL3（旧后端回退：XInput） | SendInput（提权守护进程） | 主要目标 |
+| Linux（X11 / Wayland） | SDL3（旧后端回退：evdev `/dev/input`） | uinput (`/dev/uinput`) | 实验性 |
 
-默认输入后端没有改变。Windows 的 [GameInput v4 验证程序](tools/GameInputProbe/README.md)
-用于按设备核实 Guide／Share、后台输入和 XInput 槽位关联，未接入产品；
-[原生 PS／NS 接入路线](docs/NATIVE-GAMEPAD-ROADMAP.md) 记录了 SDL3 统一后端的阶段计划
-与验收标准。
+Windows 的 [GameInput v4 验证程序](tools/GameInputProbe/README.md) 用于按设备核实
+Guide／Share、后台输入和 XInput 槽位关联，未接入产品；[原生 PS／NS 接入路线](docs/NATIVE-GAMEPAD-ROADMAP.md)
+记录了统一输入后端的阶段计划与验收标准。
 
-0.0.5-alpha.1 起新增 **SDL3 输入后端（实验性，显式启用）**：默认仍为 XInput／evdev，
-可在设置页「后台服务」卡片的「输入后端」一节切换到「SDL3 统一后端（实验性）」，
-点击「保存并重启常驻服务」后生效（daemon 启动时读取，无热切换）；显式选择启动失败时
-不会静默回退。SDL3 识别的标准 Gamepad 输入归一化后复用同一套映射、预设、临时层与输出，
-设备身份为独立的 `sdl:` 前缀 ID。0.0.5-alpha.2 起带**保守旧配置迁移**：首次为 SDL3
-设备运行时，把 XInput／evdev 名下用户自己的预设逐槽复制过去（旧文件只读不动、只覆盖
-空白或未改动的默认槽、新旧一对一且布局无反证时才迁移、多设备歧义整体跳过、持久记录
-防止重复复制或回填已删除的槽）。只能作普通 Joystick 枚举、没有标准映射的设备，可用
-独立探针的 `map` 流程逐键取证生成映射（保存到配置根目录 `sdl-mappings.json`，重启
-常驻服务后生效）。SDL3 设备在配置界面使用数据驱动的通用控件面板（0.0.5-alpha.3 起，
-U1／U2：固定分区、按输入定位、显示策略；真实未知型号待复验）。该后端**未经完整真机
-验收**（用户已实测 Xbox／NS 全部按键可用，属有限证据）。启用方式、设备身份、迁移规则、
-映射补充、探针、诊断与升级回退见 [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
+0.0.5-alpha.5 起 **SDL3 成为默认输入后端**（S3）：新安装、从未选择过后端的升级、设置
+缺失或损坏一律经 SDL3 读取；旧 XInput／evdev 退为「旧后端回退」显式选项（alpha.1–
+alpha.4 显式选过旧后端的安装升级后保持旧后端），在设置页「后台服务」卡片切换、保存并
+重启常驻服务生效（无热切换），启动失败保持原后端并报告。SDL3 识别的标准 Gamepad 输入
+归一化后复用同一套映射、预设、临时层与输出，设备身份为独立的 `sdl:` 前缀 ID；面键逻辑
+按设备字形决定（任天堂手柄的物理 X 就是逻辑 X）。0.0.5-alpha.2 起带**保守旧配置迁移**：
+首次为 SDL3 设备运行时，把 XInput／evdev 名下用户自己的预设逐槽复制过去（旧文件只读
+不动、只覆盖空白或未改动的默认槽、新旧一对一且布局无反证时才迁移、多设备歧义整体跳过、
+持久记录防止重复复制或回填已删除的槽）。只能作普通 Joystick 枚举、没有标准映射的设备，
+可用独立探针的 `map` 流程逐键取证生成映射（保存到配置根目录 `sdl-mappings.json`，SDL
+立即认账、重启常驻服务后进入映射路径）。SDL3 设备在配置界面使用数据驱动的通用控件面板
+（U1／U2：固定分区、按输入定位、显示策略；真实未知型号待复验）。该后端**未经完整真机
+验收**（用户已实测 Xbox／NS 全部按键可用，属有限证据）。启用方式、设备身份、面键语义、
+迁移规则、映射补充、探针、诊断与升级回退见 [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
 
 Linux 实验性说明：
 
@@ -142,10 +143,10 @@ Linux 实验性说明：
 > **升级提示**：`0.0.2-beta.3` 及更早版本的应用内自动更新存在缺陷，从这些版本升级请
 > 到发布页**手动下载**安装 `0.0.2-beta.4` 或更新版本；自 beta.4 起自动更新恢复正常。
 
-> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.4`
-> 是 SDL3 统一输入后端的实验性 alpha——默认后端不变、未经完整真机验收；不想升级 alpha 的
-> 用户请关闭设置页的自动检查／自动下载，或到发布页手动选择版本。发布说明见
-> [docs/RELEASE-0.0.5-alpha.4.md](docs/RELEASE-0.0.5-alpha.4.md)。
+> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.5`
+> 是 SDL3 统一输入后端的实验性 alpha——SDL3 已为默认后端（旧后端可显式回退）、未经完整
+> 真机验收；不想升级 alpha 的用户请关闭设置页的自动检查／自动下载，或到发布页手动选择
+> 版本。发布说明见 [docs/RELEASE-0.0.5-alpha.5.md](docs/RELEASE-0.0.5-alpha.5.md)。
 
 ### Windows
 
@@ -298,6 +299,7 @@ tests/
 - [docs/RELEASE-0.0.5-alpha.2.md](docs/RELEASE-0.0.5-alpha.2.md) — 0.0.5-alpha.2 发布说明。
 - [docs/RELEASE-0.0.5-alpha.3.md](docs/RELEASE-0.0.5-alpha.3.md) — 0.0.5-alpha.3 发布说明。
 - [docs/RELEASE-0.0.5-alpha.4.md](docs/RELEASE-0.0.5-alpha.4.md) — 0.0.5-alpha.4 发布说明。
+- [docs/RELEASE-0.0.5-alpha.5.md](docs/RELEASE-0.0.5-alpha.5.md) — 0.0.5-alpha.5 发布说明。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。

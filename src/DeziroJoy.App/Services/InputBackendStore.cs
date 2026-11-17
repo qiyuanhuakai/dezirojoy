@@ -8,10 +8,13 @@ namespace DeziroJoy.App.Services;
 /// enumerates that directory, and a settings file in it would be read back as a device's
 /// profile.
 /// <para>
-/// A missing file is <see cref="InputBackend.Platform"/>, the state every existing install
-/// starts from: a build that knows nothing about this setting keeps reading through XInput
-/// or evdev exactly as it did. A damaged file costs the selection and nothing else - the
-/// platform default runs - and the reason is kept for the settings card to show.
+/// A missing file is <see cref="InputBackendText.Default"/> (SDL3 since S3): a new install
+/// starts on the default, and so does an upgrade that never chose - the file only exists
+/// once a user saves a selection, so its absence is exactly the "未选择" case that moves to
+/// the new default. A file naming the legacy backend - under either its current name or the
+/// <see cref="InputBackendText.Platform"/> name alpha.1–alpha.4 wrote - is an explicit
+/// legacy choice and stays on the legacy backend. A damaged file costs the selection and
+/// nothing else - the default runs - and the reason is kept for the settings card to show.
 /// </para>
 /// <para>
 /// The daemon reads this at startup (there is no control-channel verb for a backend
@@ -21,7 +24,7 @@ namespace DeziroJoy.App.Services;
 /// </summary>
 public interface IInputBackendStore
 {
-    /// <summary>Why the last read fell back to the platform default, or null when it read whole.</summary>
+    /// <summary>Why the last read fell back to the default backend, or null when it read whole.</summary>
     string? LastError { get; }
 
     InputBackend Load();
@@ -32,7 +35,7 @@ public interface IInputBackendStore
 /// <summary>Test/embedder default that never touches the signed-in user's real AppData.</summary>
 public sealed class InMemoryInputBackendStore : IInputBackendStore
 {
-    private InputBackend _backend = InputBackend.Platform;
+    private InputBackend _backend = InputBackendText.Default;
 
     public string? LastError { get; private set; }
 
@@ -59,7 +62,7 @@ public sealed class InputBackendStore : IInputBackendStore
             FileName);
     }
 
-    /// <summary>Why the last read fell back to the platform default, or null when the file read whole.</summary>
+    /// <summary>Why the last read fell back to the default backend, or null when the file read whole.</summary>
     public string? LastError { get; private set; }
 
     public string FilePath => _path;
@@ -70,10 +73,10 @@ public sealed class InputBackendStore : IInputBackendStore
 
         if (body is null)
         {
-            // No file is the platform default every install starts from, and says nothing;
-            // an unreadable one is a failure worth quoting.
+            // No file is the default every install starts from, and says nothing; an
+            // unreadable one is a failure worth quoting.
             LastError = _readFailure;
-            return InputBackend.Platform;
+            return InputBackendText.Default;
         }
 
         var (backend, problem) = ReadBackend(body);
@@ -125,7 +128,7 @@ public sealed class InputBackendStore : IInputBackendStore
 
     /// <summary>
     /// Parses one body into the backend it describes. A body that is not JSON at all, or
-    /// that names a backend this build does not know, is the platform default with the
+    /// that names a backend this build does not know, is the default backend with the
     /// reason attached - the same damaged-file rule the foreground rules follow. Property
     /// names match case-insensitively, so a file a user hand-edits still reads.
     /// </summary>
@@ -138,7 +141,7 @@ public sealed class InputBackendStore : IInputBackendStore
         }
         catch (JsonException exception)
         {
-            return (InputBackend.Platform, $"输入后端设置无法解析，已按平台默认读取：{exception.Message}");
+            return (InputBackendText.Default, $"输入后端设置无法解析，已按默认 SDL3 读取：{exception.Message}");
         }
     }
 

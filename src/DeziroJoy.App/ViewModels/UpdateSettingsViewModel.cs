@@ -86,6 +86,12 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
 
         _orchestrator = orchestrator ?? new UpdateOrchestrator(
             updateService: service,
+            // The update's stop is the supervisor's, not the exit path's: the installer may
+            // only start behind a daemon whose process is provably gone, because a resident
+            // one holds the install directory's files open and the setup's DeleteFile fails
+            // with access denied (error 5). The exit path's stop would accept the pipe's
+            // vanish, which is exactly the state that let alpha.3 ship that failure.
+            stopDaemon: _ => DesktopLauncher.StopDaemonForUpdateAsync(),
             installers:
             [
                 new WindowsUpdateInstaller(),
@@ -525,9 +531,11 @@ public partial class UpdateSettingsViewModel : ObservableObject, IDisposable
         }
 
         // Passed to sh verbatim through ArgumentList, so the shell - not .NET's argument
-        // parser - does the quoting, exactly as the Linux package installer's chain is.
+        // parser - does the quoting, exactly as the Linux package installer's chain is. The
+        // image path is single-quote escaped: $APPIMAGE is a path the user chose, and a value
+        // with a quote or a dollar sign in it must never be parsed as script.
         var script =
-            $"while kill -0 {_processId()} 2>/dev/null; do sleep {SuccessorPollPause}; done; exec \"{image}\"";
+            $"while kill -0 {_processId()} 2>/dev/null; do sleep {SuccessorPollPause}; done; exec {LinuxPackageInstaller.ShellQuote(image)}";
 
         var startInfo = new ProcessStartInfo("sh")
         {

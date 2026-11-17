@@ -25,6 +25,12 @@ public sealed class UpdateOrchestratorTests : IDisposable
 
     private const string WindowsSidecarUrl = WindowsPackageUrl + ".sha256";
 
+    private const string AppImagePackageName = "DeziroJoy-0.0.2-x86_64.AppImage";
+
+    private const string AppImagePackageUrl = "https://example.invalid/DeziroJoy-0.0.2-x86_64.AppImage";
+
+    private const string AppImageSidecarUrl = AppImagePackageUrl + ".sha256";
+
     private readonly string _cache;
 
     private readonly List<string> _log = [];
@@ -60,6 +66,19 @@ public sealed class UpdateOrchestratorTests : IDisposable
             ],
         };
 
+    private static ReleaseInfo AppImageRelease()
+        => new()
+        {
+            TagName = "v0.0.2",
+            Version = SemanticVersion.Parse("0.0.2"),
+            PageUrl = "https://example.invalid/release",
+            Assets =
+            [
+                new ReleaseAsset { Name = AppImagePackageName, DownloadUrl = AppImagePackageUrl, Size = 16 },
+                new ReleaseAsset { Name = AppImagePackageName + ".sha256", DownloadUrl = AppImageSidecarUrl, Size = 64 },
+            ],
+        };
+
     private static ReleaseInfo WindowsRelease()
         => new()
         {
@@ -89,14 +108,18 @@ public sealed class UpdateOrchestratorTests : IDisposable
         var payload = Encoding.UTF8.GetBytes("the deb payload");
         handler ??= new StubHandler(url => url switch
         {
-            PackageUrl or WindowsPackageUrl => new StringContent(Encoding.UTF8.GetString(payload)),
-            SidecarUrl or WindowsSidecarUrl => new StringContent($"{ChecksumFor(payload)}\n"),
+            PackageUrl or WindowsPackageUrl or AppImagePackageUrl => new StringContent(Encoding.UTF8.GetString(payload)),
+            SidecarUrl or WindowsSidecarUrl or AppImageSidecarUrl => new StringContent($"{ChecksumFor(payload)}\n"),
             _ => (HttpContent?)null,
         });
 
         return new UpdateOrchestrator(
             service ?? new FakeUpdateService(UpdateCheckResult.Available(
-                kind == InstallKind.WindowsInstall ? WindowsRelease() : Release())),
+                kind == InstallKind.WindowsInstall
+                    ? WindowsRelease()
+                    : kind == InstallKind.AppImage
+                        ? AppImageRelease()
+                        : Release())),
             new UpdateDownloader(handler, TimeSpan.FromSeconds(10), () => _cache),
             installers ?? [_installer],
             detectInstall: () => new InstallKindInfo(
@@ -255,6 +278,30 @@ public sealed class UpdateOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task An_AppImage_Install_Keeps_The_Daemon_And_Leaves_The_Relaunch_To_The_Host()
+    {
+        // The AppImage form is the other preserve-daemon one: the swap replaces a single file
+        // the running image no longer needs, so mapping continues and the host - not the
+        // installer - starts the swapped-in image once this process is gone.
+        var installer = new RecordingInstaller(() => _log.Add("install"))
+        {
+            Outcome = UpdateInstallResult.Ok(relaunchHandled: false),
+        };
+        var orchestrator = Orchestrator(kind: InstallKind.AppImage, installers: [installer]);
+        await orchestrator.CheckAsync(TestContext.Current.CancellationToken);
+        await orchestrator.DownloadAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var installed = await orchestrator.InstallAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(installed, orchestrator.ErrorMessage);
+        Assert.Equal(["tray", "install"], _log);
+        Assert.Equal([true], _trayPreserveDaemon);
+        Assert.Equal(InstallKind.AppImage, installer.LastRequest!.Kind);
+        Assert.Equal(UpdatePhase.Restarting, orchestrator.Phase);
+        Assert.False(orchestrator.RelaunchHandled);
+    }
+
+    [Fact]
     public async Task The_Install_Request_Carries_The_Form_The_Version_And_The_Verified_Package()
     {
         var orchestrator = Orchestrator();
@@ -314,7 +361,11 @@ public sealed class UpdateOrchestratorTests : IDisposable
         Assert.False(installed);
         Assert.Equal(["daemon"], _log);
         Assert.Equal(UpdatePhase.Failed, orchestrator.Phase);
-        Assert.Contains("无法停止守护进程", orchestrator.ErrorMessage);
+
+        // The wording is the gate's own: the daemon could not be *confirmed* gone, which is
+        // what the installer may be started behind - a resident one holds the install
+        // directory's files open and the setup's DeleteFile fails with access denied (error 5).
+        Assert.Contains("无法确认守护进程已退出", orchestrator.ErrorMessage);
         Assert.Contains("映射功能不受影响", orchestrator.ErrorMessage);
         Assert.False(_installer.Handled);
     }

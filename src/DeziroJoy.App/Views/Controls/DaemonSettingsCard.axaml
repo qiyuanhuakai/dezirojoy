@@ -10,8 +10,6 @@
     <Border Classes="card">
         <StackPanel>
             <TextBlock Classes="cardTitle" Text="后台服务" />
-            <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                       Text="登录后运行映射，无需保持主窗口打开。" />
 
             <TextBlock Classes="fieldLabel" Margin="0,12,0,0" x:Name="DaemonStateText"
                        Text="{Binding DaemonStateText}" />
@@ -79,37 +77,36 @@
                 <StackPanel>
                     <CheckBox Content="登录时自启动" IsEnabled="{Binding IsSupported}"
                               IsChecked="{Binding AutostartEnabled, Mode=TwoWay}" />
-                    <!-- Windows keeps its original wording verbatim. -->
+                    <!-- The one limit the checkbox label cannot say: installing or removing
+                         the scheduled task needs the administrator token. A systemd user
+                         unit needs no administrator, so Linux has nothing to say here and
+                         the line stays hidden. -->
                     <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
                                x:Name="AutostartHintText"
                                IsVisible="{Binding IsSameUserModel, Converter={StaticResource Not}}"
-                               Text="登录后启动主程序；常驻服务负责后台映射。安装或卸载需要管理员权限。" />
-                    <!-- Linux: a systemd user unit needs no administrator, so that sentence
-                         would be false here and is left out. -->
-                    <TextBlock Classes="hint" Margin="0,6,0,0" TextWrapping="Wrap"
-                               x:Name="AutostartHintLinuxText"
-                               IsVisible="{Binding IsSameUserModel}"
-                               Text="登录后启动主程序；常驻服务负责后台映射。" />
+                               Text="安装或卸载需要管理员权限。" />
                 </StackPanel>
             </Border>
 
-            <!-- The input backend: platform XInput/evdev stays the default, SDL3 is opt-in.
-                 A switch persists the selection and safely restarts the daemon - the provider
-                 is built at daemon startup and cannot be hot-swapped - and the running
-                 backend the daemon reports is shown beside it, so a selection that has not
-                 taken effect (or a start that failed) is visible instead of implied. -->
+            <!-- The input backend: SDL3 is the default since S3; the legacy XInput/evdev
+                 backend is the explicit fallback for configurations that still live under the
+                 old device identities. A switch persists the selection and safely restarts the
+                 daemon - the provider is built at daemon startup and cannot be hot-swapped -
+                 and the running backend the daemon reports is shown beside it, so a selection
+                 that has not taken effect (or a start that failed) is visible instead of
+                 implied. -->
             <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0">
                 <StackPanel>
                     <TextBlock Classes="fieldLabel" Text="输入后端" />
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                                x:Name="BackendIntroText"
-                               Text="默认使用平台后端（Windows 为 XInput，Linux 为 evdev）。SDL3 是实验性的统一后端，需手动启用；切换后会安全重启常驻服务，重启失败时保持原后端并说明原因，不会静默更换。" />
-                    <RadioButton Margin="0,8,0,0" Content="平台默认（XInput / evdev）"
-                                 x:Name="PlatformBackendOption"
-                                 IsChecked="{Binding IsPlatformBackendSelected, Mode=TwoWay}" />
-                    <RadioButton Margin="0,4,0,0" Content="SDL3 统一后端（实验性）"
+                               Text="切换后重启常驻服务生效；启动失败时保持原后端，不会静默更换。" />
+                    <RadioButton Margin="0,8,0,0" Content="SDL3 统一后端（默认）"
                                  x:Name="Sdl3BackendOption"
                                  IsChecked="{Binding IsSdl3BackendSelected, Mode=TwoWay}" />
+                    <RadioButton Margin="0,4,0,0" Content="旧后端回退（XInput / evdev）"
+                                 x:Name="LegacyBackendOption"
+                                 IsChecked="{Binding IsLegacyBackendSelected, Mode=TwoWay}" />
                     <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
                                x:Name="RunningBackendText" Text="{Binding RunningBackendText}" />
                     <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
@@ -135,17 +132,19 @@
                  the input backend it is a persisted request only a restart can apply - the
                  renderer is built once per process - but unlike it there is nothing to
                  restart: the daemon draws nothing, so the card names the main-window restart
-                 as what applies it, and claims nothing about what the mode does better. -->
+                 as what applies it, and claims nothing about what the mode does better. The
+                 resident tray host is pinned to software by its own policy (Program.
+                 BuildTrayAvaloniaApp) and never reads this selection, which the hints say. -->
             <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0"
                     x:Name="RenderModeSection" IsVisible="{Binding IsRenderModeVisible}">
                 <StackPanel>
                     <TextBlock Classes="fieldLabel" Text="界面渲染（仅 Windows）" />
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
                                x:Name="RenderModeIntroText"
-                               Text="实验性开关：强制 GUI 仅使用 CPU 软件渲染（Avalonia Win32 Software 后端）。默认按平台检测（Windows 上优先 AngleEgl，失败时回退软件渲染）；本开关不作任何性能或兼容性承诺，若 Software 无法初始化，应用会启动失败而不会回退。" />
+                               Text="实验性开关：强制主窗口仅使用 CPU 软件渲染（Avalonia Win32 Software）。若 Software 无法初始化，应用会启动失败而不会回退。" />
                     <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
                                x:Name="RenderModeApplyHintText"
-                               Text="保存后重启主程序生效（托盘进程在下次启动时同样读取此设置）。临时覆盖：设置环境变量 DEZIROJOY_RENDER=software|default，或以 --render=software|default 启动，覆盖优先于本设置。" />
+                               Text="保存后重启主程序生效（当前窗口仍按启动时的渲染方式运行）；常驻托盘宿主及其浮层固定使用软件渲染，不受此设置影响。临时覆盖：DEZIROJOY_RENDER=software|default 或 --render=software|default，优先于本设置。" />
                     <RadioButton Margin="0,8,0,0" Content="平台检测（默认）"
                                  x:Name="DefaultRenderOption"
                                  IsChecked="{Binding IsDefaultRenderSelected, Mode=TwoWay}" />

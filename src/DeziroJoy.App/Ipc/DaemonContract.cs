@@ -122,11 +122,11 @@ public interface IDaemonHost
 
     /// <summary>
     /// The input backend the daemon is actually reading gamepads through. Defaults to the
-    /// platform backend so a host that predates the selection - or a fake in a test - still
-    /// serves valid snapshots; every snapshot carries it so a window shows the backend the
-    /// daemon really runs instead of the one it was last asked for.
+    /// default backend (SDL3 since S3) so a host that predates the selection - or a fake in
+    /// a test - still serves valid snapshots; every snapshot carries it so a window shows the
+    /// backend the daemon really runs instead of the one it was last asked for.
     /// </summary>
-    InputBackend ActiveInputBackend => InputBackend.Platform;
+    InputBackend ActiveInputBackend => InputBackendText.Default;
 
     /// <summary>
     /// Why the daemon's selected backend could not start, or null when it did. Carried into

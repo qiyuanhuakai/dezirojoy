@@ -1419,7 +1419,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>
     /// Applies what the daemon's snapshot says about the running backend: SDL3 adds Guide
-    /// everywhere, anything else - the platform default, or an older daemon that never
+    /// everywhere, anything else - the legacy fallback, or an older daemon that never
     /// named its backend - returns to the platform answer this window was built with.
     /// </summary>
     private void ApplyRunningBackendGuideSupport(InputBackend? runningBackend)
@@ -3093,6 +3093,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         SelectedMapping = null;
         AddMapping();
         Editor.LoadSource(source);
+
+        // The panel's contextual actions point at the control this opens, so the push comes
+        // after the source has landed in the editor.
+        SyncGenericEditorControl();
     }
 
     /// <summary>
@@ -4537,6 +4541,16 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
     private void OnEditorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is nameof(MappingEditorViewModel.SelectedButton)
+            or nameof(MappingEditorViewModel.SelectedExtraCode)
+            or nameof(MappingEditorViewModel.SelectedStick)
+            or nameof(MappingEditorViewModel.SourceIsStick))
+        {
+            // The editor moved to another control: the panel's contextual actions follow it.
+            SyncGenericEditorControl();
+            return;
+        }
+
         if (e.PropertyName != nameof(MappingEditorViewModel.IsCapturingButton))
         {
             return;
@@ -4654,6 +4668,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             EndButtonCapture(reason: null);
         }
+
+        // The panel's contextual actions follow the editor: they act on the control being
+        // edited, and on nothing once the card closes.
+        SyncGenericEditorControl();
     }
 
     partial void OnActiveProfileChanged(GamepadProfile? value)
@@ -4716,6 +4734,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         _genericPanelDeviceId = ScopedDeviceId();
         OnPropertyChanged(nameof(CanUseGenericPanel));
+
+        // A reload can replace the items, so the control the editor has open is re-found
+        // rather than left pointing at an item the new declaration no longer carries.
+        SyncGenericEditorControl();
     }
 
     /// <summary>
@@ -4802,6 +4824,22 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         => CurrentDaemonDevice() is { } device
             ? new GamepadDescriptor(device.DeviceId, device.Name) { Controls = device.Controls ?? [] }
             : null;
+
+    /// <summary>
+    /// The physical control the mapping editor is editing, as the panel's own item - or null
+    /// when the editor is closed or the control is not on this device's panel. The panel's
+    /// contextual actions (hide, the stick's two switches) act on exactly this, which is why
+    /// the window pushes it in rather than letting the panel guess.
+    /// </summary>
+    private void SyncGenericEditorControl()
+        => GenericPanel.SetEditorControl(
+            IsEditing && EditorControlSource() is { } source ? GenericPanel.ItemFor(source) : null);
+
+    /// <summary>The source the editor is editing, read the same way the connector line reads it.</summary>
+    private InputBinding? EditorControlSource()
+        => Editor.SourceIsStick
+            ? new StickBinding(Editor.SelectedStick)
+            : new ButtonBinding(Editor.SelectedButton, Editor.SelectedExtraCode);
 
     /// <summary>
     /// The daemon snapshot's device the window is currently scoped to: the one the profile

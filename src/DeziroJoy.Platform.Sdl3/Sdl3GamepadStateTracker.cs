@@ -31,6 +31,7 @@ public sealed class Sdl3GamepadStateTracker
     /// <summary>Divisor that maps the 0..32767 trigger travel onto 0..1.</summary>
     private const float TriggerDivisor = 32767f;
 
+    private readonly Sdl3FaceButtonMap _faceButtons;
     private readonly SortedSet<int> _extraButtons = [];
     private GamepadButtonMask _buttons;
     private float _leftStickX;
@@ -41,10 +42,23 @@ public sealed class Sdl3GamepadStateTracker
     private bool _rightTriggerPressed;
     private IReadOnlyList<int>? _extraButtonsSnapshot;
 
+    /// <summary>
+    /// Creates a tracker for one device.
+    /// </summary>
+    /// <param name="faceButtons">
+    /// Which logical button each of the device's four face positions is, read from the glyphs SDL
+    /// reports for it. Defaults to the positional table, which is the answer for a device whose
+    /// glyphs SDL could not read - and the one every layout shares.
+    /// </param>
+    public Sdl3GamepadStateTracker(Sdl3FaceButtonMap? faceButtons = null)
+    {
+        _faceButtons = faceButtons ?? Sdl3FaceButtonMap.Positional;
+    }
+
     /// <summary>Applies one standard button; positionless buttons are kept as raw SDL codes.</summary>
     public void ApplyButton(SDL.GamepadButton button, bool pressed)
     {
-        if (Sdl3ButtonMap.TryToLogical(button, out var logical))
+        if (_faceButtons.TryLogical(button, out var logical))
         {
             _buttons = pressed ? _buttons.Add(logical) : _buttons.Remove(logical);
             return;

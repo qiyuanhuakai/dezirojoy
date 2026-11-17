@@ -12,29 +12,59 @@ using Xunit;
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// The input-backend section of the daemon settings card. The platform backend reads as
-/// checked by default, SDL3 is an explicit opt-in, and applying it persists the selection
-/// and asks for the safe restart - while the running backend the daemon reports is shown
-/// beside it as its own line, so a switch that has not taken effect is visible.
+/// The input-backend section of the daemon settings card. SDL3 reads as checked by default
+/// since S3 and the legacy XInput/evdev backend is the explicit fallback; applying a
+/// selection persists it and asks for the safe restart - while the running backend the
+/// daemon reports is shown beside it as its own line, so a switch that has not taken effect
+/// (or a start that failed) is visible.
 /// </summary>
 public sealed class InputBackendSettingsGuiTests
 {
     [AvaloniaFact]
-    public void The_Platform_Backend_Reads_As_The_Default_Selection()
+    public void The_Sdl3_Backend_Reads_As_The_Default_Selection()
     {
         var (_, card) = ShowCard(CreateViewModel());
 
-        Assert.True(card.FindControl<RadioButton>("PlatformBackendOption")!.IsChecked);
-        Assert.False(card.FindControl<RadioButton>("Sdl3BackendOption")!.IsChecked!.Value);
+        Assert.True(card.FindControl<RadioButton>("Sdl3BackendOption")!.IsChecked);
+        Assert.False(card.FindControl<RadioButton>("LegacyBackendOption")!.IsChecked!.Value);
         Assert.Contains("未知", card.FindControl<TextBlock>("RunningBackendText")!.Text!);
         Assert.False(card.FindControl<TextBlock>("RunningBackendErrorText")!.IsEffectivelyVisible);
         Assert.False(card.FindControl<TextBlock>("BackendMismatchText")!.IsEffectivelyVisible);
+
+        // The default and the fallback are labelled as such, not as two equal options.
+        Assert.Contains("默认", card.FindControl<RadioButton>("Sdl3BackendOption")!.Content!.ToString()!);
+        Assert.Contains("回退", card.FindControl<RadioButton>("LegacyBackendOption")!.Content!.ToString()!);
+    }
+
+    [AvaloniaFact]
+    public void Choosing_Legacy_And_Applying_Persists_The_Fallback()
+    {
+        var store = new InMemoryInputBackendStore();
+        var restarts = 0;
+        var viewModel = CreateViewModel(store, () =>
+        {
+            restarts++;
+            return Task.FromResult(true);
+        });
+        var (window, card) = ShowCard(viewModel);
+
+        Click(card.FindControl<RadioButton>("LegacyBackendOption")!, window);
+
+        Assert.True(viewModel.IsLegacyBackendSelected);
+        Assert.Equal(InputBackend.Legacy, viewModel.SelectedBackend);
+
+        Click(card.FindControl<Button>("ApplyBackendButton")!, window);
+
+        Assert.Equal(1, restarts);
+        Assert.Equal(InputBackend.Legacy, store.Load());
+        Assert.Contains("重启", card.FindControl<TextBlock>("BackendStatusText")!.Text!);
     }
 
     [AvaloniaFact]
     public void Choosing_Sdl3_And_Applying_Persists_The_Selection()
     {
         var store = new InMemoryInputBackendStore();
+        store.Save(InputBackend.Legacy);
         var restarts = 0;
         var viewModel = CreateViewModel(store, () =>
         {
@@ -72,7 +102,16 @@ public sealed class InputBackendSettingsGuiTests
         Assert.Contains("libSDL3.so", error.Text!);
         Assert.Contains("未切换回其他后端", error.Text!);
 
-        // The card still shows the platform selection, and says the two differ.
+        // The saved selection still reads SDL3 - the default - and the daemon named the same
+        // backend, so no restart is pending and the card does not claim one.
+        Assert.False(viewModel.HasBackendMismatch);
+        Assert.False(card.FindControl<TextBlock>("BackendMismatchText")!.IsEffectivelyVisible);
+
+        // The user switches to the legacy fallback while the daemon still runs SDL3: the two
+        // now differ, and the card says the restart is what applies it.
+        viewModel.IsLegacyBackendSelected = true;
+        Dispatcher.UIThread.RunJobs();
+
         var mismatch = card.FindControl<TextBlock>("BackendMismatchText")!;
         Assert.True(mismatch.IsEffectivelyVisible);
         Assert.Contains("重启常驻服务后生效", mismatch.Text!);

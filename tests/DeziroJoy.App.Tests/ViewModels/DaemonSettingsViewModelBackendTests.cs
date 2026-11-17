@@ -5,7 +5,8 @@ using Xunit;
 namespace DeziroJoy.App.Tests.ViewModels;
 
 /// <summary>
-/// The input-backend half of the settings card. The selection is persisted and only takes
+/// The input-backend half of the settings card. SDL3 is the default since S3 and the legacy
+/// XInput/evdev backend is the explicit fallback; the selection is persisted and only takes
 /// effect through a safe daemon restart; the card never claims a switch the daemon has not
 /// confirmed, and a restart that fails leaves the old backend running with the reason shown.
 /// </summary>
@@ -15,13 +16,13 @@ public class DaemonSettingsViewModelBackendTests
     public void The_Persisted_Selection_Is_What_The_Card_Opens_With()
     {
         var store = new InMemoryInputBackendStore();
-        store.Save(InputBackend.Sdl3);
+        store.Save(InputBackend.Legacy);
 
         var vm = new DaemonSettingsViewModel(new FakeDaemonService(), backendStore: store);
 
-        Assert.Equal(InputBackend.Sdl3, vm.SelectedBackend);
-        Assert.True(vm.IsSdl3BackendSelected);
-        Assert.False(vm.IsPlatformBackendSelected);
+        Assert.Equal(InputBackend.Legacy, vm.SelectedBackend);
+        Assert.True(vm.IsLegacyBackendSelected);
+        Assert.False(vm.IsSdl3BackendSelected);
 
         // The running backend is the daemon's answer, not the saved selection: with no
         // daemon connected it says so instead of implying the saved one is already live.
@@ -29,15 +30,15 @@ public class DaemonSettingsViewModelBackendTests
     }
 
     [Fact]
-    public void The_Default_Selection_Is_The_Platform_Backend()
+    public void The_Default_Selection_Is_Sdl3()
     {
         var vm = new DaemonSettingsViewModel(
             new FakeDaemonService(),
             backendStore: new InMemoryInputBackendStore());
 
-        Assert.Equal(InputBackend.Platform, vm.SelectedBackend);
-        Assert.True(vm.IsPlatformBackendSelected);
-        Assert.False(vm.IsSdl3BackendSelected);
+        Assert.Equal(InputBackend.Sdl3, vm.SelectedBackend);
+        Assert.True(vm.IsSdl3BackendSelected);
+        Assert.False(vm.IsLegacyBackendSelected);
     }
 
     [Fact]
@@ -47,15 +48,15 @@ public class DaemonSettingsViewModelBackendTests
             new FakeDaemonService(),
             backendStore: new InMemoryInputBackendStore());
 
+        vm.IsLegacyBackendSelected = true;
+
+        Assert.Equal(InputBackend.Legacy, vm.SelectedBackend);
+        Assert.True(vm.IsLegacyBackendSelected);
+        Assert.False(vm.IsSdl3BackendSelected);
+
         vm.IsSdl3BackendSelected = true;
 
         Assert.Equal(InputBackend.Sdl3, vm.SelectedBackend);
-        Assert.True(vm.IsSdl3BackendSelected);
-        Assert.False(vm.IsPlatformBackendSelected);
-
-        vm.IsPlatformBackendSelected = true;
-
-        Assert.Equal(InputBackend.Platform, vm.SelectedBackend);
     }
 
     [Fact]
@@ -79,6 +80,31 @@ public class DaemonSettingsViewModelBackendTests
         Assert.Equal(InputBackend.Sdl3, store.Load());
         Assert.Contains("重启", vm.BackendStatusMessage);
         Assert.True(vm.HasBackendStatusMessage);
+    }
+
+    [Fact]
+    public async Task Falling_Back_To_Legacy_Persists_The_Fallback_And_Restarts()
+    {
+        // The rollback path an S3 default needs: choosing the legacy fallback persists it
+        // under its own name and asks for the same safe restart, so a machine whose SDL3
+        // runtime will not come up has a way back that the daemon reads at startup.
+        var store = new InMemoryInputBackendStore();
+        store.Save(InputBackend.Sdl3);
+        var restarts = 0;
+        var vm = new DaemonSettingsViewModel(
+            new FakeDaemonService(),
+            backendStore: store,
+            restartDaemon: () =>
+            {
+                restarts++;
+                return Task.FromResult(true);
+            });
+
+        vm.IsLegacyBackendSelected = true;
+        await vm.ApplyBackendCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, restarts);
+        Assert.Equal(InputBackend.Legacy, store.Load());
     }
 
     [Fact]
@@ -138,18 +164,50 @@ public class DaemonSettingsViewModelBackendTests
         Assert.False(vm.HasRunningBackendError);
         Assert.False(vm.HasBackendMismatch);
 
-        vm.ReportRunningBackend(InputBackend.Platform, null);
+        // The daemon runs the legacy fallback the SDL3 default does not name: the two
+        // differ, and the card says the restart is what applies the change.
+        vm.ReportRunningBackend(InputBackend.Legacy, null);
 
-        Assert.Contains("平台默认", vm.RunningBackendText);
-        Assert.False(vm.HasBackendMismatch);
+        Assert.Contains("旧后端回退", vm.RunningBackendText);
+        Assert.True(vm.HasBackendMismatch);
+        Assert.Contains("重启常驻服务后生效", vm.BackendMismatchText);
 
-        vm.ReportRunningBackend(InputBackend.Sdl3, "SDL3 输入后端初始化失败：libSDL3.so 缺失");
+        // The daemon restarts onto SDL3: the mismatch clears.
+        vm.ReportRunningBackend(InputBackend.Sdl3, null);
 
         Assert.Contains("SDL3", vm.RunningBackendText);
+        Assert.False(vm.HasBackendMismatch);
+
+        // A start that failed on SDL3 is reported beside the running backend - never
+        // silently swapped for the legacy one.
+        vm.ReportRunningBackend(InputBackend.Sdl3, "SDL3 输入后端初始化失败：libSDL3.so 缺失");
+
         Assert.Contains("libSDL3.so", vm.RunningBackendErrorText);
         Assert.Contains("未切换回其他后端", vm.RunningBackendErrorText);
         Assert.True(vm.HasRunningBackendError);
-        Assert.True(vm.HasBackendMismatch);
-        Assert.Contains("重启常驻服务后生效", vm.BackendMismatchText);
+    }
+
+    [Fact]
+    public void A_Damaged_File_Opens_On_The_Default_With_The_Reason_On_The_Status_Line()
+    {
+        // The upgrade-with-damage case: the selection is lost, the default runs, and the
+        // card says why on its own line instead of silently showing a selection nobody chose.
+        var path = Path.Combine(Path.GetTempPath(), $"dezirojoy-backend-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "this is not json");
+
+            var vm = new DaemonSettingsViewModel(
+                new FakeDaemonService(),
+                backendStore: new InputBackendStore(path));
+
+            Assert.Equal(InputBackend.Sdl3, vm.SelectedBackend);
+            Assert.True(vm.IsSdl3BackendSelected);
+            Assert.Contains("无法解析", vm.BackendStatusMessage);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

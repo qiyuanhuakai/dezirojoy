@@ -6,6 +6,14 @@ using Xunit;
 namespace DeziroJoy.Platform.Tests.Sdl3;
 
 /// <summary>
+/// Tests that talk to the real SDL runtime. SDL's device list and mapping database are
+/// process-global, so these must not run at the same time as any other test that attaches a
+/// device or adds a mapping - hence the shared collection.
+/// </summary>
+[CollectionDefinition("DeziroJoy.SdlNative")]
+public abstract class SdlNativeGroup;
+
+/// <summary>
 /// The mapping-supplement flow against the real SDL runtime, driven by a virtual joystick.
 /// <para>
 /// A virtual joystick is a real SDL device: it enumerates, it carries a GUID, and SDL decides
@@ -22,6 +30,7 @@ namespace DeziroJoy.Platform.Tests.Sdl3;
 /// chain from "SDL sees a plain joystick" to "the daemon's own scan sees a standard gamepad".
 /// </para>
 /// </summary>
+[Collection("DeziroJoy.SdlNative")]
 public sealed class Sdl3JoystickEndToEndTests : IDisposable
 {
     /// <summary>
@@ -276,7 +285,7 @@ public sealed class Sdl3JoystickEndToEndTests : IDisposable
         Assert.True(Sdl3MappingFile.Save(path, entry!).Saved);
 
         var descriptor = Sdl3GamepadProvider.ProbeOnce(new Sdl3MappingFileSource(path));
-        var device = Assert.Single(descriptor.Devices);
+        var device = descriptor.Devices.Single(item => item.GuidString == guid);
 
         // Every required control the mapping describes is one SDL now declares, so the generic
         // panel has something to show for the device the user just mapped by hand.
@@ -293,6 +302,43 @@ public sealed class Sdl3JoystickEndToEndTests : IDisposable
         Assert.Contains(controls, control => control.Label == "左摇杆");
         Assert.Contains(controls, control => control.Label == "左扳机");
         Assert.Contains(controls, control => control.Kind == GamepadControlKind.Direction);
+    }
+
+    [Fact]
+    public void A_Hand_Mapped_DInput_Device_Keeps_The_Positional_Face_Semantic()
+    {
+        // The DInput mapping-supplement flow has to be unaffected by the glyph-driven face map.
+        // Such a device reports no glyphs SDL recognizes, so every slot takes the positional
+        // answer - which is exactly what the mapping the user wrote by hand assumed, because the
+        // capture flow's own keys are SDL's positional ones (a = south, b = east, ...).
+        if (!RuntimeAvailable())
+        {
+            return;
+        }
+
+        var instanceId = AttachPlainJoystick(VendorIdFor(8));
+        var guid = GuidOf(instanceId);
+        var path = System.IO.Path.Combine(_directory, Sdl3MappingFile.FileName);
+
+        var entry = Sdl3MappingFile.TryBuild(
+            guid,
+            "Virtual Test Pad",
+            CapturedMapping(guid, Sdl3JoystickCatalog.PlatformName));
+        Assert.True(Sdl3MappingFile.Save(path, entry!).Saved);
+
+        var device = Sdl3GamepadProvider.ProbeOnce(new Sdl3MappingFileSource(path))
+            .Devices.Single(item => item.GuidString == guid);
+
+        var map = Sdl3FaceButtonMap.From(device);
+        Assert.Equal(Sdl3FaceButtonMap.Positional, map);
+
+        // Pressing the button the mapping bound to SDL's north slot ("y:b3") is logical Y - the
+        // same answer the positional table gave before the glyph-driven map existed.
+        var tracker = new Sdl3GamepadStateTracker(map);
+        tracker.ApplyButton(SDL.GamepadButton.North, true);
+
+        Assert.True(tracker.Snapshot().PressedButtons.Has(GamepadButton.Y));
+        Assert.False(tracker.Snapshot().PressedButtons.Has(GamepadButton.X));
     }
 
     [Fact]
