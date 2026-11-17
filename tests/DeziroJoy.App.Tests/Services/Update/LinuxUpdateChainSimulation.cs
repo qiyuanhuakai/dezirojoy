@@ -156,6 +156,21 @@ internal sealed class ChainSimulation : IDisposable
         exit "${DEZIROJOY_STUB_SYSTEMCTL_EXIT:-0}"
         """;
 
+    private const string IdStub =
+        """
+        #!/bin/sh
+        %PROLOGUE%
+        # The simulation's user is a fixture, not a machine account: a deterministic uid and
+        # gid keep the setpriv branch testable on a runner that has no such user, where the
+        # real id would fail and leave the chain unable to drop privileges at all.
+        case "$1" in
+            -u) printf '1000\n' ;;
+            -g) printf '1000\n' ;;
+            *) printf 'uid=1000(qiyuaner) gid=1000(qiyuaner) groups=1000(qiyuaner),1001(input)\n' ;;
+        esac
+        exit 0
+        """;
+
     private const string AppStub =
         """
         #!/bin/sh
@@ -189,6 +204,7 @@ internal sealed class ChainSimulation : IDisposable
         WriteStub("apt-get", WithPrologue(InstallerStub, "apt-get"));
         WriteStub("dnf", WithPrologue(InstallerStub, "dnf"));
         WriteStub("systemctl", WithPrologue(SystemCtlStub, "systemctl"));
+        WriteStub("id", WithPrologue(IdStub, "id"));
         WriteStub("DeziroJoy", WithPrologue(AppStub, "app"));
 
         if (withRunUser)
@@ -202,9 +218,10 @@ internal sealed class ChainSimulation : IDisposable
         }
 
         // The only real executables the chain is allowed to reach: the shell it runs under
-        // and the handful of coreutils its script calls. Everything else resolves to a stub
-        // or to nothing, which is what makes the no-drop-tool scenario possible at all.
-        foreach (var tool in new[] { "sh", "env", "id", "sleep" })
+        // and the coreutils its script calls that are not themselves under test. Everything
+        // else resolves to a stub or to nothing, which is what makes the no-drop-tool
+        // scenario possible at all.
+        foreach (var tool in new[] { "sh", "env", "sleep" })
         {
             File.CreateSymbolicLink(Path.Combine(_toolDirectory, tool), ResolveTool(tool));
         }

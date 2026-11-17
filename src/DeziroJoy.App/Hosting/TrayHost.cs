@@ -2253,6 +2253,26 @@ internal static class TrayHost
         /// </summary>
         private InputSampleMessage? _latestSample;
 
+        private long _queuedSampleCount;
+
+        /// <summary>
+        /// How many samples the receive loop has queued for a frame since this feed was built.
+        /// Read under <see cref="_sampleGate"/>, which is what makes it the deterministic signal
+        /// that a sample's arrival work is finished: the controller stores its latest sample
+        /// before raising the event that queues here, so a test waiting on that store alone
+        /// could tick a frame before the sample reached the feed.
+        /// </summary>
+        internal long QueuedSampleCount
+        {
+            get
+            {
+                lock (_sampleGate)
+                {
+                    return _queuedSampleCount;
+                }
+            }
+        }
+
         private bool _disposed;
 
         public DaemonLayerHintFeed(
@@ -2318,6 +2338,7 @@ internal static class TrayHost
             lock (_sampleGate)
             {
                 _latestSample = sample;
+                _queuedSampleCount++;
             }
         }
 
@@ -2523,6 +2544,27 @@ internal static class TrayHost
         /// <summary>The frame's samples in arrival order; only filled while the keyboard is open.</summary>
         private readonly List<InputSampleMessage> _pendingSamples = [];
 
+        private long _queuedSampleCount;
+
+        /// <summary>
+        /// How many samples the receive loop has queued for a frame while the keyboard was open.
+        /// Read under <see cref="_sampleGate"/>, which is what makes it the deterministic signal
+        /// that a sample's arrival work is finished: the controller stores its latest sample
+        /// before raising the event that queues here, so a test waiting on that store alone
+        /// could tick a frame before the sample reached the feed. Samples dropped while the
+        /// keyboard is closed are not queued and not counted.
+        /// </summary>
+        internal long QueuedSampleCount
+        {
+            get
+            {
+                lock (_sampleGate)
+                {
+                    return _queuedSampleCount;
+                }
+            }
+        }
+
         /// <summary>The profile the last snapshot carried, for the key that summons the keyboard.</summary>
         private GamepadProfile? _profile;
 
@@ -2630,6 +2672,7 @@ internal static class TrayHost
             lock (_sampleGate)
             {
                 _pendingSamples.Add(sample);
+                _queuedSampleCount++;
             }
         }
 

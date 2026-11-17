@@ -493,17 +493,22 @@ public sealed class LinuxPackageInstallerTests : IDisposable
         Assert.SkipWhen(!OperatingSystem.IsLinux(), "the generated chain is a POSIX shell script");
 
         // A machine with setpriv but no runuser: the drop resolves the uid and gid and
-        // initializes the supplementary groups, so the user's input group survives.
+        // initializes the supplementary groups, so the user's input group survives. The ids
+        // come from the stub, so the assertion does not depend on the runner having an
+        // account for the fixture user.
         using var simulation = new ChainSimulation(withRunUser: false);
         var run = await RunChainAsync(simulation, Request(InstallKind.Deb, DebPath), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, run.ExitCode);
 
-        var drop = run.Invocation("setpriv", 0);
-        Assert.Contains("--reuid", drop);
-        Assert.Contains("--regid", drop);
-        Assert.Contains("--init-groups", drop);
-        Assert.Contains("systemctl", drop);
+        var environment = ChainSimulation.ExpectedEnvironment();
+        Assert.Equal(
+            ["--reuid", "1000", "--regid", "1000", "--init-groups", "--", "env", .. environment, "systemctl", "--user", "start", "dezirojoy-daemon"],
+            run.Invocation("setpriv", 0));
+        Assert.Equal(
+            ["--reuid", "1000", "--regid", "1000", "--init-groups", "--", "env", .. environment, simulation.AppPath],
+            run.Invocation("setpriv", 1));
+
         Assert.Contains("app", run.Calls);
         Assert.Equal("/home/qiyuaner", run.AppEnvironment["HOME"]);
     }

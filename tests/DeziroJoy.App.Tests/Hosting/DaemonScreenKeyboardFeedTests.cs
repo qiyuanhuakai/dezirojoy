@@ -66,7 +66,7 @@ public sealed class DaemonScreenKeyboardFeedTests
 
         context.Host.PublishInputSample("pad-1", GamepadState.Neutral);
         context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.DPadRight, 0f, 0f, 0f, 0f));
-        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.DPadRight);
+        await WaitForSample(context.Feed, context.Controller, "pad-1", queuedAtLeast: 2, GamepadButtonMask.DPadRight);
 
         // Nothing dispatched before the frame.
         Assert.Equal("a", context.Keyboard.Keyboard.FocusedKey?.Label);
@@ -87,7 +87,10 @@ public sealed class DaemonScreenKeyboardFeedTests
 
         context.Host.PublishInputSample("pad-1", GamepadState.Neutral);
         context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.DPadRight, 0f, 0f, 0f, 0f));
-        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.DPadRight);
+        // The keyboard is closed, so these are dropped on arrival rather than queued: the wait
+        // is on the controller's store alone, which only sequences the publishes before the
+        // toggle below - nothing asserts on when the drop happened.
+        await WaitForSampleOnController(context.Controller, "pad-1", GamepadButtonMask.DPadRight);
         context.Clock!.RaiseTick();
 
         context.Server.RequestScreenKeyboardToggle();
@@ -99,7 +102,7 @@ public sealed class DaemonScreenKeyboardFeedTests
         // the pair published before the keyboard opened.
         context.Host.PublishInputSample("pad-1", GamepadState.Neutral);
         context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.DPadRight, 0.2f, 0f, 0f, 0f));
-        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.DPadRight, leftStickX: 0.2f);
+        await WaitForSample(context.Feed, context.Controller, "pad-1", queuedAtLeast: 2, GamepadButtonMask.DPadRight, leftStickX: 0.2f);
         context.Clock!.RaiseTick();
 
         Assert.Equal("b", context.Keyboard.Keyboard.FocusedKey?.Label);
@@ -179,19 +182,38 @@ public sealed class DaemonScreenKeyboardFeedTests
     }
 
     /// <summary>
-    /// Waits until the controller has taken the given sample. The controller stores the latest
-    /// sample per device before raising the event, so a match also means the feed has already
-    /// queued it.
+    /// Waits until the feed has queued the given samples and the controller's latest sample for
+    /// the device matches. The queue count is the deterministic half: the controller stores its
+    /// latest sample before raising the event that queues here, so waiting on that store alone
+    /// could tick a frame before the sample reached the feed. Samples published while the
+    /// keyboard is closed are dropped rather than queued, so they never move the count.
     /// </summary>
     private static async Task WaitForSample(
+        TrayHost.DaemonScreenKeyboardFeed feed,
         DaemonController controller,
         string deviceId,
+        long queuedAtLeast,
         GamepadButtonMask pressed,
         float leftStickX = 0f)
     {
+        await WaitForCondition(() => feed.QueuedSampleCount >= queuedAtLeast
+            && controller.InputSamples.Any(sample => sample.DeviceId == deviceId
+                && sample.PressedButtons == pressed
+                && sample.LeftStickX == leftStickX));
+    }
+
+    /// <summary>
+    /// Waits until the controller has taken the given sample - the store-only wait, for the
+    /// publishes whose arrival the feed drops rather than queues, where there is no queue count
+    /// to wait on and no assertion that depends on when the drop happened.
+    /// </summary>
+    private static async Task WaitForSampleOnController(
+        DaemonController controller,
+        string deviceId,
+        GamepadButtonMask pressed)
+    {
         await WaitForCondition(() => controller.InputSamples.Any(sample => sample.DeviceId == deviceId
-            && sample.PressedButtons == pressed
-            && sample.LeftStickX == leftStickX));
+            && sample.PressedButtons == pressed));
     }
 
     private static async Task<FeedContext> CreateFeed(FakeFrameClock? clock = null)

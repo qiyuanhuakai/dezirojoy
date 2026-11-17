@@ -54,7 +54,7 @@ public sealed class MainWindowViewModelSampleDispatchTests
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(default, 0.1f, 0, 0, 0));
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(default, 0.3f, 0, 0, 0));
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(default, 0.5f, 0, 0, 0));
-        await WaitForSample(context.Controller, "pad-1", rightStickX: 0f, leftStickX: 0.5f);
+        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: 4, leftStickX: 0.5f);
 
         // Nothing has been dispatched yet: no tick, no UI update.
         Assert.Empty(stickFrames);
@@ -81,13 +81,13 @@ public sealed class MainWindowViewModelSampleDispatchTests
 
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Neutral);
         context.DaemonHost.PublishInputSample("pad-2", GamepadState.Neutral);
-        await WaitForSample(context.Controller, "pad-2", leftStickX: 0f);
+        await WaitForSample(viewModel, context.Controller, "pad-2", queuedAtLeast: 2);
         context.Clock.RaiseTick();
 
         // One frame, two devices: pad-1's press and pad-2's sub-threshold stick push.
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
         context.DaemonHost.PublishInputSample("pad-2", GamepadState.Create(default, 0.3f, 0, 0, 0));
-        await WaitForSample(context.Controller, "pad-2", leftStickX: 0.3f);
+        await WaitForSample(viewModel, context.Controller, "pad-2", queuedAtLeast: 4, leftStickX: 0.3f);
         context.Clock.RaiseTick();
 
         // Pad-1's press navigated even though pad-2 sampled after it inside the same frame.
@@ -131,7 +131,7 @@ public sealed class MainWindowViewModelSampleDispatchTests
             context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(default, 0, 0, value, 0));
         }
 
-        await WaitForSample(context.Controller, "pad-1", rightStickX: 0.4f);
+        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: 4, rightStickX: 0.4f);
 
         // Every sample reached the panel - four readouts, not the frame's last one - before a
         // single frame was dispatched. The values round-trip through the protocol's float, so
@@ -153,7 +153,7 @@ public sealed class MainWindowViewModelSampleDispatchTests
         viewModel.SetGamepadNavigationEnabled(true);
 
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
-        await WaitForSample(context.Controller, "pad-1", pressed: GamepadButtonMask.A);
+        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: 1, pressed: GamepadButtonMask.A);
 
         await viewModel.DisposeAsync();
 
@@ -177,7 +177,7 @@ public sealed class MainWindowViewModelSampleDispatchTests
         await using var viewModel = context.ViewModel;
 
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
-        await WaitForSample(context.Controller, "pad-1", pressed: GamepadButtonMask.A);
+        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: 1, pressed: GamepadButtonMask.A);
 
         // The daemon goes away while the sample is still waiting for its frame. The wait is on
         // the window's own handling of the loss - the snapshot going null, which the handler
@@ -211,13 +211,18 @@ public sealed class MainWindowViewModelSampleDispatchTests
         context.Endpoint.Channel = new MainWindowViewModelDaemonTests.ServerChannel(context.Server);
         context.Server.StateChanged += context.Endpoint.Channel.Push;
         context.Server.InputSampled += context.Endpoint.Channel.Push;
-        await WaitForCondition(() => viewModel.IsDaemonConnected);
 
-        Assert.Equal(startsAfterDisconnect + 1, context.Clock.StartCalls);
-        Assert.True(context.Clock.IsRunning);
+        // The controller reports Connected a moment before the window's own connect handler
+        // runs - the state flips first and the event follows it - so the wait is on the clock
+        // the handler starts rather than on the state. A reconnect whose handler never
+        // restarted the clock leaves this wait timing out, which is the failure worth
+        // reporting; asserting on the state alone raced it.
+        await WaitForCondition(
+            () => context.Clock.StartCalls >= startsAfterDisconnect + 1 && context.Clock.IsRunning,
+            "the reconnected daemon's connect handler did not restart the frame clock");
 
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
-        await WaitForSample(context.Controller, "pad-1", pressed: GamepadButtonMask.B);
+        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: viewModel.QueuedSampleCount + 1, pressed: GamepadButtonMask.B);
         context.Clock.RaiseTick();
 
         Assert.True(viewModel.Visualizer.IsBPressed);
@@ -241,7 +246,11 @@ public sealed class MainWindowViewModelSampleDispatchTests
         server.InputSampled += channel.Push;
         var endpoint = new MainWindowViewModelDaemonTests.ServerEndpoint(channel);
         var clock = new FakeFrameClock();
-        var controller = new DaemonController(endpoint);
+        // A short startup grace bounds each failed reconnect attempt against the disposed
+        // channel, so the reconnect test's wait budget is spent on the reconnect loop's own
+        // delay rather than on a handshake that cannot succeed. The in-memory endpoint answers
+        // the first probe at once, so the initial connect is unaffected.
+        var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromMilliseconds(300));
         await controller.ConnectAsync(TestContext.Current.CancellationToken);
 
         var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
@@ -255,31 +264,37 @@ public sealed class MainWindowViewModelSampleDispatchTests
     }
 
     /// <summary>
-    /// Waits until the controller has taken a sample for <paramref name="deviceId"/> whose
-    /// state matches. The controller stores the latest sample per device before raising the
-    /// event, so a match also means the view model has already queued it.
+    /// Waits until <paramref name="queuedAtLeast"/> samples have been queued for a frame and the
+    /// controller's latest sample for the device matches. The queue count is the deterministic
+    /// half: the controller stores its latest sample before raising the event that queues here,
+    /// so waiting on that store alone could tick a frame before the sample reached the queue.
+    /// The count is cumulative, so a caller that published onto a stream already in flight
+    /// reads it first and passes that plus one.
     /// </summary>
     private static async Task WaitForSample(
+        MainWindowViewModel viewModel,
         DaemonController controller,
         string deviceId,
+        long queuedAtLeast,
         GamepadButtonMask pressed = default,
         float leftStickX = 0f,
         float rightStickX = 0f)
     {
-        await WaitForCondition(() => controller.InputSamples.Any(sample => sample.DeviceId == deviceId
-            && sample.PressedButtons == pressed
-            && sample.LeftStickX == leftStickX
-            && sample.RightStickX == rightStickX));
+        await WaitForCondition(() => viewModel.QueuedSampleCount >= queuedAtLeast
+            && controller.InputSamples.Any(sample => sample.DeviceId == deviceId
+                && sample.PressedButtons == pressed
+                && sample.LeftStickX == leftStickX
+                && sample.RightStickX == rightStickX));
     }
 
-    private static async Task WaitForCondition(Func<bool> condition)
+    private static async Task WaitForCondition(Func<bool> condition, string? because = null)
     {
         for (var attempt = 0; attempt < 1000 && !condition(); attempt++)
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
-        Assert.True(condition());
+        Assert.True(condition(), because);
     }
 
     private sealed record DispatchContext(

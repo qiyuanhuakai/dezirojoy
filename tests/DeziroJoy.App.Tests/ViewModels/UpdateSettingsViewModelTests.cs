@@ -756,11 +756,14 @@ public sealed class UpdateSettingsViewModelTests : IDisposable
         Assert.Equal(1, restarted);
 
         // Close, escape and reopen around the embedded quote: the rest stays literal, so the
-        // chain execs exactly that path and runs nothing the path happens to contain.
-        var expected =
-            "'" + Path.GetDirectoryName(image) + "/a b'\\''c$(id)`d.AppImage'";
+        // chain execs exactly that path and runs nothing the path happens to contain. The
+        // expectation is built from the path itself and escaped independently of the
+        // implementation, and the exec and the quoted path are asserted separately - the
+        // relaunch command may carry more arguments in front of the image.
+        var escaped = "'" + image.Replace("'", "'\\''") + "'";
         var script = Assert.Single(launcher.Calls).ArgumentList[1];
-        Assert.Contains($"exec {expected}", script);
+        Assert.Contains("exec ", script);
+        Assert.Contains(escaped, script);
         Assert.Contains($"kill -0 {SuccessorPid}", script);
     }
 

@@ -89,7 +89,7 @@ public sealed class DaemonLayerHintFeedTests
         context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0f, 0f, 0f, 0f));
         context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.B, 0f, 0f, 0f, 0f));
         context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.X, 0f, 0f, 0f, 0f));
-        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.X);
+        await WaitForSample(context.Feed, context.Controller, "pad-1", queuedAtLeast: 3, GamepadButtonMask.X);
 
         // Nothing dispatched before the frame: the samples a frame coalesced away were never
         // displayed states.
@@ -137,17 +137,21 @@ public sealed class DaemonLayerHintFeedTests
     }
 
     /// <summary>
-    /// Waits until the controller has taken the given sample. The controller stores the latest
-    /// sample per device before raising the event, so a match also means the feed has already
-    /// queued it.
+    /// Waits until the feed has queued the given samples and the controller's latest sample for
+    /// the device matches. The queue count is the deterministic half: the controller stores its
+    /// latest sample before raising the event that queues here, so waiting on that store alone
+    /// could tick a frame before the sample reached the feed.
     /// </summary>
     private static async Task WaitForSample(
+        TrayHost.DaemonLayerHintFeed feed,
         DaemonController controller,
         string deviceId,
+        long queuedAtLeast,
         GamepadButtonMask pressed)
     {
-        await WaitForCondition(() => controller.InputSamples.Any(sample => sample.DeviceId == deviceId
-            && sample.PressedButtons == pressed));
+        await WaitForCondition(() => feed.QueuedSampleCount >= queuedAtLeast
+            && controller.InputSamples.Any(sample => sample.DeviceId == deviceId
+                && sample.PressedButtons == pressed));
     }
 
     private static List<EffectiveMappingSnapshot> EffectiveIds(GamepadProfile profile, int layerId)

@@ -191,6 +191,27 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private long _sampleOrder;
 
     /// <summary>
+    /// How many samples the receive loop has queued for a frame since this window was built.
+    /// Read under <see cref="_sampleGate"/>, which is what makes it the deterministic signal
+    /// that a sample's arrival work is finished: the controller's own latest-sample store is
+    /// written before the event that queues here, so a test waiting on that store alone can
+    /// tick a frame before the sample reached the queue. Cumulative - never reset - so a
+    /// caller compares against the count it read before publishing.
+    /// </summary>
+    internal long QueuedSampleCount
+    {
+        get
+        {
+            lock (_sampleGate)
+            {
+                return _queuedSampleCount;
+            }
+        }
+    }
+
+    private long _queuedSampleCount;
+
+    /// <summary>
     /// What the daemon's profile body could not be read for, or null when it parsed whole.
     /// Kept so the notice survives the next accepted mutation, which clears the transfer
     /// message: the damaged body is still what the daemon is serving until the user commits
@@ -2966,6 +2987,7 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         lock (_sampleGate)
         {
             _pendingSamples[sample.DeviceId] = (++_sampleOrder, sample);
+            _queuedSampleCount++;
         }
     }
 
