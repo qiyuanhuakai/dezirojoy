@@ -201,7 +201,7 @@ public sealed class GenericGamepadPanelGuiTests
     }
 
     [AvaloniaFact]
-    public void A_Long_Label_Ellipsises_Inside_The_Card_Instead_Of_Overflowing_It()
+    public void A_Long_Label_Grows_The_Card_To_Show_Its_Full_Text()
     {
         // The label is the device's own text, and a description is free to be long: the Core
         // names Back "Back / Select" and Start "Start / Options", which no one-line card
@@ -229,12 +229,13 @@ public sealed class GenericGamepadPanelGuiTests
         var cardRect = RectIn(card, panel);
         var labelRect = RectIn(label, panel);
 
-        // The card is one compact single line: the label ellipsises inside it rather than
-        // wrapping the card tall or spilling over its edge, and the full text is one hover
-        // away on the card's own tooltip - nothing is silently clipped.
+        // Long text gets horizontal room instead of an ellipsis: the card grows from its
+        // desired content width while remaining one compact line.
         Assert.Equal(TextWrapping.NoWrap, label.TextWrapping);
-        Assert.Equal(TextTrimming.CharacterEllipsis, label.TextTrimming);
+        Assert.Equal(TextTrimming.None, label.TextTrimming);
         Assert.Equal("Back / Select", ToolTip.GetTip(card));
+        Assert.True(card.Bounds.Width > 64,
+            $"the full label should grow the card beyond the short-name minimum, got {card.Bounds.Width}");
         Assert.True(labelRect.Left >= cardRect.Left - 0.5,
             $"the label {labelRect} spills left of the card {cardRect}");
         Assert.True(labelRect.Right <= cardRect.Right + 0.5,

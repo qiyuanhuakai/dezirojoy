@@ -103,8 +103,8 @@ alpha.4 显式选过旧后端的安装升级后保持旧后端），在设置页
 首次为 SDL3 设备运行时，把 XInput／evdev 名下用户自己的预设逐槽复制过去（旧文件只读
 不动、只覆盖空白或未改动的默认槽、新旧一对一且布局无反证时才迁移、多设备歧义整体跳过、
 持久记录防止重复复制或回填已删除的槽）。只能作普通 Joystick 枚举、没有标准映射的设备，
-可用独立探针的 `map` 流程逐键取证生成映射（保存到配置根目录 `sdl-mappings.json`，SDL
-立即认账、重启常驻服务后进入映射路径）。SDL3 设备在配置界面使用数据驱动的通用控件面板
+可在「设置 → 后台服务 → DInput / 未映射手柄」逐键学习，或用独立探针的 `map` 流程生成映射
+（保存到配置根目录 `sdl-mappings.json`，SDL 立即认账、重启常驻服务后进入映射路径）。SDL3 设备在配置界面使用数据驱动的通用控件面板
 （U1／U2：固定分区、按输入定位、显示策略；真实未知型号待复验）。该后端**未经完整真机
 验收**（用户已实测 Xbox／NS 全部按键可用，属有限证据）。启用方式、设备身份、面键语义、
 迁移规则、映射补充、探针、诊断与升级回退见 [docs/SDL3-BACKEND.md](docs/SDL3-BACKEND.md)。
@@ -143,10 +143,10 @@ Linux 实验性说明：
 > **升级提示**：`0.0.2-beta.3` 及更早版本的应用内自动更新存在缺陷，从这些版本升级请
 > 到发布页**手动下载**安装 `0.0.2-beta.4` 或更新版本；自 beta.4 起自动更新恢复正常。
 
-> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.5`
+> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.6`
 > 是 SDL3 统一输入后端的实验性 alpha——SDL3 已为默认后端（旧后端可显式回退）、未经完整
 > 真机验收；不想升级 alpha 的用户请关闭设置页的自动检查／自动下载，或到发布页手动选择
-> 版本。发布说明见 [docs/RELEASE-0.0.5-alpha.5.md](docs/RELEASE-0.0.5-alpha.5.md)。
+> 版本。发布说明见 [docs/RELEASE-0.0.5-alpha.6.md](docs/RELEASE-0.0.5-alpha.6.md)。
 
 ### Windows
 
@@ -300,6 +300,7 @@ tests/
 - [docs/RELEASE-0.0.5-alpha.3.md](docs/RELEASE-0.0.5-alpha.3.md) — 0.0.5-alpha.3 发布说明。
 - [docs/RELEASE-0.0.5-alpha.4.md](docs/RELEASE-0.0.5-alpha.4.md) — 0.0.5-alpha.4 发布说明。
 - [docs/RELEASE-0.0.5-alpha.5.md](docs/RELEASE-0.0.5-alpha.5.md) — 0.0.5-alpha.5 发布说明。
+- [docs/RELEASE-0.0.5-alpha.6.md](docs/RELEASE-0.0.5-alpha.6.md) — 0.0.5-alpha.6 发布说明。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。

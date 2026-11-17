@@ -48,7 +48,8 @@ public sealed class WindowsCompatibilityGuiTests
 
         Assert.Equal(1, guard.DisableCalls);
         Assert.False(button.IsVisible);
-        Assert.Contains("已写入并核验", settings.FindControl<TextBlock>("GameBarPopupHint")!.Text);
+        Assert.Contains("已关闭", settings.FindControl<TextBlock>("GameBarPreferenceStatus")!.Text);
+        Assert.DoesNotContain("已关闭", settings.FindControl<TextBlock>("GameBarPopupHint")!.Text);
         window.Close();
     }
 
@@ -83,7 +84,7 @@ public sealed class WindowsCompatibilityGuiTests
         Assert.Equal(1, guard.RegisterCalls);
         Assert.False(register.IsVisible);
         Assert.True(restore.IsVisible);
-        Assert.Contains("已为本用户注册静默处理程序", settings.FindControl<TextBlock>("GameBarHandlerStatus")!.Text);
+        Assert.Contains("已注册", settings.FindControl<TextBlock>("GameBarHandlerStatus")!.Text);
 
         Click(restore, window);
 

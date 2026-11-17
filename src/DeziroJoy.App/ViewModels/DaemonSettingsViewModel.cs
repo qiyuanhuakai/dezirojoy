@@ -1,7 +1,9 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Linux;
+using DeziroJoy.Platform.Sdl3;
 
 namespace DeziroJoy.App.ViewModels;
 
@@ -31,6 +33,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
     private readonly ThemeService _settings;
     private readonly Func<bool> _isWindows;
     private readonly Func<Task<bool>>? _restartDaemon;
+    private readonly Func<Sdl3JoystickScan> _scanJoysticks;
     private DeviceAccessSnapshot? _deviceAccess;
     private string? _deviceAccessProbeError;
     private bool _suppressAutostartChange;
@@ -52,7 +55,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
         IInputBackendStore? backendStore = null,
         Func<Task<bool>>? restartDaemon = null,
         ThemeService? settings = null,
-        Func<bool>? isWindows = null)
+        Func<bool>? isWindows = null,
+        Func<Sdl3JoystickScan>? scanJoysticks = null)
     {
         _service = service ?? PlatformFactory.CreateDaemonService();
         _deviceAccessFixer = deviceAccessFixer ?? new DeviceAccessFixer();
@@ -61,6 +65,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
         _settings = settings ?? new ThemeService();
         _isWindows = isWindows ?? (static () => OperatingSystem.IsWindows());
         _restartDaemon = restartDaemon;
+        _scanJoysticks = scanJoysticks ?? Sdl3JoystickCatalog.Scan;
         _selectedBackend = _backendStore.Load();
         if (_backendStore.LastError is { } backendReadError)
         {
@@ -308,6 +313,71 @@ public partial class DaemonSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _autostartEnabled;
+
+    public ObservableCollection<DInputDeviceOption> UnmappedDInputDevices { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSelectedDInputDevice))]
+    private DInputDeviceOption? _selectedDInputDevice;
+
+    public bool HasSelectedDInputDevice => SelectedDInputDevice is not null;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDInputStatusMessage))]
+    private string _dInputStatusMessage = "打开设置时扫描缺少标准映射的设备。";
+
+    public bool HasDInputStatusMessage => DInputStatusMessage.Length > 0;
+
+    public event Func<DInputDeviceOption, Task<bool>>? DInputMappingRequested;
+
+    [RelayCommand]
+    private void RefreshDInputDevices()
+    {
+        var selectedInstanceId = SelectedDInputDevice?.Device.InstanceId;
+        var scan = _scanJoysticks();
+        var options = scan.Unmapped.Select(device => new DInputDeviceOption(device)).ToList();
+        UnmappedDInputDevices.Clear();
+        foreach (var option in options)
+        {
+            UnmappedDInputDevices.Add(option);
+        }
+
+        SelectedDInputDevice = options.FirstOrDefault(option => option.Device.InstanceId == selectedInstanceId)
+            ?? options.OrderByDescending(option => option.Device.AxisCount + option.Device.HatCount)
+                .ThenByDescending(option => option.Device.ButtonCount)
+                .FirstOrDefault();
+        DInputStatusMessage = !scan.Initialized
+            ? $"SDL3 不可用：{scan.InitError ?? "未知错误"}"
+            : options.Count == 0
+                ? "没有发现缺少标准映射的原始设备。"
+                : $"发现 {options.Count} 个未映射 HID 接口；请选择手柄主接口（通常按钮和轴更多）。";
+    }
+
+    [RelayCommand]
+    private async Task MapDInput()
+    {
+        if (SelectedDInputDevice is not { } device)
+        {
+            DInputStatusMessage = "请先选择要学习的原始设备。";
+            return;
+        }
+
+        if (DInputMappingRequested is not { } openMapping)
+        {
+            DInputStatusMessage = "映射窗口尚未就绪，请重新打开设置后再试。";
+            return;
+        }
+
+        if (!await openMapping(device))
+        {
+            DInputStatusMessage = "未保存新映射；原有配置未改变。";
+            return;
+        }
+
+        DInputStatusMessage = "映射已保存，正在按原后端设置安全重启常驻服务。";
+        await ApplyBackend();
+        RefreshDInputDevices();
+    }
 
     /// <summary>
     /// The persisted input-backend selection. SDL3 is the default since S3; the legacy

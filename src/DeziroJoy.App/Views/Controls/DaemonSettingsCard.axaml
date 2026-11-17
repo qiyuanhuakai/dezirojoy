@@ -127,6 +127,31 @@
                 </StackPanel>
             </Border>
 
+            <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0"
+                    IsVisible="{Binding IsSdl3BackendSelected}">
+                <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="DInput / 未映射手柄" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               Text="SDL 能看到设备但没有标准布局时，用真实输入逐键生成映射，不猜测按钮或轴的顺序。" />
+                    <ComboBox x:Name="DInputDeviceSelector" Margin="0,8,0,0"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding UnmappedDInputDevices}"
+                              SelectedItem="{Binding SelectedDInputDevice}"
+                              DisplayMemberBinding="{Binding DisplayName}" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Classes="ghost" Margin="0,0,8,8" Content="重新扫描"
+                                Command="{Binding RefreshDInputDevicesCommand}" />
+                        <Button x:Name="MapDInputButton" Classes="ghost" Margin="0,0,8,8"
+                                Content="逐键学习并保存"
+                                IsEnabled="{Binding HasSelectedDInputDevice}"
+                                Command="{Binding MapDInputCommand}" />
+                    </WrapPanel>
+                    <TextBlock Classes="hint" TextWrapping="Wrap"
+                               IsVisible="{Binding HasDInputStatusMessage}"
+                               Text="{Binding DInputStatusMessage}" />
+                </StackPanel>
+            </Border>
+
             <!-- The experimental rendering switch, Windows only: the software mode exists on
                  the Win32 backend alone, so the section is not offered anywhere else. Like
                  the input backend it is a persisted request only a restart can apply - the

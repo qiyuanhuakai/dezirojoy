@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DeziroJoy.App.ViewModels"
+        x:Class="DeziroJoy.App.Views.DInputMappingWindow"
+        x:DataType="vm:DInputMappingViewModel"
+        Title="配置 DInput 手柄"
+        Width="560" Height="360"
+        MinWidth="440" MinHeight="300"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}">
+    <Border Padding="24">
+        <Grid RowDefinitions="Auto,Auto,*,Auto,Auto">
+            <StackPanel Grid.Row="0">
+                <TextBlock Classes="cardTitle" Text="逐键学习原始输入" />
+                <TextBlock Classes="hint" Margin="0,8,0,0" TextWrapping="Wrap"
+                           Text="SDL 不知道这台设备的标准布局。请按提示操作真实控件；不会根据按钮或轴的序号猜测。" />
+                <TextBlock Classes="fieldLabel" Margin="0,12,0,0" TextWrapping="Wrap"
+                           Text="{Binding DeviceSummary}" />
+            </StackPanel>
+            <Border Grid.Row="1" Margin="0,18,0,0" Padding="14,12"
+                    Background="{DynamicResource SubtleBrush}" CornerRadius="{DynamicResource CornerRadiusMd}">
+                <TextBlock FontSize="16" TextWrapping="Wrap" Text="{Binding ProgressText}" />
+            </Border>
+            <TextBlock Grid.Row="2" Classes="hint" Margin="0,12,0,12" TextWrapping="Wrap"
+                       VerticalAlignment="Top"
+                       Text="摇杆请推到底后松开。方向帽、按钮和轴均可作为输入；已按住的控件不会在下一步被重复捕获。取消或跳过不会修改已有配置。" />
+            <TextBlock Grid.Row="3" Classes="hint" TextWrapping="Wrap" Text="{Binding StatusMessage}" />
+            <WrapPanel Grid.Row="4" Margin="0,16,0,0" HorizontalAlignment="Right">
+                <Button Classes="ghost" Content="跳过此项" Margin="0,0,8,0"
+                        IsEnabled="{Binding CanCapture}" Command="{Binding SkipCommand}" />
+                <Button Classes="ghost" Content="取消" Command="{Binding CancelCommand}" />
+            </WrapPanel>
+        </Grid>
+    </Border>
+</Window>

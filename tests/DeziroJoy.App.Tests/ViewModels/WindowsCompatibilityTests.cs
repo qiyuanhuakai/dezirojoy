@@ -56,7 +56,8 @@ public sealed class WindowsCompatibilityTests
         Assert.Equal(1, guard.DisableCalls);
         Assert.True(vm.IsGameBarControllerLaunchDisabled);
         Assert.False(vm.CanDisableGameBarControllerLaunch);
-        Assert.Contains("已写入并核验", vm.GameBarPopupHint);
+        Assert.Contains("已关闭", vm.GameBarPreferenceStatus);
+        Assert.DoesNotContain("已关闭", vm.GameBarPopupHint);
         Assert.False(vm.HasGameBarPopupError);
     }
 
@@ -137,14 +138,14 @@ public sealed class WindowsCompatibilityTests
         Assert.True(vm.IsGameBarPopupHandlerRegistered);
         Assert.False(vm.CanRegisterGameBarPopupHandler);
         Assert.True(vm.CanRestoreGameBarPopupHandler);
-        Assert.Contains("已为本用户注册静默处理程序", vm.GameBarHandlerStatus);
-        Assert.Contains("已为本用户注册静默处理程序", vm.GameBarPopupHint);
+        Assert.Contains("已注册", vm.GameBarHandlerStatus);
+        Assert.DoesNotContain("已注册", vm.GameBarPopupHint);
 
-        // The registered state must not promise suppression: it names the scope (ms-gamebar
-        // only), the residual case, and where to go when the handler does not help.
-        Assert.Contains("仅 ms-gamebar", vm.GameBarHandlerStatus);
-        Assert.Contains("仍可能弹窗", vm.GameBarHandlerStatus);
-        Assert.Contains("安装/修复 Xbox Game Bar", vm.GameBarHandlerStatus);
+        // Status and scope each appear once: the handler reports its state, while the shared
+        // hint carries the residual popup limitation instead of repeating that state.
+        Assert.Contains("ms-gamebar", vm.GameBarHandlerStatus);
+        Assert.DoesNotContain("仍可能弹窗", vm.GameBarHandlerStatus);
+        Assert.Contains("不保证抑制所有弹窗", vm.GameBarPopupHint);
         Assert.False(vm.HasGameBarPopupError);
     }
 
@@ -156,7 +157,7 @@ public sealed class WindowsCompatibilityTests
         var vm = new MainWindowViewModel(host, store, gameBarPopupGuard: guard);
 
         Assert.Contains("未注册", vm.GameBarHandlerStatus);
-        Assert.Contains("不保证抑制所有弹窗", vm.GameBarHandlerStatus);
+        Assert.DoesNotContain("不保证抑制所有弹窗", vm.GameBarHandlerStatus);
         Assert.Contains("不保证抑制所有弹窗", vm.GameBarPopupHint);
     }
 
@@ -194,7 +195,7 @@ public sealed class WindowsCompatibilityTests
         Assert.True(vm.CanRestoreGameBarPopupHandler);
         Assert.Equal("重新注册静默处理程序", vm.RegisterGameBarPopupHandlerText);
         Assert.Contains("重新注册", vm.GameBarHandlerStatus);
-        Assert.Contains("重新注册", vm.GameBarPopupHint);
+        Assert.DoesNotContain("重新注册", vm.GameBarPopupHint);
 
         vm.RegisterGameBarPopupHandlerCommand.Execute(null);
 
@@ -221,8 +222,8 @@ public sealed class WindowsCompatibilityTests
         Assert.False(vm.CanRegisterGameBarPopupHandler);
         Assert.False(vm.CanRestoreGameBarPopupHandler);
         Assert.Contains("已被其他程序接管", vm.GameBarHandlerStatus);
-        Assert.Contains("接管", vm.GameBarPopupHint);
-        Assert.Contains("不提供注册与恢复", vm.GameBarPopupHint);
+        Assert.Contains("不提供注册或恢复", vm.GameBarHandlerStatus);
+        Assert.DoesNotContain("接管", vm.GameBarPopupHint);
     }
 
     [Fact]
@@ -251,14 +252,14 @@ public sealed class WindowsCompatibilityTests
         var vm = new MainWindowViewModel(host, store, gameBarPopupGuard: guard);
 
         Assert.Contains("不保证抑制所有弹窗", vm.GameBarPopupHint);
-        Assert.Contains("不修改系统录制设置", vm.GameBarPopupHint);
+        Assert.Contains("不修改录制设置", vm.GameBarPopupHint);
         Assert.DoesNotContain("不影响 Win+G", vm.GameBarPopupHint);
 
         vm.RegisterGameBarPopupHandlerCommand.Execute(null);
 
-        Assert.Contains("其他启动方式不主动拦截", vm.GameBarPopupHint);
-        Assert.Contains("不修改系统录制设置", vm.GameBarPopupHint);
-        Assert.Contains("仍可能弹窗", vm.GameBarPopupHint);
+        Assert.Contains("不主动拦截其他启动方式", vm.GameBarPopupHint);
+        Assert.Contains("不修改录制设置", vm.GameBarPopupHint);
+        Assert.Contains("不保证抑制所有弹窗", vm.GameBarPopupHint);
         Assert.DoesNotContain("不影响 Win+G", vm.GameBarPopupHint);
     }
 
@@ -312,9 +313,10 @@ public sealed class WindowsCompatibilityTests
         Assert.True(vm.IsGameBarControllerLaunchDisabled);
         Assert.Contains("已关闭", vm.GameBarPreferenceStatus);
         Assert.True(vm.IsGameBarPopupHandlerRegistered);
-        Assert.Contains("已为本用户注册静默处理程序", vm.GameBarHandlerStatus);
-        Assert.Contains("已为本用户注册静默处理程序", vm.GameBarPopupHint);
-        Assert.Contains("偏好也已写入并核验", vm.GameBarPopupHint);
+        Assert.Contains("已注册", vm.GameBarHandlerStatus);
+        Assert.Contains("已关闭", vm.GameBarPreferenceStatus);
+        Assert.DoesNotContain("已注册", vm.GameBarPopupHint);
+        Assert.DoesNotContain("已关闭", vm.GameBarPopupHint);
     }
 
     private static EngineHost CreateHost(out InMemoryProfileStore store)

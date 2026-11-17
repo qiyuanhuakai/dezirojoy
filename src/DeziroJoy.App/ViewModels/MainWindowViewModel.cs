@@ -1402,7 +1402,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     [RelayCommand]
-    private void OpenSettings() => IsSettingsOpen = true;
+    private void OpenSettings()
+    {
+        IsSettingsOpen = true;
+        DaemonSettings.RefreshDInputDevicesCommand.Execute(null);
+    }
 
     [RelayCommand]
     private void CloseSettings() => IsSettingsOpen = false;
@@ -1500,8 +1504,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     public bool IsGameBarPopupHandlerStale => OwnsGameBarPopupHandler && !IsGameBarPopupHandlerRegistered;
 
     public string GameBarPreferenceStatus => IsGameBarControllerLaunchDisabled
-        ? "已关闭：控制器不再经系统唤起 Game Bar。"
-        : "未关闭：连接手柄或按 Guide 时系统仍可能尝试唤起 Game Bar。";
+        ? "已关闭控制器唤起。"
+        : "未关闭控制器唤起。";
 
     public string GameBarHandlerStatus
     {
@@ -1509,54 +1513,23 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             if (IsGameBarPopupHandlerTakenOver)
             {
-                return "已被其他程序接管：协议命令已不是本应用的，本应用的注册标记与备份原样未动；请检查系统设置，或安装/修复 Xbox Game Bar。";
+                return "已被其他程序接管；为避免覆盖对方，不提供注册或恢复。";
             }
 
             if (IsGameBarPopupHandlerStale)
             {
-                return "已注册但指向旧版程序路径：请重新注册，或恢复系统默认。";
+                return "注册路径已失效，请重新注册或恢复默认。";
             }
 
             return IsGameBarPopupHandlerRegistered
-                ? "已为本用户注册静默处理程序：仅 ms-gamebar 链接由 DeziroJoy 静默处理；部分系统组件经其他上下文触发时仍可能弹窗，此时请用系统设置，或安装/修复 Xbox Game Bar。"
-                : "未注册：系统找不到 ms-gamebar 处理程序时会弹出“选择应用”对话框。注册只覆盖 ms-gamebar，不保证抑制所有弹窗。";
+                ? "已注册：ms-gamebar 链接由 DeziroJoy 静默处理。"
+                : "未注册：ms-gamebar 弹窗可能要求选择应用。";
         }
     }
 
-    public string GameBarPopupHint
-    {
-        get
-        {
-            if (!ShowGameBarPopupGuard)
-            {
-                return string.Empty;
-            }
-
-            if (IsGameBarPopupHandlerTakenOver)
-            {
-                return "ms-gamebar 处理程序已被其他程序接管：为避免破坏对方的处理程序，不提供注册与恢复，本应用的注册标记和备份保持原样。请检查系统设置，或安装/修复 Xbox Game Bar。";
-            }
-
-            if (IsGameBarPopupHandlerStale)
-            {
-                return "本应用注册的 ms-gamebar 处理程序指向已不存在的程序路径（应用可能移动或更新过），请重新注册；也可恢复系统默认。";
-            }
-
-            if (IsGameBarPopupHandlerRegistered)
-            {
-                return IsGameBarControllerLaunchDisabled
-                    ? "已为本用户注册静默处理程序：仅 ms-gamebar 链接由 DeziroJoy 静默处理（其他启动方式不主动拦截），控制器唤起偏好也已写入并核验。部分系统组件经其他上下文触发时仍可能弹窗，此时请用系统设置，或安装/修复 Xbox Game Bar。不修改系统录制设置，可随时恢复。"
-                    : "已为本用户注册静默处理程序：仅 ms-gamebar 链接由 DeziroJoy 静默处理（其他启动方式不主动拦截），控制器唤起偏好仍未关闭。部分系统组件经其他上下文触发时仍可能弹窗，此时请用系统设置，或安装/修复 Xbox Game Bar。不修改系统录制设置，可随时恢复。";
-            }
-
-            if (IsGameBarControllerLaunchDisabled)
-            {
-                return "偏好已写入并核验。若仍弹出 ms-gamebar“选择应用”对话框，可注册本应用的静默处理程序（只覆盖 ms-gamebar，不保证抑制所有弹窗）；部分系统需要重新登录。";
-            }
-
-            return "出现 ms-gamebar 弹窗时：可写入当前用户的关闭偏好（“允许控制器打开 Game Bar”）；若仍弹窗，再注册本应用的 ms-gamebar 静默处理程序（只覆盖 ms-gamebar，不保证抑制所有弹窗；Game Bar 不再经该协议打开），仅当前用户、可随时恢复。不修改系统录制设置。";
-        }
-    }
+    public string GameBarPopupHint => ShowGameBarPopupGuard
+        ? "仅当前用户生效，可恢复；仅处理 ms-gamebar 链接，不主动拦截其他启动方式，不修改录制设置，也不保证抑制所有弹窗。"
+        : string.Empty;
 
     [ObservableProperty]
     private string? _gameBarPopupError;

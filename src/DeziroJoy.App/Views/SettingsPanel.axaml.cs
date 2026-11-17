@@ -37,6 +37,7 @@ public partial class SettingsPanel : UserControl
             _subscribed = viewModel;
             viewModel.Update.OpenReleasePageRequested += OnOpenReleasePageRequested;
             viewModel.Update.RestartRequested += OnRestartRequested;
+            viewModel.DaemonSettings.DInputMappingRequested += OnDInputMappingRequested;
         }
     }
 
@@ -47,6 +48,7 @@ public partial class SettingsPanel : UserControl
             _subscribed = null;
             viewModel.Update.OpenReleasePageRequested -= OnOpenReleasePageRequested;
             viewModel.Update.RestartRequested -= OnRestartRequested;
+            viewModel.DaemonSettings.DInputMappingRequested -= OnDInputMappingRequested;
         }
     }
 
@@ -65,6 +67,17 @@ public partial class SettingsPanel : UserControl
     /// presentation host has already been asked to restart; on Linux the daemon keeps running.
     /// </summary>
     private void OnRestartRequested(object? sender, EventArgs e) => Environment.Exit(0);
+
+    private async Task<bool> OnDInputMappingRequested(DInputDeviceOption device)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner)
+        {
+            return false;
+        }
+
+        var dialog = new DInputMappingWindow(device.Device);
+        return await dialog.ShowDialog<bool>(owner);
+    }
 
     /// <summary>
     /// Hands the release page to the shell. A machine with no URL handler (a stripped-down

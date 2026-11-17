@@ -14,22 +14,19 @@
         The layout is responsive rather than a fixed design size: the zones live in one
         scroll region and the action bar is pinned below it, so a long declaration scrolls
         instead of pushing the bar out of sight, and a narrow stage reflows the cards instead
-        of overlapping them. Every card carries the same width, so a zone reads as an even
-        grid whatever the stage's shape - and the face buttons arrange as a 2x2 block, the
-        pad's own diamond, instead of four cards stretched across the stage.
+        of overlapping them. Cards size to their full, single-line labels, with a compact
+        minimum for short names - no ellipsis and no hidden suffix. The face buttons arrange
+        as a 2x2 block, the pad's own diamond, instead of four cards stretched across the stage.
     -->
     <UserControl.Resources>
         <!-- One control, one button: the card opens the control's mapping settings and
              carries the live states. Every other per-control action - hide, and for a stick
              the appearance and execution-mode switches - acts on the control the editor has
-             open, from the bar below the zones. That keeps the cards one even grid of
-             single-line buttons: no badge column to misalign them, no wrapped labels, no
-             stacked switches, and the actions stay reachable by pointer and by gamepad
-             navigation alike, which a hover-revealed badge would not be. A label longer
-             than the card ellipsises with the full text on the card's tooltip, so nothing
-             is silently clipped. -->
+             open, from the bar below the zones. Cards keep their labels on one line and grow
+             to fit the whole label; 64 is only the minimum for short names, not a ceiling. -->
         <DataTemplate x:Key="ControlCard" x:DataType="vm:GenericControlItem">
-            <Button Width="64" MinHeight="30" Margin="2" Classes="genericCard"
+            <Button MinWidth="64" MinHeight="30" Margin="2" Classes="genericCard"
+                    HorizontalAlignment="Left"
                     Classes.live="{Binding IsLive}"
                     Classes.pressed="{Binding IsPressed}"
                     Classes.capture="{Binding IsCaptureTarget}"
@@ -48,7 +45,7 @@
                               Data="M7,1 L11,1 L11,7 L17,7 L17,11 L11,11 L11,17 L7,17 L7,11 L1,11 L1,7 L7,7 Z"
                               IsVisible="{Binding IsDpadGlyph}" />
                     </Panel>
-                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"
+                    <TextBlock Text="{Binding Label}" TextWrapping="NoWrap"
                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>

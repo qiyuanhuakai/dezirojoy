@@ -89,7 +89,7 @@
                                     IsVisible="{Binding CanDisableGameBarControllerLaunch}"
                                     Command="{Binding DisableGameBarControllerLaunchCommand}" />
 
-                            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="ms-gamebar 静默处理程序（仅当前用户，可恢复）" />
+                            <TextBlock Classes="fieldLabel" Margin="0,12,0,0" Text="ms-gamebar 静默处理程序" />
                             <TextBlock x:Name="GameBarHandlerStatus" Classes="hint" Margin="0,4,0,0"
                                        TextWrapping="Wrap" Text="{Binding GameBarHandlerStatus}" />
                             <WrapPanel Margin="0,8,0,0">

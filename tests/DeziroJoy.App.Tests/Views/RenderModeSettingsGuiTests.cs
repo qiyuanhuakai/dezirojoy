@@ -91,7 +91,7 @@ public sealed class RenderModeSettingsGuiTests : IDisposable
         {
             Width = 480,
             Height = 800,
-            Content = card,
+            Content = new ScrollViewer { Content = card },
         };
         window.Show();
         window.UpdateLayout();
