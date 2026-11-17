@@ -179,6 +179,15 @@ public sealed class MainWindowViewModelSampleDispatchTests
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0, 0, 0, 0));
         await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: 1, pressed: GamepadButtonMask.A);
 
+        // The endpoint stops answering before the channel goes. The controller's retry loop
+        // would otherwise keep re-opening the closed channel - a handshake on it can still
+        // succeed, because a message pushed after the close is still delivered - and every
+        // re-open restarts the frame clock for as long as the receive loop takes to notice the
+        // channel is gone. That flapping is scheduling noise: locally each re-connected window
+        // is microseconds, under a loaded runner it is milliseconds, and the assertions below
+        // must never race one.
+        context.Endpoint.Ready = false;
+
         // The daemon goes away while the sample is still waiting for its frame. The wait is on
         // the window's own handling of the loss - the snapshot going null, which the handler
         // clears after it stops the clock - rather than on the controller's state, which flips
@@ -206,23 +215,34 @@ public sealed class MainWindowViewModelSampleDispatchTests
         await WaitForCondition(() => viewModel.DaemonSnapshot is null);
         var startsAfterDisconnect = context.Clock.StartCalls;
 
-        // The replacement daemon serves the same endpoint, so the controller's own reconnect
-        // lands on it - the same path a supervised restart takes.
+        // The replacement daemon serves the same endpoint, so the reconnect that follows lands
+        // on it - the same handshake a supervised restart's client reconnect performs. The
+        // reconnect is driven here rather than left to the controller's retry loop: that loop's
+        // one-second delay and its attempts against the still-closed channel are scheduling
+        // noise this test does not need to depend on, and the loop's own reconnect is covered
+        // by the controller's tests. The endpoint is held unready across the swap so no attempt
+        // in flight can connect on the channel that is being replaced.
+        context.Endpoint.Ready = false;
         context.Endpoint.Channel = new MainWindowViewModelDaemonTests.ServerChannel(context.Server);
         context.Server.StateChanged += context.Endpoint.Channel.Push;
         context.Server.InputSampled += context.Endpoint.Channel.Push;
+        context.Endpoint.Ready = true;
 
-        // The controller reports Connected a moment before the window's own connect handler
-        // runs - the state flips first and the event follows it - so the wait is on the clock
-        // the handler starts rather than on the state. A reconnect whose handler never
-        // restarted the clock leaves this wait timing out, which is the failure worth
-        // reporting; asserting on the state alone raced it.
+        await context.Controller.ConnectAsync(TestContext.Current.CancellationToken);
+
+        // Connected fires inside the call above and the window's handler runs on it, so the
+        // clock is restarted by the time it returns; the wait is the guard that says so, with a
+        // message naming the regression if it ever stops holding.
         await WaitForCondition(
             () => context.Clock.StartCalls >= startsAfterDisconnect + 1 && context.Clock.IsRunning,
             "the reconnected daemon's connect handler did not restart the frame clock");
 
+        // The queue depth is read before the publish, never after: the receive loop can
+        // deliver the sample before this thread's next statement runs, and a count read then
+        // would ask for one more arrival than the test ever publishes.
+        var queuedBefore = viewModel.QueuedSampleCount;
         context.DaemonHost.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.B, 0, 0, 0, 0));
-        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: viewModel.QueuedSampleCount + 1, pressed: GamepadButtonMask.B);
+        await WaitForSample(viewModel, context.Controller, "pad-1", queuedAtLeast: queuedBefore + 1, pressed: GamepadButtonMask.B);
         context.Clock.RaiseTick();
 
         Assert.True(viewModel.Visualizer.IsBPressed);
