@@ -136,12 +136,19 @@ public sealed class MainWindowGuiTests
     private static Control ModelElement(Window window, string name)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!.FindControl<Control>(name)!;
 
+    private static Viewbox ModelViewbox(Window window)
+        => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!
+            .GetVisualAncestors().OfType<Viewbox>().First();
+
     // The mapping editor and the two sensitivity panels are UserControls now, so their
     // controls live in the panels' own name scopes: reach them through the panel instance
     // rather than through the window's scope. The logical tree is walked because it holds
     // every tab's content whether or not that tab is the selected one; the selected tab's
     // panel is reachable by two logical paths (its TabItem and the TabControl's content
     // host), so the first match is the one instance.
+    //
+    // The editor and the sensitivity panels are built by lazy hosts the first time their
+    // surface opens, so a test that reaches for one opens that surface first.
     private static MappingEditorPanel EditorPanelOf(Window window)
         => window.GetLogicalDescendants().OfType<MappingEditorPanel>().First();
 
@@ -150,6 +157,14 @@ public sealed class MainWindowGuiTests
 
     private static ScrollSensitivityPanel ScrollSensitivityPanelOf(Window window)
         => window.GetLogicalDescendants().OfType<ScrollSensitivityPanel>().First();
+
+    /// <summary>Selects a tab by index, which is what builds that tab's lazily-hosted panel.</summary>
+    private static void SelectTab(Window window, int index)
+    {
+        window.FindControl<TabControl>("MainTabs")!.SelectedIndex = index;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
 
     [AvaloniaFact]
     public void Window_Opens_With_Title_And_All_Three_Zones()
@@ -184,8 +199,19 @@ public sealed class MainWindowGuiTests
     {
         var (window, viewModel, _, _) = BuildWindow();
 
+        // The editor and the sensitivity panels are lazily hosted: opening each surface is
+        // what builds its panel, and the panel is a view over the very same view models.
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.A));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
         Assert.Same(viewModel.Editor, EditorPanelOf(window).DataContext);
+
+        // Each sensitivity panel exists while its own tab is the selected one.
+        SelectTab(window, 1);
         Assert.Same(viewModel.MouseSensitivity, MouseSensitivityPanelOf(window).DataContext);
+
+        SelectTab(window, 2);
         Assert.Same(viewModel.ScrollSensitivity, ScrollSensitivityPanelOf(window).DataContext);
     }
 
@@ -501,7 +527,11 @@ public sealed class MainWindowGuiTests
     [AvaloniaFact]
     public void Editor_Buttons_Do_Not_Display_Keyboard_Shortcuts()
     {
-        var (window, _, _, _) = BuildWindow();
+        var (window, viewModel, _, _) = BuildWindow();
+
+        viewModel.OpenEditorForSource(new ButtonBinding(GamepadButton.A));
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
 
         Assert.Equal("确定", EditorPanelOf(window).FindControl<Button>("CommitButton")!.Content);
         Assert.Equal("取消", EditorPanelOf(window).FindControl<Button>("CancelButton")!.Content);
@@ -528,6 +558,7 @@ public sealed class MainWindowGuiTests
     public void MaxSpeedSlider_Updates_MouseSensitivity()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 1);
         var slider = MouseSensitivityPanelOf(window).FindControl<Slider>("MaxSpeedSlider")!;
 
         Assert.Equal(1600d, slider.Value);
@@ -543,6 +574,7 @@ public sealed class MainWindowGuiTests
     public void CurveComboBox_Updates_MouseSensitivity_Curve()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 1);
         var combo = MouseSensitivityPanelOf(window).FindControl<ComboBox>("CurveComboBox")!;
 
         Assert.Equal(ResponseCurve.Precise, combo.SelectedItem);
@@ -555,6 +587,7 @@ public sealed class MainWindowGuiTests
     public void ScrollSliders_Update_ScrollSensitivity()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 2);
 
         var scroll = ScrollSensitivityPanelOf(window);
         scroll.FindControl<Slider>("ScrollRateSlider")!.Value = 24;
@@ -572,6 +605,7 @@ public sealed class MainWindowGuiTests
     public void ScrollPreview_Bar_Grows_With_The_Live_Rate()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 2);
         var bar = ScrollSensitivityPanelOf(window).FindControl<Rectangle>("ScrollRateBar")!;
 
         Assert.Equal(0d, bar.Height);
@@ -938,6 +972,7 @@ public sealed class MainWindowGuiTests
     public void The_Mouse_Sensitivity_Panel_Explains_Every_Option()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 1);
 
         var hints = new (string Name, string Expected)[]
         {
@@ -966,6 +1001,7 @@ public sealed class MainWindowGuiTests
     public void The_Scroll_Sensitivity_Panel_Explains_Every_Option()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 2);
 
         var hints = new (string Name, string Expected)[]
         {
@@ -992,6 +1028,7 @@ public sealed class MainWindowGuiTests
     public void The_Curve_Hint_Tracks_The_Selected_Curve_In_The_Panel()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        SelectTab(window, 1);
         var hint = MouseSensitivityPanelOf(window).FindControl<TextBlock>("CurveHint")!;
 
         Assert.Equal(MappingDescriptions.MouseCurve(ResponseCurve.Precise), hint.Text);
@@ -1038,18 +1075,27 @@ public sealed class MainWindowGuiTests
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
+
+        var editor = window.FindControl<Border>("EditorPanel")!;
+        var viewbox = ModelViewbox(window);
+        var tabGrid = (Grid)editor.Parent!;
+        var restRow = tabGrid.RowDefinitions[0].Height.Value;
+        var restStage = viewbox.Bounds.Height;
+
         Click(ModelElement(window, "ButtonA"), window);
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
-        var editor = window.FindControl<Border>("EditorPanel")!;
-
-        // The card keeps the 60px the 480 -> 420 stage shrink releases (DESIGN 4.3.7): 218
-        // was, and 162 is now that the global preset strip rides above the tab surface and
-        // the editor row - the star row that absorbs slack - funds it. The stage row is
-        // untouched, so the model keeps its full DESIGN 4.6 sizing, and the body still
-        // scrolls at this height (the reachability test below pins that).
-        Assert.Equal(162d, editor.Bounds.Height);
+        // The stage row hands its height to the card for real while the editor is open, so
+        // the card gains the whole released stage - 170px of the 420 row, not only the 60px
+        // the 480 -> 420 design shrink released - and the model re-fits the smaller slot
+        // through its Viewbox instead of only rendering smaller inside a reserved slot.
+        var editingRow = tabGrid.RowDefinitions[0].Height.Value;
+        Assert.Equal(170d, restRow - editingRow, 1.0);
+        Assert.True(viewbox.Bounds.Height < restStage - 100,
+            $"the model must re-fit the smaller slot, it renders {viewbox.Bounds.Height} of {restStage}");
+        Assert.True(editor.Bounds.Height > 262d,
+            $"the card must be the tall surface, it is {editor.Bounds.Height}");
     }
 
     [AvaloniaFact]

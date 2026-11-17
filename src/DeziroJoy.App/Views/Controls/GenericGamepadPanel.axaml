@@ -11,20 +11,32 @@
         Order inside a zone is the declaration order, so a control being detected or hidden
         never re-arranges its neighbours.
 
-        The panel is sized to the stage's logical box and lives inside the stage's Viewbox,
-        so the editor's lift and zoom apply to it exactly as they do to the hand-drawn
-        model - including hit testing, which rides the same transform.
+        The layout is responsive rather than a fixed design size: the zones live in one
+        scroll region and the 更多输入 bar is pinned below it, so a long declaration
+        scrolls instead of pushing the bar out of sight, and a narrow stage wraps the cards
+        instead of overlapping them. Every card carries the same width, so a zone reads as
+        an even grid whatever the stage's shape.
     -->
     <UserControl.Resources>
-        <!-- One control: the card that opens its mapping settings, the hide affordance
-             beside it (bound controls refuse one), and - for a stick - the two independent
-             switches below it. Appearance says how the control is drawn and changes nothing
-             about mappings; the execution mode is rewritten as mappings. They are separate
-             buttons because they are separate questions. -->
+        <!-- One control: the card that opens its mapping settings and, beside it in its own
+             reserved column, the hide affordance (bound controls refuse one). The badge
+             column is the same 16px on every card whether it shows or not, so the cards stay
+             uniform and the affordance never steals the card's width or sits on top of it -
+             a fixed-width card sharing one row between the two used to overlap them. The
+             device's own label can be long ("Back / Select"), so it wraps and ellipsises
+             inside the card instead of running over its edge or its neighbour.
+             For a stick, the two independent switches sit below the card: appearance says
+             how the control is drawn and changes nothing about mappings, the execution mode
+             is rewritten as mappings. They are separate buttons because they are separate
+             questions. -->
         <DataTemplate x:Key="ControlCard" x:DataType="vm:GenericControlItem">
-            <Border Margin="2">
-                <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto">
-                    <Button Grid.Row="0" Grid.Column="0" Classes="genericCard"
+            <Border Width="80" Margin="3">
+                <Grid RowDefinitions="Auto,Auto,Auto">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" MinWidth="16" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Row="0" Grid.Column="0" Classes="genericCard" MinHeight="40"
                             Classes.live="{Binding IsLive}"
                             Classes.pressed="{Binding IsPressed}"
                             Classes.capture="{Binding IsCaptureTarget}"
@@ -42,13 +54,16 @@
                                       Data="M7,1 L11,1 L11,7 L17,7 L17,11 L11,11 L11,17 L7,17 L7,11 L1,11 L1,7 L7,7 Z"
                                       IsVisible="{Binding IsDpadGlyph}" />
                             </Panel>
-                            <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding Label}" HorizontalAlignment="Center"
+                                       TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxLines="2" />
                             <TextBlock Text="{Binding StickModeLabel}" FontSize="10" HorizontalAlignment="Center"
                                        Foreground="{DynamicResource HintTextBrush}"
                                        IsVisible="{Binding IsStick}" />
                         </StackPanel>
                     </Button>
-                    <Button Grid.Row="0" Grid.Column="1" Classes="genericMinor" VerticalAlignment="Top"
+                    <Button Grid.Row="0" Grid.Column="1" Classes="genericMinor" Padding="0"
+                            Height="18" VerticalAlignment="Top" HorizontalAlignment="Center"
+                            HorizontalContentAlignment="Center"
                             Command="{Binding HideCommand}"
                             IsVisible="{Binding CanHide}"
                             Content="×"
@@ -78,9 +93,9 @@
             <Setter Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="{DynamicResource CornerRadiusMd}" />
-            <Setter Property="Padding" Value="8,5" />
-            <Setter Property="MinWidth" Value="52" />
+            <Setter Property="Padding" Value="4,4" />
             <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <Style Selector="Button.genericCard.live">
             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
@@ -106,42 +121,80 @@
         </Style>
     </UserControl.Styles>
 
-    <Grid Width="620" Height="380" RowDefinitions="Auto,*,Auto,Auto,Auto" HorizontalAlignment="Center">
+    <Grid RowDefinitions="*,Auto">
+        <!-- The five zones in one scroll region. A long declaration scrolls; the bar below
+             it does not move, so 更多输入 is never pushed out of sight. -->
+        <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel>
+                <!-- 肩键与扳机: the top strip, in the device's declaration order. -->
+                <StackPanel Margin="0,0,0,10">
+                    <TextBlock Classes="zoneTitle" Text="肩键与扳机" />
+                    <ItemsControl ItemsSource="{Binding ShoulderItems}" ItemTemplate="{StaticResource ControlCard}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </StackPanel>
 
-        <!-- 肩键与扳机: the top strip, in the device's declaration order. -->
-        <StackPanel Grid.Row="0">
-            <TextBlock Classes="zoneTitle" Text="肩键与扳机" />
-            <ItemsControl ItemsSource="{Binding ShoulderItems}" ItemTemplate="{StaticResource ControlCard}" />
-        </StackPanel>
+                <!-- 方向 on the left, 主按钮 on the right - the two zones the hands live on.
+                     The split is proportional, so a narrow stage narrows both instead of
+                     pushing one under the other. -->
+                <Grid ColumnDefinitions="*,*" Margin="0,0,0,10">
+                    <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                        <TextBlock Classes="zoneTitle" Text="方向" />
+                        <ItemsControl ItemsSource="{Binding DirectionItems}" ItemTemplate="{StaticResource ControlCard}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                        <TextBlock Classes="zoneTitle" Text="主按钮" />
+                        <ItemsControl ItemsSource="{Binding MainButtonItems}" ItemTemplate="{StaticResource ControlCard}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </StackPanel>
+                </Grid>
 
-        <!-- 方向 on the left, 主按钮 on the right - the two zones the hands live on. -->
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,*" Margin="0,10,0,10">
-            <StackPanel Grid.Column="0" Width="210" Margin="0,0,12,0">
-                <TextBlock Classes="zoneTitle" Text="方向" />
-                <ItemsControl ItemsSource="{Binding DirectionItems}" ItemTemplate="{StaticResource ControlCard}" />
+                <!-- 功能键: back, start, guide and the stick clicks. -->
+                <StackPanel Margin="0,0,0,10">
+                    <TextBlock Classes="zoneTitle" Text="功能键" />
+                    <ItemsControl ItemsSource="{Binding FunctionItems}" ItemTemplate="{StaticResource ControlCard}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- 扩展: everything with no standard position - misc keys, paddles, the touchpad. -->
+                <StackPanel>
+                    <TextBlock Classes="zoneTitle" Text="扩展" />
+                    <ItemsControl ItemsSource="{Binding ExtensionItems}" ItemTemplate="{StaticResource ControlCard}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </StackPanel>
             </StackPanel>
-            <StackPanel Grid.Column="1">
-                <TextBlock Classes="zoneTitle" Text="主按钮" />
-                <ItemsControl ItemsSource="{Binding MainButtonItems}" ItemTemplate="{StaticResource ControlCard}" />
-            </StackPanel>
-        </Grid>
-
-        <!-- 功能键: back, start, guide and the stick clicks. -->
-        <StackPanel Grid.Row="2">
-            <TextBlock Classes="zoneTitle" Text="功能键" />
-            <ItemsControl ItemsSource="{Binding FunctionItems}" ItemTemplate="{StaticResource ControlCard}" />
-        </StackPanel>
-
-        <!-- 扩展: everything with no standard position - misc keys, paddles, the touchpad. -->
-        <StackPanel Grid.Row="3">
-            <TextBlock Classes="zoneTitle" Text="扩展" />
-            <ItemsControl ItemsSource="{Binding ExtensionItems}" ItemTemplate="{StaticResource ControlCard}" />
-        </StackPanel>
+        </ScrollViewer>
 
         <!-- The 更多输入 bar: controls the device declares but that have never been detected
              wait here, in their fixed order. 显示全部输入 promotes them onto the panel for a
-             full inspection; 恢复 brings back anything the user hid. -->
-        <Grid Grid.Row="4" ColumnDefinitions="Auto,Auto,*,Auto" Margin="0,8,0,0">
+             full inspection; 恢复 brings back anything the user hid. The bar is pinned below
+             the scroll region, so it stays reachable however long the declaration is. -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto" Margin="0,8,0,0">
             <Button Grid.Column="0" Classes="genericMinor"
                     Command="{Binding ToggleShowAllCommand}"
                     Content="{Binding ShowAllLabel}" />

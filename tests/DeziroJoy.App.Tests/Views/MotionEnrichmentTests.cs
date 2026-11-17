@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
@@ -125,7 +126,11 @@ public sealed class MotionEnrichmentTests
         window.UpdateLayout();
 
         // The profile buttons moved into the settings surface, which is its own name scope,
-        // so they are reached through the panel rather than through the window.
+        // so they are reached through the panel rather than through the window. The panel
+        // is built by its lazy host when the surface opens.
+        window.FindControl<ToggleButton>("SettingsButton")!.IsChecked = true;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
         var panel = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
         var save = panel.FindControl<Button>("SaveProfileButton")!;
         var close = window.FindControl<Button>("CloseButton")!;

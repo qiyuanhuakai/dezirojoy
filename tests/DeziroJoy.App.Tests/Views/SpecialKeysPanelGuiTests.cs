@@ -176,6 +176,13 @@ public sealed class SpecialKeysPanelGuiTests
         await viewModel.CommitEditorCommand.ExecuteAsync(null);
         window.UpdateLayout();
 
+        // The list is virtualized, so the last cards - B's and A's among them - are scrolled
+        // into view before their rows can be inspected, exactly as a user would.
+        var scroller = MappingsList(window).GetVisualAncestors().OfType<ScrollViewer>().First();
+        scroller.Offset = new Vector(0, scroller.Extent.Height);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
         var rows = MappingsList(window).GetVisualDescendants().OfType<MappingRowBorder>().ToList();
         var conflicting = rows.Where(row =>
                 row.GetVisualDescendants().OfType<TextBlock>().Any(text =>

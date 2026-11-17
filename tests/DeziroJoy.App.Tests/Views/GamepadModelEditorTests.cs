@@ -422,31 +422,35 @@ public sealed class GamepadModelEditorTests
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
-        // The editor row collapses to zero while nothing is being edited, so the comparison is
-        // only meaningful with the settings open.
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
-        Click(Model(window).FindControl<Control>("ButtonA")!, window);
-        Assert.True(viewModel.IsEditing);
 
         var model = Model(window);
         var panel = window.FindControl<Border>("EditorPanel")!;
-
-        // The model must sit above the settings panel in the mapping tab, and the settings
-        // panel must be the inline companion rather than a separate form region.
-        var modelOrigin = model.TranslatePoint(new Point(0, 0), window)!;
-        var panelOrigin = panel.TranslatePoint(new Point(0, 0), window)!;
-
-        Assert.True(modelOrigin.Value.Y < panelOrigin.Value.Y, "the model must lead the tab");
-
-        // The model must be ENLARGED. The visualizer is a fixed 320x244 grid that the Viewbox
-        // scales, so its own Bounds never change with the scale - the Viewbox's Bounds are the
-        // rendered size and the only honest measure of how big the model actually is.
         var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+
+        // The model must be ENLARGED. The visualizer is a fixed 620x380 grid that the Viewbox
+        // scales, so its own Bounds never change with the scale - the Viewbox's Bounds are the
+        // rendered slot and the only honest measure of how big the model actually is. Measured
+        // at rest: while the editor is open the stage hands its height to the card below, and
+        // the model is the smaller surface by design.
         Assert.True(viewbox.Bounds.Width > 420,
             $"the model must be enlarged, the Viewbox renders it {viewbox.Bounds.Width} wide");
         Assert.True(viewbox.Bounds.Height > 320,
             $"the model must be enlarged, the Viewbox renders it {viewbox.Bounds.Height} tall");
+
+        // The model must sit above the settings panel in the mapping tab, and the settings
+        // panel must be the inline companion rather than a separate form region. Measured
+        // with the editor open: a collapsed panel keeps its last laid-out position, so at
+        // rest the comparison would read a card that is not on the stage at all.
+        Click(Element(model, "ButtonA"), window);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var modelOrigin = model.TranslatePoint(new Point(0, 0), window)!;
+        var panelOrigin = panel.TranslatePoint(new Point(0, 0), window)!;
+
+        Assert.True(modelOrigin.Value.Y < panelOrigin.Value.Y, "the model must lead the tab");
     }
 
     [AvaloniaFact]
@@ -482,6 +486,69 @@ public sealed class GamepadModelEditorTests
     }
 
     [AvaloniaFact]
+    public void Opening_The_Editor_Shrinks_The_Stage_For_Real_And_Takes_The_Height_Back()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        ConnectPad(provider);
+        SampleHelper.Sample(viewModel, host);
+
+        var model = Model(window);
+        var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
+        var editor = window.FindControl<Border>("EditorPanel")!;
+        ModelMotion.Detach(viewbox);
+
+        // At rest the stage is the full 420 row, the editor card is collapsed to nothing,
+        // and the model's slot is what that row gives it.
+        var restStage = viewbox.Bounds.Height;
+        var restEditor = editor.Bounds.Height;
+        Assert.True(restStage > 320, $"the stage must be the tall row at rest, it is {restStage}");
+        Assert.Equal(0d, restEditor, 3);
+
+        Click(model.FindControl<Control>("ButtonA")!, window);
+        Assert.True(viewModel.IsEditing);
+
+        // The stage row itself shrinks: the height is handed to the editor card for real, not
+        // won by rendering the model smaller inside a reserved slot. The card is the surface
+        // that needs the room, so it grows by what the stage gives up.
+        var editingStage = viewbox.Bounds.Height;
+        var editingEditor = editor.Bounds.Height;
+        Assert.True(editingStage < restStage - 100,
+            $"the stage must hand its height to the card, it went {restStage} -> {editingStage}");
+        Assert.True(editingEditor > restEditor + 100,
+            $"the card must take the height, it went {restEditor} -> {editingEditor}");
+
+        // The model is not clipped by its smaller slot: the Viewbox re-fits it, so the whole
+        // pad still renders inside the stage it was given.
+        Assert.True(model.Bounds.Height > 0);
+        var modelInStage = model.TranslatePoint(new Point(0, 0), viewbox)!.Value;
+        Assert.True(modelInStage.Y >= -1, $"the model must stay inside the stage, its top is {modelInStage.Y}");
+
+        // The two surfaces never overlap: the stage's bottom is the card's top.
+        var stageBottom = viewbox.TranslatePoint(new Point(0, viewbox.Bounds.Height), window)!.Value.Y;
+        var editorTop = editor.TranslatePoint(new Point(0, 0), window)!.Value.Y;
+        Assert.True(stageBottom <= editorTop + 1,
+            $"the stage and the card must not overlap, stage ends at {stageBottom}, card starts at {editorTop}");
+
+        window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
+        Assert.False(viewModel.IsEditing);
+
+        // Closing takes the height back with nothing left behind: the card is gone and its
+        // row is collapsed again, and the stage is the full row once more.
+        Assert.False(editor.IsVisible);
+        Assert.Equal(420d, TabGrid(window).RowDefinitions[0].Height.Value, 3);
+        Assert.Equal(0d, TabGrid(window).RowDefinitions[1].Height.Value, 3);
+        Assert.Equal(restStage, viewbox.Bounds.Height, 3);
+    }
+
+    /// <summary>
+    /// The mapping tab's own grid: the one whose two rows are the stage and the editor card,
+    /// found through the card so the lookup survives the stage's internal restructuring.
+    /// </summary>
+    private static Grid TabGrid(Window window)
+        => (Grid)window.FindControl<Border>("EditorPanel")!.Parent!;
+
+    [AvaloniaFact]
     public void Opening_The_Editor_Lifts_The_Model_With_An_Animated_Transform()
     {
         // This test pins the motion itself, so it keeps the transitions attached until it
@@ -494,10 +561,8 @@ public sealed class GamepadModelEditorTests
         var model = Model(window);
         var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
 
-        // The model's motion is one group: the zoom scale and the lift share it, and each
-        // carries its own transition.
+        // The model's motion is one group, and the lift carries its own transition.
         var lift = ModelMotion.Lift(viewbox);
-        var zoom = ModelMotion.Zoom(viewbox);
 
         // The lift is animated, not an instant property flip.
         var liftTransition = Assert.Single(
@@ -505,76 +570,20 @@ public sealed class GamepadModelEditorTests
             candidate => candidate.Property == TranslateTransform.YProperty);
         Assert.InRange(liftTransition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
 
-        // The zoom is animated too, on both axes: one uniform scale, not two timings.
-        foreach (var property in new[] { ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty })
-        {
-            var zoomTransition = Assert.Single(
-                zoom.Transitions!.OfType<DoubleTransition>(),
-                candidate => candidate.Property == property);
-            Assert.InRange(zoomTransition.Duration, TimeSpan.FromMilliseconds(150), TimeSpan.FromMilliseconds(300));
-        }
-
         Assert.Equal(0d, lift.Y);
-        Assert.Equal(1d, zoom.ScaleX);
-        Assert.Equal(1d, zoom.ScaleY);
 
         // Headless runs no clock, so a transitioned property never leaves its start value
         // here. Detaching the transitions lets the bound values apply directly, which makes
         // the animation's TARGETS observable without depending on a ticking clock.
         lift.Transitions = null;
-        zoom.Transitions = null;
 
         Click(model.FindControl<Control>("ButtonA")!, window);
         Assert.True(viewModel.IsEditing);
         Assert.True(lift.Y < 0d, $"the model must lift while the editor is open, Y was {lift.Y}");
-        Assert.True(zoom.ScaleX < 1d, $"the model must shrink while the editor is open, scale was {zoom.ScaleX}");
-        Assert.Equal(zoom.ScaleX, zoom.ScaleY);
 
         window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
         Assert.False(viewModel.IsEditing);
         Assert.Equal(0d, lift.Y);
-        Assert.Equal(1d, zoom.ScaleX);
-        Assert.Equal(1d, zoom.ScaleY);
-    }
-
-    [AvaloniaFact]
-    public void Opening_The_Editor_Shrinks_The_Model_Without_Re_Laying_It_Out()
-    {
-        var (window, viewModel, host, provider) = BuildWindow();
-
-        ConnectPad(provider);
-        SampleHelper.Sample(viewModel, host);
-
-        var model = Model(window);
-        var viewbox = model.GetVisualAncestors().OfType<Viewbox>().First();
-        var zoom = ModelMotion.Zoom(viewbox);
-
-        // At rest the model is full size, and its layout slot is what the fixed 420 stage
-        // row gives it - the zoom is a render transform, so the slot never re-measures.
-        var restSize = viewbox.Bounds.Size;
-        Assert.Equal(1d, zoom.ScaleX);
-        Assert.Equal(1d, zoom.ScaleY);
-
-        Click(model.FindControl<Control>("ButtonA")!, window);
-        Assert.True(viewModel.IsEditing);
-
-        // Uniform and centred: both axes carry the same scale, and the model's own size is
-        // untouched - the stage the card shares is what the model gives back by rendering
-        // smaller, not by being laid out again. (The slot's position can shift by a
-        // rounding pixel as the stage's star row re-divides around the card; the model
-        // itself is neither re-measured nor re-scaled in layout.)
-        Assert.Equal(0.65d, zoom.ScaleX, 3);
-        Assert.Equal(zoom.ScaleX, zoom.ScaleY);
-        Assert.Equal(restSize, viewbox.Bounds.Size);
-
-        window.KeyPress(Key.Escape, RawInputModifiers.None, PhysicalKey.Escape, null);
-        Assert.False(viewModel.IsEditing);
-
-        // Closing restores the size with nothing left behind: the scale is exactly 1 again,
-        // not the residue of an animation frame headless never finished.
-        Assert.Equal(1d, zoom.ScaleX);
-        Assert.Equal(1d, zoom.ScaleY);
-        Assert.Equal(restSize, viewbox.Bounds.Size);
     }
 
     [AvaloniaFact]

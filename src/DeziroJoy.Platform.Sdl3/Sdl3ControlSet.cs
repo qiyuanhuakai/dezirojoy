@@ -87,11 +87,21 @@ internal static class Sdl3ControlSet
     }
 
     /// <summary>
-    /// The face-button glyph SDL can read, or the device-agnostic fallback when it cannot.
+    /// The face-button glyph SDL can read, or the logical position when it cannot.
+    /// <para>
     /// SDL answers <c>Unknown</c> for most third-party pads, and the roadmap is explicit that
-    /// this must become a generic "按钮 N" rather than a guess at the brand's glyphs - a
-    /// description that named an Xbox glyph on a pad that is not one would be a lie the user
-    /// pays for when they look for a button that is not there.
+    /// this must not become a guess at the brand's glyphs - a description that named an Xbox
+    /// glyph on a pad that is not one would be a lie the user pays for when they look for a
+    /// button that is not there. What it *can* fall back to is the logical position: A/B/X/Y is
+    /// the Core's own name for the four diamond positions, the same name every other surface
+    /// already uses, and the name a mapping binds to.
+    /// </para>
+    /// <para>
+    /// It must not fall back to the raw ordinal. "按钮 3" is the Extensions zone's vocabulary -
+    /// it means "the control with raw code 2" - so using it for a face key would make the same
+    /// string mean two different things and leave the user unable to tell which of the four
+    /// diamond keys it is.
+    /// </para>
     /// </summary>
     private static string LabelFor(Sdl3GamepadInfo info, SDL.GamepadButton declared, GamepadButton logical)
     {
@@ -105,11 +115,7 @@ internal static class Sdl3ControlSet
             }
         }
 
-        // No glyph to read: fall back to the generic name, counted from the raw control so the
-        // number matches what a mapping string carries.
-        return IsFaceButton(declared)
-            ? GamepadControlLabels.Generic((int)declared)
-            : GamepadControlLabels.Button(logical);
+        return GamepadControlLabels.Button(logical);
     }
 
     /// <summary>Index into <see cref="Sdl3GamepadInfo.FaceButtonLabels"/>, which is south/east/west/north.</summary>
@@ -126,10 +132,6 @@ internal static class Sdl3ControlSet
 
         return index >= 0;
     }
-
-    private static bool IsFaceButton(SDL.GamepadButton button)
-        => button is SDL.GamepadButton.South or SDL.GamepadButton.East
-            or SDL.GamepadButton.West or SDL.GamepadButton.North;
 
     private static bool HasAxis(Sdl3GamepadInfo info, SDL.GamepadAxis axis)
         => info.DeclaredAxes.Contains(Sdl3ControlNames.Key(axis), StringComparer.OrdinalIgnoreCase);

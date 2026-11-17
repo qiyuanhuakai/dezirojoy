@@ -53,6 +53,59 @@ public sealed class DaemonScreenKeyboardFeedTests
     }
 
     [Fact]
+    public async Task The_Frame_Keeps_The_Keyboards_Press_Edges_In_Order()
+    {
+        // The keyboard navigates on press edges, so the frame keeps its samples in order
+        // rather than only the last one: a baseline and a press that land inside one frame
+        // still move the cursor, exactly as they did per sample.
+        var context = await CreateFeed(clock: new FakeFrameClock());
+        using var feed = context.Feed;
+
+        context.Server.RequestScreenKeyboardToggle();
+        await WaitForCondition(() => context.Keyboard.IsOpen);
+
+        context.Host.PublishInputSample("pad-1", GamepadState.Neutral);
+        context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.DPadRight, 0f, 0f, 0f, 0f));
+        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.DPadRight);
+
+        // Nothing dispatched before the frame.
+        Assert.Equal("a", context.Keyboard.Keyboard.FocusedKey?.Label);
+
+        context.Clock!.RaiseTick();
+
+        Assert.Equal("b", context.Keyboard.Keyboard.FocusedKey?.Label);
+    }
+
+    [Fact]
+    public async Task Samples_While_The_Keyboard_Is_Closed_Are_Dropped_Rather_Than_Queued()
+    {
+        // While the keyboard is closed the feed has no consumer at all, so its samples are
+        // dropped on arrival. Queued instead, they would drain into the first frame after the
+        // open and spend presses the user made at the game behind the keyboard.
+        var context = await CreateFeed(clock: new FakeFrameClock());
+        using var feed = context.Feed;
+
+        context.Host.PublishInputSample("pad-1", GamepadState.Neutral);
+        context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.DPadRight, 0f, 0f, 0f, 0f));
+        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.DPadRight);
+        context.Clock!.RaiseTick();
+
+        context.Server.RequestScreenKeyboardToggle();
+        await WaitForCondition(() => context.Keyboard.IsOpen);
+
+        // The first sample after the open is the baseline again, and only the press that
+        // follows it navigates - the closed-window samples moved nothing. The stick value
+        // makes this second press a sample of its own, so the wait cannot be satisfied by
+        // the pair published before the keyboard opened.
+        context.Host.PublishInputSample("pad-1", GamepadState.Neutral);
+        context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.DPadRight, 0.2f, 0f, 0f, 0f));
+        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.DPadRight, leftStickX: 0.2f);
+        context.Clock!.RaiseTick();
+
+        Assert.Equal("b", context.Keyboard.Keyboard.FocusedKey?.Label);
+    }
+
+    [Fact]
     public async Task The_Key_That_Summoned_The_Keyboard_Also_Puts_It_Away()
     {
         var context = await CreateFeed();
@@ -125,7 +178,23 @@ public sealed class DaemonScreenKeyboardFeedTests
         Assert.True(condition());
     }
 
-    private static async Task<FeedContext> CreateFeed()
+    /// <summary>
+    /// Waits until the controller has taken the given sample. The controller stores the latest
+    /// sample per device before raising the event, so a match also means the feed has already
+    /// queued it.
+    /// </summary>
+    private static async Task WaitForSample(
+        DaemonController controller,
+        string deviceId,
+        GamepadButtonMask pressed,
+        float leftStickX = 0f)
+    {
+        await WaitForCondition(() => controller.InputSamples.Any(sample => sample.DeviceId == deviceId
+            && sample.PressedButtons == pressed
+            && sample.LeftStickX == leftStickX));
+    }
+
+    private static async Task<FeedContext> CreateFeed(FakeFrameClock? clock = null)
     {
         var profile = new GamepadProfile
         {
@@ -149,8 +218,8 @@ public sealed class DaemonScreenKeyboardFeedTests
         await controller.ConnectAsync(TestContext.Current.CancellationToken);
 
         var keyboard = new ScreenKeyboardViewModel();
-        var feed = new TrayHost.DaemonScreenKeyboardFeed(controller, keyboard);
-        return new FeedContext(controller, server, feed, host, profile, channel, keyboard);
+        var feed = new TrayHost.DaemonScreenKeyboardFeed(controller, keyboard, clock);
+        return new FeedContext(controller, server, feed, host, profile, channel, keyboard, clock);
     }
 
     private sealed record FeedContext(
@@ -160,7 +229,8 @@ public sealed class DaemonScreenKeyboardFeedTests
         FakeDaemonHost Host,
         GamepadProfile Profile,
         FeedServerChannel Channel,
-        ScreenKeyboardViewModel Keyboard);
+        ScreenKeyboardViewModel Keyboard,
+        FakeFrameClock? Clock);
 
     /// <summary>A ready endpoint over one in-memory channel, so no pipe is opened.</summary>
     private sealed class FeedServerEndpoint(FeedServerChannel channel) : IDaemonEndpoint

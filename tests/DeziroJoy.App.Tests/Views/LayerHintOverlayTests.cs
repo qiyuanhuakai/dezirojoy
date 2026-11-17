@@ -81,6 +81,36 @@ public sealed class LayerHintOverlayTests
     }
 
     [AvaloniaFact]
+    public void A_Released_Window_No_Longer_Answers_Its_View_Model()
+    {
+        // The presentation host builds one window per appearance and closes it when the layer
+        // lets go, keeping the view model no longer: the binding side is dropped on close, so a
+        // window that is gone cannot be asked back onto the screen. Show on a closed window
+        // throws, which is what a stale subscription would run into.
+        var hint = new LayerHintViewModel();
+        var profile = Profile();
+        var window = BuildOverlay(hint);
+        try
+        {
+            hint.Update(profile, LayerSnapshot(profile));
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(window.IsVisible);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            hint.Update(profile, LayerSnapshot(profile, layerId: 3));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.False(window.IsVisible, "a released window must not come back with its view model");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void The_Overlay_Shows_While_The_Layer_Is_Active_And_Hides_On_Release()
     {
         var hint = new LayerHintViewModel();

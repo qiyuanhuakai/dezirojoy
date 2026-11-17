@@ -119,15 +119,15 @@ public sealed class Sdl3ControlSetTests
     }
 
     [Fact]
-    public void The_Face_Buttons_Fall_Back_To_A_Generic_Number_When_Sdl_Cannot_Read_A_Glyph()
+    public void The_Face_Buttons_Fall_Back_To_The_Logical_Position_When_Sdl_Cannot_Read_A_Glyph()
     {
-        // SDL answers "Unknown" for most third-party pads. The roadmap forbids guessing the
-        // brand's glyphs, so the control is named by its own ordinal instead - and the number
-        // is the one a mapping string carries plus one.
+        // SDL answers "Unknown" for most third-party pads. Guessing the brand's glyphs is
+        // forbidden, but the Core's own name for the position is not a guess - and it is what
+        // every other surface already shows and what a mapping binds to.
         var controls = Build(Info(faceButtonLabels: ["Unknown", "Unknown", "Unknown", "Unknown"]));
 
         Assert.Equal(
-            ["按钮 1", "按钮 2", "按钮 3", "按钮 4"],
+            ["A", "B", "X", "Y"],
             controls.Where(control => control.Zone == GamepadControlZone.MainButtons)
                 .Select(control => control.Label));
     }
@@ -138,9 +138,22 @@ public sealed class Sdl3ControlSetTests
         var controls = Build(Info(faceButtonLabels: []));
 
         Assert.Equal(
-            ["按钮 1", "按钮 2", "按钮 3", "按钮 4"],
+            ["A", "B", "X", "Y"],
             controls.Where(control => control.Zone == GamepadControlZone.MainButtons)
                 .Select(control => control.Label));
+    }
+
+    [Fact]
+    public void A_Face_Button_Never_Falls_Back_To_The_Extras_Zones_Ordinal_Vocabulary()
+    {
+        // "按钮 N" is the Extensions zone's vocabulary: it names a raw code. Reusing it for a
+        // face key would make one string mean two things and leave the user unable to tell which
+        // of the four diamond keys it is.
+        var controls = Build(Info(faceButtonLabels: ["Unknown", "Unknown", "Unknown", "Unknown"]));
+
+        Assert.DoesNotContain(
+            controls.Where(control => control.Zone == GamepadControlZone.MainButtons),
+            control => control.Label.StartsWith("按钮", StringComparison.Ordinal));
     }
 
     [Fact]

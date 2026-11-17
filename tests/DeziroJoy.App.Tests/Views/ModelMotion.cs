@@ -1,26 +1,21 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
-using Avalonia.VisualTree;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.Views;
 
 /// <summary>
-/// The mapping model's motion: the zoom and the lift share one render-transform group on
-/// the model's Viewbox. Tests that need the settled end values - or that assert the motion
-/// itself - reach the children through here, so no test has to care that the two motions
-/// compose in a group rather than a bare transform.
+/// The model stage's motion, and the settling a test needs before it presses the model.
+/// The lift is the only motion left: the shrink itself is the stage row's real height
+/// handover to the editor card, which the surface inside re-fits through its own layout -
+/// a Viewbox for the model, a scroll region for the generic panel - rather than through a
+/// render scale.
 /// </summary>
 internal static class ModelMotion
 {
     /// <summary>The lift out of the model's motion group.</summary>
     public static TranslateTransform Lift(Viewbox viewbox)
         => Group(viewbox).Children.OfType<TranslateTransform>().Single();
-
-    /// <summary>The zoom out of the model's motion group.</summary>
-    public static ScaleTransform Zoom(Viewbox viewbox)
-        => Group(viewbox).Children.OfType<ScaleTransform>().Single();
 
     /// <summary>
     /// Detaches every transition the model's motion carries. Headless runs no clock, so a
@@ -34,9 +29,6 @@ internal static class ModelMotion
         {
             switch (child)
             {
-                case ScaleTransform zoom:
-                    zoom.Transitions = null;
-                    break;
                 case TranslateTransform lift:
                     lift.Transitions = null;
                     break;

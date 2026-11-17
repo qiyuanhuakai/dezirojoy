@@ -45,13 +45,27 @@ public sealed class SensitivityPanelGuiTests
     }
 
     // The panels are UserControls with their own name scopes, so their controls are
-    // reached through the panel instance in the logical tree, which holds every tab's
-    // content whether or not that tab is the selected one.
+    // reached through the panel instance in the logical tree. The panels are built by lazy
+    // hosts the first time their tab is selected, so the lookup selects the tab first -
+    // exactly what a user does before reaching a control inside it.
     private static MouseSensitivityPanel MouseSensitivityPanelOf(Window window)
-        => window.GetLogicalDescendants().OfType<MouseSensitivityPanel>().First();
+    {
+        SelectTab(window, 1);
+        return window.GetLogicalDescendants().OfType<MouseSensitivityPanel>().First();
+    }
 
     private static ScrollSensitivityPanel ScrollSensitivityPanelOf(Window window)
-        => window.GetLogicalDescendants().OfType<ScrollSensitivityPanel>().First();
+    {
+        SelectTab(window, 2);
+        return window.GetLogicalDescendants().OfType<ScrollSensitivityPanel>().First();
+    }
+
+    private static void SelectTab(Window window, int index)
+    {
+        window.FindControl<TabControl>("MainTabs")!.SelectedIndex = index;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
 
     [AvaloniaFact]
     public void PrecisionMode_Is_A_Readonly_Report_That_Follows_The_Mapping()

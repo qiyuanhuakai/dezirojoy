@@ -77,6 +77,9 @@ C# + .NET 10 + Avalonia 构建。参考 AntiMicroX 的核心映射模型，提�
 ### 界面与常驻
 
 - 手柄模型即编辑器：点击模型上的键就地配置，实时高亮；浅色 / 深色主题。
+- SDL3 设备使用数据驱动的通用控件面板（固定分区、按输入定位、显示策略），不按型号绘图。
+- 实验性「界面渲染（仅 Windows）」：可强制 GUI 仅用 CPU 软件渲染（默认按平台检测；
+  见设置页）。daemon 失联时可在设置页（daemon 模式）「重新连接守护」。
 - 按需 GUI + 常驻呈现宿主：关窗 / 最小化即完全退出 GUI，托盘与浮层继续；GUI 显示时无托盘图标；daemon 是唯一注入权威。
 
 ## 平台支持
@@ -139,10 +142,10 @@ Linux 实验性说明：
 > **升级提示**：`0.0.2-beta.3` 及更早版本的应用内自动更新存在缺陷，从这些版本升级请
 > 到发布页**手动下载**安装 `0.0.2-beta.4` 或更新版本；自 beta.4 起自动更新恢复正常。
 
-> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.3`
+> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.4`
 > 是 SDL3 统一输入后端的实验性 alpha——默认后端不变、未经完整真机验收；不想升级 alpha 的
 > 用户请关闭设置页的自动检查／自动下载，或到发布页手动选择版本。发布说明见
-> [docs/RELEASE-0.0.5-alpha.3.md](docs/RELEASE-0.0.5-alpha.3.md)。
+> [docs/RELEASE-0.0.5-alpha.4.md](docs/RELEASE-0.0.5-alpha.4.md)。
 
 ### Windows
 
@@ -294,6 +297,7 @@ tests/
 - [docs/RELEASE-0.0.5-alpha.1.md](docs/RELEASE-0.0.5-alpha.1.md) — 0.0.5-alpha.1 发布说明。
 - [docs/RELEASE-0.0.5-alpha.2.md](docs/RELEASE-0.0.5-alpha.2.md) — 0.0.5-alpha.2 发布说明。
 - [docs/RELEASE-0.0.5-alpha.3.md](docs/RELEASE-0.0.5-alpha.3.md) — 0.0.5-alpha.3 发布说明。
+- [docs/RELEASE-0.0.5-alpha.4.md](docs/RELEASE-0.0.5-alpha.4.md) — 0.0.5-alpha.4 发布说明。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。

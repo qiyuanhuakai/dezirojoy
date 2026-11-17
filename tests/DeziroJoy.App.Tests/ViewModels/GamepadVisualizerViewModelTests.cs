@@ -1,5 +1,6 @@
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Core.Input;
+using DeziroJoy.Core.Mapping;
 using Xunit;
 
 namespace DeziroJoy.App.Tests.ViewModels;
@@ -301,5 +302,60 @@ public class GamepadVisualizerViewModelTests
 
         Assert.Null(vm.ButtonCount);
         Assert.Equal("按键数未知", vm.ButtonCountText);
+    }
+
+    [Fact]
+    public void The_Face_Buttons_Carry_The_Glyphs_The_Device_Declares()
+    {
+        var vm = new GamepadVisualizerViewModel();
+        var descriptor = new GamepadDescriptor("pad-1", "Nintendo Controller")
+        {
+            Controls =
+            [
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.Y), "X", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.X), "Y", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.B), "A", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.A), "B", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+            ],
+        };
+
+        vm.SetDevice(descriptor);
+
+        // The drawing keeps its fixed positions - the north cap is still logical Y - and the
+        // device's own glyphs relabel it, so a pad whose physical X sits north reads "X".
+        Assert.Equal("X", vm.ButtonYLabel);
+        Assert.Equal("Y", vm.ButtonXLabel);
+        Assert.Equal("A", vm.ButtonBLabel);
+        Assert.Equal("B", vm.ButtonALabel);
+    }
+
+    [Fact]
+    public void A_Device_That_Describes_Nothing_Keeps_The_Logical_Names()
+    {
+        var vm = new GamepadVisualizerViewModel();
+        vm.SetDevice(new GamepadDescriptor("pad-1", "Legacy Controller") { ButtonCount = 14 });
+
+        Assert.Equal("A", vm.ButtonALabel);
+        Assert.Equal("B", vm.ButtonBLabel);
+        Assert.Equal("X", vm.ButtonXLabel);
+        Assert.Equal("Y", vm.ButtonYLabel);
+    }
+
+    [Fact]
+    public void Disconnect_Puts_The_Logical_Names_Back_On_The_Face_Buttons()
+    {
+        var vm = new GamepadVisualizerViewModel();
+        vm.SetDevice(new GamepadDescriptor("pad-1", "Nintendo Controller")
+        {
+            Controls =
+            [
+                new GamepadControlDescriptor(new ButtonBinding(GamepadButton.Y), "X", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+            ],
+        });
+
+        vm.SetConnected(false);
+
+        // The glyphs describe a device, so they cannot outlive the connection either.
+        Assert.Equal("Y", vm.ButtonYLabel);
     }
 }

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.Core.Input;
@@ -67,6 +68,13 @@ public enum PresetStripAction
 /// Main window orchestration: connection state, profile editing, mapping table and
 /// the sensitivity panels. Avalonia-free so the whole flow is unit-testable; the view
 /// only marshals host events onto the UI thread and calls <see cref="ApplySample"/>.
+/// <para>
+/// The daemon's input samples are the one stream that arrives faster than the display
+/// refreshes, so they do not follow that shape: the receive loop keeps the latest sample
+/// per device and a 16 ms frame clock (<see cref="IUiFrameClock"/>) drains it once per UI
+/// frame, while the sensitivity panels' real-input calibration - the one consumer that
+/// needs the complete stream - is fed every sample on its own path.
+/// </para>
 /// </summary>
 public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 {
@@ -75,6 +83,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private readonly DaemonController? _daemon;
 
     private readonly bool _daemonRequired;
+
+    /// <summary>
+    /// The supervised restart the reconnect button falls back to when a client reconnect
+    /// cannot reach the daemon. Production wires it to the render process's supervisor;
+    /// a test wires it to a recorder, which is what makes the button's recovery testable
+    /// without a real daemon process.
+    /// </summary>
+    private readonly Func<Task<DaemonRecoveryReport>>? _recoverDaemon;
+
+    /// <summary>True while a supervised restart is running, so a second click waits instead of doubling it.</summary>
+    private int _recoveryRunning;
 
     private readonly ThemeService? _settings;
 
@@ -145,6 +164,33 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     private string? _daemonInputDeviceId;
 
     /// <summary>
+    /// The frame clock the coalesced daemon-sample dispatch rides, or null when none was wired -
+    /// which is what every unit test drives, and what makes a sample apply inline exactly as
+    /// the event always did. Production hands the window a 16 ms DispatcherTimer; the view
+    /// model owns it and disposes it with itself.
+    /// </summary>
+    private readonly IUiFrameClock? _sampleFrameClock;
+
+    /// <summary>
+    /// Guards the coalesced sample state: the daemon's receive loop writes it, the frame
+    /// clock's tick drains it. The clock itself is only ever started and stopped on the UI
+    /// thread, so a drain never races a start or a stop.
+    /// </summary>
+    private readonly object _sampleGate = new();
+
+    /// <summary>
+    /// The latest sample per device waiting for the next frame, each tagged with the order it
+    /// arrived in. One entry per device - a device that sampled ten times inside one frame
+    /// costs one dispatch, and a second pad's sample never overwrites the first pad's - and
+    /// the arrival order is what keeps "the device that sampled most recently" true across a
+    /// flush, which is what the panel's device scope reads.
+    /// </summary>
+    private readonly Dictionary<string, (long Order, InputSampleMessage Sample)> _pendingSamples = new(StringComparer.Ordinal);
+
+    /// <summary>Arrival counter for <see cref="_pendingSamples"/>; only ever moved under <see cref="_sampleGate"/>.</summary>
+    private long _sampleOrder;
+
+    /// <summary>
     /// What the daemon's profile body could not be read for, or null when it parsed whole.
     /// Kept so the notice survives the next accepted mutation, which clears the transfer
     /// message: the damaged body is still what the daemon is serving until the user commits
@@ -176,11 +222,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         IGameBarPopupGuard? gameBarPopupGuard = null,
         IForegroundRuleStore? foregroundRuleStore = null,
         ISchemeImportRecoveryStore? schemeImportRecoveryStore = null,
-        Func<Task<bool>>? restartDaemon = null)
+        Func<Task<bool>>? restartDaemon = null,
+        Func<Task<DaemonRecoveryReport>>? recoverDaemon = null,
+        IUiFrameClock? sampleFrameClock = null)
     {
         _host = host;
         _daemon = daemon;
         _daemonRequired = daemonRequired || daemon is not null;
+        _recoverDaemon = recoverDaemon;
+        _sampleFrameClock = sampleFrameClock;
         _settings = settings;
         _uiContext = SynchronizationContext.Current;
         _profileStore = profileStore;
@@ -273,6 +323,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             foreach (var sample in _daemon.InputSamples)
             {
                 OnDaemonInputSample(sample);
+            }
+
+            if (_sampleFrameClock is not null)
+            {
+                // The clock runs for as long as this connection can deliver samples. The
+                // window is usually built before the daemon answers - production connects
+                // right after construction - so starting here covers a controller that was
+                // already connected when this window was built, and OnDaemonConnected covers
+                // the one that answers later; both are idempotent.
+                _sampleFrameClock.Tick += FlushCoalescedSamples;
+                StartSampleClock();
             }
         }
 
@@ -2809,10 +2870,9 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         UpdateGenericPanel(args.State, args.Runtime.Descriptor.DeviceId);
 
         // The sensitivity panels' real-input calibration reads the same samples the visualizer
-        // does: latest sample wins between preview ticks, and a panel that is not calibrating
-        // costs one field copy.
-        MouseSensitivity.ApplySample(args.State);
-        ScrollSensitivity.ApplySample(args.State);
+        // does; a panel showing the scripted sweep has no consumer for them, so only a
+        // calibrating panel is fed.
+        FeedCalibration(args.State);
     }
 
     /// <summary>
@@ -2836,18 +2896,87 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         // The presence poll is a sample like any other, so the calibration sees the pad while
         // the mapping loop is off exactly as it does while it runs.
-        MouseSensitivity.ApplySample(args.State);
-        ScrollSensitivity.ApplySample(args.State);
+        FeedCalibration(args.State);
     }
 
-    private void OnDaemonInputSample(InputSampleMessage sample)
+    /// <summary>
+    /// Feeds the two sensitivity panels' real-input calibration from one sample - the mouse
+    /// panel the right stick, the scroll panel the left - exactly the way the visualizer is
+    /// fed. The feed is gated on a panel actually calibrating: the readouts and the drift
+    /// distribution are the only consumers, both of them live only while the panel is in
+    /// real-input mode, so a panel showing the scripted sweep is not fed at all.
+    /// </summary>
+    private void FeedCalibration(IGamepadState state)
     {
-        if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+        if (!MouseSensitivity.IsRealInputMode && !ScrollSensitivity.IsRealInputMode)
         {
-            _uiContext.Post(_ => OnDaemonInputSample(sample), null);
             return;
         }
 
+        MouseSensitivity.ApplySample(state);
+        ScrollSensitivity.ApplySample(state);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the UI thread, or inline when this view model was
+    /// built without one - the shape every daemon event handler already uses.
+    /// </summary>
+    private void RunOnUiThread(Action action)
+    {
+        if (_uiContext is not null && !ReferenceEquals(SynchronizationContext.Current, _uiContext))
+        {
+            _uiContext.Post(_ => action(), null);
+            return;
+        }
+
+        action();
+    }
+
+    /// <summary>
+    /// The daemon's receive loop delivers every input sample here, on its own thread. The
+    /// display path keeps only the latest sample per device and lets the frame clock drain it
+    /// once per UI frame, so a stream that outruns the refresh costs one dispatch per frame
+    /// instead of one queued post per sample.
+    /// <para>
+    /// The calibration is the one consumer that needs the complete stream - the panels'
+    /// real-input readouts are built from every sample, not from the frame's last one - so
+    /// while a panel is calibrating each sample is marshalled across on its own, exactly as it
+    /// always was. The flag is a UI-thread property read from the receive loop; a stale read
+    /// costs one sample at the moment of the switch, and the readouts are latest-wins, so the
+    /// next sample carries the current value anyway.
+    /// </para>
+    /// </summary>
+    private void OnDaemonInputSample(InputSampleMessage sample)
+    {
+        if (_sampleFrameClock is null)
+        {
+            // No frame clock wired - a test, or a window built without one: the sample is
+            // applied inline, display and calibration together, exactly as the event always
+            // did.
+            ApplyDaemonSample(sample);
+            return;
+        }
+
+        if (MouseSensitivity.IsRealInputMode || ScrollSensitivity.IsRealInputMode)
+        {
+            var state = sample.ToGamepadState();
+            RunOnUiThread(() => FeedCalibration(state));
+        }
+
+        lock (_sampleGate)
+        {
+            _pendingSamples[sample.DeviceId] = (++_sampleOrder, sample);
+        }
+    }
+
+    /// <summary>
+    /// Applies one daemon sample to the display surfaces: navigation and capture first, the
+    /// visualizer and the generic panel second, the calibration last - the order the event
+    /// always ran in. The device check drops a sample for a device the snapshot no longer
+    /// lists, which is how a pad that just unplugged stops lighting the model.
+    /// </summary>
+    private void ApplyDaemonSample(InputSampleMessage sample)
+    {
         if (DaemonSnapshot is { } snapshot
             && !snapshot.Devices.Any(device => device.DeviceId == sample.DeviceId))
         {
@@ -2872,8 +3001,61 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
 
         // The daemon's samples are the only input a render process sees, so the sensitivity
         // panels' real-input calibration is fed from here exactly as from the host's samples.
-        MouseSensitivity.ApplySample(state);
-        ScrollSensitivity.ApplySample(state);
+        FeedCalibration(state);
+    }
+
+    /// <summary>
+    /// The frame clock's tick, on the UI thread: drains everything the receive loop queued
+    /// since the last frame and applies it in arrival order. One dispatch per frame, however
+    /// many samples landed inside it - and the samples a frame coalesced away were never
+    /// displayed states, only intermediate ones the latest already stands for.
+    /// </summary>
+    private void FlushCoalescedSamples()
+    {
+        List<InputSampleMessage> batch;
+        lock (_sampleGate)
+        {
+            if (_pendingSamples.Count == 0)
+            {
+                return;
+            }
+
+            batch = _pendingSamples.Values
+                .OrderBy(entry => entry.Order)
+                .Select(entry => entry.Sample)
+                .ToList();
+            _pendingSamples.Clear();
+        }
+
+        foreach (var sample in batch)
+        {
+            ApplyDaemonSample(sample);
+        }
+    }
+
+    /// <summary>
+    /// Starts the frame clock the coalesced dispatch rides. Called on the UI thread - the
+    /// construction thread in production, the daemon's connect handler otherwise - and
+    /// idempotent, so a reconnect restarts a clock a disconnect stopped.
+    /// </summary>
+    private void StartSampleClock() => _sampleFrameClock?.StartTicking();
+
+    /// <summary>
+    /// Stops the clock and drops whatever the last frames never dispatched: the samples belong
+    /// to a connection that is gone, and a window that lost the daemon shows no pad at all.
+    /// </summary>
+    private void StopSampleClock()
+    {
+        if (_sampleFrameClock is null)
+        {
+            return;
+        }
+
+        lock (_sampleGate)
+        {
+            _pendingSamples.Clear();
+            _sampleFrameClock.StopTicking();
+        }
     }
 
     /// <summary>Selects an element without opening the editor or changing the input lease.</summary>
@@ -3571,6 +3753,12 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ActiveController = runtime;
         ActiveProfile = runtime.Profile;
         HasController = true;
+
+        // The hand-drawn model reads no description of its own, so the device's glyphs are
+        // handed to it here: a Nintendo pad labels its face buttons its own way, while the
+        // mapping still binds the logical position - the display follows the device, the
+        // profile does not.
+        Visualizer.SetDevice(runtime.Descriptor);
         RefreshStatus();
 
         ReloadSensitivityPanels();
@@ -3710,6 +3898,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // The supervisor's recovery ends the daemon that stopped answering by identity,
+        // and the identity is the PID this snapshot names for the injector. Recording it
+        // here - at the moment the daemon was seen alive - is what lets the recovery
+        // confirm a PID before ending it, and what keeps a recycled one from being
+        // mistaken for the daemon. No supervisor in play (a test's view model) is a
+        // no-op, not a failure.
+        if (snapshot.InjectorPid > 0)
+        {
+            DesktopLauncher.Daemon?.RecordDaemonPid(snapshot.InjectorPid);
+        }
+
         DaemonSnapshot = snapshot;
         IsEngineRunning = snapshot.Running;
         IsMappingEnabled = snapshot.MappingEnabled;
@@ -3752,6 +3951,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         Visualizer.SetConnected(snapshot.HasController);
+
+        // A render process never sees the pad, so the snapshot's device is the model's only
+        // channel to the device's own glyphs - the same description the generic panel shows.
+        Visualizer.SetDevice(snapshot.HasController ? DaemonDescriptor() : null);
         RefreshStatus(wasConnected && !snapshot.HasController);
 
         // The floating screen keyboard follows the flag the daemon owns: the engine's
@@ -3856,6 +4059,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // The clock stopped when the last connection went; a reconnected daemon delivers
+        // samples again, so it runs again. Idempotent, so a connect that lands while it
+        // already runs changes nothing.
+        StartSampleClock();
+
         if (_daemon?.Snapshot is { } snapshot)
         {
             OnDaemonSnapshot(snapshot);
@@ -3873,6 +4081,11 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _uiContext.Post(_ => OnDaemonDisconnected(), null);
             return;
         }
+
+        // Stop dispatching before the state below is torn down: the samples still queued
+        // belong to the connection that just went, and a frame that ran after this would
+        // paint a pad the daemon no longer reports.
+        StopSampleClock();
 
         DaemonSnapshot = null;
         _daemonInputDeviceId = null;
@@ -3905,6 +4118,15 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         RefreshStatus();
     }
 
+    /// <summary>
+    /// How long the reconnect button waits for an already-connected daemon to answer one
+    /// state read before treating it as lost. The controller's own request timeout is ten
+    /// seconds - a budget sized for a slow mutation, not for a button press - so the
+    /// liveness read carries its own, and the supervised restart is what follows a daemon
+    /// that does not answer inside it.
+    /// </summary>
+    private static readonly TimeSpan DaemonLivenessProbeTimeout = TimeSpan.FromSeconds(3);
+
     [RelayCommand]
     private async Task ReconnectDaemon()
     {
@@ -3913,24 +4135,189 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
+        // Phase 1 - the plain client reconnect, for a daemon that is merely not
+        // connected: still opening its pipe after a start, or a connection the last
+        // window close dropped. It costs the resident daemon nothing.
+        string? clientFailure = null;
+        if (_daemon.State != DaemonConnectionState.Connected)
+        {
+            try
+            {
+                await _daemon.ConnectAsync(_lifetime.Token);
+                await AdoptReconnectedDaemon();
+                return;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                // The daemon did not answer: the supervised restart below is the only
+                // thing that can bring it back.
+                clientFailure = exception.Message;
+            }
+        }
+        else
+        {
+            // Already connected: prove the daemon answers before calling it healthy. A
+            // daemon whose pipe still accepts connects but whose requests never
+            // complete reads as connected here, and that is exactly the state a
+            // reconnect button used to do nothing about.
+            using var liveness = new CancellationTokenSource(DaemonLivenessProbeTimeout);
+            try
+            {
+                await _daemon.GetStateAsync(liveness.Token);
+                RefreshStatus();
+                return;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
+            {
+                // Unresponsive: fall through to the supervised restart.
+                clientFailure = exception.Message;
+            }
+        }
+
+        // Phase 2 - the supervised restart. A client reconnect cannot bring back a
+        // daemon that stopped answering: the process holding the mapping pipe, the
+        // injection mutex and the instance slot is still resident, so only the
+        // supervisor can end that exact daemon - the owned child, the systemd unit's,
+        // the planned task's - and start its replacement. That is what this button has
+        // to mean, and the phases below are what it reports.
+        if (_recoverDaemon is null)
+        {
+            ReportDaemonUnavailable(clientFailure is { } reason
+                ? $"客户端重连失败（{reason}），且没有可用的监督重启入口"
+                : "没有可用的守护进程监督重启入口");
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _recoveryRunning, 1, 0) != 0)
+        {
+            // One supervised restart at a time: a second click while the first is
+            // ending and replacing the daemon would race it for the same slot.
+            return;
+        }
+
         try
         {
-            await _daemon.ConnectAsync(_lifetime.Token);
-            if (_daemon.Snapshot is { } snapshot)
+            TransferMessage = "正在安全重启失联的守护进程…";
+            IsTransferError = false;
+
+            var report = await _recoverDaemon();
+
+            if (!report.Recovered)
             {
-                OnDaemonSnapshot(snapshot);
+                SetTransferError(DescribeRecoveryFailure(report));
+                RefreshStatus();
+                return;
             }
 
-            TransferMessage = string.Empty;
-            IsTransferError = false;
-            await SetEditorInjectionSuspended(GamepadNavigationEnabled && IsPhysicalInputInScope);
+            // The replacement daemon is up: connect this client to it. The daemon this
+            // controller held was just ended, so its pipe has broken and the receive
+            // loop is on its way to Disconnected - waiting for that, bounded, is what
+            // makes the reconnect below re-handshake against the replacement instead
+            // of adopting the last snapshot the dead daemon served.
+            if (_daemon.State == DaemonConnectionState.Connected)
+            {
+                var broken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnBroken() => broken.TrySetResult();
+                _daemon.Disconnected += OnBroken;
+                try
+                {
+                    await broken.Task.WaitAsync(TimeSpan.FromSeconds(2), _lifetime.Token);
+                }
+                catch (TimeoutException)
+                {
+                    // The pipe never broke: the daemon this controller held was not the
+                    // one the recovery ended, and the reconnect below runs against
+                    // whatever answers.
+                }
+                finally
+                {
+                    _daemon.Disconnected -= OnBroken;
+                }
+            }
 
+            // The controller's own reconnect loop is spinning against the same pipe, so
+            // an attempt can land mid-flight, and a daemon that is still opening its pipe
+            // answers the supervisor's probe a moment before it serves a handshake: both
+            // are retries, not failures - and none of them may erase the phases of a
+            // restart that did happen.
+            var connected = false;
+            Exception? lastConnectFailure = null;
+            for (var attempt = 1; attempt <= 5 && !connected; attempt++)
+            {
+                try
+                {
+                    await _daemon.ConnectAsync(_lifetime.Token);
+                    connected = true;
+                }
+                catch (Exception exception) when (exception
+                    is InvalidOperationException or DaemonUnavailableException or DaemonHandshakeException
+                        or DaemonDisconnectedException or IOException or TimeoutException or ObjectDisposedException)
+                {
+                    lastConnectFailure = exception;
+                    if (attempt < 5)
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(250), _lifetime.Token);
+                    }
+                }
+            }
+
+            if (!connected)
+            {
+                // The daemon was replaced but this client could not re-handshake. The
+                // phases are what happened and they stay on the line: a report that
+                // names only the reconnect failure erases the restart that succeeded.
+                SetTransferError(
+                    $"守护进程已重启，但重新连接失败：{lastConnectFailure?.Message ?? "原因未知"}"
+                    + $"（{string.Join("；", report.Phases)}）");
+                RefreshStatus();
+                return;
+            }
+
+            await AdoptReconnectedDaemon();
+            TransferMessage = report.Phases.Count > 0
+                ? $"守护进程已重启并恢复连接：{string.Join("；", report.Phases)}。"
+                : "守护进程已重启并恢复连接。";
+            IsTransferError = false;
             RefreshStatus();
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !_lifetime.IsCancellationRequested)
         {
             ReportDaemonUnavailable(exception.Message);
         }
+        finally
+        {
+            Volatile.Write(ref _recoveryRunning, 0);
+        }
+    }
+
+    /// <summary>
+    /// Adopts whatever the reconnected daemon is serving: its snapshot, the cleared
+    /// transfer error and this connection's editor lease. Shared by the client
+    /// reconnect and the post-restart reconnect so the two land in exactly the same
+    /// state.
+    /// </summary>
+    private async Task AdoptReconnectedDaemon()
+    {
+        if (_daemon?.Snapshot is { } snapshot)
+        {
+            OnDaemonSnapshot(snapshot);
+        }
+
+        TransferMessage = string.Empty;
+        IsTransferError = false;
+        await SetEditorInjectionSuspended(GamepadNavigationEnabled && IsPhysicalInputInScope);
+
+        RefreshStatus();
+    }
+
+    /// <summary>
+    /// The reconnect button's failure line: the phases the supervised restart got
+    /// through, then the reason it stopped. A recovery that reports neither is not one.
+    /// </summary>
+    private static string DescribeRecoveryFailure(DaemonRecoveryReport report)
+    {
+        var phases = report.Phases.Count > 0 ? $"{string.Join("；", report.Phases)}；" : string.Empty;
+        return $"守护进程重启失败：{phases}{report.Failure ?? "原因未知"}";
     }
 
     private void ReportMutationFailure(MutationResult result, string operation)
@@ -3991,6 +4378,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
             _daemon.Disconnected -= OnDaemonDisconnected;
         }
 
+        // The events are gone, so nothing can queue another sample: the clock stops here and
+        // whatever the last frames never dispatched is dropped with it.
+        StopSampleClock();
+
         await _lifetime.CancelAsync();
         if (_daemon is not null)
         {
@@ -4014,6 +4405,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         }
 
         Editor.PropertyChanged -= OnEditorPropertyChanged;
+
+        // The frame clock is unsubscribed before the daemon connection goes, so a tick that
+        // races the shutdown finds no pending work rather than a half-torn-down window; the
+        // clock itself is the window's to release.
+        if (_sampleFrameClock is not null)
+        {
+            _sampleFrameClock.Tick -= FlushCoalescedSamples;
+        }
 
         // Released before the daemon connection goes, so a pause a foreground rule left behind
         // is lifted while the engine that holds it is still reachable - and with it the platform
@@ -4041,6 +4440,10 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         {
             Update.Orchestrator.Dispose();
         }
+
+        // DisconnectDaemonAsync above already stopped the clock and dropped the queue; this
+        // releases the timer itself, which nothing else owns.
+        _sampleFrameClock?.Dispose();
 
         GC.SuppressFinalize(this);
     }
@@ -4388,6 +4791,17 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         StickBinding stick => GamepadControlLabels.Stick(stick.Stick),
         _ => source.ToString() ?? "未知输入",
     };
+
+    /// <summary>
+    /// The scoped daemon device as a descriptor, so the surfaces that want a device rather
+    /// than a snapshot entry - the hand-drawn model's labels - can read one. Null when the
+    /// snapshot names no device, which is the same "no device" answer a null descriptor
+    /// carries everywhere else.
+    /// </summary>
+    private GamepadDescriptor? DaemonDescriptor()
+        => CurrentDaemonDevice() is { } device
+            ? new GamepadDescriptor(device.DeviceId, device.Name) { Controls = device.Controls ?? [] }
+            : null;
 
     /// <summary>
     /// The daemon snapshot's device the window is currently scoped to: the one the profile

@@ -78,6 +78,34 @@ public sealed class DaemonLayerHintFeedTests
     }
 
     [Fact]
+    public async Task A_Frames_Worth_Of_Samples_Dispatches_Once_To_The_Tray_Pad_Diagram()
+    {
+        // The tray is resident and the daemon's samples outrun its refresh, so the feed keeps
+        // the sample that arrived last - the diagram is one pad's picture - and lets the frame
+        // clock post one update for the whole frame instead of one per sample.
+        var context = await CreateFeed(clock: new FakeFrameClock());
+        using var feed = context.Feed;
+
+        context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.A, 0f, 0f, 0f, 0f));
+        context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.B, 0f, 0f, 0f, 0f));
+        context.Host.PublishInputSample("pad-1", GamepadState.Create(GamepadButtonMask.X, 0f, 0f, 0f, 0f));
+        await WaitForSample(context.Controller, "pad-1", GamepadButtonMask.X);
+
+        // Nothing dispatched before the frame: the samples a frame coalesced away were never
+        // displayed states.
+        Assert.False(context.Visualizer.IsAPressed);
+        Assert.False(context.Visualizer.IsBPressed);
+        Assert.False(context.Visualizer.IsXPressed);
+
+        context.Clock!.RaiseTick();
+
+        // One dispatch, carrying the latest sample.
+        Assert.True(context.Visualizer.IsXPressed);
+        Assert.False(context.Visualizer.IsAPressed);
+        Assert.True(context.Visualizer.IsConnected);
+    }
+
+    [Fact]
     public async Task Losing_The_Daemon_Empties_The_Tray_Hint()
     {
         var context = await CreateFeed();
@@ -108,6 +136,20 @@ public sealed class DaemonLayerHintFeedTests
         Assert.True(condition());
     }
 
+    /// <summary>
+    /// Waits until the controller has taken the given sample. The controller stores the latest
+    /// sample per device before raising the event, so a match also means the feed has already
+    /// queued it.
+    /// </summary>
+    private static async Task WaitForSample(
+        DaemonController controller,
+        string deviceId,
+        GamepadButtonMask pressed)
+    {
+        await WaitForCondition(() => controller.InputSamples.Any(sample => sample.DeviceId == deviceId
+            && sample.PressedButtons == pressed));
+    }
+
     private static List<EffectiveMappingSnapshot> EffectiveIds(GamepadProfile profile, int layerId)
     {
         var effective = profile.Mappings
@@ -117,7 +159,7 @@ public sealed class DaemonLayerHintFeedTests
         return effective;
     }
 
-    private static async Task<FeedContext> CreateFeed()
+    private static async Task<FeedContext> CreateFeed(FakeFrameClock? clock = null)
     {
         var profile = new GamepadProfile
         {
@@ -148,8 +190,8 @@ public sealed class DaemonLayerHintFeedTests
 
         var layerHint = new LayerHintViewModel();
         var visualizer = new GamepadVisualizerViewModel();
-        var feed = new TrayHost.DaemonLayerHintFeed(controller, layerHint, visualizer);
-        return new FeedContext(controller, feed, host, layers, profile, channel, layerHint, visualizer);
+        var feed = new TrayHost.DaemonLayerHintFeed(controller, layerHint, visualizer, clock);
+        return new FeedContext(controller, feed, host, layers, profile, channel, layerHint, visualizer, clock);
     }
 
     /// <summary>
@@ -313,7 +355,8 @@ public sealed class DaemonLayerHintFeedTests
         GamepadProfile Profile,
         FeedServerChannel Channel,
         LayerHintViewModel LayerHint,
-        GamepadVisualizerViewModel Visualizer);
+        GamepadVisualizerViewModel Visualizer,
+        FakeFrameClock? Clock);
 
     /// <summary>A ready endpoint over one in-memory channel, so no pipe is opened.</summary>
     private sealed class FeedServerEndpoint(FeedServerChannel channel) : IDaemonEndpoint

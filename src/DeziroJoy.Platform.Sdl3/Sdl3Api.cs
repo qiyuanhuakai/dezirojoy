@@ -336,7 +336,13 @@ internal sealed class Sdl3Api : ISdl3Api
 
                 try
                 {
-                    joysticks.Add(ReadJoystickInfo(instanceId, pointer, hasStandardMapping: true));
+                    // This device is *not* in SDL's gamepad list - that is the only reason it is
+                    // being opened here. Recording it as "has a standard mapping" would put it
+                    // in the mapped half of the scan and filter it out of the unmapped list, so
+                    // every plain joystick would look already-supported and the mapping flow
+                    // would have nothing to offer. The whole point of the open is to read the
+                    // evidence for a device that has no mapping.
+                    joysticks.Add(ReadJoystickInfo(instanceId, pointer, hasStandardMapping: false));
                 }
                 finally
                 {

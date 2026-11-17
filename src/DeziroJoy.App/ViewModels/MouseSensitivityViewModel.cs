@@ -156,8 +156,9 @@ public partial class MouseSensitivityViewModel : ObservableObject
     /// <summary>
     /// Feeds one real host sample into the calibration, exactly the way
     /// <see cref="GamepadVisualizerViewModel.Update"/> receives them: called on the UI thread
-    /// for every sample, latest sample wins between preview ticks. Only the right stick - the
-    /// stick the mouse mapping reads - and the precision button are consumed.
+    /// for every sample while the panel is calibrating, latest sample wins between preview
+    /// ticks. Only the right stick - the stick the mouse mapping reads - and the precision
+    /// button are consumed.
     /// <para>
     /// The at-rest drift collection is NOT driven from here: a sample arrives when the pad's
     /// state changes, so a stick held still would contribute exactly one sample and the
@@ -560,10 +561,54 @@ public partial class MouseSensitivityViewModel : ObservableObject
     public bool IsLive { get; set; }
 
     /// <summary>
+    /// Whether the preview has nothing left to animate: no drift measurement is collecting,
+    /// the dot is centered and the speed has decayed to zero, and - while live input feeds
+    /// real samples - the pad is at rest. A static panel would redraw the same pixels on
+    /// every tick, so the window's preview gate parks it; anything that can still change -
+    /// the live sweep, a dot still gliding home, a collecting measurement, a pad coming off
+    /// rest - keeps it drawing.
+    /// </summary>
+    public bool IsStatic
+    {
+        get
+        {
+            // The drift collection rides the preview clock, so a running measurement is
+            // never static: parking it would thin the distribution the suggestion is
+            // built from.
+            if (IsMeasuringDrift)
+            {
+                return false;
+            }
+
+            // Not settled: the dot is still gliding home or the speed is still decaying.
+            if (PreviewX != PreviewCenter || PreviewY != PreviewCenter || CurrentSpeed != 0)
+            {
+                return false;
+            }
+
+            // Settled at rest. A parked preview owes no further frame; live real input
+            // owes one only while the pad is off rest, and the live sweep always owes one.
+            if (!IsLive)
+            {
+                return true;
+            }
+
+            return IsRealInputMode && _realStickX == 0f && _realStickY == 0f;
+        }
+    }
+
+    /// <summary>
     /// Advances the preview by one tick. Live input runs either the scripted sweep (demo) or
     /// the latest real sample (calibration); without live input the preview decays to rest.
     /// The tick cadence is the window's preview timer - samples arrive on the host's own
     /// cadence through <see cref="ApplySample"/> and are held until the next tick.
+    /// <para>
+    /// The window's preview gate decides which of the timer's ticks reach this method: a
+    /// hidden, deactivated or minimized window, a different tab and a parked panel are all
+    /// skipped, so a tick that does arrive is always a frame worth drawing. A skipped tick
+    /// leaves this panel exactly where it was - the next one resumes from the held phase
+    /// and the latest sample with no replay of the time in between.
+    /// </para>
     /// <para>
     /// The at-rest drift collection runs on this clock rather than on the sample stream: see
     /// <see cref="DriftSampleInterval"/>.

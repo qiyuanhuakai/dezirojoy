@@ -118,6 +118,46 @@ internal static class SampleHelper
 }
 
 /// <summary>
+/// A frame clock a test drives by hand: samples queue behind it and nothing is applied until
+/// the tick, which is what makes the coalescing observable. Records its start and stop calls
+/// so a lifecycle test can prove the clock was released rather than left running.
+/// </summary>
+internal sealed class FakeFrameClock : IUiFrameClock
+{
+    public int StartCalls { get; private set; }
+
+    public int StopCalls { get; private set; }
+
+    public int TickCount { get; private set; }
+
+    public bool IsRunning { get; private set; }
+
+    public event Action? Tick;
+
+    public void StartTicking()
+    {
+        IsRunning = true;
+        StartCalls++;
+    }
+
+    public void StopTicking()
+    {
+        IsRunning = false;
+        StopCalls++;
+    }
+
+    public void RaiseTick()
+    {
+        TickCount++;
+        Tick?.Invoke();
+    }
+
+    public void Dispose()
+    {
+    }
+}
+
+/// <summary>
 /// In-memory <see cref="IDaemonService"/> for the settings-card tests. It mutates its own state
 /// on a completed operation and records every autostart request, so a test can assert both the
 /// published state and the calls the card made. <see cref="NextResult"/> simulates the elevated

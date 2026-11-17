@@ -92,6 +92,45 @@ public sealed class GamepadVisualizerTests
             "the Menu capsule must show the pressed token while the controller holds it");
     }
 
+    [AvaloniaFact]
+    public void The_Model_Labels_The_Face_Buttons_With_The_Devices_Own_Glyphs()
+    {
+        var (window, viewModel, host, provider) = BuildWindow();
+
+        // A pad whose physical X sits in the north position - logical Y - and whose A and B
+        // are swapped the Switch way. The declaration is the device's own answer about its
+        // glyphs, and a device that declares its controls starts on the generic panel.
+        provider.Add(DeviceId, "Nintendo Controller",
+        [
+            new GamepadControlDescriptor(new ButtonBinding(GamepadButton.Y), "X", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+            new GamepadControlDescriptor(new ButtonBinding(GamepadButton.X), "Y", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+            new GamepadControlDescriptor(new ButtonBinding(GamepadButton.B), "A", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+            new GamepadControlDescriptor(new ButtonBinding(GamepadButton.A), "B", GamepadControlKind.Button, GamepadControlZone.MainButtons),
+        ]);
+        provider.SetState(DeviceId, GamepadState.Create(default, 0f, 0f, 0f, 0f));
+        SampleHelper.Sample(viewModel, host);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+
+        var model = Model(window);
+        Assert.Equal("X", model.FindControl<TextBlock>("ButtonYLabel")!.Text);
+        Assert.Equal("Y", model.FindControl<TextBlock>("ButtonXLabel")!.Text);
+        Assert.Equal("A", model.FindControl<TextBlock>("ButtonBLabel")!.Text);
+        Assert.Equal("B", model.FindControl<TextBlock>("ButtonALabel")!.Text);
+
+        // The relabelling is display only: the north cap still binds logical Y, so a click
+        // on the cap that now reads "X" opens Y's mapping.
+        viewModel.ToggleMappingSurfaceCommand.Execute(null);
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        Assert.True(model.IsVisible);
+
+        Click(model.FindControl<Control>("ButtonY")!, window);
+
+        Assert.True(viewModel.IsEditing);
+        Assert.Equal(GamepadButton.Y, viewModel.Editor.SelectedButton);
+    }
+
     private static GamepadVisualizer Model(Window window)
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!;
 
@@ -594,23 +633,26 @@ public sealed class GamepadVisualizerTests
     }
 
     [AvaloniaFact]
-    public void Opening_The_Editor_Does_Not_Resize_The_Model()
+    public void Opening_The_Editor_Does_Not_ReLay_The_Model()
     {
         var (window, viewModel, host, provider) = BuildWindow();
 
         ConnectPad(provider);
         SampleHelper.Sample(viewModel, host);
 
-        var stage = Stage(Model(window));
-        var before = stage.Bounds.Size;
+        var model = Model(window);
+        var stage = Stage(model);
 
-        Click(Model(window).FindControl<Control>("ButtonA")!, window);
+        Click(model.FindControl<Control>("ButtonA")!, window);
         Assert.True(viewModel.IsEditing);
 
-        // The stage row is fixed height so the editor never re-lays the model out: the only
-        // motion while editing is the animated lift, which is a render transform and leaves
-        // the model's own size untouched.
-        Assert.Equal(before, stage.Bounds.Size);
+        // The stage row hands its height to the editor card for real while a mapping is
+        // open, and the Viewbox re-fits the model to the smaller slot - but the model's own
+        // layout never moves: it is still the same 620x380 canvas rendered smaller, so
+        // nothing inside it re-lays, re-hits or drifts. The lift is a render transform.
+        Assert.Equal(new Size(620, 380), model.Bounds.Size);
+        Assert.True(stage.Bounds.Height < 365 - 100,
+            $"the Viewbox must re-fit the smaller slot, it renders {stage.Bounds.Height} tall");
     }
 
     private static Size RenderedModel(double width, double height)

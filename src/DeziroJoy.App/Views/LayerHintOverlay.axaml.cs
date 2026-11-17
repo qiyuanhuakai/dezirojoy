@@ -21,7 +21,9 @@ namespace DeziroJoy.App.Views;
 /// exists, because the flag is applied before the window is mapped and no manager honours it
 /// there. It shows itself the moment the layer hint view model becomes active and is not
 /// suppressed, and hides the moment the layer is released, the hint is dismissed or the daemon
-/// is lost, so its lifetime is exactly the layer's.
+/// is lost. The presentation host builds one per appearance and closes it when the layer lets
+/// go, so the window itself is not resident between them - see
+/// <see cref="Hosting.TrayOverlayHost"/>.
 /// </summary>
 public partial class LayerHintOverlay : Window
 {
@@ -124,6 +126,24 @@ public partial class LayerHintOverlay : Window
         // manager may not have seen the map yet when this ask goes out.
         ApplyTopmost();
         Dispatcher.UIThread.Post(ApplyTopmost);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        // The presentation host closes this window when the layer lets go and keeps the view
+        // model no longer: the binding side is dropped here rather than left for the collector,
+        // and the layout hook goes with it. A closed window must never answer its view model
+        // again - Show on a closed window throws - and the next appearance is a window the host
+        // builds fresh, with a fresh binding.
+        _layerHint.PropertyChanged -= OnLayerHintPropertyChanged;
+
+        if (_trackingLayout)
+        {
+            _trackingLayout = false;
+            LayoutUpdated -= OnLayoutUpdated;
+        }
+
+        base.OnClosed(e);
     }
 
     /// <summary>

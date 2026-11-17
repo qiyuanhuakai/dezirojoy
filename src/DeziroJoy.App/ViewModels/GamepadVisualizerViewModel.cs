@@ -118,6 +118,25 @@ public partial class GamepadVisualizerViewModel : ObservableObject
     public string ButtonCountText => ButtonCount is { } count ? $"检测到 {count} 个按键" : "按键数未知";
 
     /// <summary>
+    /// The glyph the connected device prints at each face-button position. A hand-drawn pad is
+    /// drawn once with the Xbox letters in the artwork, so a Nintendo pad - whose physical X
+    /// sits in the north position, logical Y - would light the wrong letter; the device's own
+    /// declaration is what relabels the drawing. The logical position a mapping binds to is
+    /// untouched, so no profile means something different on a different pad.
+    /// </summary>
+    [ObservableProperty]
+    private string _buttonALabel = GamepadControlLabels.Button(GamepadButton.A);
+
+    [ObservableProperty]
+    private string _buttonBLabel = GamepadControlLabels.Button(GamepadButton.B);
+
+    [ObservableProperty]
+    private string _buttonXLabel = GamepadControlLabels.Button(GamepadButton.X);
+
+    [ObservableProperty]
+    private string _buttonYLabel = GamepadControlLabels.Button(GamepadButton.Y);
+
+    /// <summary>
     /// Raw platform codes of unmapped buttons the device has reported. They are drawn on the
     /// model as "按键 N" pills so they are as clickable as any fixed element.
     /// </summary>
@@ -263,11 +282,21 @@ public partial class GamepadVisualizerViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Points the model at the connected device so the pad's real button count can be shown.
-    /// A null descriptor means no device, which reports the count as unknown.
+    /// Points the model at the connected device so the pad's real button count and face-button
+    /// glyphs can be shown. A null descriptor means no device, which reports the count as
+    /// unknown and puts the logical names back on the face buttons.
     /// </summary>
     public void SetDevice(GamepadDescriptor? descriptor)
-        => ButtonCount = descriptor?.ButtonCount;
+    {
+        ButtonCount = descriptor?.ButtonCount;
+
+        // A descriptor with no description is a different problem from an unlabelled button:
+        // the labels fall back to the logical names rather than going blank.
+        ButtonALabel = descriptor?.ControlLabel(GamepadButton.A) ?? GamepadControlLabels.Button(GamepadButton.A);
+        ButtonBLabel = descriptor?.ControlLabel(GamepadButton.B) ?? GamepadControlLabels.Button(GamepadButton.B);
+        ButtonXLabel = descriptor?.ControlLabel(GamepadButton.X) ?? GamepadControlLabels.Button(GamepadButton.X);
+        ButtonYLabel = descriptor?.ControlLabel(GamepadButton.Y) ?? GamepadControlLabels.Button(GamepadButton.Y);
+    }
 
     public void SetConnected(bool connected)
     {
@@ -280,6 +309,7 @@ public partial class GamepadVisualizerViewModel : ObservableObject
 
         // The count describes a device, so it cannot outlive the connection.
         ButtonCount = null;
+        SetDevice(null);
         Update(GamepadState.Neutral);
     }
 }

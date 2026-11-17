@@ -11,8 +11,9 @@ namespace DeziroJoy.App.Services;
 /// Owns the persisted app preferences in <c>settings.json</c> beside the profile store
 /// (%APPDATA%\DeziroJoy on Windows, ~/.config/DeziroJoy on Linux): the light/dark
 /// choice, gamepad UI ownership, the independent close/minimize tray policies, the
-/// startup release check and the startup auto-download, and the layer hint overlay's
-/// visibility and screen placement. The file is read as the service is built, so a
+/// startup release check and the startup auto-download, the layer hint overlay's
+/// visibility and screen placement, and the experimental Win32 software rendering
+/// selection. The file is read as the service is built, so a
 /// consumer that snapshots a preference in its own constructor reads the stored value
 /// rather than the default. A missing or corrupt file falls back to the documented
 /// defaults rather than throwing.
@@ -32,6 +33,7 @@ public sealed class ThemeService
         Converters =
         {
             new ThemeVariantConverter(),
+            new AppRenderModeConverter(),
             new ResilientEnumConverter<LayerHintPositionMode>(),
             new ResilientEnumConverter<LayerHintAnchor>(),
         },
@@ -276,6 +278,31 @@ public sealed class ThemeService
     }
 
     /// <summary>
+    /// The persisted rendering selection. <see cref="AppRenderMode.Default"/> - the platform's
+    /// own detection - is what a settings file that never chose a mode reads back as, so an
+    /// existing install starts exactly as it did before the switch existed. The selection is
+    /// read by the GUI process at startup only: there is no live renderer swap, which is why
+    /// the card says a restart is what applies it.
+    /// </summary>
+    public AppRenderMode RenderMode => _settings.RenderMode;
+
+    /// <summary>
+    /// Chooses the rendering backend the next GUI start asks for and persists it. Only the
+    /// GUI reads this - the daemon and the headless entries build no UI and never ask - and
+    /// only Windows acts on it, because the software mode exists on the Win32 backend alone.
+    /// </summary>
+    public void SetRenderMode(AppRenderMode mode)
+    {
+        if (_settings.RenderMode == mode)
+        {
+            return;
+        }
+
+        _settings = _settings with { RenderMode = mode };
+        Save();
+    }
+
+    /// <summary>
     /// The retired leader button, read for the one-shot migration into the preset slots
     /// only. New saves never write it, so this is null on every settings file written
     /// after the retirement.
@@ -402,6 +429,15 @@ public sealed class ThemeService
         public bool AutoDownloadUpdatesEnabled { get; init; }
 
         /// <summary>
+        /// The experimental rendering selection. Omitted while it is the platform default,
+        /// so a settings file that never chose a mode stays exactly as it was; a file that
+        /// names anything this build cannot read degrades to <see cref="AppRenderMode.Default"/>
+        /// through its converter rather than failing the whole file.
+        /// </summary>
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public AppRenderMode RenderMode { get; init; } = AppRenderMode.Default;
+
+        /// <summary>
         /// The retired leader pair. Kept so an old settings.json still deserializes and can
         /// be migrated, but never written again: the leader key is a preset-slot mapping now.
         /// The condition is write-only, so a file written before the retirement still reads
@@ -439,6 +475,31 @@ public sealed class ThemeService
 
         public override void Write(Utf8JsonWriter writer, ThemeVariant value, JsonSerializerOptions options)
             => writer.WriteStringValue(value == ThemeVariant.Light ? "Light" : "Dark");
+    }
+
+    /// <summary>
+    /// Reads and writes the rendering selection as the shared stable name ("default" /
+    /// "software"), degrading to the platform default when the stored name is unknown,
+    /// missing or a bare number - the same damaged-file rule the resilient enum converters
+    /// follow, with the one vocabulary the settings file, the DEZIROJOY_RENDER variable and
+    /// the --render= switch all speak.
+    /// </summary>
+    private sealed class AppRenderModeConverter : JsonConverter<AppRenderMode>
+    {
+        public override AppRenderMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                reader.Skip();
+
+                return AppRenderMode.Default;
+            }
+
+            return AppRenderModes.Parse(reader.GetString()).Mode;
+        }
+
+        public override void Write(Utf8JsonWriter writer, AppRenderMode value, JsonSerializerOptions options)
+            => writer.WriteStringValue(AppRenderModes.ToName(value));
     }
 
     /// <summary>

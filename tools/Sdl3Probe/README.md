@@ -104,6 +104,9 @@ dotnet run --project tools/Sdl3Probe -- list
   描述，不会把设备伪装成已有完整标准布局。
 - 同一 GUID 重复映射是**更新**而非追加：文件按 GUID 排序、同 GUID 只保留最后一条。
 - 写入是原子的（临时文件 + 替换），daemon 与探针都读到旧整体或新整体。
+- 保存后立即用 `SDL_GetGamepads` 复核：报告本次运行中 SDL 是否已把该设备识别为标准
+  Gamepad。SDL 的映射库是**进程全局**的，因此 `map` 的复核结论对同一进程内的后续枚举也成立；
+  但也因为全局，测试与工具不要复用同一个 VID/PID 去映射两台不同的设备。
 
 ## sdl-mappings.json
 
@@ -125,16 +128,24 @@ dotnet run --project tools/Sdl3Probe -- list
 ```
 
 - **provider 在枚举前载入**：`Sdl3GamepadProvider` 在 SDL 初始化成功后、第一次
-  `SDL_GetGamepads` 之前，逐条调用 `SDL_AddGamepadMapping`。SDL 在构建游戏手柄列表时决定
-  一个 Joystick 是不是标准 Gamepad，映射加晚了要等到下次枚举才生效。
+  `SDL_GetGamepads` 之前，逐条调用 `SDL_AddGamepadMapping`。全新的 daemon 进程里 SDL 的映射库
+  是空的，载入放在枚举前，第一次扫描就能看到这台设备；放到枚举之后，第一次扫描仍会把它当
+  普通 Joystick。
 - **daemon 与探针读同一文件**：App 通过 `Sdl3Backend` 用同一个
   `Sdl3MappingFileSource` 构造 provider；探针的 `list`／`watch` 同样载入。
-- **重启后生效，没有热切换**：daemon 只在启动时读一次。这也是 SDL 自身的行为——按实例 ID
-  缓存的"是不是 Gamepad"结论在进程生命周期内不会因新增映射而失效。
+- **daemon 需要重启，SDL 不需要**：SDL 的 `SDL_AddGamepadMapping` 会立即生效，包括对已经枚举
+  过的设备——新增映射的代码路径会跑一遍 SDL 的 mapping-change tracking，重新评估每个已接入
+  的 Joystick 并更新按实例 ID 缓存的"是不是 Gamepad"结论。所以 `map` 保存后会在**本次运行**
+  里直接报告"SDL 已把该设备识别为标准 Gamepad"，不需要靠重启去猜。
+  需要重启的是 daemon：它只在启动时读一次文件，正在运行的 daemon 不会重新载入。这是本项目的
+  设计，不是 SDL 的限制。
 - 文件损坏或不可读时**宁可不映射也不覆盖**：扫描诊断会给出
   `持久 SDL 映射文件（sdl-mappings.json）读取失败：…`，本次运行只使用 SDL 内置映射库。
 - `platform:` 记录映射是在哪个平台的驱动下取证的；SDL 的 `SDL_AddGamepadMapping` 不校验它，
   它只是证据，不是限制。
+- 已知边界：`Sdl3Api.Shutdown()` 只退 gamepad 子系统，joystick 子系统的引用计数因此永远不回
+  到零，SDL 的映射库也不会被销毁。对单一 provider 长生命周期的 daemon 没有影响（映射在启动时
+  载入、进程退出时一起释放），但意味着同一进程内后建的 `Sdl3Api` 会看到前一个留下的映射。
 
 ## 构建与运行
 

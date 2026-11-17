@@ -186,6 +186,7 @@ public sealed class MappingSurfaceTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
+        ScrollRowIntoView(window, row);
         var list = window.FindControl<ItemsControl>("MappingsList")!;
         var rows = list.GetVisualDescendants().OfType<MappingRowBorder>().ToList();
         var selectedRow = rows.Single(r => r.DataContext == row);
@@ -213,6 +214,7 @@ public sealed class MappingSurfaceTests
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 
+        ScrollRowIntoView(window, row);
         var list = window.FindControl<ItemsControl>("MappingsList")!;
         var other = list.GetVisualDescendants().OfType<MappingRowBorder>()
             .First(r => r.DataContext != row);
@@ -313,8 +315,24 @@ public sealed class MappingSurfaceTests
         Assert.Equal(1d, tint.Opacity);
     }
 
+    /// <summary>
+    /// Scrolls the row's card into view first: the list is virtualized, so a row below the
+    /// fold has no container until the list scrolls to it - exactly as in the app.
+    /// </summary>
+    private static void ScrollRowIntoView(Window window, MappingRowViewModel row)
+    {
+        if (window.DataContext is MainWindowViewModel viewModel
+            && viewModel.MappingCards.FirstOrDefault(card => card.Mappings.Contains(row)) is { } card)
+        {
+            window.FindControl<ItemsControl>("MappingsList")!.ScrollIntoView(card);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+        }
+    }
+
     private static Border TintOf(Window window, MappingRowViewModel row)
     {
+        ScrollRowIntoView(window, row);
         var list = window.FindControl<ItemsControl>("MappingsList")!;
         var selectedRow = list.GetVisualDescendants().OfType<MappingRowBorder>().Single(r => r.DataContext == row);
 
@@ -420,6 +438,9 @@ public sealed class MappingSurfaceTests
     public void The_Mouse_Panel_Only_Reports_The_Precision_Key()
     {
         var (window, viewModel, _, _) = BuildWindow();
+        window.FindControl<TabControl>("MainTabs")!.SelectedIndex = 1;
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
 
         var mousePanel = MouseSensitivityPanelOf(window);
         Assert.Null(mousePanel.FindControl<ComboBox>("PrecisionButtonCombo"));
@@ -544,11 +565,15 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
         window.UpdateLayout();
 
-        var stage = (Grid)ModelViewbox(window).Parent!;
-        var shell = (Grid)stage.Parent!;
+        // The tab grid, found through the card it also parents: the stage's own grid is
+        // header-plus-surface and says nothing about the height handover.
+        var shell = (Grid)window.FindControl<Border>("EditorPanel")!.Parent!;
 
         // DESIGN 4.3.7: the stage shrinks 480 -> 420 and the editor row keeps the rest, so
-        // the bottom card gains the released height instead of the model hoarding it.
+        // the bottom card gains the released height instead of the model hoarding it. The
+        // stage row hands even more of its height to the card while the editor is open -
+        // see Opening_The_Editor_Shrinks_The_Stage_For_Real_And_Takes_The_Height_Back - so
+        // this pins the resting height the stage starts from.
         Assert.Equal(420d, shell.RowDefinitions[0].Height.Value);
     }
 
@@ -629,6 +654,8 @@ public sealed class MappingSurfaceTests
         SampleHelper.Sample(viewModel, host);
         window.UpdateLayout();
 
+        ScrollRowIntoView(window, viewModel.Mappings.First(
+            candidate => candidate.Entry.Source == new ButtonBinding(GamepadButton.B)));
         var list = window.FindControl<ItemsControl>("MappingsList")!;
         var row = list.GetVisualDescendants().OfType<MappingRowBorder>()
             .Single(candidate => candidate.DataContext == viewModel.Mappings.First(
@@ -650,6 +677,14 @@ public sealed class MappingSurfaceTests
     private static MappingRowBorder RowForTarget(
         Window window, MainWindowViewModel viewModel, Func<MappingTarget, bool> match)
     {
+        var target = viewModel.Mappings.First(row => match(row.Entry.Target));
+        if (viewModel.MappingCards.FirstOrDefault(card => card.Mappings.Contains(target)) is { } card)
+        {
+            window.FindControl<ItemsControl>("MappingsList")!.ScrollIntoView(card);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+        }
+
         var list = window.FindControl<ItemsControl>("MappingsList")!;
         return list.GetVisualDescendants().OfType<MappingRowBorder>()
             .Single(candidate => candidate.DataContext == viewModel.Mappings.First(

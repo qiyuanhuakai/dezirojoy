@@ -119,11 +119,16 @@ public static class Sdl3JoystickCatalog
     /// Applies one mapping to the running SDL instance and reports whether SDL took it. A
     /// mapping SDL rejects is a diagnostic the capture flow prints instead of persisting.
     /// <para>
-    /// The confirmation is SDL's own GUID lookup rather than the gamepad list: SDL caches the
-    /// per-instance "is this a gamepad" answer for the life of the process, so a mapping added
-    /// after enumeration does not make the device appear as a gamepad until the next start.
-    /// That is precisely the restart the flow tells the user about - the GUID lookup proves the
-    /// mapping is registered, which is what survives the restart.
+    /// The confirmation is SDL's own GUID lookup rather than the gamepad list: since SDL 3.4.20
+    /// <c>SDL_AddGamepadMapping</c> re-evaluates immediately - the add path runs SDL's
+    /// mapping-change tracking over every attached joystick, including ones enumerated before
+    /// the add - so the GUID lookup proves the mapping is registered and in force right now.
+    /// </para>
+    /// <para>
+    /// What still needs a restart is the daemon, not SDL: it reads <c>sdl-mappings.json</c>
+    /// once, at startup before its first enumeration, so a mapping saved while it runs reaches
+    /// injection only after the daemon restarts. That is the restart the flow tells the user
+    /// about - and this process's own instance already answers for the new mapping.
     /// </para>
     /// </summary>
     public static Sdl3MappingApplyResult ApplyMapping(string mapping, string guidString)
@@ -145,6 +150,35 @@ public static class Sdl3JoystickCatalog
             api.Shutdown();
         }
     }
+
+    /// <summary>
+    /// Whether SDL currently reads this joystick instance as a standard gamepad - the question
+    /// the mapping flow asks right after saving, so the user is told the device is recognized
+    /// instead of being sent to restart and find out.
+    /// <para>
+    /// SDL applies a mapping added with <c>SDL_AddGamepadMapping</c> immediately, including to
+    /// devices that were already enumerated: the add path runs SDL's mapping-change tracking,
+    /// which re-evaluates every attached joystick and updates the per-instance answer. So a
+    /// false here means the mapping is not in force, not that a restart is needed.
+    /// </para>
+    /// </summary>
+    public static bool IsGamepad(uint instanceId)
+    {
+        var api = new Sdl3Api();
+        try
+        {
+            if (!api.TryEnsureInitialized(out _))
+            {
+                return false;
+            }
+
+            return api.GetGamepadIds().Contains(instanceId);
+        }
+        finally
+        {
+            api.Shutdown();
+        }
+    }
 }
 
 /// <summary>Opening one plain joystick: either a reader or the reason it did not open.</summary>
@@ -158,7 +192,9 @@ public sealed record Sdl3MappingApplyResult(bool Applied, string? Error, string?
 {
     /// <summary>
     /// What SDL's mapping database now answers for this GUID, or null when it answers nothing.
-    /// A non-null value is the proof that the mapping is registered and will survive a restart.
+    /// A non-null value is the proof that the mapping is registered and in force in this
+    /// instance right now; reaching the daemon is the persisted file's job, which it reads at
+    /// startup.
     /// </summary>
     public string? RegisteredMapping { get; } = RegisteredMapping;
 }

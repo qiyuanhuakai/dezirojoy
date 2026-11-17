@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using DeziroJoy.App.Hosting;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.Tests.Ipc;
@@ -376,6 +377,303 @@ public sealed class MainWindowViewModelDaemonTests
             await acceptTask;
             serverCancellation.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task Reconnect_Restarts_The_Daemon_Through_The_Supervisor_When_The_Client_Cannot_Reach_It()
+    {
+        // The reported failure: the daemon stopped answering, so the client reconnect
+        // lands on nothing. The button has to end and replace the daemon itself - the
+        // supervisor's bounded restart - and show the phases it went through, not just
+        // another failed connect.
+        var daemonHost = new FakeDaemonHost();
+        var store = new InMemoryProfileStore();
+        var statePath = Path.Combine(Path.GetTempPath(), "dezirojoy-vm-daemon-tests", Guid.NewGuid().ToString("N"), "state.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var channel = new ServerChannel(server);
+        server.StateChanged += channel.Push;
+        var endpoint = new ServerEndpoint(channel) { Ready = false };
+        var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromMilliseconds(200));
+        var presentation = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), store);
+        var recoverCalls = 0;
+        await using var viewModel = new MainWindowViewModel(
+            presentation,
+            store,
+            daemon: controller,
+            daemonRequired: true,
+            recoverDaemon: () =>
+            {
+                recoverCalls++;
+                // The supervisor's recovery: the daemon that stopped answering is ended
+                // and its replacement is serving, so the client reconnect that follows
+                // the report lands on the replacement.
+                endpoint.Ready = true;
+                return Task.FromResult(new DaemonRecoveryReport(
+                    true,
+                    ["已按身份确认结束旧守护进程", "映射通道与注入槽位已释放", "新守护进程已就绪"],
+                    null));
+            });
+
+        await viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, recoverCalls);
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+        Assert.NotNull(viewModel.DaemonSnapshot);
+        Assert.False(viewModel.IsTransferError);
+        Assert.Contains("新守护进程已就绪", viewModel.TransferMessage);
+    }
+
+    [Fact]
+    public async Task Reconnect_Restarts_A_Connected_Daemon_That_Stopped_Answering()
+    {
+        // The intermittent failure in its purest form: the daemon process is alive and
+        // its pipe still accepts connects, but no request ever completes. The
+        // controller reads as connected - a client reconnect adopts the dead daemon's
+        // last snapshot and changes nothing - so the button has to end and replace the
+        // process, and the window has to come back on the replacement's state.
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1", "Xbox Wireless Controller");
+        var store = new InMemoryProfileStore();
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var channel = new ServerChannel(server);
+        server.StateChanged += channel.Push;
+        server.InputSampled += channel.Push;
+        var endpoint = new ServerEndpoint(channel);
+        var controller = new DaemonController(endpoint);
+        var presentation = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), store);
+        var recoverCalls = 0;
+        FakeDaemonHost? replacement = null;
+        await using var viewModel = new MainWindowViewModel(
+            presentation,
+            store,
+            daemon: controller,
+            daemonRequired: true,
+            recoverDaemon: async () =>
+            {
+                recoverCalls++;
+                // The supervisor's recovery: the unresponsive daemon is ended - its
+                // pipe breaks, exactly as the real one would when the process dies -
+                // and a replacement daemon serves the same endpoint.
+                await channel.DisposeAsync();
+                replacement = new FakeDaemonHost { HasController = true };
+                replacement.AddDevice("pad-1", "Xbox Wireless Controller");
+                var replacementServer = new DaemonServer(
+                    replacement,
+                    new InMemoryProfileStore(),
+                    new DaemonStateStore(statePath));
+                var replacementChannel = new ServerChannel(replacementServer);
+                replacementServer.StateChanged += replacementChannel.Push;
+                replacementServer.InputSampled += replacementChannel.Push;
+                endpoint.Channel = replacementChannel;
+                return new DaemonRecoveryReport(
+                    true,
+                    ["已按身份确认结束旧守护进程", "新守护进程已就绪"],
+                    null);
+            });
+
+        await controller.ConnectAsync(TestContext.Current.CancellationToken);
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+        Assert.Equal(1, daemonHost.StartCalls);
+        var firstInstanceId = controller.DaemonInstanceId;
+
+        // The daemon stops answering while its pipe stays open.
+        channel.DropAnswers = true;
+
+        await viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, recoverCalls);
+        await WaitForCondition(() => controller.State == DaemonConnectionState.Connected
+            && !string.Equals(controller.DaemonInstanceId, firstInstanceId, StringComparison.Ordinal));
+
+        // The window drives the replacement daemon now, not the one that stopped
+        // answering - which is the proof the reconnect re-handshook.
+        Assert.NotNull(viewModel.DaemonSnapshot);
+        Assert.False(viewModel.IsTransferError, viewModel.TransferMessage);
+        Assert.Contains("新守护进程已就绪", viewModel.TransferMessage);
+        await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+        Assert.Equal(1, replacement!.StartCalls);
+    }
+
+    [Fact]
+    public async Task Reconnect_After_A_Supervised_Restart_Adopts_The_New_Daemons_Snapshot()
+    {
+        // End to end over a real pipe: the daemon dies, the client reconnect cannot
+        // reach anything, the supervised restart brings a replacement up on the same
+        // pipe, and the window adopts the replacement's snapshot - a different daemon
+        // instance, which is what proves the reconnect re-handshook instead of keeping
+        // the dead daemon's last state.
+        var pipeName = $"DeziroJoy.Test.{Guid.NewGuid():N}";
+        var statePath = Path.Combine(Path.GetTempPath(), $"dezirojoy-{Guid.NewGuid():N}.json");
+        var daemonHost = new FakeDaemonHost { HasController = true };
+        daemonHost.AddDevice("pad-1", "Xbox Wireless Controller");
+        var store = new InMemoryProfileStore();
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var acceptTask = DaemonHost.ServePipeAsync(server, serverCancellation.Token, pipeName);
+        var endpoint = new PipeEndpoint(pipeName);
+        await using var controller = new DaemonController(
+            endpoint,
+            startupGrace: TimeSpan.FromMilliseconds(300));
+
+        FakeDaemonHost? replacement = null;
+        CancellationTokenSource? replacementCancellation = null;
+        Task? replacementAccept = null;
+        var recoverCalls = 0;
+        var presentation = new EngineHost(new NoGamepadProvider(), new RecordingOutputSink(), store);
+        await using var viewModel = new MainWindowViewModel(
+            presentation,
+            store,
+            daemon: controller,
+            daemonRequired: true,
+            recoverDaemon: () =>
+            {
+                recoverCalls++;
+                replacement = new FakeDaemonHost { HasController = true };
+                replacement.AddDevice("pad-1", "Xbox Wireless Controller");
+                var replacementServer = new DaemonServer(
+                    replacement,
+                    new InMemoryProfileStore(),
+                    new DaemonStateStore(statePath));
+                replacementCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    TestContext.Current.CancellationToken);
+                replacementAccept = DaemonHost.ServePipeAsync(
+                    replacementServer,
+                    replacementCancellation.Token,
+                    pipeName);
+                return Task.FromResult(new DaemonRecoveryReport(true, ["新守护进程已就绪"], null));
+            });
+
+        try
+        {
+            await controller.ConnectAsync(TestContext.Current.CancellationToken);
+            await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+            var firstInstanceId = controller.DaemonInstanceId;
+
+            // The daemon dies: its pipe goes with it.
+            await serverCancellation.CancelAsync();
+            await acceptTask;
+
+            await viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+
+            Assert.Equal(1, recoverCalls);
+            Assert.Equal(DaemonConnectionState.Connected, controller.State);
+            Assert.NotEqual(firstInstanceId, controller.DaemonInstanceId);
+            Assert.NotNull(viewModel.DaemonSnapshot);
+
+            // The window drives the replacement daemon now.
+            await viewModel.ToggleEngineCommand.ExecuteAsync(null);
+            Assert.Equal(1, replacement!.StartCalls);
+        }
+        finally
+        {
+            await serverCancellation.CancelAsync();
+            await acceptTask;
+            serverCancellation.Dispose();
+
+            if (replacementCancellation is not null)
+            {
+                await replacementCancellation.CancelAsync();
+                if (replacementAccept is not null)
+                {
+                    await replacementAccept;
+                }
+
+                replacementCancellation.Dispose();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Reconnect_Retries_The_Client_Reconnect_After_A_Successful_Restart_And_Keeps_The_Phases()
+    {
+        // The supervisor proved the replacement daemon is serving - its own verify saw
+        // the pipe - but this window's first handshake lands a moment before it serves
+        // one. The retry is what keeps a restart that really happened from being
+        // reported as a failure with its phases erased.
+        var daemonHost = new FakeDaemonHost();
+        var store = new InMemoryProfileStore();
+        var statePath = Path.Combine(Path.GetTempPath(), "dezirojoy-vm-daemon-tests", Guid.NewGuid().ToString("N"), "state.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var channel = new ServerChannel(server);
+        server.StateChanged += channel.Push;
+        var endpoint = new ServerEndpoint(channel) { Ready = false };
+        var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromMilliseconds(200));
+        var presentation = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), store);
+        var recoverCalls = 0;
+        await using var viewModel = new MainWindowViewModel(
+            presentation,
+            store,
+            daemon: controller,
+            daemonRequired: true,
+            recoverDaemon: () =>
+            {
+                recoverCalls++;
+                _ = Task.Delay(TimeSpan.FromMilliseconds(300)).ContinueWith(_ => endpoint.Ready = true);
+                return Task.FromResult(new DaemonRecoveryReport(
+                    true,
+                    ["已按身份确认结束旧守护进程", "新守护进程已就绪"],
+                    null));
+            });
+
+        await viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, recoverCalls);
+        Assert.Equal(DaemonConnectionState.Connected, controller.State);
+        Assert.NotNull(viewModel.DaemonSnapshot);
+        Assert.False(viewModel.IsTransferError);
+        Assert.Contains("新守护进程已就绪", viewModel.TransferMessage);
+    }
+
+    [Fact]
+    public async Task Reconnect_Reports_The_Supervised_Restarts_Failure_And_Never_Starts_It_Twice()
+    {
+        // A recovery that cannot prove the old daemon is gone must say so - with the
+        // phases it got through and the reason it stopped - and a second click while
+        // the first restart is still running must not start a second one beside it.
+        var daemonHost = new FakeDaemonHost();
+        var store = new InMemoryProfileStore();
+        var statePath = Path.Combine(Path.GetTempPath(), "dezirojoy-vm-daemon-tests", Guid.NewGuid().ToString("N"), "state.json");
+        var server = new DaemonServer(daemonHost, store, new DaemonStateStore(statePath));
+        var channel = new ServerChannel(server);
+        server.StateChanged += channel.Push;
+        var endpoint = new ServerEndpoint(channel) { Ready = false };
+        var controller = new DaemonController(endpoint, startupGrace: TimeSpan.FromMilliseconds(200));
+        var presentation = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), store);
+
+        var recoverCalls = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var viewModel = new MainWindowViewModel(
+            presentation,
+            store,
+            daemon: controller,
+            daemonRequired: true,
+            recoverDaemon: async () =>
+            {
+                recoverCalls++;
+                await release.Task;
+                return new DaemonRecoveryReport(
+                    false,
+                    ["已通过计划任务结束提权实例"],
+                    "守护进程未在释放预算内退出");
+            });
+
+        // The first click runs the supervised restart; the seam holds it open so the
+        // second click lands while it is still ending and replacing the daemon.
+        var first = viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+        await WaitForCondition(() => recoverCalls == 1);
+
+        await viewModel.ReconnectDaemonCommand.ExecuteAsync(null);
+        Assert.Equal(1, recoverCalls);
+
+        release.SetResult();
+        await first;
+
+        Assert.Equal(1, recoverCalls);
+        Assert.True(viewModel.IsTransferError);
+        Assert.Contains("守护进程未在释放预算内退出", viewModel.TransferMessage);
+        Assert.Contains("已通过计划任务结束提权实例", viewModel.TransferMessage);
+        Assert.Equal(DaemonConnectionState.Disconnected, controller.State);
     }
 
     [Fact]
@@ -1326,10 +1624,17 @@ public sealed class MainWindowViewModelDaemonTests
     {
         public bool Ready { get; set; } = true;
 
+        /// <summary>
+        /// The channel a connect opens. Settable so a test can model a replaced daemon:
+        /// the recovery ends one daemon and starts another, and the endpoint hands the
+        /// new daemon's channel to the reconnect that follows.
+        /// </summary>
+        public ServerChannel Channel { get; set; } = channel;
+
         public Task<bool> EnsureReadyAsync(bool allowLaunch, CancellationToken cancellationToken) => Task.FromResult(Ready);
 
         public Task<IDaemonChannel> OpenChannelAsync(CancellationToken cancellationToken)
-            => Task.FromResult<IDaemonChannel>(channel);
+            => Task.FromResult<IDaemonChannel>(Channel);
     }
 
     internal sealed class ServerChannel(DaemonServer server) : IDaemonChannel
@@ -1342,9 +1647,21 @@ public sealed class MainWindowViewModelDaemonTests
         /// <summary>Every message the client sent, in order, so a test can assert what reached the daemon.</summary>
         public List<IpcMessage> Sent { get; } = [];
 
+        /// <summary>
+        /// When set, every request is swallowed without an answer - the daemon that
+        /// stopped answering while its pipe still accepts connects, which is the state a
+        /// client reconnect cannot fix and the supervised restart exists for.
+        /// </summary>
+        public bool DropAnswers { get; set; }
+
         public async Task SendAsync(IpcMessage message, CancellationToken cancellationToken)
         {
             Sent.Add(message);
+            if (DropAnswers)
+            {
+                return;
+            }
+
             var answer = await server.ProcessAsync(message);
             Push(answer);
         }

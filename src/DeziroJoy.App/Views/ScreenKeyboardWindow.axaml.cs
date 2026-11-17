@@ -29,7 +29,9 @@ namespace DeziroJoy.App.Views;
 /// It owns no state. It shows and hides with the view model's open flag - which the daemon owns
 /// in daemon mode, and publishes in a snapshot - and mirrors the view model's cursor onto the
 /// caps, exactly as the editor panel used to mirror it onto the embedded grid. Every write goes
-/// through the view model, which asks the daemon to inject.
+/// through the view model, which asks the daemon to inject. The presentation host builds one
+/// window per appearance and closes it when the daemon's flag clears, so the window itself is
+/// not resident between them - see <see cref="Hosting.TrayOverlayHost"/>.
 /// </para>
 /// <para>
 /// It places itself: bottom-centre on the screen it is on, one margin above the bottom edge,
@@ -140,6 +142,14 @@ public partial class ScreenKeyboardWindow : Window
             screens.Changed -= OnScreensChanged;
             _watchedScreens = null;
         }
+
+        // The presentation host closes this window when the daemon stops reporting the
+        // keyboard open and keeps the view model no longer: both binding subscriptions are
+        // dropped here rather than left for the collector. A closed window must never answer
+        // its view model again - Show on a closed window throws - and the next keyboard is a
+        // window the host builds fresh, with a fresh binding.
+        _keyboard.PropertyChanged -= OnKeyboardPropertyChanged;
+        _keyboard.Keyboard.PropertyChanged -= OnKeyboardPropertyChanged;
 
         base.OnClosed(e);
     }

@@ -98,6 +98,36 @@ public sealed class ScreenKeyboardWindowTests
     }
 
     [AvaloniaFact]
+    public void A_Released_Window_No_Longer_Answers_Its_View_Model()
+    {
+        // The presentation host builds one window per appearance and closes it when the
+        // daemon's flag clears, keeping the view model no longer: both binding subscriptions
+        // are dropped on close, so a window that is gone cannot be asked back onto the screen.
+        // Show on a closed window throws, which is what a stale subscription would run into.
+        var keyboard = BuildKeyboard(out _, out _);
+        var window = new ScreenKeyboardWindow(keyboard);
+        try
+        {
+            keyboard.IsOpen = true;
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(window.IsVisible);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            keyboard.IsOpen = false;
+            keyboard.IsOpen = true;
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.False(window.IsVisible, "a released window must not come back with its view model");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void The_Keyboard_Shows_With_The_Open_Flag_And_Hides_When_It_Clears()
     {
         var keyboard = BuildKeyboard(out _, out _);

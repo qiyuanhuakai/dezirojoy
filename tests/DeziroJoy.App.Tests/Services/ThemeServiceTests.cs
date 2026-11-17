@@ -217,6 +217,67 @@ public sealed class ThemeServiceTests : IDisposable
     }
 
     [Fact]
+    public void A_Missing_Settings_File_Leaves_The_Platform_Render_Default_In_Place()
+    {
+        var service = Service(_directory);
+        service.Load();
+
+        Assert.Equal(AppRenderMode.Default, service.RenderMode);
+    }
+
+    [Fact]
+    public void The_Render_Selection_Round_Trips_Under_The_Shared_Name()
+    {
+        var service = Service(_directory);
+
+        service.SetRenderMode(AppRenderMode.Software);
+
+        Assert.Equal(AppRenderMode.Software, service.RenderMode);
+        Assert.Equal(AppRenderMode.Software, Service(_directory).RenderMode);
+        Assert.Contains("\"software\"", File.ReadAllText(service.SettingsPath));
+
+        service.SetRenderMode(AppRenderMode.Default);
+
+        // Back to the default the switch never writes: the key leaves the file, so a settings
+        // file that never chose a mode stays exactly as it was before the switch existed.
+        Assert.Equal(AppRenderMode.Default, Service(_directory).RenderMode);
+        Assert.DoesNotContain("RenderMode", File.ReadAllText(service.SettingsPath));
+    }
+
+    [Fact]
+    public void The_Render_Selection_Survives_Every_Other_Preference_Being_Saved()
+    {
+        var service = Service(_directory);
+        service.SetRenderMode(AppRenderMode.Software);
+
+        service.Save(ThemeVariant.Light);
+        service.SetGamepadNavigation(false);
+        service.SetLayerHintEnabled(false);
+
+        var reloaded = Service(_directory);
+        reloaded.Load();
+
+        Assert.Equal(AppRenderMode.Software, reloaded.RenderMode);
+        Assert.Equal(ThemeVariant.Light, reloaded.Load());
+    }
+
+    [Fact]
+    public void An_Unknown_Render_Value_Falls_Back_Without_Failing_The_Whole_File()
+    {
+        // A hand-edited or newer settings file names a mode this build does not know: that one
+        // preference degrades to the platform default, and the rest of the file still reads.
+        File.WriteAllText(
+            Path.Combine(_directory, "settings.json"),
+            """{"Theme":"Light","RenderMode":"vulkan"}""");
+
+        var service = Service(_directory);
+        service.Load();
+
+        Assert.Equal(AppRenderMode.Default, service.RenderMode);
+        Assert.Equal(ThemeVariant.Light, service.Load());
+    }
+
+    [Fact]
     public void The_Layer_Hint_Preferences_Default_To_Shown_Fixed_Bottom_Centre()
     {
         var service = Service(_directory);

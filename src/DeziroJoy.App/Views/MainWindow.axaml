@@ -28,17 +28,18 @@
         <conv:ScrollRateBarConverter x:Key="RateBar" />
         <conv:RowSelectedConverter x:Key="RowSelected" />
         <conv:BoolToRowHeightConverter x:Key="EditorRowHeight" />
+        <!-- The stage row hands its height to the editor card while a mapping is open: the
+             shrink is the row's own, so the card gets the room for real and the surface
+             inside re-fits the smaller slot through its layout. -->
+        <conv:BoolToGridLengthConverter x:Key="StageRowHeight" TrueValue="250" FalseValue="420" />
         <conv:BoolToBrushConverter x:Key="TransferMessageBrush" PressedKey="DangerBrush" IdleKey="HintTextBrush" />
 
         <!-- Motion targets for the mapping surface. Each drives one animated property, so the
              animation lives in a DoubleTransition on the target and these only say where the
              property has to end up:
-               EditorZoom  the model shrinks while the editor is open, leaving the stage to
-                           the settings card
                EditorLift  the model rises while the editor is open, clearing the card below
                EditorSlide the editor card settles up into its slot as it appears
                EditorFade  the editor card's opacity, 0 at rest and 1 while open -->
-        <conv:BoolToDoubleConverter x:Key="EditorZoom" TrueValue="0.65" FalseValue="1" />
         <conv:BoolToDoubleConverter x:Key="EditorLift" TrueValue="-24" FalseValue="0" />
         <conv:BoolToDoubleConverter x:Key="EditorSlide" TrueValue="0" FalseValue="14" />
         <conv:BoolToDoubleConverter x:Key="EditorFade" TrueValue="1" FalseValue="0" />
@@ -547,9 +548,9 @@
                  one tab, and it spans the column's full width - the wide-short cards get the
                  horizontal room the old narrow gutter beside the model never gave them. The
                  strip takes its height from the column, which leaves the mapping tab's stage
-                 row untouched (the model keeps its DESIGN 4.6 sizing and responsive scaling)
-                 and the editor row - the star row that absorbs slack - shorter by the same
-                 amount; the editor body scrolls, as it already did at the minimum size. -->
+                 row untouched (the model keeps its DESIGN 4.6 sizing) and the editor row -
+                 the star row that absorbs slack - shorter by the same amount; the editor body
+                 scrolls, as it already did at the minimum size. -->
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -563,24 +564,29 @@
                 <TabItem Header="按键映射">
                     <Grid Margin="14,12,14,0">
                         <Grid.RowDefinitions>
-                            <!-- The model stage is a fixed-height row: opening the editor below
-                                 must not re-lay the model out, or it would jump before the lift
-                                 animation even starts. The only motion is the animated lift and
-                                 zoom, both render transforms on the model itself.
-                                 The stage is 420 rather than 480 (DESIGN 4.3.7): the released
-                                 60px go to the editor card below, which is the surface that
-                                 actually needs the room. -->
-                            <RowDefinition Height="420" />
+                            <!-- The stage row hands its height to the editor card for real
+                                 while a mapping is open: the row itself shrinks, the card's
+                                 star row takes the room, and the surface inside the stage
+                                 re-fits the smaller slot through its own layout - the
+                                 hand-drawn model through its Viewbox, the generic panel
+                                 through its scroll region. A render-only shrink left the
+                                 slot reserved, so the card never actually got the space.
+                                 Closing takes the height back with nothing left behind.
+                                 The stage is 420 rather than 480 (DESIGN 4.3.7): the
+                                 released 60px go to the editor card below, which is the
+                                 surface that actually needs the room. -->
+                            <RowDefinition Height="{Binding IsEditing, Converter={StaticResource StageRowHeight}}" />
                             <RowDefinition Height="{Binding IsEditing, Converter={StaticResource EditorRowHeight}}" />
                         </Grid.RowDefinitions>
 
                         <!-- The model stage. No card wraps the model: it is the surface itself,
                              enlarged and centred by default. While a mapping is being edited it
-                             lifts, clearing room for the card that slides in below it, and
-                             shrinks, so the stage reads as the card's while the card is open.
+                             lifts, clearing room for the card that slides in below it, and the
+                             stage row shrinks, so the stage reads as the card's while the card
+                             is open.
 
                              The stage is split so the title and the instructions own a header
-                             row and the model owns the rest. The lift is a render transform,
+                             row and the surface owns the rest. The lift is a render transform,
                              so it moves the model without re-laying anything out - which also
                              means nothing but reserved space stops it from carrying the
                              shoulder buttons up over the header text. The model row therefore
@@ -589,7 +595,7 @@
                              the header stays clear while the editor is open. The stage spans
                              the tab's full width now that the preset selector no longer takes
                              a gutter column beside the model. -->
-                        <Grid Grid.Row="0" MaxWidth="620" HorizontalAlignment="Center">
+                        <Grid Grid.Row="0" MaxWidth="980" HorizontalAlignment="Center">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
@@ -605,8 +611,12 @@
                                          device that declares its controls, the hand-drawn model
                                          otherwise. It only exists when the device gives the
                                          panel something to show, and it is a view of this
-                                         session's device - nothing is persisted about it. -->
-                                    <Button Classes="caption" Margin="0,0,6,0" FontSize="11" Padding="10,6"
+                                         session's device - nothing is persisted about it. A
+                                         text button rather than a caption mark: the caption
+                                         style pins a 44px icon width, which cut the label's
+                                         own text off. -->
+                                    <Button Classes="ghost" Margin="0,0,6,0" FontSize="11" Padding="12,6"
+                                            MinHeight="30"
                                             IsVisible="{Binding CanUseGenericPanel}"
                                             Command="{Binding ToggleMappingSurfaceCommand}"
                                             Content="{Binding SurfaceToggleLabel}"
@@ -625,55 +635,39 @@
                                     </ToggleButton>
                                 </StackPanel>
                             </Grid>
-                            <Viewbox Grid.Row="1" Stretch="Uniform" MaxHeight="380" MaxWidth="620"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,24,0,0">
-                                <Viewbox.RenderTransform>
-                                    <TransformGroup>
-                                        <!-- The stage surface - model or panel - shrinks while
-                                             the editor is open: the stage row is a fixed 420
-                                             and hands its height to the settings card's star
-                                             row either way, so the room is won by the
-                                             surface occupying less of the stage. Uniform and
-                                             centred - the transform origin is the centre - so
-                                             the surface keeps its proportions and stays
-                                             centred, and it is a render transform, so hit
-                                             testing rides the same matrix and every element
-                                             stays clickable exactly where it is drawn.
-                                             Closing returns the scale to 1 with nothing left
-                                             behind. The lift rides in the same group so the
-                                             two motions compose instead of overriding. -->
-                                        <ScaleTransform ScaleX="{Binding IsEditing, Converter={StaticResource EditorZoom}}"
-                                                        ScaleY="{Binding IsEditing, Converter={StaticResource EditorZoom}}">
-                                            <ScaleTransform.Transitions>
-                                                <Transitions>
-                                                    <DoubleTransition Property="ScaleX" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
-                                                    <DoubleTransition Property="ScaleY" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
-                                                </Transitions>
-                                            </ScaleTransform.Transitions>
-                                        </ScaleTransform>
-                                        <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
-                                            <TranslateTransform.Transitions>
-                                                <Transitions>
-                                                    <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
-                                                </Transitions>
-                                            </TranslateTransform.Transitions>
-                                        </TranslateTransform>
-                                    </TransformGroup>
-                                </Viewbox.RenderTransform>
-                                <!-- The two mapping surfaces share the stage's Viewbox, so the
-                                     lift and the zoom apply to both and hit testing rides the
-                                     same transform on either. Which one shows is the device's
-                                     answer and then the user's: a device that declares its
-                                     controls starts on the data-driven panel, and the
-                                     hand-drawn model - the surface for a device that declares
-                                     nothing - stays one switch away. -->
-                                <Grid>
+                            <!-- The two mapping surfaces are siblings in the stage's content
+                                 cell, not children of one Viewbox: the model keeps its uniform
+                                 scaling, and the generic panel is a responsive surface that
+                                 fills the cell and scrolls, so neither can overlap the other
+                                 or be clipped by a fixed design size. Which one shows is the
+                                 device's answer and then the user's. -->
+                            <Grid Grid.Row="1">
+                                <Viewbox Stretch="Uniform" MaxHeight="380" MaxWidth="620" Margin="0,24,0,0"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Viewbox.RenderTransform>
+                                        <TransformGroup>
+                                            <!-- The model rises while the editor is open,
+                                                 clearing the card below. The shrink itself is
+                                                 the stage row's: the Viewbox re-fits the
+                                                 model to the smaller slot, so the room is
+                                                 handed over for real and hit testing rides
+                                                 the same layout transform on either size. -->
+                                            <TranslateTransform Y="{Binding IsEditing, Converter={StaticResource EditorLift}}">
+                                                <TranslateTransform.Transitions>
+                                                    <Transitions>
+                                                        <DoubleTransition Property="Y" Duration="{DynamicResource MotionDurationSlow}" Easing="{DynamicResource MotionEaseStandard}" />
+                                                    </Transitions>
+                                                </TranslateTransform.Transitions>
+                                            </TranslateTransform>
+                                        </TransformGroup>
+                                    </Viewbox.RenderTransform>
                                     <controls:GamepadVisualizer x:Name="GamepadVisualizer" DataContext="{Binding Visualizer}"
                                                                 IsVisible="{Binding DataContext.(vm:MainWindowViewModel).IsGenericPanelMode, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource Not}}" />
-                                    <controls:GenericGamepadPanel DataContext="{Binding GenericPanel}"
-                                                                  IsVisible="{Binding DataContext.(vm:MainWindowViewModel).IsGenericPanelMode, RelativeSource={RelativeSource AncestorType=Window}}" />
-                                </Grid>
-                            </Viewbox>
+                                </Viewbox>
+                                <controls:GenericGamepadPanel x:Name="GenericPanel" DataContext="{Binding GenericPanel}"
+                                                              Margin="0,24,0,0"
+                                                              IsVisible="{Binding DataContext.(vm:MainWindowViewModel).IsGenericPanelMode, RelativeSource={RelativeSource AncestorType=Window}}" />
+                            </Grid>
                         </Grid>
 
                         <!-- The editor card is a FIXED frame, not a child of a scroll region:
@@ -683,7 +677,12 @@
                              matters most at the window's minimum height where the body has to
                              scroll. Its row collapses to zero when no mapping is open, handing
                              the whole height back to the model stage. The card slides up and
-                             fades in as it appears, and the model lifts out of its way. -->
+                             fades in as it appears, and the model lifts out of its way.
+
+                             The editor panel inside is built by the lazy host when a mapping
+                             opens for the first time and released again when it closes: the
+                             panel is the heaviest surface in the window, and a panel that only
+                             exists while it is open cannot leak a subscription per edit. -->
                         <Border Grid.Row="1" x:Name="EditorPanel" Classes="card" Margin="0,0,0,12"
                                 IsVisible="{Binding IsEditing}" ClipToBounds="True"
                                 Opacity="{Binding IsEditing, Converter={StaticResource EditorFade}}">
@@ -701,7 +700,13 @@
                                     <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionDurationBase}" Easing="{DynamicResource MotionEaseStandard}" />
                                 </Transitions>
                             </Border.Transitions>
-                            <views:MappingEditorPanel DataContext="{Binding Editor}" />
+                            <controls:LazyContent IsActive="{Binding IsEditing}">
+                                <controls:LazyContent.ContentFactory>
+                                    <DataTemplate x:DataType="vm:MainWindowViewModel">
+                                        <views:MappingEditorPanel DataContext="{Binding Editor}" />
+                                    </DataTemplate>
+                                </controls:LazyContent.ContentFactory>
+                            </controls:LazyContent>
                         </Border>
 
                         <!-- Connector layer. Drawn last so it sits in front of the cards and the
@@ -718,11 +723,31 @@
                 </TabItem>
 
                 <TabItem Header="鼠标灵敏度" DataContext="{Binding MouseSensitivity}">
-                    <views:MouseSensitivityPanel />
+                    <!-- The panel is built by the lazy host when its tab is selected for the
+                         first time and released again when the tab is left, so a tab nobody
+                         visits costs nothing. The host's activation rides the TabItem's own
+                         IsSelected through the LOGICAL tree: the TabControl re-parents a
+                         selected tab's content into its content presenter, so the TabItem is
+                         no longer a visual ancestor of the content while the tab is open. -->
+                    <controls:LazyContent IsActive="{Binding $parent[TabItem].IsSelected}">
+                        <controls:LazyContent.ContentFactory>
+                            <DataTemplate>
+                                <views:MouseSensitivityPanel />
+                            </DataTemplate>
+                        </controls:LazyContent.ContentFactory>
+                    </controls:LazyContent>
                 </TabItem>
 
                 <TabItem Header="滚轮灵敏度" DataContext="{Binding ScrollSensitivity}">
-                    <views:ScrollSensitivityPanel />
+                    <!-- Lazily hosted like the mouse panel above: built when the tab is
+                         selected for the first time, released when it is left. -->
+                    <controls:LazyContent IsActive="{Binding $parent[TabItem].IsSelected}">
+                        <controls:LazyContent.ContentFactory>
+                            <DataTemplate>
+                                <views:ScrollSensitivityPanel />
+                            </DataTemplate>
+                        </controls:LazyContent.ContentFactory>
+                    </controls:LazyContent>
                 </TabItem>
                 </TabControl>
             </Grid>
@@ -783,18 +808,24 @@
                     <!-- The scroll content reserves a 16px gutter on the right: the vertical
                          scrollbar is an overlay that paints over the content's edge rather
                          than taking layout space, so without the gutter it would sit on top
-                         of the rows' delete buttons (DESIGN 4.3.8). -->
+                         of the rows' delete buttons (DESIGN 4.3.8).
+
+                         The list is virtualized: only the cards on screen are realized, so a
+                         long profile measures a handful of card containers instead of the
+                         whole list. LazyMappingList also answers the view model's
+                         card-visible request for the cards that are not realized yet - the
+                         window's own handler can only find containers that exist. -->
                     <ScrollViewer Grid.Row="3" Margin="0,12,0,0" HorizontalScrollBarVisibility="Disabled">
-                        <ItemsControl x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding MappingCards}">
+                        <controls:LazyMappingList x:Name="MappingsList" Margin="0,0,16,0" ItemsSource="{Binding MappingCards}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <StackPanel />
+                                    <VirtualizingStackPanel />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <StaticResource ResourceKey="MappingCardTemplate" />
                             </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        </controls:LazyMappingList>
                     </ScrollViewer>
                 </Grid>
             </Border>
@@ -805,11 +836,21 @@
              sizing, and it spans only that column's width: the connection and engine state
              in the left column and the model in the centre column stay visible and live
              while it is open. Closing it hides the surface and nothing else, so an edit in
-             progress is exactly where it was left. -->
-        <views:SettingsPanel x:Name="SettingsPanelHost" Grid.Row="1"
-                             Width="300" Margin="0,8,0,8"
-                             HorizontalAlignment="Right" VerticalAlignment="Stretch"
-                             IsVisible="{Binding IsSettingsOpen}" />
+             progress is exactly where it was left.
+
+             The panel itself is built by the lazy host the first time the surface opens and
+             released again when it closes, so its bindings and its subscriptions to the
+             view model exist only while the surface is on screen. -->
+        <controls:LazyContent x:Name="SettingsPanelHost" Grid.Row="1"
+                              Width="300" Margin="0,8,0,8"
+                              HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                              IsActive="{Binding IsSettingsOpen}">
+            <controls:LazyContent.ContentFactory>
+                <DataTemplate>
+                    <views:SettingsPanel />
+                </DataTemplate>
+            </controls:LazyContent.ContentFactory>
+        </controls:LazyContent>
 
         <!-- WindowDecorations="None" strips the native resize border, so the window has to
              declare its own hit-test zones. Kept as the last child so it sits above the

@@ -48,6 +48,9 @@ public sealed class PrecisionButtonGuiTests
             Target = new MouseMoveTarget(
                 new MouseStickSettings { PrecisionButton = GamepadButton.RightStick }),
         });
+
+        // The editor panel is built by its lazy host when a mapping opens.
+        viewModel.IsEditing = true;
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
 

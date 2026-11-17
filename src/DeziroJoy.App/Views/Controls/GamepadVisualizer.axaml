@@ -323,7 +323,7 @@
                 </Ellipse>
                 <Ellipse Width="36" Height="36" Fill="{DynamicResource PadControlGlossBrush}" IsHitTestVisible="False" />
                 <Ellipse Canvas.Left="4" Canvas.Top="4" Width="28" Height="28" Stroke="{DynamicResource PadControlEdgeBrush}" StrokeThickness="1" IsHitTestVisible="False" />
-                <TextBlock Width="36" Height="36" LineHeight="36" Text="Y" FontSize="16" FontWeight="SemiBold"
+                <TextBlock x:Name="ButtonYLabel" Width="36" Height="36" LineHeight="36" Text="{Binding ButtonYLabel}" FontSize="16" FontWeight="SemiBold"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
             <Canvas Canvas.Left="336" Canvas.Top="140" Width="36" Height="36" Background="Transparent" Tag="Button:X">
@@ -333,7 +333,7 @@
                 </Ellipse>
                 <Ellipse Width="36" Height="36" Fill="{DynamicResource PadControlGlossBrush}" IsHitTestVisible="False" />
                 <Ellipse Canvas.Left="4" Canvas.Top="4" Width="28" Height="28" Stroke="{DynamicResource PadControlEdgeBrush}" StrokeThickness="1" IsHitTestVisible="False" />
-                <TextBlock Width="36" Height="36" LineHeight="36" Text="X" FontSize="16" FontWeight="SemiBold"
+                <TextBlock x:Name="ButtonXLabel" Width="36" Height="36" LineHeight="36" Text="{Binding ButtonXLabel}" FontSize="16" FontWeight="SemiBold"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
             <Canvas Canvas.Left="404" Canvas.Top="140" Width="36" Height="36" Background="Transparent" Tag="Button:B">
@@ -343,7 +343,7 @@
                 </Ellipse>
                 <Ellipse Width="36" Height="36" Fill="{DynamicResource PadControlGlossBrush}" IsHitTestVisible="False" />
                 <Ellipse Canvas.Left="4" Canvas.Top="4" Width="28" Height="28" Stroke="{DynamicResource PadControlEdgeBrush}" StrokeThickness="1" IsHitTestVisible="False" />
-                <TextBlock Width="36" Height="36" LineHeight="36" Text="B" FontSize="16" FontWeight="SemiBold"
+                <TextBlock x:Name="ButtonBLabel" Width="36" Height="36" LineHeight="36" Text="{Binding ButtonBLabel}" FontSize="16" FontWeight="SemiBold"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
             <Canvas Canvas.Left="370" Canvas.Top="174" Width="36" Height="36" Background="Transparent" Tag="Button:A">
@@ -353,7 +353,7 @@
                 </Ellipse>
                 <Ellipse Width="36" Height="36" Fill="{DynamicResource PadControlGlossBrush}" IsHitTestVisible="False" />
                 <Ellipse Canvas.Left="4" Canvas.Top="4" Width="28" Height="28" Stroke="{DynamicResource PadControlEdgeBrush}" StrokeThickness="1" IsHitTestVisible="False" />
-                <TextBlock Width="36" Height="36" LineHeight="36" Text="A" FontSize="16" FontWeight="SemiBold"
+                <TextBlock x:Name="ButtonALabel" Width="36" Height="36" LineHeight="36" Text="{Binding ButtonALabel}" FontSize="16" FontWeight="SemiBold"
                            Foreground="{DynamicResource PadLabelBrush}" TextAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False" />
             </Canvas>
 

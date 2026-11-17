@@ -130,6 +130,38 @@
                 </StackPanel>
             </Border>
 
+            <!-- The experimental rendering switch, Windows only: the software mode exists on
+                 the Win32 backend alone, so the section is not offered anywhere else. Like
+                 the input backend it is a persisted request only a restart can apply - the
+                 renderer is built once per process - but unlike it there is nothing to
+                 restart: the daemon draws nothing, so the card names the main-window restart
+                 as what applies it, and claims nothing about what the mode does better. -->
+            <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0"
+                    x:Name="RenderModeSection" IsVisible="{Binding IsRenderModeVisible}">
+                <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="界面渲染（仅 Windows）" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               x:Name="RenderModeIntroText"
+                               Text="实验性开关：强制 GUI 仅使用 CPU 软件渲染（Avalonia Win32 Software 后端）。默认按平台检测（Windows 上优先 AngleEgl，失败时回退软件渲染）；本开关不作任何性能或兼容性承诺，若 Software 无法初始化，应用会启动失败而不会回退。" />
+                    <TextBlock Classes="hint" Margin="0,2,0,0" TextWrapping="Wrap"
+                               x:Name="RenderModeApplyHintText"
+                               Text="保存后重启主程序生效（托盘进程在下次启动时同样读取此设置）。临时覆盖：设置环境变量 DEZIROJOY_RENDER=software|default，或以 --render=software|default 启动，覆盖优先于本设置。" />
+                    <RadioButton Margin="0,8,0,0" Content="平台检测（默认）"
+                                 x:Name="DefaultRenderOption"
+                                 IsChecked="{Binding IsDefaultRenderSelected, Mode=TwoWay}" />
+                    <RadioButton Margin="0,4,0,0" Content="软件渲染 Software（实验）"
+                                 x:Name="SoftwareRenderOption"
+                                 IsChecked="{Binding IsSoftwareRenderSelected, Mode=TwoWay}" />
+                    <Button Classes="ghost" Margin="0,8,0,0" Padding="10,4"
+                            Content="保存渲染设置" x:Name="ApplyRenderModeButton"
+                            Command="{Binding ApplyRenderModeCommand}" />
+                    <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
+                               x:Name="RenderModeStatusText"
+                               IsVisible="{Binding HasRenderModeStatusMessage}"
+                               Text="{Binding RenderModeStatusMessage}" />
+                </StackPanel>
+            </Border>
+
             <TextBlock Classes="hint" Margin="0,10,0,0" TextWrapping="Wrap"
                        x:Name="DaemonStatusText"
                        IsVisible="{Binding HasStatusMessage}"

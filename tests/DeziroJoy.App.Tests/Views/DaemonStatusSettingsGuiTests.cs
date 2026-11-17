@@ -4,6 +4,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DeziroJoy.App.Ipc;
 using DeziroJoy.App.Services;
 using DeziroJoy.App.Tests.ViewModels;
@@ -45,7 +46,9 @@ public sealed class DaemonStatusSettingsGuiTests
             window.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
-            var panel = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+            // The surface is open before the window is built, so the lazy host has already
+            // built the panel by the time it is shown.
+            var panel = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
             Assert.Equal("high", panel.FindControl<TextBlock>("InjectorIntegrityText")!.Text);
             Assert.Equal("3", panel.FindControl<TextBlock>("DaemonRevisionText")!.Text);
             Assert.Equal("10", panel.FindControl<TextBlock>("InjectedEventsText")!.Text);

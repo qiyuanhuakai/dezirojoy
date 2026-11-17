@@ -68,7 +68,12 @@ public partial class App : Application
             settings: themes,
             foregroundRuleStore: foregroundRules,
             schemeImportRecoveryStore: recovery,
-            restartDaemon: DesktopLauncher.RestartDaemonAsync);
+            restartDaemon: DesktopLauncher.RestartDaemonAsync,
+            recoverDaemon: DesktopLauncher.RecoverDaemonAsync,
+            // The daemon's input samples arrive on its own receive loop, faster than the
+            // window refreshes; the frame clock is what turns that stream into one UI
+            // dispatch per displayed frame instead of one queued post per sample.
+            sampleFrameClock: new DispatcherFrameClock());
 
         var services = new ServiceCollection();
         services.AddSingleton<IGamepadProvider>(provider);

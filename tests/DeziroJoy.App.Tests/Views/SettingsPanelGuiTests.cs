@@ -115,7 +115,8 @@ public sealed class SettingsPanelGuiTests : IDisposable
     {
         var (window, viewModel, _, _) = BuildWindow();
         window.UpdateLayout();
-        var panel = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
+        var panel = PanelOf(window);
         var close = panel.FindControl<CheckBox>("CloseToTrayBox")!;
         var minimize = panel.FindControl<CheckBox>("MinimizeToTrayBox")!;
 
@@ -240,6 +241,7 @@ public sealed class SettingsPanelGuiTests : IDisposable
     {
         var (window, viewModel, _, _) = BuildWindow();
         window.UpdateLayout();
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
         var panel = PanelOf(window);
         var toggle = panel.FindControl<CheckBox>("AutoDownloadUpdatesBox")!;
 
@@ -263,6 +265,7 @@ public sealed class SettingsPanelGuiTests : IDisposable
     {
         var (window, viewModel, _, _) = BuildWindow();
         window.UpdateLayout();
+        Click(window.FindControl<ToggleButton>("SettingsButton")!, window);
         var panel = PanelOf(window);
 
         var download = panel.FindControl<Button>("DownloadUpdateButton")!;
@@ -339,14 +342,16 @@ public sealed class SettingsPanelGuiTests : IDisposable
         window.UpdateLayout();
 
         var button = window.FindControl<ToggleButton>("SettingsButton")!;
-        var panel = PanelOf(window);
 
         Assert.False(viewModel.IsSettingsOpen);
-        Assert.False(panel.IsVisible, "the surface stays out of the way until it is asked for");
+        Assert.False(
+            window.GetVisualDescendants().OfType<SettingsPanel>().Any(),
+            "the surface is not built until it is opened for the first time");
 
         Click(button, window);
 
         Assert.True(viewModel.IsSettingsOpen);
+        var panel = PanelOf(window);
         Assert.True(panel.IsVisible);
         Assert.True(button.IsChecked, "the title-bar button shows the surface is open");
 
@@ -371,7 +376,9 @@ public sealed class SettingsPanelGuiTests : IDisposable
         Click(close, window);
 
         Assert.False(viewModel.IsSettingsOpen);
-        Assert.False(PanelOf(window).IsVisible);
+        Assert.False(
+            window.GetVisualDescendants().OfType<SettingsPanel>().Any(),
+            "closing releases the surface instead of leaving it hidden and resident");
         Assert.False(window.FindControl<ToggleButton>("SettingsButton")!.IsChecked);
     }
 

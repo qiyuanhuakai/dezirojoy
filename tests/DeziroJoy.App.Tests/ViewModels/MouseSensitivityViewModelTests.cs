@@ -744,4 +744,76 @@ public class MouseSensitivityViewModelTests
         Assert.False(vm.IsMeasuringDrift);
         Assert.Null(vm.SuggestedDeadZone);
     }
+
+    [Fact]
+    public void A_Parked_Preview_Reports_Static()
+    {
+        var vm = new MouseSensitivityViewModel { MaxSpeed = 4000f, IsLive = true };
+        AdvanceMany(vm, 120);
+
+        vm.IsLive = false;
+        AdvanceMany(vm, 700);
+
+        Assert.True(vm.IsStatic, "a settled, unpowered preview has nothing left to animate");
+    }
+
+    [Fact]
+    public void A_Decaying_Preview_Reports_Not_Static()
+    {
+        var vm = new MouseSensitivityViewModel { MaxSpeed = 4000f, IsLive = true };
+        AdvanceMany(vm, 120);
+
+        vm.IsLive = false;
+        AdvanceMany(vm, 2);
+
+        Assert.False(vm.IsStatic, "the dot is still gliding home and the speed still decaying");
+    }
+
+    [Fact]
+    public void A_Collecting_Measurement_Reports_Not_Static_Even_At_Rest()
+    {
+        // The window's preview gate parks a static panel; a measurement rides the same
+        // clock, so it must never report static or the collection would thin out.
+        var vm = new MouseSensitivityViewModel { IsRealInputMode = true };
+        AdvanceMany(vm, 700);
+
+        vm.StartDriftMeasurementCommand.Execute(null);
+
+        Assert.True(vm.IsMeasuringDrift);
+        Assert.False(vm.IsStatic);
+    }
+
+    [Fact]
+    public void The_Live_Sweep_Reports_Not_Static()
+    {
+        var vm = new MouseSensitivityViewModel { MaxSpeed = 1600f, IsLive = true };
+
+        AdvanceMany(vm, 60);
+
+        Assert.False(vm.IsStatic, "the scripted sweep always has a next frame");
+    }
+
+    [Fact]
+    public void A_Resting_Pad_Reports_Static_And_A_Sample_Wakes_It()
+    {
+        var vm = new MouseSensitivityViewModel
+        {
+            MaxSpeed = 1600f,
+            ResponseTime = 0f,
+            IsLive = true,
+            IsRealInputMode = true,
+        };
+
+        // A pad at rest: one sample, then the silence a still stick reports.
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0f, 0f));
+        AdvanceMany(vm, 60);
+
+        Assert.True(vm.IsStatic, "live real input at rest has nothing to animate");
+
+        // The stick comes off rest: the held sample alone must reopen the gate, with no
+        // tick in between to notice it.
+        vm.ApplySample(GamepadState.Create(default, 0f, 0f, 0.8f, 0f));
+
+        Assert.False(vm.IsStatic, "a pad off rest owes a frame again");
+    }
 }

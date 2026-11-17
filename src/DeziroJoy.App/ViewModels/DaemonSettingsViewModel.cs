@@ -13,6 +13,14 @@ namespace DeziroJoy.App.ViewModels;
 /// any platform and is unit-tested with a fake. On the same-user platform the card also drives
 /// the one-click device-access fix through <see cref="IDeviceAccessFixer"/> - the Linux-only
 /// permission repair mapping depends on - and publishes its outcome with its own status line.
+/// <para>
+/// The card also hosts the two switches that only a restart can apply: the daemon's input
+/// backend (the provider is built at daemon startup) and, on Windows alone, the GUI's
+/// experimental software rendering selection (the renderer is built at process startup). Both
+/// persist through their own store - <see cref="IInputBackendStore"/> beside the profiles, the
+/// shared <see cref="ThemeService"/> settings file - and neither ever claims the running
+/// process already changed.
+/// </para>
 /// </summary>
 public partial class DaemonSettingsViewModel : ObservableObject
 {
@@ -20,6 +28,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
     private readonly IDeviceAccessFixer _deviceAccessFixer;
     private readonly IDeviceAccessProbe _deviceAccessProbe;
     private readonly IInputBackendStore _backendStore;
+    private readonly ThemeService _settings;
+    private readonly Func<bool> _isWindows;
     private readonly Func<Task<bool>>? _restartDaemon;
     private DeviceAccessSnapshot? _deviceAccess;
     private string? _deviceAccessProbeError;
@@ -40,12 +50,16 @@ public partial class DaemonSettingsViewModel : ObservableObject
         IDeviceAccessFixer? deviceAccessFixer = null,
         IDeviceAccessProbe? deviceAccessProbe = null,
         IInputBackendStore? backendStore = null,
-        Func<Task<bool>>? restartDaemon = null)
+        Func<Task<bool>>? restartDaemon = null,
+        ThemeService? settings = null,
+        Func<bool>? isWindows = null)
     {
         _service = service ?? PlatformFactory.CreateDaemonService();
         _deviceAccessFixer = deviceAccessFixer ?? new DeviceAccessFixer();
         _deviceAccessProbe = deviceAccessProbe ?? new LinuxDeviceAccessProbe();
         _backendStore = backendStore ?? new InputBackendStore();
+        _settings = settings ?? new ThemeService();
+        _isWindows = isWindows ?? (static () => OperatingSystem.IsWindows());
         _restartDaemon = restartDaemon;
         _selectedBackend = _backendStore.Load();
         if (_backendStore.LastError is { } backendReadError)
@@ -54,6 +68,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
             // status line instead of silently showing a selection nobody chose.
             BackendStatusMessage = backendReadError;
         }
+
+        _selectedRenderMode = _settings.RenderMode;
 
         RefreshFromService();
     }
@@ -424,6 +440,74 @@ public partial class DaemonSettingsViewModel : ObservableObject
         BackendStatusMessage = restarted
             ? "已保存并重启常驻服务；上方“运行中的后端”显示守护进程实际使用的后端。"
             : "已保存设置，但重启常驻服务失败：请手动重启。重启前守护进程仍在原后端上运行，不会静默切换。";
+    }
+
+    /// <summary>
+    /// The persisted rendering selection. <see cref="AppRenderMode.Default"/> is the platform's
+    /// own detection and what a settings file that never chose reads back as;
+    /// <see cref="AppRenderMode.Software"/> asks the Win32 backend for CPU rendering only. A
+    /// change here is a request until <see cref="ApplyRenderMode"/> persists it and the next
+    /// GUI start honors it - there is no live renderer swap, so the card never implies the
+    /// running window changed how it draws.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDefaultRenderSelected))]
+    [NotifyPropertyChangedFor(nameof(IsSoftwareRenderSelected))]
+    private AppRenderMode _selectedRenderMode;
+
+    /// <summary>True while the radio for platform detection must read as checked.</summary>
+    public bool IsDefaultRenderSelected
+    {
+        get => SelectedRenderMode == AppRenderMode.Default;
+        set
+        {
+            if (value)
+            {
+                SelectedRenderMode = AppRenderMode.Default;
+            }
+        }
+    }
+
+    /// <summary>True while the radio for the software renderer must read as checked.</summary>
+    public bool IsSoftwareRenderSelected
+    {
+        get => SelectedRenderMode == AppRenderMode.Software;
+        set
+        {
+            if (value)
+            {
+                SelectedRenderMode = AppRenderMode.Software;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The software mode exists on the Win32 backend alone, so the whole section is offered
+    /// only on Windows. Elsewhere the platform's own detection runs no matter what a settings
+    /// file says, and offering a switch that cannot act would be a lie.
+    /// </summary>
+    public bool IsRenderModeVisible => _isWindows();
+
+    /// <summary>The outcome of the last apply, kept on its own line so it reads as a result.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasRenderModeStatusMessage))]
+    private string _renderModeStatusMessage = string.Empty;
+
+    public bool HasRenderModeStatusMessage => RenderModeStatusMessage.Length > 0;
+
+    /// <summary>
+    /// Persists the selection and says what still has to happen for it to matter. The
+    /// renderer is built once per process and cannot be swapped live, so the restart is the
+    /// only honest way to apply a switch - and the daemon is deliberately not restarted: it
+    /// draws nothing, and bouncing it would cost the user their mappings for no reason. No
+    /// claim is made about what the new mode does better; the line only states what was
+    /// saved and when it takes effect.
+    /// </summary>
+    [RelayCommand]
+    private void ApplyRenderMode()
+    {
+        _settings.SetRenderMode(SelectedRenderMode);
+        RenderModeStatusMessage = "已保存渲染设置；重启主程序后生效（当前窗口仍按启动时的渲染方式运行）。";
     }
 
     /// <summary>Re-reads the scheduler and token, then republishes every derived property.</summary>

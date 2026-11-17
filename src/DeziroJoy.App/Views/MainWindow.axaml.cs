@@ -30,6 +30,16 @@ public partial class MainWindow : Window
 
     private static readonly TimeSpan SyncInterval = TimeSpan.FromMilliseconds(300);
 
+    /// <summary>
+    /// Tab indices of <c>MainTabs</c>. The mapping surface and the appended foreground-rules
+    /// panel host no preview; each of the two sensitivity tabs hosts one.
+    /// </summary>
+    private const int MappingTabIndex = 0;
+
+    private const int MouseTabIndex = 1;
+
+    private const int ScrollTabIndex = 2;
+
     private readonly DispatcherTimer _previewTimer = new() { Interval = PreviewInterval };
 
     private readonly DispatcherTimer _syncTimer = new() { Interval = SyncInterval };
@@ -55,6 +65,13 @@ public partial class MainWindow : Window
     /// </summary>
     private TabItem? _foregroundRulesTab;
 
+    /// <summary>
+    /// The window's tab surface, kept because the preview gate reads the selected tab on every
+    /// 16 ms tick. The foreground-rules tab is appended to this same control, so its index lands
+    /// after the three static tabs and reads as "no preview" like the mapping tab does.
+    /// </summary>
+    private TabControl? _tabs;
+
     private readonly System.Diagnostics.Stopwatch _previewClock = new();
 
     private TimeSpan _lastPreviewTime;
@@ -76,6 +93,13 @@ public partial class MainWindow : Window
     private bool _windowActive;
 
     private bool _minimizeRequestInProgress;
+
+    /// <summary>
+    /// How many panel advances the preview gate has let through since the window opened -
+    /// one per drawn frame per panel. A tick the gate dropped leaves this untouched, so a
+    /// test can tell "the timer fired" from "the preview moved".
+    /// </summary>
+    internal long AppliedPreviewTicks { get; private set; }
 
     internal Func<Task<bool>>? MinimizeToTrayRequested { get; set; }
 
@@ -295,6 +319,7 @@ public partial class MainWindow : Window
         // the only thing that knows about all three.
         if (this.FindControl<TabControl>("MainTabs") is { } tabs)
         {
+            _tabs = tabs;
             tabs.SelectionChanged += (_, _) => UpdatePhysicalInputScope();
         }
 
@@ -618,30 +643,90 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private void OnPreviewTick(object? sender, EventArgs e)
+    internal void OnPreviewTick(object? sender, EventArgs e)
     {
         var now = _previewClock.Elapsed;
         var delta = now - _lastPreviewTime;
         _lastPreviewTime = now;
 
+        // A busy UI thread delays the tick; the sweep follows real elapsed time so it stays in
+        // sync, but a multi-second stall (modal dialog, blocking I/O) is clamped to one generous
+        // frame so the dot does not teleport across the pad when the thread finally frees up.
+        // The bookkeeping runs before the gate on purpose: a gate that dropped a tick without
+        // recording the time it covered would hand the next frame a debt of the whole pause.
         if (delta < TimeSpan.Zero || delta > MaxPreviewDelta)
         {
             delta = PreviewInterval;
         }
 
+        AdvancePreview(delta);
+    }
+
+    /// <summary>
+    /// One preview frame. The 16 ms timer keeps firing whatever the window is doing, but a
+    /// frame is drawn only when something is on screen to animate: the window shown, active
+    /// and un-minimized, the panel's own tab selected, and the panel not parked at rest. A
+    /// running drift measurement outranks every one of those gates - its collection rides
+    /// this clock, so dropping frames would thin the distribution the suggested deadzone is
+    /// built from.
+    /// <para>
+    /// Nothing here reaches the daemon: the engine ticks its own loop whatever this window
+    /// does, and the presence poll below dispatches no command - so gating the preview never
+    /// throttles input or release.
+    /// </para>
+    /// <para>
+    /// A dropped frame leaves both panels exactly where they were, so a panel that comes back
+    /// into view resumes from its held phase and its latest sample with one ordinary frame,
+    /// never a replay of the time it spent off screen.
+    /// </para>
+    /// </summary>
+    internal void AdvancePreview(TimeSpan delta)
+    {
+        // Recomputed on every tick, gated or not: a panel parked at rest must notice the
+        // engine coming back the moment it does, or the rest gate could never open again.
         UpdatePreviewLiveness();
 
-        ViewModel.MouseSensitivity.Advance(delta);
-        ViewModel.ScrollSensitivity.Advance(delta);
+        var mouse = ViewModel.MouseSensitivity;
+        var scroll = ViewModel.ScrollSensitivity;
+
+        var drawMouse = mouse.IsMeasuringDrift
+            || (PreviewOnScreen(MouseTabIndex) && !mouse.IsStatic);
+        var drawScroll = scroll.IsMeasuringDrift
+            || (PreviewOnScreen(ScrollTabIndex) && !scroll.IsStatic);
+
+        if (drawMouse)
+        {
+            mouse.Advance(delta);
+            AppliedPreviewTicks++;
+        }
+
+        if (drawScroll)
+        {
+            scroll.Advance(delta);
+            AppliedPreviewTicks++;
+        }
 
         // With the mapping loop stopped nothing polls the pad, so live highlighting and
         // pad-driven navigation would freeze. Presence sampling is the stopped-state
-        // counterpart of the engine's Sampled event: it polls without ticking or injecting.
-        if (!ViewModel.Host.IsRunning)
+        // counterpart of the engine's Sampled event: it polls without ticking or injecting,
+        // so it rides the same gate - including the measurement override above, which keeps
+        // a hidden calibration's held sample fresh.
+        if ((drawMouse || drawScroll) && !ViewModel.Host.IsRunning)
         {
             ViewModel.Host.SamplePresence();
         }
     }
+
+    /// <summary>
+    /// Whether a frame on the given tab would actually be seen right now: the window shown,
+    /// active and un-minimized, and the tab selected. A hidden, deactivated or minimized
+    /// window shows nothing and an unselected tab hosts no visible preview, so the panels
+    /// freeze rather than animate into a surface nobody sees.
+    /// </summary>
+    private bool PreviewOnScreen(int tabIndex)
+        => IsVisible && _windowActive && WindowState != WindowState.Minimized && SelectedTab() == tabIndex;
+
+    private int SelectedTab() => _tabs?.SelectedIndex ?? -1;
 
     /// <summary>
     /// The scripted preview sweep stands in for live stick input, so it only runs while the

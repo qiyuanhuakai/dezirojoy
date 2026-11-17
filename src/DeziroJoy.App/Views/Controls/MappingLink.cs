@@ -30,31 +30,20 @@ public sealed class MappingLink : Control
 
     private MappingEditorViewModel? _editor;
 
+    private bool _subscribed;
+
     private (Point Start, Point End)? _lastConnector;
 
     protected override void OnDataContextChanged(EventArgs e)
     {
         base.OnDataContextChanged(e);
 
-        if (_vm is not null)
-        {
-            _vm.PropertyChanged -= OnViewModelPropertyChanged;
-        }
-
-        if (_editor is not null)
-        {
-            _editor.PropertyChanged -= OnEditorPropertyChanged;
-            _editor = null;
-        }
+        Unsubscribe();
 
         _vm = DataContext as MainWindowViewModel;
+        _editor = _vm?.Editor;
 
-        if (_vm is not null)
-        {
-            _vm.PropertyChanged += OnViewModelPropertyChanged;
-            _editor = _vm.Editor;
-            _editor.PropertyChanged += OnEditorPropertyChanged;
-        }
+        Subscribe();
 
         UpdateLinkage();
     }
@@ -62,6 +51,13 @@ public sealed class MappingLink : Control
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
+
+        // The visualizer and the layout pass are visual-tree wiring, but the view model and
+        // its editor are not: their subscriptions outlive every attach, so a detach that
+        // forgets them leaves the link listening to a view model whose window is gone - and
+        // every reopen of the window adds another listener to the same instance. Subscribing
+        // here as well as on the data-context change is what makes the pair symmetric.
+        Subscribe();
 
         if (Find<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
         {
@@ -75,6 +71,8 @@ public sealed class MappingLink : Control
     {
         base.OnDetachedFromVisualTree(e);
 
+        Unsubscribe();
+
         if (Find<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
         {
             visualizer.ElementClicked -= OnElementClicked;
@@ -84,9 +82,57 @@ public sealed class MappingLink : Control
         _lastConnector = null;
     }
 
+    /// <summary>
+    /// Follows the view model and its editor, once. The guard keeps the two entry points -
+    /// the data-context change and the visual-tree attach - from doubling the subscription
+    /// when both fire for the same data context, which is the normal order.
+    /// </summary>
+    private void Subscribe()
+    {
+        if (_subscribed || _vm is null)
+        {
+            return;
+        }
+
+        _vm.PropertyChanged += OnViewModelPropertyChanged;
+
+        if (_editor is not null)
+        {
+            _editor.PropertyChanged += OnEditorPropertyChanged;
+        }
+
+        _subscribed = true;
+    }
+
+    /// <summary>
+    /// Stops following them, whatever the data context is now: the pair is released by
+    /// identity, so a data-context change to another view model cannot leave the old one's
+    /// handler behind either.
+    /// </summary>
+    private void Unsubscribe()
+    {
+        if (!_subscribed)
+        {
+            return;
+        }
+
+        if (_vm is not null)
+        {
+            _vm.PropertyChanged -= OnViewModelPropertyChanged;
+        }
+
+        if (_editor is not null)
+        {
+            _editor.PropertyChanged -= OnEditorPropertyChanged;
+        }
+
+        _subscribed = false;
+    }
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(MainWindowViewModel.SelectedMapping) or nameof(MainWindowViewModel.IsEditing))
+        if (e.PropertyName is nameof(MainWindowViewModel.SelectedMapping) or nameof(MainWindowViewModel.IsEditing)
+            or nameof(MainWindowViewModel.IsGenericPanelMode))
         {
             UpdateLinkage();
         }
@@ -132,7 +178,17 @@ public sealed class MappingLink : Control
             return;
         }
 
-        if (Find<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
+        // The model's highlight only means something while the model is the surface: in
+        // generic mode the panel's own states - live, pressed, capture - are the answer, and
+        // the visualizer behind it is hidden anyway.
+        if (_vm.IsGenericPanelMode)
+        {
+            if (Find<GamepadVisualizer>("GamepadVisualizer") is { } hidden)
+            {
+                hidden.SelectedSource = null;
+            }
+        }
+        else if (Find<GamepadVisualizer>("GamepadVisualizer") is { } visualizer)
         {
             visualizer.SelectedSource = ActiveSource(_vm);
         }
@@ -239,24 +295,83 @@ public sealed class MappingLink : Control
 
         // The editor card is a fixed frame outside the scroll region, so while it is open the
         // line always has a valid endpoint and never has to be dropped for scrolling.
-        var element = Find<GamepadVisualizer>("GamepadVisualizer")?.ElementFor(source);
         var layer = Find<Canvas>("ConnectorLayer");
         var editor = Find<Border>("EditorPanel");
 
-        if (element is null || layer is null || editor is not { IsVisible: true })
+        if (layer is null || editor is not { IsVisible: true })
         {
             return null;
         }
 
-        var start = element.TranslatePoint(new Point(element.Bounds.Width / 2, element.Bounds.Height / 2), layer);
-        var end = editor.TranslatePoint(new Point(editor.Bounds.Width / 2, 0), layer);
+        var start = StageStart(source, layer);
+        if (start is null)
+        {
+            return null;
+        }
 
-        if (start is null || end is null)
+        var end = editor.TranslatePoint(new Point(editor.Bounds.Width / 2, 0), layer);
+        if (end is null)
         {
             return null;
         }
 
         return (start.Value, end.Value);
+    }
+
+    /// <summary>
+    /// Where the control being edited sits on the stage right now: its card on the generic
+    /// panel, or its element on the hand-drawn model. Either way the line starts at the
+    /// control the editor is editing.
+    /// <para>
+    /// A control with no position on the stage has no line: hidden by the user, still waiting
+    /// in 更多输入, not declared, or scrolled out of the panel's view. Dropping the line is
+    /// the safe answer - it is redrawn on the next layout pass once the control is back.
+    /// </para>
+    /// </summary>
+    private Point? StageStart(InputBinding source, Canvas layer)
+    {
+        if (_vm is { IsGenericPanelMode: true })
+        {
+            if (Find<GenericGamepadPanel>("GenericPanel") is not { } panel)
+            {
+                return null;
+            }
+
+            var card = panel.CardFor(source);
+            if (card is null || !card.IsVisible)
+            {
+                return null;
+            }
+
+            var start = card.TranslatePoint(new Point(card.Bounds.Width / 2, card.Bounds.Height / 2), layer);
+            if (start is null)
+            {
+                return null;
+            }
+
+            // The card is inside the panel's scroll region, so being in the tree is not the
+            // same as being on the stage: one scrolled out of the viewport would draw the
+            // line to a card nobody can see. The viewport's own rect is the stage's answer.
+            var viewport = panel.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+            if (viewport is null)
+            {
+                return null;
+            }
+
+            var visible = viewport.TranslatePoint(default, layer) is { } origin
+                ? new Rect(origin, viewport.Bounds.Size)
+                : (Rect?)null;
+
+            return visible is { } area && area.Contains(start.Value) ? start : null;
+        }
+
+        var element = Find<GamepadVisualizer>("GamepadVisualizer")?.ElementFor(source);
+        if (element is null)
+        {
+            return null;
+        }
+
+        return element.TranslatePoint(new Point(element.Bounds.Width / 2, element.Bounds.Height / 2), layer);
     }
 
     /// <summary>

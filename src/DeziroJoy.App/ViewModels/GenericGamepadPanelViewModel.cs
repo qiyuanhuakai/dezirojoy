@@ -229,6 +229,15 @@ public sealed partial class GenericGamepadPanelViewModel : ObservableObject
     }
 
     /// <summary>
+    /// The item that stands for one physical control, or null when the panel has none.
+    /// Identity is physical - see <see cref="SameSource"/> - so a direction or a gesture a
+    /// mapping configures on the control still finds the card the panel drew for it, which
+    /// is what the connector line and the capture mark both ask for.
+    /// </summary>
+    public GenericControlItem? ItemFor(InputBinding source)
+        => Items.FirstOrDefault(item => SameSource(item.Source, source));
+
+    /// <summary>
     /// Re-derives every item's bound state from the profile. A control that just gained its
     /// first mapping joins the always-shown half of the panel; one that lost its last moves
     /// to 更多输入 if the device has not detected it. The mappings themselves are untouched -

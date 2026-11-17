@@ -12,9 +12,17 @@ namespace DeziroJoy.App.Views;
 /// window's view models, so the only state it owns is the subscription to the platform
 /// actions a view model deliberately does not perform - opening the release page in the
 /// browser and exiting the process for an update restart.
+/// <para>
+/// The panel is built by a lazy host, so it loads and unloads once per open rather than once
+/// per window. The subscribed view model is therefore held in a field: Unloaded can arrive a
+/// dispatcher pass after the panel was detached, by which time the DataContext the handler
+/// would otherwise read is already gone.
+/// </para>
 /// </summary>
 public partial class SettingsPanel : UserControl
 {
+    private MainWindowViewModel? _subscribed;
+
     public SettingsPanel()
     {
         InitializeComponent();
@@ -24,8 +32,9 @@ public partial class SettingsPanel : UserControl
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel)
+        if (_subscribed is null && DataContext is MainWindowViewModel viewModel)
         {
+            _subscribed = viewModel;
             viewModel.Update.OpenReleasePageRequested += OnOpenReleasePageRequested;
             viewModel.Update.RestartRequested += OnRestartRequested;
         }
@@ -33,8 +42,9 @@ public partial class SettingsPanel : UserControl
 
     private void OnUnloaded(object? sender, RoutedEventArgs e)
     {
-        if (DataContext is MainWindowViewModel viewModel)
+        if (_subscribed is { } viewModel)
         {
+            _subscribed = null;
             viewModel.Update.OpenReleasePageRequested -= OnOpenReleasePageRequested;
             viewModel.Update.RestartRequested -= OnRestartRequested;
         }

@@ -70,9 +70,21 @@ public sealed class MappingRowKeyboardTests
         => window.FindControl<GamepadVisualizer>("GamepadVisualizer")!
             .GetVisualAncestors().OfType<Viewbox>().First();
 
+    /// <summary>
+    /// The row's container, scrolled to first: the list is virtualized, so a row below the
+    /// fold has no container until the list scrolls to it - exactly as in the app.
+    /// </summary>
     private static MappingRowBorder RowFor(Window window, MappingRowViewModel row)
     {
         var list = window.FindControl<ItemsControl>("MappingsList")!;
+        if (window.DataContext is MainWindowViewModel viewModel
+            && viewModel.MappingCards.FirstOrDefault(card => card.Mappings.Contains(row)) is { } card)
+        {
+            list.ScrollIntoView(card);
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+        }
+
         return list.GetVisualDescendants().OfType<MappingRowBorder>().Single(candidate => candidate.DataContext == row);
     }
 
@@ -91,16 +103,26 @@ public sealed class MappingRowKeyboardTests
     private static List<TextBlock> HeaderTexts(Window window)
     {
         var viewbox = ModelViewbox(window);
-        var stage = (Panel)viewbox.Parent!;
+
+        // The stage grid: the ancestor that owns the header row. The Viewbox's own parent is
+        // the surface cell now that the two surfaces are siblings, so the walk goes up to
+        // the grid that still contains the stage title.
+        var stage = viewbox.GetVisualAncestors().OfType<Grid>()
+            .First(grid => grid.GetVisualDescendants().OfType<TextBlock>()
+                .Any(text => text.Text == "手柄模型"));
         var modelTexts = viewbox.GetVisualDescendants().OfType<TextBlock>().ToHashSet();
 
         // The temporary hijack toggle lives beside the header but is a control, not a header
-        // label; its caption must not count toward the title/subtitle pair.
+        // label; its caption must not count toward the title/subtitle pair. The generic
+        // panel's own texts - zone titles and card labels - are the surface, not the header,
+        // for exactly the same reason.
         var toggleTexts = window.FindControl<ToggleButton>("GamepadHijackToggle")
+            ?.GetVisualDescendants().OfType<TextBlock>().ToHashSet() ?? [];
+        var panelTexts = window.FindControl<GenericGamepadPanel>("GenericPanel")
             ?.GetVisualDescendants().OfType<TextBlock>().ToHashSet() ?? [];
 
         var header = stage.GetVisualDescendants().OfType<TextBlock>()
-            .Where(text => text.IsEffectivelyVisible && !modelTexts.Contains(text) && !toggleTexts.Contains(text))
+            .Where(text => text.IsEffectivelyVisible && !modelTexts.Contains(text) && !toggleTexts.Contains(text) && !panelTexts.Contains(text))
             .ToList();
 
         Assert.Equal(2, header.Count);
@@ -149,9 +171,8 @@ public sealed class MappingRowKeyboardTests
 
         var viewbox = ModelViewbox(window);
         var lift = ModelMotion.Lift(viewbox);
-        var zoom = ModelMotion.Zoom(viewbox);
 
-        // Headless runs no clock, so the animated motions never leave their start values
+        // Headless runs no clock, so the animated motion never leaves its start values
         // here. Detaching the transitions makes the TARGETS observable, exactly as
         // Opening_The_Editor_Lifts_The_Model_With_An_Animated_Transform does.
         ModelMotion.Detach(viewbox);
@@ -161,18 +182,15 @@ public sealed class MappingRowKeyboardTests
         Click(ModelElement(window, "ButtonA"), window);
         Assert.True(viewModel.IsEditing);
 
-        // Both motions land, and they compose in one group: the lift still carries the
-        // model up by its full 24, and the zoom shrinks it about its centre - the rendered
-        // size that produces is pinned by the dedicated zoom test, which measures the
-        // transform rather than this helper's layout-sized rectangle.
+        // The lift lands and carries the model up by its full 24. The shrink itself is the
+        // stage row's real height handover, which the Viewbox re-fits - pinned by
+        // Opening_The_Editor_Shrinks_The_Stage_For_Real_And_Takes_The_Height_Back - so the
+        // motion this test owns is the lift alone.
         Assert.Equal(-24d, lift.Y);
-        Assert.Equal(0.65d, zoom.ScaleX, 3);
-        Assert.Equal(zoom.ScaleX, zoom.ScaleY);
 
         var lifted = ModelRect(window);
 
         // The fix reserves room for the lift; it must not remove the motion itself, and the
-        // zoom only adds clearance: the model's top never reaches the stage header - the
         // inset the lift was reserved against is still what keeps the header clear.
         Assert.True(lifted.Top >= header.Bottom,
             $"the open model (top {lifted.Top}) overlaps the stage header (bottom {header.Bottom})");

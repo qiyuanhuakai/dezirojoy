@@ -810,14 +810,18 @@ public sealed class GestureEditorGuiTests
     public void Choosing_A_Direction_Refreshes_The_Bound_Header()
     {
         var (window, viewModel) = OpenEditorOn("LeftStickPad");
+
+        // The header TextBlock the panel binds SourceDescription to, captured while the
+        // panel is still showing the description it was built with: the panel is created
+        // when the editor opens, and a target-kind change that only moves NeedsDirection
+        // re-reads the getter without announcing SourceDescription, so the capture is
+        // taken against the description the open itself rendered.
+        var header = EditorPanelOf(window).GetLogicalDescendants().OfType<TextBlock>()
+            .First(text => text.Text == viewModel.Editor.SourceDescription);
+
         ChooseTargetKind(window, MappingTargetKind.KeyPress);
 
         Assert.Equal("左摇杆（上）", viewModel.Editor.SourceDescription);
-
-        // The header TextBlock the panel binds SourceDescription to, captured before the
-        // choice so the assertion is on the rendered control, not on the getter.
-        var header = EditorPanelOf(window).GetLogicalDescendants().OfType<TextBlock>()
-            .First(text => text.Text == viewModel.Editor.SourceDescription);
 
         var raised = new List<string>();
         viewModel.Editor.PropertyChanged += (_, e) => raised.Add(e.PropertyName!);

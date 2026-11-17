@@ -278,8 +278,16 @@ internal static class JoystickMappingFlow
             Console.WriteLine("注意：SDL 未能在本次运行中登记该 GUID 的映射，重启后请用 joysticks 复核。");
         }
 
-        Console.WriteLine("映射在 daemon 启动时通过 SDL_AddGamepadMapping 载入，重启常驻服务后生效；");
-        Console.WriteLine("同一文件也会被 Sdl3Probe 载入，因此重启后用 list 即可看到该设备成为标准 Gamepad。");
+        // SDL applies a mapping added at runtime immediately, including to a device that was
+        // already enumerated - so this is answerable now rather than after a restart. Saying
+        // "restart and see" when the answer is already available would be a needless guess.
+        var recognized = Sdl3JoystickCatalog.IsGamepad(target.InstanceId);
+        Console.WriteLine(recognized
+            ? $"本次运行中 SDL 已把「{target.Name}」识别为标准 Gamepad（{target.GuidString}）。"
+            : $"本次运行中 SDL 仍未把「{target.Name}」识别为标准 Gamepad；请检查上面的诊断。");
+
+        Console.WriteLine("daemon 只在启动时读取一次该文件，因此需要重启常驻服务才会改读这台设备；");
+        Console.WriteLine("同一文件也会被 Sdl3Probe 载入，重启后用 list 即可看到该设备成为标准 Gamepad。");
 
         return 0;
     }

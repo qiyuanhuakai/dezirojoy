@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DeziroJoy.App.ViewModels;
@@ -159,6 +160,85 @@ public sealed class GenericGamepadPanelGuiTests
         viewModel.RestoreHiddenCommand.Execute(null);
 
         Assert.Contains(lb, viewModel.ShoulderItems);
+    }
+
+    [AvaloniaFact]
+    public void The_Hide_Affordance_Never_Covers_The_Card_It_Sits_On()
+    {
+        var viewModel = PanelWith();
+        var (window, panel, _) = Host(viewModel);
+
+        var lb = viewModel.Items.Single(item => item.Label == "LB");
+        var card = CardFor(panel, "LB");
+        var hide = AffordanceFor(panel, "×", lb);
+        var frame = card.GetVisualAncestors().OfType<Border>().First();
+
+        var cardRect = RectIn(card, panel);
+        var hideRect = RectIn(hide, panel);
+        var frameRect = RectIn(frame, panel);
+
+        // The badge has its own column beside the card: it never steals the card's width,
+        // so the two never overlap - the fixed 64px card sharing one row between them used
+        // to sit the × on top of the button - and neither runs past the frame that sizes it.
+        Assert.False(cardRect.Intersects(hideRect), $"the × {hideRect} overlaps the card {cardRect}");
+        Assert.True(hideRect.Left >= cardRect.Right - 0.5,
+            $"the × must sit beside the card, it starts at {hideRect.Left} of a card ending at {cardRect.Right}");
+        Assert.True(cardRect.Right <= frameRect.Right + 0.5,
+            $"the card {cardRect} overruns its frame {frameRect}");
+        Assert.True(hideRect.Right <= frameRect.Right + 0.5,
+            $"the × {hideRect} overruns its frame {frameRect}");
+    }
+
+    [AvaloniaFact]
+    public void A_Long_Label_Wraps_Inside_The_Card_Instead_Of_Overflowing_It()
+    {
+        // The label is the device's own text, and a description is free to be long: the Core
+        // names Back "Back / Select" and Start "Start / Options", which no one-line card
+        // holds at this size.
+        var viewModel = new GenericGamepadPanelViewModel
+        {
+            OpenControlRequested = _ => { },
+            RequestStickModeChange = (_, _) => Task.FromResult(true),
+        };
+        viewModel.Load(
+            [
+                new GamepadControlDescriptor(
+                    new ButtonBinding(GamepadButton.Back),
+                    "Back / Select",
+                    GamepadControlKind.Button,
+                    GamepadControlZone.Functions),
+            ],
+            _ => true);
+        var (window, panel, _) = Host(viewModel);
+
+        var card = CardFor(panel, "Back / Select");
+        var label = card.GetVisualDescendants().OfType<TextBlock>()
+            .Single(text => text.Text == "Back / Select");
+        var frame = card.GetVisualAncestors().OfType<Border>().First();
+
+        var cardRect = RectIn(card, panel);
+        var labelRect = RectIn(label, panel);
+        var frameRect = RectIn(frame, panel);
+
+        // The label wraps - and ellipsises at its second line - inside the card, and the
+        // card stays inside its frame: nothing spills over the card's edge, over the frame,
+        // or onto the neighbour beside it.
+        Assert.Equal(TextWrapping.Wrap, label.TextWrapping);
+        Assert.Equal(TextTrimming.CharacterEllipsis, label.TextTrimming);
+        Assert.True(labelRect.Left >= cardRect.Left - 0.5,
+            $"the label {labelRect} spills left of the card {cardRect}");
+        Assert.True(labelRect.Right <= cardRect.Right + 0.5,
+            $"the label {labelRect} spills right of the card {cardRect}");
+        Assert.True(labelRect.Bottom <= cardRect.Bottom + 0.5,
+            $"the label {labelRect} spills below the card {cardRect}");
+        Assert.True(cardRect.Right <= frameRect.Right + 0.5,
+            $"the card {cardRect} overruns its frame {frameRect}");
+    }
+
+    private static Rect RectIn(Control control, Control host)
+    {
+        var origin = control.TranslatePoint(new Point(0, 0), host) ?? default;
+        return new Rect(origin, control.Bounds.Size);
     }
 
     [AvaloniaFact]

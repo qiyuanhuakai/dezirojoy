@@ -39,7 +39,8 @@ public sealed class WindowsCompatibilityGuiTests
 
         vm.OpenSettingsCommand.Execute(null);
         window.UpdateLayout();
-        var settings = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        // The surface is open, so the lazy host has built the panel.
+        var settings = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
         var button = settings.FindControl<Button>("DisableGameBarControllerLaunchButton")!;
         Assert.True(button.IsVisible);
 
@@ -69,7 +70,8 @@ public sealed class WindowsCompatibilityGuiTests
 
         vm.OpenSettingsCommand.Execute(null);
         window.UpdateLayout();
-        var settings = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        // The surface is open, so the lazy host has built the panel.
+        var settings = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
         var register = settings.FindControl<Button>("RegisterGameBarPopupHandlerButton")!;
         var restore = settings.FindControl<Button>("RestoreGameBarPopupHandlerButton")!;
         Assert.True(register.IsVisible);
@@ -110,7 +112,8 @@ public sealed class WindowsCompatibilityGuiTests
 
         vm.OpenSettingsCommand.Execute(null);
         window.UpdateLayout();
-        var settings = window.FindControl<SettingsPanel>("SettingsPanelHost")!;
+        // The surface is open, so the lazy host has built the panel.
+        var settings = window.GetVisualDescendants().OfType<SettingsPanel>().Single();
         var register = settings.FindControl<Button>("RegisterGameBarPopupHandlerButton")!;
         var restore = settings.FindControl<Button>("RestoreGameBarPopupHandlerButton")!;
 

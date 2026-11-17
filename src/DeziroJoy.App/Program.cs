@@ -7,6 +7,7 @@ using DeziroJoy.App.Services;
 using DeziroJoy.Platform.Windows.Elevation;
 using DeziroJoy.Platform.Windows.Gaming;
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -38,6 +39,15 @@ internal static class Program
         if (HasFlag(args, "--daemon"))
         {
             return DaemonHost.Run();
+        }
+
+        // The elevated recovery entry: an elevated copy of this product, asked for by the
+        // supervisor when the daemon that stopped answering runs with a token the GUI
+        // does not have and no planned task owns it. It ends exactly the daemon the
+        // caller identified and then becomes its replacement.
+        if (HasFlag(args, "--recover-daemon"))
+        {
+            return ElevatedDaemonRecovery.Run(args);
         }
 
         if (HasFlag(args, "--install-daemon"))
@@ -80,8 +90,66 @@ internal static class Program
         return DesktopLauncher.Launch(args);
     }
 
-    public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont().LogToTrace();
+    /// <summary>
+    /// Builds the GUI application. The rendering backend is resolved here instead of being
+    /// pinned in the chain: the persisted selection, the <c>DEZIROJOY_RENDER</c> variable and
+    /// the <c>--render=</c> switch choose between the platform's own detection and the Win32
+    /// software mode, and the choice is fixed for the process - a live window cannot swap its
+    /// renderer, which is why the settings card asks for a restart rather than applying the
+    /// switch on the spot. Every source degrades to the platform default, so a launch that
+    /// names nothing, a settings file that names something unreadable, and a platform where
+    /// the software mode does not exist all start exactly as they did before the switch.
+    /// </summary>
+    public static AppBuilder BuildAvaloniaApp(string[]? args = null)
+    {
+        var builder = AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont().LogToTrace();
+
+        var (renderMode, ignored) = AppRenderModes.Resolve(
+            new ThemeService().RenderMode,
+            CommandLineValue(args, AppRenderModes.CommandLineSwitch),
+            Environment.GetEnvironmentVariable(AppRenderModes.EnvironmentVariable),
+            OperatingSystem.IsWindows());
+
+        if (ignored is { } note)
+        {
+            // An override that was not honoured is the one part of an A/B run that cannot be
+            // seen from outside the process; the trace is where the run records what it
+            // actually started with.
+            Trace.WriteLine($"[DeziroJoy] 渲染模式：{note}");
+        }
+
+        if (renderMode == AppRenderMode.Software)
+        {
+            Trace.WriteLine("[DeziroJoy] 渲染模式：software（Win32 软件渲染）。");
+        }
+
+        var options = AppRenderModes.Win32Options(renderMode);
+
+        // Default keeps the chain exactly as it was: no Win32PlatformOptions is registered,
+        // so Avalonia applies its own platform detection untouched on every platform.
+        return options is null ? builder : builder.With(options);
+    }
+
+    /// <summary>The value of a <c>--name=value</c> command-line switch, or null when absent.</summary>
+    private static string? CommandLineValue(string[]? args, string name)
+    {
+        if (args is null)
+        {
+            return null;
+        }
+
+        var prefix = name + "=";
+
+        foreach (var arg in args)
+        {
+            if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return arg[prefix.Length..];
+            }
+        }
+
+        return null;
+    }
 
     private static bool HasFlag(string[] args, string flag)
         => args.Any(arg => string.Equals(arg, flag, StringComparison.OrdinalIgnoreCase));
@@ -348,6 +416,151 @@ internal static class Program
 }
 
 /// <summary>
+/// The elevated recovery entry. An elevated copy of this product, asked for by the
+/// supervisor when the daemon that stopped answering runs with a token the GUI does not
+/// have and no planned task owns it - the one-off elevated relaunch on Windows, where an
+/// unelevated caller can neither read the daemon's executable nor end it.
+/// <para>
+/// The copy does the end and the start itself, in that order and never the other way
+/// around: it re-verifies the identity the caller handed over - the PID a snapshot named,
+/// the same daemon executable, started no later than the moment it was last seen serving -
+/// and only then ends the old process, waits for the daemon instance slot and the
+/// injection mutex to be released, and finally becomes the replacement daemon through the
+/// ordinary <see cref="DaemonHost.Run"/> path. A PID whose identity cannot be confirmed is
+/// never ended: a reused number or a foreign executable is reported and the copy exits
+/// without touching anything, because a kill is only ever issued against a daemon this
+/// product can prove.
+/// </para>
+/// </summary>
+internal static class ElevatedDaemonRecovery
+{
+    /// <summary>The command-line flag that dispatches into this entry.</summary>
+    public const string Flag = "--recover-daemon";
+
+    private const string PidArgument = "--pid";
+
+    private const string SeenAtArgument = "--seen-at";
+
+    /// <summary>The identity did not check out; nothing was ended and nothing was started.</summary>
+    public const int IdentityRejected = 2;
+
+    /// <summary>The end or the release failed; nothing was started, so no second injector exists.</summary>
+    public const int EndFailed = 3;
+
+    /// <summary>How long the copy waits for the ended daemon's slots before giving up.</summary>
+    private static readonly TimeSpan ReleaseWait = TimeSpan.FromSeconds(10);
+
+    private static readonly TimeSpan ReleaseProbeInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Runs the elevated recovery. The seams exist so no test ever ends a real process or
+    /// starts a real daemon: production passes the defaults, a test passes recorders.
+    /// </summary>
+    public static int Run(
+        string[] args,
+        IDaemonRecovery? recovery = null,
+        Func<int>? runDaemon = null,
+        TimeSpan? releaseWait = null)
+    {
+        recovery ??= new SystemDaemonRecovery();
+        runDaemon ??= static () => DaemonHost.Run();
+        var releaseBudget = releaseWait ?? ReleaseWait;
+
+        var processId = ParsePid(args);
+        var seenAtTicks = ParseSeenAt(args);
+
+        if (processId is null || processId.Value == 0 || seenAtTicks is null)
+        {
+            Console.Error.WriteLine($"{Flag} 需要 {PidArgument} 与 {SeenAtArgument} 参数（守护进程身份），已拒绝执行。");
+            return IdentityRejected;
+        }
+
+        var seenAt = new DateTime(seenAtTicks.Value, DateTimeKind.Utc);
+
+        var startTime = recovery.TryGetStartTime(processId.Value);
+        if (startTime is null)
+        {
+            // The daemon is already gone - it died between the request and this copy.
+            // There is nothing to end and nothing to verify, so the copy goes straight to
+            // being the replacement.
+            Console.WriteLine($"[DeziroJoy] 提权恢复：守护进程 (PID {processId.Value}) 已退出，无需结束。");
+        }
+        else
+        {
+            if (startTime > seenAt)
+            {
+                // The process started after the snapshot that named this PID: the daemon
+                // died and the number was handed to something else. Ending it would kill a
+                // process this product has no authority over.
+                Console.Error.WriteLine(
+                    $"[DeziroJoy] 提权恢复：PID {processId.Value} 已属于启动时间更晚的进程（PID 复用），拒绝结束。");
+                return IdentityRejected;
+            }
+
+            if (!recovery.IsDaemonExecutable(processId.Value))
+            {
+                Console.Error.WriteLine(
+                    $"[DeziroJoy] 提权恢复：PID {processId.Value} 不再运行本产品的守护进程可执行文件，拒绝结束。");
+                return IdentityRejected;
+            }
+
+            if (!recovery.EndProcess(processId.Value))
+            {
+                Console.Error.WriteLine($"[DeziroJoy] 提权恢复：无法结束 PID {processId.Value}（权限不足？）。");
+                return EndFailed;
+            }
+
+            Console.WriteLine($"[DeziroJoy] 提权恢复：已按身份确认结束 PID {processId.Value}。");
+        }
+
+        // Wait for the instance slot and the injection mutex to be released before
+        // becoming the daemon: a replacement that starts beside a holder is the second
+        // injector the slot exists to prevent. This copy holds neither yet, so a free
+        // answer here is meaningful.
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            var processGone = recovery.TryGetStartTime(processId.Value) is null;
+            if (processGone && recovery.IsDaemonInstanceSlotFree() && recovery.IsInjectionSlotFree())
+            {
+                break;
+            }
+
+            if (elapsed.Elapsed >= releaseBudget)
+            {
+                Console.Error.WriteLine(
+                    $"[DeziroJoy] 提权恢复：实例或注入槽位未在 {releaseBudget.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} 秒内释放，放弃启动以避免双重注入。");
+                return EndFailed;
+            }
+
+            Thread.Sleep(ReleaseProbeInterval);
+        }
+
+        Console.WriteLine("[DeziroJoy] 提权恢复：实例与注入槽位已释放，启动替代守护进程。");
+        return runDaemon();
+    }
+
+    private static int? ParsePid(string[] args)
+        => ParseArgument(args, PidArgument, static value => int.TryParse(value, out var pid) ? pid : (int?)null);
+
+    private static long? ParseSeenAt(string[] args)
+        => ParseArgument(args, SeenAtArgument, static value => long.TryParse(value, out var ticks) ? ticks : (long?)null);
+
+    private static T? ParseArgument<T>(string[] args, string name, Func<string, T?> parse) where T : struct
+    {
+        for (var index = 0; index < args.Length - 1; index++)
+        {
+            if (string.Equals(args[index], name, StringComparison.OrdinalIgnoreCase))
+            {
+                return parse(args[index + 1]);
+            }
+        }
+
+        return null;
+    }
+}
+
+/// <summary>
 /// The render process. It arbitrates the instance lock, serves the activation channel, starts
 /// the daemon and shows the window. The render lifetime coordinator either acknowledges a tray
 /// successor or stops the daemon for a full exit before this owner releases its resources.
@@ -406,7 +619,7 @@ internal static class DesktopLauncher
 
         try
         {
-            Program.BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+            Program.BuildAvaloniaApp(args).StartWithClassicDesktopLifetime(args);
             return 0;
         }
         finally
@@ -427,6 +640,19 @@ internal static class DesktopLauncher
     /// </summary>
     internal static Task<bool> RestartDaemonAsync()
         => Task.Run(() => Daemon?.Restart() ?? false);
+
+    /// <summary>
+    /// The supervised recovery the reconnect button asks for: the supervisor ends the
+    /// daemon that stopped answering - by identity, or through the owner's own service
+    /// (the systemd user unit, the Windows planned task) - waits for the mapping pipe and
+    /// the injection slot to be released, and brings a replacement up before reporting
+    /// success. Every wait is bounded but real, so this runs off the UI thread.
+    /// </summary>
+    internal static Task<DaemonRecoveryReport> RecoverDaemonAsync()
+        => Task.Run(() => Daemon?.Recover() ?? new DaemonRecoveryReport(
+            false,
+            [],
+            "没有运行中的守护进程监督器"));
 
     internal static bool EnsureTrayRunning()
     {

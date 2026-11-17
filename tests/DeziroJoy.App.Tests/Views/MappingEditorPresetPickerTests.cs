@@ -660,11 +660,13 @@ public sealed class MappingEditorPresetPickerTests
         Assert.False(IsDescendantOf(selector, window.FindControl<TabControl>("MainTabs")!),
             "the strip is a column-level host above the tabs, not a child of the tab surface");
 
-        // The strip's height is funded by the editor row - the star row that absorbs slack -
-        // not by the stage row: the model keeps its full DESIGN 4.6 sizing at the minimum
-        // window, and the editor keeps a scrolling body at its reduced height.
-        Assert.Equal(566d, modelRect.Width);
-        Assert.Equal(162d, window.FindControl<Border>("EditorPanel")!.Bounds.Height);
+        // The stage row is 250 while a mapping is open, so the model re-fits the smaller
+        // slot for real instead of keeping a reserved one - and the editor card is the star
+        // row that takes the released height, with a scrolling body at the minimum window.
+        Assert.True(modelRect.Width < 500,
+            $"the model must re-fit the smaller slot, it renders {modelRect.Width} wide");
+        Assert.True(window.FindControl<Border>("EditorPanel")!.Bounds.Height > 262,
+            $"the card must be the tall surface, it is {window.FindControl<Border>("EditorPanel")!.Bounds.Height}");
 
         var hits = model.GetVisualDescendants()
             .OfType<Control>()
