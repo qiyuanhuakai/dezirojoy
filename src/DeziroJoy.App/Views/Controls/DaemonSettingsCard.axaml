@@ -130,12 +130,12 @@
             <Border Background="{DynamicResource SubtleBrush}" CornerRadius="8" Padding="12,10" Margin="0,14,0,0"
                     IsVisible="{Binding IsSdl3BackendSelected}">
                 <StackPanel>
-                    <TextBlock Classes="fieldLabel" Text="DInput / 未映射手柄" />
+                    <TextBlock Classes="fieldLabel" Text="手柄布局学习（SDL）" />
                     <TextBlock Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap"
-                               Text="SDL 能看到设备但没有标准布局时，用真实输入逐键生成映射，不猜测按钮或轴的顺序。" />
+                               Text="布局学习决定物理控件对应的逻辑按键；动作预设决定这些按键执行什么。已有标准或自定义布局也可重新学习，保存前原映射不变。" />
                     <ComboBox x:Name="DInputDeviceSelector" Margin="0,8,0,0"
                               HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding UnmappedDInputDevices}"
+                              ItemsSource="{Binding DInputDevices}"
                               SelectedItem="{Binding SelectedDInputDevice}"
                               DisplayMemberBinding="{Binding DisplayName}" />
                     <WrapPanel Margin="0,8,0,0">

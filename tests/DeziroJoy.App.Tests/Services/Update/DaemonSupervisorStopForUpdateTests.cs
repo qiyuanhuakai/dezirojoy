@@ -14,18 +14,16 @@ namespace DeziroJoy.App.Tests.Services.Update;
 /// the setup's DeleteFile fails with access denied (error 5) and rolls back. That is what a user
 /// hit: the app closed for the update, nothing was installed, and nothing said why.
 /// <para>
-/// So the chain under test is a proof, not a request: the graceful stop, then the recovery's own
-/// escalation (the identity-confirmed end, the owner's own service, the elevated copy), then the
-/// stop again so the replacement does not linger either, then the proof - and a daemon nobody
-/// could prove gone is a failed stop, which is why every assertion here ends in either a proven
-/// stop or an honest failure. Every process is a fake and no PID is ever ended for real.
+/// So the chain under test is a proof, not a request: the graceful stop, then the platform or
+/// identity-confirmed end, a bounded wait for that asynchronous end, and finally the elevated
+/// stop-only copy. No recovery start is allowed during an update. A daemon nobody could prove
+/// gone is a failed stop, which is why every assertion here ends in either a proven stop or an
+/// honest failure. Every process is a fake and no PID is ever ended for real.
 /// </para>
 /// </summary>
 public sealed class DaemonSupervisorStopForUpdateTests
 {
     private const int OldDaemonPid = 4242;
-
-    private const int ReplacementPid = 5252;
 
     private static DateTimeOffset SeenAt => DateTimeOffset.UtcNow.AddMinutes(-1);
 
@@ -265,72 +263,49 @@ public sealed class DaemonSupervisorStopForUpdateTests
     }
 
     [AvaloniaFact]
-    public void The_Escalation_Ends_The_Daemon_And_The_Replacement_Is_Stopped_Too()
+    public void The_Asynchronous_Platform_End_Is_Waited_For_Without_Starting_A_Replacement()
     {
-        // The reported shape: the graceful stop cannot prove the daemon is gone, so the
-        // recovery's identity-confirmed end finishes it, a replacement comes up, and the
-        // second stop takes that replacement down as well - an update that has to stop the
-        // same daemon twice is a working update; one that leaves the second instance running
-        // is the failure this chain exists to prevent.
+        // Ending a scheduled task acknowledges the request before the elevated process exits.
+        // The update must wait for that process, never call the recovery start path and then
+        // race the replacement it just created.
         var reachable = true;
-        var shutdowns = 0;
-        var recovery = new FakeRecovery();
-        var (supervisor, _, _) = Build(
+        var probes = 0;
+        var recovery = new FakeRecovery { TaskInstalled = true, RefuseEnd = true };
+        var (supervisor, _, stopOnlyRequests) = Build(
             recovery,
-            () => false,
+            () => true,
             () => reachable,
             _ =>
             {
-                shutdowns++;
                 reachable = false;
-
-                // A healthy daemon answers its shutdown request; the wedged one did not, which
-                // is the state the escalation exists for.
-                if (shutdowns > 1 && recovery.IsAlive(ReplacementPid))
-                {
-                    recovery.ForceEnd(ReplacementPid);
-                }
-
                 return Task.FromResult(true);
             },
-            probe: pid => recovery.IsAlive(pid)
-                ? DaemonProcessLiveness.Running
-                : DaemonProcessLiveness.Gone,
-            unitInstalled: true,
-            startDaemonUnit: () =>
+            probe: pid =>
             {
-                // The owner's own path brings the daemon back, pipe and all.
-                recovery.Plant(ReplacementPid);
-                reachable = true;
-                return true;
+                if (!recovery.IsAlive(pid))
+                {
+                    return DaemonProcessLiveness.Gone;
+                }
+
+                if (++probes >= 3)
+                {
+                    recovery.ForceEnd(pid);
+                    return DaemonProcessLiveness.Gone;
+                }
+
+                return DaemonProcessLiveness.Unreadable;
             });
 
         supervisor.EnsureRunning();
         supervisor.RecordDaemonPid(OldDaemonPid);
-        recovery.Plant(OldDaemonPid);
-
-        // The unit's Restart=on-failure: ending *the daemon it owns* brings a fresh one
-        // straight back. A healthy daemon answering its own shutdown is not a restart.
-        recovery.OnEndProcess = pid =>
-        {
-            if (pid == OldDaemonPid)
-            {
-                recovery.Plant(ReplacementPid);
-                reachable = true;
-            }
-        };
+        recovery.Plant(OldDaemonPid, executable: false);
 
         Assert.True(supervisor.StopForUpdate());
 
-        // The old daemon was ended by identity, not by a blind kill.
-        Assert.Contains(OldDaemonPid, recovery.Ended);
-
-        // ...and the daemon the unit put back was stopped too. More than one shutdown request
-        // is the point: the recovery stops once on its own account, and the stop after it is
-        // what takes the replacement down. No daemon is left in the table.
-        Assert.True(shutdowns >= 2, $"the replacement was stopped too, shutdown requests: {shutdowns}");
+        Assert.Equal(1, recovery.EndTaskCalls);
+        Assert.Equal(0, recovery.StartTaskCalls);
+        Assert.Empty(stopOnlyRequests);
         Assert.False(recovery.IsAlive(OldDaemonPid));
-        Assert.False(recovery.IsAlive(ReplacementPid));
     }
 
     [AvaloniaFact]
@@ -378,6 +353,7 @@ public sealed class DaemonSupervisorStopForUpdateTests
         // The identity that travelled is the one the snapshot named - nothing is handed over
         // without it, which is what keeps this from being a blind kill.
         Assert.Equal(OldDaemonPid, Assert.Single(stopOnlyRequests));
+        Assert.Empty(recovery.ElevatedRequests);
     }
 
     [AvaloniaFact]

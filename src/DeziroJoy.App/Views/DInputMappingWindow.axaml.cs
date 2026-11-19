@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using DeziroJoy.App.ViewModels;
 using DeziroJoy.Platform.Sdl3;
 
@@ -8,6 +9,7 @@ namespace DeziroJoy.App.Views;
 public partial class DInputMappingWindow : Window
 {
     private readonly DInputMappingViewModel _mapping;
+    private int _closeRequested;
 
     public DInputMappingWindow()
         : this(new DInputMappingViewModel(new Sdl3JoystickInfo
@@ -50,9 +52,10 @@ public partial class DInputMappingWindow : Window
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {
+        Interlocked.Exchange(ref _closeRequested, 1);
         if (_mapping.IsCapturing)
         {
-            _mapping.CancelCommand.Execute(null);
+            _mapping.RequestCancellation();
         }
 
         base.OnClosing(e);
@@ -65,5 +68,19 @@ public partial class DInputMappingWindow : Window
         base.OnClosed(e);
     }
 
-    private void OnCloseRequested(bool saved) => Close(saved);
+    private void OnCloseRequested(bool saved)
+    {
+        if (Interlocked.Exchange(ref _closeRequested, 1) != 0)
+        {
+            return;
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            Close(saved);
+            return;
+        }
+
+        Dispatcher.UIThread.Invoke(() => Close(saved));
+    }
 }

@@ -151,7 +151,7 @@ public sealed class Sdl3MappingCaptureTests
     {
         var session = new Sdl3MappingCaptureSession();
         var rest = Snapshot(buttons: [false, false]);
-        var held = Snapshot(buttons: [true, true]);
+        var held = Snapshot(buttons: [true, false]);
 
         session.BeginStep(rest);
         Assert.True(session.TryCapture(held));
@@ -162,6 +162,97 @@ public sealed class Sdl3MappingCaptureTests
 
         Assert.Equal("b", session.Current!.Key);
         Assert.Single(session.Captured);
+    }
+
+    [Fact]
+    public void A_Held_Hat_Is_Captured_Again_After_Release()
+    {
+        var session = new Sdl3MappingCaptureSession();
+        while (session.Current!.Key != "dpdown")
+        {
+            session.Skip();
+        }
+
+        var held = Snapshot(hats: [Sdl3MappingDefaults.HatDown]);
+        var released = Snapshot(hats: [0]);
+        session.BeginStep(held);
+
+        Assert.False(session.TryCapture(held));
+        Assert.False(session.TryCapture(released));
+        Assert.True(session.TryCapture(held));
+        Assert.Equal("h0.4", session.TokenFor(Step("dpdown")));
+    }
+
+    [Fact]
+    public void A_Held_Stick_Axis_Is_Captured_Again_After_Returning_To_Centre()
+    {
+        var session = new Sdl3MappingCaptureSession();
+        while (session.Current!.Key != "leftx")
+        {
+            session.Skip();
+        }
+
+        var held = Snapshot(axes: [-20000]);
+        var centre = Snapshot(axes: [0]);
+        session.BeginStep(held);
+
+        Assert.False(session.TryCapture(held));
+        Assert.False(session.TryCapture(centre));
+        Assert.True(session.TryCapture(held));
+        Assert.Equal("a0", session.TokenFor(Step("leftx")));
+    }
+
+    [Fact]
+    public void A_Different_Stick_Axis_Already_Active_At_The_Next_Step_Is_Accepted()
+    {
+        var session = new Sdl3MappingCaptureSession([Step("leftx"), Step("lefty")]);
+        session.BeginStep(Snapshot(axes: [0, 0]));
+        Assert.True(session.TryCapture(Snapshot(axes: [-20000, 0])));
+
+        session.BeginStep(Snapshot(axes: [-20000, -20000]));
+
+        Assert.True(session.TryCapture(Snapshot(axes: [-20000, -20000])));
+        Assert.Equal("a1", session.TokenFor(Step("lefty")));
+    }
+
+    [Fact]
+    public void Full_Negative_Travel_Is_Captured_On_Consecutive_Stick_Axes()
+    {
+        var session = new Sdl3MappingCaptureSession([Step("leftx"), Step("lefty")]);
+        session.BeginStep(Snapshot(axes: [0, 0]));
+        Assert.True(session.TryCapture(Snapshot(axes: [short.MinValue, 0])));
+
+        session.BeginStep(Snapshot(axes: [short.MinValue, short.MinValue]));
+
+        Assert.True(session.TryCapture(Snapshot(axes: [short.MinValue, short.MinValue])));
+        Assert.Equal("a1", session.TokenFor(Step("lefty")));
+    }
+
+    [Fact]
+    public void An_Unselected_Axis_Active_In_The_Previous_Frame_Does_Not_Fill_The_Next_Step()
+    {
+        var session = new Sdl3MappingCaptureSession([Step("lefty"), Step("rightx")]);
+        session.BeginStep(Snapshot(axes: [0, 0, 0, 0]));
+        Assert.True(session.TryCapture(Snapshot(axes: [0, short.MinValue, short.MinValue, 0])));
+
+        session.BeginStep(Snapshot(axes: [0, short.MinValue, short.MinValue, 0]));
+
+        Assert.False(session.TryCapture(Snapshot(axes: [0, short.MinValue, short.MinValue, 0])));
+        Assert.True(session.TryCapture(Snapshot(axes: [0, short.MinValue, short.MinValue, short.MinValue])));
+        Assert.Equal("a3", session.TokenFor(Step("rightx")));
+    }
+
+    [Fact]
+    public void A_Different_Hat_Direction_Already_Active_At_The_Next_Step_Is_Accepted()
+    {
+        var session = new Sdl3MappingCaptureSession([Step("dpup"), Step("dpdown")]);
+        session.BeginStep(Snapshot(hats: [0]));
+        Assert.True(session.TryCapture(Snapshot(hats: [Sdl3MappingDefaults.HatUp])));
+
+        session.BeginStep(Snapshot(hats: [Sdl3MappingDefaults.HatDown]));
+
+        Assert.True(session.TryCapture(Snapshot(hats: [Sdl3MappingDefaults.HatDown])));
+        Assert.Equal("h0.4", session.TokenFor(Step("dpdown")));
     }
 
     [Fact]
@@ -198,9 +289,12 @@ public sealed class Sdl3MappingCaptureTests
     {
         var session = new Sdl3MappingCaptureSession();
 
-        while (!session.IsComplete)
+        foreach (var _ in session.Steps)
         {
-            session.TryCapture(Snapshot(buttons: [true], axes: [-20000, 20000], hats: [1]));
+            Assert.True(
+                session.TryCapture(Snapshot(buttons: [true], axes: [-20000, 20000], hats: [1])),
+                session.Current?.Key);
+            Assert.False(session.TryCapture(Snapshot(buttons: [false], axes: [0, 0], hats: [0])));
         }
 
         Assert.True(session.IsComplete);

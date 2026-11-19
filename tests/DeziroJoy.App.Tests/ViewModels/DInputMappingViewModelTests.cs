@@ -93,6 +93,21 @@ public sealed class DInputMappingViewModelTests
         Assert.Equal([false], closes);
     }
 
+    [Fact]
+    public void Cancel_Requests_Close_Immediately()
+    {
+        var vm = Create(
+            new ScriptedReader(Sdl3JoystickSnapshot.Empty),
+            (_, _) => new Sdl3MappingApplyResult(false, null, null),
+            (_, entry) => new Sdl3MappingSaveResult(false, [], entry));
+        var closes = new List<bool>();
+
+        vm.CloseRequested += closes.Add;
+        vm.CancelCommand.Execute(null);
+
+        Assert.Equal([false], closes);
+    }
+
     private static DInputMappingViewModel Create(
         ISdl3JoystickReader reader,
         Func<string, string, Sdl3MappingApplyResult> apply,

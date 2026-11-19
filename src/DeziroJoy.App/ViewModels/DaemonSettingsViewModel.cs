@@ -314,7 +314,7 @@ public partial class DaemonSettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _autostartEnabled;
 
-    public ObservableCollection<DInputDeviceOption> UnmappedDInputDevices { get; } = [];
+    public ObservableCollection<DInputDeviceOption> DInputDevices { get; } = [];
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelectedDInputDevice))]
@@ -335,11 +335,11 @@ public partial class DaemonSettingsViewModel : ObservableObject
     {
         var selectedInstanceId = SelectedDInputDevice?.Device.InstanceId;
         var scan = _scanJoysticks();
-        var options = scan.Unmapped.Select(device => new DInputDeviceOption(device)).ToList();
-        UnmappedDInputDevices.Clear();
+        var options = scan.Joysticks.Select(device => new DInputDeviceOption(device)).ToList();
+        DInputDevices.Clear();
         foreach (var option in options)
         {
-            UnmappedDInputDevices.Add(option);
+            DInputDevices.Add(option);
         }
 
         SelectedDInputDevice = options.FirstOrDefault(option => option.Device.InstanceId == selectedInstanceId)
@@ -349,8 +349,8 @@ public partial class DaemonSettingsViewModel : ObservableObject
         DInputStatusMessage = !scan.Initialized
             ? $"SDL3 不可用：{scan.InitError ?? "未知错误"}"
             : options.Count == 0
-                ? "没有发现缺少标准映射的原始设备。"
-                : $"发现 {options.Count} 个未映射 HID 接口；请选择手柄主接口（通常按钮和轴更多）。";
+                ? "没有发现可学习的 HID 设备。"
+                : $"发现 {options.Count} 个 HID 接口（{scan.MappedAsGamepadCount} 个已有映射）；已有映射也可重学。主接口通常按钮和轴更多。";
     }
 
     [RelayCommand]

@@ -86,6 +86,7 @@ public class PresetStoreTests
         Assert.NotNull(loaded);
         Assert.Equal("第二套", loaded.Name);
         Assert.Equal("preset2:pad-1", loaded.DeviceId);
+        Assert.Equal(2, loaded.PresetSlot);
         Assert.NotNull(inner.Load("preset2:pad-1"));
         Assert.Null(inner.Load("pad-1"));
     }

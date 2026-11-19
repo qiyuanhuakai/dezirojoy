@@ -498,11 +498,9 @@ internal sealed class DaemonSupervisor : IDisposable
     /// The chain is the graceful stop first, then the end the recovery performs - run directly,
     /// because <see cref="Recover"/>'s own first step is a graceful stop, and a graceful stop
     /// that finds the pipe already gone reports "nothing resident" and skips exactly the end
-    /// this chain needs. Then the recovery and its stop again: a daemon the owner's own service
-    /// put back (the unit's <c>Restart=on-failure</c>) is still a daemon, and the replacement
-    /// the recovery brings up must not linger either - an update that has to stop the same
-    /// daemon twice is a working update, and one that leaves the second instance running is the
-    /// failure this method exists to prevent.
+    /// this chain needs. The platform end is asynchronous, so the proof that follows is a
+    /// bounded wait rather than an immediate check. An update never calls <see cref="Recover"/>:
+    /// starting a replacement just to stop it again races the install and serves no purpose.
     /// </para>
     /// <para>
     /// The proof is the process, not the pipe. A daemon this caller cannot open - the elevated
@@ -541,13 +539,11 @@ internal sealed class DaemonSupervisor : IDisposable
             return true;
         }
 
-        // 3. A daemon the owner's own service put back is still a daemon, and the update
-        //    replaces the install directory either way: recover, then stop the replacement.
-        Recover();
-        Stop();
-        if (IsDaemonGoneForUpdate())
+        // 3. Ending a scheduled task or a service returns before its process necessarily exits.
+        //    Wait for that end instead of recovering a replacement which the update would only
+        //    have to stop again.
+        if (WaitForDaemonGoneForUpdate())
         {
-            LastError = null;
             return true;
         }
 
@@ -560,21 +556,14 @@ internal sealed class DaemonSupervisor : IDisposable
     /// <summary>
     /// The end the recovery performs, without the restart that follows it: the owner's own
     /// service end (the systemd user unit's stop, the Windows planned task's end) and the
-    /// identity-confirmed process end, and - for the daemon only an elevated token can reach -
-    /// the elevated copy's verified takeover. Nothing is started here, which is what makes this
-    /// the update's end rather than the recovery's.
+    /// identity-confirmed process end. The recovery's elevated end-and-replace is deliberately
+    /// excluded: the update's later stop-only elevated request ends the process without starting
+    /// anything, which is what makes this the update's end rather than the recovery's.
     /// </summary>
     private void EndDaemonForUpdate()
     {
         var phases = new List<string>();
-        if (TryEndDaemon(phases, out _, out var elevatedRecoveryRequested)
-            && elevatedRecoveryRequested
-            && !WaitForElevatedReplacement(out _))
-        {
-            // The elevated copy took over the daemon: it is both the end and the replacement,
-            // so the stop that follows is what has to take that replacement down.
-            Trace.WriteLine("[DeziroJoy] daemon supervisor: the elevated replacement never answered; the stop that follows is what ends it");
-        }
+        TryEndDaemon(phases, out _, out _, allowElevatedReplacement: false);
     }
 
     /// <summary>
@@ -796,7 +785,11 @@ internal sealed class DaemonSupervisor : IDisposable
     /// replaces, which is the one end that reaches an elevated daemon no planned task
     /// owns. Nothing is ever ended without a confirmed identity.
     /// </summary>
-    private bool TryEndDaemon(List<string> phases, out string? failure, out bool elevatedRecoveryRequested)
+    private bool TryEndDaemon(
+        List<string> phases,
+        out string? failure,
+        out bool elevatedRecoveryRequested,
+        bool allowElevatedReplacement = true)
     {
         failure = null;
         elevatedRecoveryRequested = false;
@@ -843,7 +836,8 @@ internal sealed class DaemonSupervisor : IDisposable
             // with its own token before ending anything, so the hand-off is not a blind
             // kill; it is also the replacement, so this supervisor starts nothing beside
             // it. A PID that was reused is never handed over.
-            if (_isWindows()
+            if (allowElevatedReplacement
+                && _isWindows()
                 && _daemonIdentity is { } identity
                 && RecordedIdentityIsLiveAndNotReused()
                 && SafeStartElevatedRecovery(identity))

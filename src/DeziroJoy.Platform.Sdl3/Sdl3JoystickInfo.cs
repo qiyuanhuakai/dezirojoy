@@ -49,10 +49,9 @@ public sealed record Sdl3JoystickInfo
     public required string TypeName { get; init; }
 
     /// <summary>
-    /// True when SDL already recognizes this joystick as a standard gamepad, i.e. it appears
-    /// in SDL's gamepad list and needs no supplemental mapping. The mapping flow only offers
-    /// the ones where this is false - a device that already has a standard layout is not
-    /// something the user should have to hand-map.
+    /// True when SDL already recognizes this joystick as a standard gamepad. The CLI mapping
+    /// flow offers only unmapped devices; the application also offers mapped devices for an
+    /// explicit re-learn, preserving the old mapping until a replacement is saved.
     /// </summary>
     public required bool HasStandardMapping { get; init; }
 }

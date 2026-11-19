@@ -74,16 +74,16 @@ public sealed class PresetStore
     }
 
     /// <summary>
-    /// Persists <paramref name="profile"/> as one slot of a device, rebinding it to the
-    /// slot key exactly the way the legacy leader alternate was stored, so a slot's
-    /// profile never collides with the device's own.
+    /// Persists <paramref name="profile"/> as one slot of a device, rebinding both its store
+    /// key and <see cref="GamepadProfile.PresetSlot"/> so the file body names the slot it
+    /// actually belongs to and never collides with the device's own or another slot.
     /// </summary>
     public void SaveSlot(string deviceId, int slot, GamepadProfile profile)
     {
         ValidateSlot(slot);
         ArgumentNullException.ThrowIfNull(profile);
 
-        _store.Save(profile with { DeviceId = KeyFor(deviceId, slot) });
+        _store.Save(profile with { DeviceId = KeyFor(deviceId, slot), PresetSlot = slot });
     }
 
     /// <summary>

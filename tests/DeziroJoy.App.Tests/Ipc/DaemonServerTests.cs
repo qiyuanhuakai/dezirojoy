@@ -881,7 +881,9 @@ public class DaemonServerTests
             await server.ProcessAsync(new GetStateMessage("req-state")));
 
         Assert.Equal("第二套", snapshot.Snapshot.ProfileName);
-        Assert.Equal(ProfileSerializer.Serialize(slotTwo), snapshot.Snapshot.ProfileJson);
+        Assert.Equal(
+            ProfileSerializer.Serialize(slotTwo with { PresetSlot = 2 }),
+            snapshot.Snapshot.ProfileJson);
     }
 
     [Fact]

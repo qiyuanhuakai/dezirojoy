@@ -14,10 +14,29 @@ public sealed class DInputSettingsTests
 
         vm.RefreshDInputDevicesCommand.Execute(null);
 
-        Assert.Equal(2, vm.UnmappedDInputDevices.Count);
+        Assert.Equal(2, vm.DInputDevices.Count);
         Assert.Equal(1u, vm.SelectedDInputDevice!.Device.InstanceId);
         Assert.True(vm.HasSelectedDInputDevice);
-        Assert.Contains("2 个未映射 HID 接口", vm.DInputStatusMessage);
+        Assert.Contains("2 个 HID 接口", vm.DInputStatusMessage);
+    }
+
+    [Fact]
+    public async Task An_Existing_Standard_Mapping_Can_Be_Learned_Again()
+    {
+        var mapped = Device(1, 19, 6, 1) with { HasStandardMapping = true };
+        var vm = ViewModel(() => Scan(mapped));
+        var opened = 0;
+        vm.DInputMappingRequested += _ =>
+        {
+            opened++;
+            return Task.FromResult(false);
+        };
+        vm.RefreshDInputDevicesCommand.Execute(null);
+
+        Assert.Contains("已有映射，可重学", vm.SelectedDInputDevice!.DisplayName);
+        await vm.MapDInputCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, opened);
     }
 
     [Fact]
@@ -43,7 +62,22 @@ public sealed class DInputSettingsTests
         saved = true;
         await vm.MapDInputCommand.ExecuteAsync(null);
         Assert.Equal(1, restarts);
-        Assert.Empty(vm.UnmappedDInputDevices);
+        Assert.Empty(vm.DInputDevices);
+    }
+
+    [Fact]
+    public async Task Opening_Settings_Through_The_Binding_Scans_Without_A_Command()
+    {
+        var store = new InMemoryProfileStore();
+        using var host = new EngineHost(new FakeGamepadProvider(), new RecordingOutputSink(), store);
+        await using var viewModel = new MainWindowViewModel(
+            host,
+            store,
+            scanJoysticks: () => Scan(Device(1, 19, 6, 1)));
+
+        viewModel.IsSettingsOpen = true;
+
+        Assert.Equal(1u, viewModel.DaemonSettings.SelectedDInputDevice!.Device.InstanceId);
     }
 
     private static DaemonSettingsViewModel ViewModel(

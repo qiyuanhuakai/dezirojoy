@@ -57,7 +57,8 @@ internal interface ISdl3Api
 
     /// <summary>
     /// Every joystick SDL currently sees, each carrying whether SDL already recognizes it as a
-    /// standard gamepad. The mapping-supplement flow filters to the ones where that is false.
+    /// standard gamepad. The CLI mapping flow filters to unmapped devices; the provider also
+    /// uses the raw paths and capabilities to choose one interface of a composite HID unit.
     /// </summary>
     IReadOnlyList<Sdl3JoystickInfo> GetJoysticks();
 

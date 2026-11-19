@@ -519,6 +519,16 @@
                                                FontSize="11" Foreground="{DynamicResource BadgeTextBrush}" />
                                 </Border>
                             </Grid>
+                            <Grid Margin="0,10,0,0" ColumnDefinitions="Auto,*" IsVisible="{Binding HasController}">
+                                <TextBlock Grid.Column="0" Classes="hint" Text="动作预设" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                           Text="{Binding ActiveProfile.Name}" TextTrimming="CharacterEllipsis"
+                                           ToolTip.Tip="{Binding ActiveProfile.Name}"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" FontSize="12" />
+                            </Grid>
+                            <TextBlock Classes="hint" Margin="0,5,0,0" TextWrapping="Wrap"
+                                       IsVisible="{Binding HasController}"
+                                       Text="布局决定输入含义；动作预设决定执行什么。" />
                         </StackPanel>
                     </Border>
 

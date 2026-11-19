@@ -44,6 +44,9 @@ internal static class Program
                 case "joysticks":
                     command = "joysticks";
                     break;
+                case "raw":
+                    command = "raw";
+                    break;
                 case "map":
                     command = "map";
                     break;
@@ -94,6 +97,7 @@ internal static class Program
         {
             "watch" => RunWatch(json, intervalMs, durationSeconds),
             "joysticks" => RunJoysticks(json),
+            "raw" => RunRaw(guidFilter, intervalMs, durationSeconds),
             "map" => JoystickMappingFlow.Run(guidFilter, mappingFilePath, json),
             _ => RunList(json),
         };
@@ -144,6 +148,65 @@ internal static class Program
 
         return scan.Initialized ? ExitOk : ExitSdlUnavailable;
     }
+
+    private static int RunRaw(string? guidFilter, int intervalMs, double? durationSeconds)
+    {
+        var scan = Sdl3JoystickCatalog.Scan();
+        if (!scan.Initialized)
+        {
+            Console.Error.WriteLine(scan.InitError ?? "SDL3 初始化失败");
+            return ExitSdlUnavailable;
+        }
+
+        var candidates = scan.Unmapped
+            .Where(device => guidFilter is null || device.GuidString.Equals(guidFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(device => device.AxisCount + device.HatCount)
+            .ThenByDescending(device => device.ButtonCount)
+            .ToList();
+        var target = candidates.FirstOrDefault();
+        if (target is null)
+        {
+            Console.Error.WriteLine("没有匹配的原始 Joystick。");
+            return ExitUsage;
+        }
+
+        var opened = Sdl3JoystickCatalog.OpenJoystick(target.InstanceId);
+        if (opened.Reader is null)
+        {
+            Console.Error.WriteLine(opened.Error ?? "无法打开原始 Joystick");
+            return ExitSdlUnavailable;
+        }
+
+        using var reader = opened.Reader;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(durationSeconds ?? 30);
+        Sdl3JoystickSnapshot? previous = null;
+        Console.WriteLine($"raw target: {target.Name} instance={target.InstanceId} guid={target.GuidString}");
+        while (DateTime.UtcNow < deadline)
+        {
+            var now = reader.Sample();
+            if (!SameRaw(previous, now))
+            {
+                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    stamp = Stamp(),
+                    buttons = now.Buttons.Select((pressed, index) => new { index, pressed }).Where(button => button.pressed).Select(button => button.index).ToArray(),
+                    axes = now.Axes,
+                    hats = now.Hats,
+                }));
+                previous = now;
+            }
+
+            Thread.Sleep(intervalMs);
+        }
+
+        return ExitOk;
+    }
+
+    private static bool SameRaw(Sdl3JoystickSnapshot? left, Sdl3JoystickSnapshot right)
+        => left is not null
+            && left.Buttons.SequenceEqual(right.Buttons)
+            && left.Axes.SequenceEqual(right.Axes)
+            && left.Hats.SequenceEqual(right.Hats);
 
     private static int RunWatch(bool json, int intervalMs, double? durationSeconds)
     {
@@ -312,12 +375,13 @@ internal static class Program
 
     private static void PrintUsage()
     {
-        Console.WriteLine("usage: Sdl3Probe [list|watch|joysticks|map] [--json] [--interval=<ms>] [--duration=<s>]");
+        Console.WriteLine("usage: Sdl3Probe [list|watch|joysticks|raw|map] [--json] [--interval=<ms>] [--duration=<s>]");
         Console.WriteLine("                [--guid=<guid>] [--file=<path>]");
         Console.WriteLine();
         Console.WriteLine("  list       一次性枚举并报告 SDL3 运行时、设备身份、映射与能力（默认）");
         Console.WriteLine("  watch      持续监听热插拔并打印归一化输入状态");
         Console.WriteLine("  joysticks  只列出只能作普通 Joystick 枚举、无标准 Gamepad 映射的设备");
+        Console.WriteLine("  raw        只读打印原始按钮、轴和方向帽变化，不写配置");
         Console.WriteLine("  map        为这样的设备交互式逐键生成标准 SDL 映射并保存到配置根目录");
         Console.WriteLine("  --json     以 JSON 输出（list/joysticks 为单个对象，watch 每轮一个对象）");
         Console.WriteLine("  --interval=<ms>   watch 刷新间隔，默认 100");

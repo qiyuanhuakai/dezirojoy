@@ -143,10 +143,10 @@ Linux 实验性说明：
 > **升级提示**：`0.0.2-beta.3` 及更早版本的应用内自动更新存在缺陷，从这些版本升级请
 > 到发布页**手动下载**安装 `0.0.2-beta.4` 或更新版本；自 beta.4 起自动更新恢复正常。
 
-> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.6`
+> **预发布版本**：应用内自动更新按语义版本提供最新发布（含预发布）。`0.0.5-alpha.7`
 > 是 SDL3 统一输入后端的实验性 alpha——SDL3 已为默认后端（旧后端可显式回退）、未经完整
 > 真机验收；不想升级 alpha 的用户请关闭设置页的自动检查／自动下载，或到发布页手动选择
-> 版本。发布说明见 [docs/RELEASE-0.0.5-alpha.6.md](docs/RELEASE-0.0.5-alpha.6.md)。
+> 版本。发布说明见 [docs/RELEASE-0.0.5-alpha.7.md](docs/RELEASE-0.0.5-alpha.7.md)。
 
 ### Windows
 
@@ -301,6 +301,7 @@ tests/
 - [docs/RELEASE-0.0.5-alpha.4.md](docs/RELEASE-0.0.5-alpha.4.md) — 0.0.5-alpha.4 发布说明。
 - [docs/RELEASE-0.0.5-alpha.5.md](docs/RELEASE-0.0.5-alpha.5.md) — 0.0.5-alpha.5 发布说明。
 - [docs/RELEASE-0.0.5-alpha.6.md](docs/RELEASE-0.0.5-alpha.6.md) — 0.0.5-alpha.6 发布说明。
+- [docs/RELEASE-0.0.5-alpha.7.md](docs/RELEASE-0.0.5-alpha.7.md) — 0.0.5-alpha.7 发布说明。
 - [docs/ELEVATION-AND-DAEMON.md](docs/ELEVATION-AND-DAEMON.md) — 提权、daemon 与 IPC 安全边界。
 - [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md) — Windows 真机人工验收清单。
 - [docs/MEMORY.md](docs/MEMORY.md) — 早期内存占用实测。

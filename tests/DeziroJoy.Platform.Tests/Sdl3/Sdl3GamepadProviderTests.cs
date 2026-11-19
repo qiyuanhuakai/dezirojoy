@@ -308,6 +308,44 @@ public sealed class Sdl3GamepadProviderTests : IDisposable
     }
 
     [Fact]
+    public void Composite_Interfaces_Of_One_Physical_Device_Expose_Only_The_Richest_Gamepad()
+    {
+        var auxiliaryPath = CompositePath("COL02", "8&1F99DFF&2&0000");
+        var mainPath = CompositePath("COL01", "8&1F99DFF&2&0000");
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, path: auxiliaryPath));
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 2, path: mainPath));
+        AddCompositeJoystick(1, 8, 0, 0, auxiliaryPath);
+        AddCompositeJoystick(2, 19, 6, 1, mainPath);
+
+        Assert.Single(_provider.GetConnected());
+
+        Assert.Equal(2u, _provider.LastScanDiagnostic!.Devices.Single().InstanceId);
+    }
+
+    [Fact]
+    public void Composite_Paths_From_Two_Physical_Units_Are_Not_Merged()
+    {
+        var firstPath = CompositePath("COL01", "8&FIRST&2&0000");
+        var secondPath = CompositePath("COL01", "8&SECOND&2&0000");
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, serial: "unit-1", path: firstPath));
+        _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 2, serial: "unit-2", path: secondPath));
+        AddCompositeJoystick(1, 19, 6, 1, firstPath);
+        AddCompositeJoystick(2, 19, 6, 1, secondPath);
+
+        Assert.Equal(2, _provider.GetConnected().Count);
+    }
+
+    private void AddCompositeJoystick(uint instanceId, int buttons, int axes, int hats, string path)
+    {
+        var joystick = FakeSdl3Api.FakeJoystick.Make(instanceId, buttons, axes, hats);
+        joystick.Path = path;
+        _api.Joysticks.Add(joystick);
+    }
+
+    private static string CompositePath(string collection, string instance)
+        => $"\\\\?\\HID#{{00001124-0000-1000-8000-00805F9B34FB}}_VID&00023537_PID&1041&{collection}#{instance}#{{4D1E55B2-F16F-11CF-88CB-001111000030}}";
+
+    [Fact]
     public void Dispose_Is_Idempotent_And_Releases_Everything()
     {
         _api.AddDevice(FakeSdl3Api.MakeDevice(instanceId: 1, serial: "unit-1"));

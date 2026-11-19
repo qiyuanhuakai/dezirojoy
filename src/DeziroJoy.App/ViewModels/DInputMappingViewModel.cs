@@ -85,10 +85,18 @@ public sealed partial class DInputMappingViewModel : ObservableObject, IDisposab
             return;
         }
 
+        RequestCancellation();
+        CloseRequested?.Invoke(false);
+    }
+
+    internal void RequestCancellation()
+    {
         _commands.Enqueue(Sdl3MappingCaptureRunner.CancelCommand);
     }
 
-    public async Task<bool> RunAsync()
+    public Task<bool> RunAsync() => Task.Run(Run);
+
+    private bool Run()
     {
         if (_started)
         {
@@ -138,7 +146,8 @@ public sealed partial class DInputMappingViewModel : ObservableObject, IDisposab
 
                     if (_pollInterval > TimeSpan.Zero)
                     {
-                        await Task.Delay(_pollInterval, _lifetime.Token);
+                        Thread.Sleep(_pollInterval);
+                        _lifetime.Token.ThrowIfCancellationRequested();
                     }
                 }
             }
@@ -180,7 +189,7 @@ public sealed partial class DInputMappingViewModel : ObservableObject, IDisposab
         {
             return false;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception exception)
         {
             return Fail(exception.Message);
         }
@@ -193,9 +202,14 @@ public sealed partial class DInputMappingViewModel : ObservableObject, IDisposab
     private void Report(Sdl3MappingCaptureSession session)
     {
         var current = session.Current;
+        var capturedList = session.Captured;
+        var captured = capturedList.Count > 0 ? capturedList[^1] : null;
+        var capturedText = captured is null
+            ? string.Empty
+            : $"\n上一项：{captured.Key} = {session.TokenFor(captured)}";
         ProgressText = current is null
             ? session.DescribeProgress()
-            : $"{session.DescribeProgress()}\n请操作对应控件；没有该输入时选择“跳过”。";
+            : $"{session.DescribeProgress()}{capturedText}\n请操作对应控件；没有该输入时选择“跳过”。";
     }
 
     private bool Fail(string message)

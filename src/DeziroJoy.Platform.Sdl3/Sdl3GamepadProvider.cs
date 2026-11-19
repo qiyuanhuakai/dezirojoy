@@ -424,7 +424,8 @@ public sealed class Sdl3GamepadProvider : IGamepadProvider
     {
         var present = new HashSet<uint>();
 
-        foreach (var instanceId in _api.GetGamepadIds())
+        var gamepadIds = Sdl3CompositeDevice.SelectGamepadIds(_api.GetGamepadIds(), _api.GetJoysticks());
+        foreach (var instanceId in gamepadIds)
         {
             present.Add(instanceId);
 

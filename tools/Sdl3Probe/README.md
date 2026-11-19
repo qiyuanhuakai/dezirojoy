@@ -5,9 +5,9 @@ XInput／evdev provider。它对应路线图 **S1**：在决定默认后端切�
 部署、枚举、身份、映射、扩展能力与归一化输入语义，并作为 **S2 初始 provider**
 （`src/DeziroJoy.Platform.Sdl3`）的独立验证工具。
 
-探针不注入键鼠、不常驻。`list` 一次性枚举后即释放 SDL；`watch` 只读输入，Ctrl+C 或
-`--duration` 退出；`joysticks` 列出只能作普通 Joystick 枚举、缺少标准 Gamepad 映射的设备；
-`map` 是唯一会写配置的子命令——它为其中一台设备交互式生成标准 SDL 映射，并原子保存到
+探针不注入键鼠、不常驻。`list` 一次性枚举后即释放 SDL；`watch` 与 `raw` 只读输入，
+Ctrl+C 或 `--duration` 退出；`joysticks` 列出只能作普通 Joystick 枚举、缺少标准 Gamepad
+映射的设备；`map` 是唯一会写配置的子命令——它为其中一台设备交互式生成标准 SDL 映射，并原子保存到
 配置根目录的 `sdl-mappings.json`（与 `input-backend.json` 同处 profiles 目录之外）。
 
 ## 依赖
@@ -20,7 +20,7 @@ XInput／evdev provider。它对应路线图 **S1**：在决定默认后端切�
 ## 用法
 
 ```bash
-dotnet run --project tools/Sdl3Probe/Sdl3Probe.csproj -c Release -- [list|watch|joysticks|map] [选项]
+dotnet run --project tools/Sdl3Probe/Sdl3Probe.csproj -c Release -- [list|watch|joysticks|raw|map] [选项]
 ```
 
 | 命令／选项 | 说明 |
@@ -28,11 +28,12 @@ dotnet run --project tools/Sdl3Probe/Sdl3Probe.csproj -c Release -- [list|watch|
 | `list`（默认） | 一次性报告 SDL 运行时、每只手柄的身份与能力、旧后端对照与建议 |
 | `watch` | 持续监听热插拔，并按引擎相同语义打印归一化输入（按钮、双摇杆、扳机） |
 | `joysticks` | 只列出只能作普通 Joystick 枚举、无标准 Gamepad 映射的设备，并打印当前映射文件 |
+| `raw` | 只读打印一台未映射设备的原始按钮、轴和方向帽变化，不写配置 |
 | `map` | 为其中一台设备交互式逐键生成标准 SDL 映射，保存到配置根目录 `sdl-mappings.json` |
 | `--json` | JSON 输出（`list`／`joysticks` 为单个对象，`watch` 每轮一个对象） |
-| `--interval=<ms>` | `watch` 刷新间隔，默认 100 |
-| `--duration=<s>` | `watch` 运行秒数，到时自动退出（脚本化验证用） |
-| `--guid=<guid>` | `map`：直接映射该 GUID 的设备，跳过设备选择 |
+| `--interval=<ms>` | `watch`／`raw` 采样间隔，默认 100 |
+| `--duration=<s>` | `watch`／`raw` 运行秒数，到时自动退出（脚本化验证用） |
+| `--guid=<guid>` | `raw`／`map`：选择该 GUID 的设备，`map` 跳过设备选择 |
 | `--file=<path>` | `map`：映射文件路径，默认为配置根目录的 `sdl-mappings.json` |
 
 退出码：`0` 成功；`1` SDL3 运行时不可用（或映射被 SDL 拒绝、写入失败）；`2` 参数错误，
@@ -85,7 +86,8 @@ dotnet run --project tools/Sdl3Probe -- list
 - 依次提示 21 个必需项（面键四枚、十字键四向、start/back/guide、左右肩键、左右摇杆点击、
   左右摇杆的 X/Y、左右扳机）与 6 个可选项（截屏／分享键、背键 1–4、触摸板）。每项按提示
   激活对应控件；`s` 跳过（设备没有该项），`q` 取消整个流程。
-- 每个项目开始时会取一次基线快照，已经按住／推住的控件不会重复捕获，可以放心逐个按下。
+- 刚完成捕获的同一控件须先回中，防止串到下一步；不同方向即使在下一步提示前已经激活也可
+  直接捕获。未捕获过的控件在步骤开始时已按住，则需松开后重新操作；松开后的再次操作有效。
 - 采样频率约 60 Hz，每次采样前先泵一次 SDL：`SDL_GetJoystickButton`／`Axis`／`Hat` 读的是
   驱动上次写入的缓存状态，不泵就永远读到设备刚打开时的值，这一条有对应回归测试。
 - 扳机与"用轴表示的方向键"按 SDL 的解析规则写成半轴 `+aN`／`-aN`；摇杆轴写成 `aN`，只有

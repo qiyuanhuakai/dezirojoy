@@ -166,8 +166,8 @@ public static class Sdl3MappingActivation
 
         for (var a = 0; a < now.Axes.Count; a++)
         {
-            var value = now.Axis(a);
-            if (Math.Abs(value) < axisDeadzone || Math.Abs(baseline.Axis(a)) >= axisDeadzone)
+            var value = (int)now.Axis(a);
+            if (Math.Abs(value) < axisDeadzone || Math.Abs((int)baseline.Axis(a)) >= axisDeadzone)
             {
                 continue;
             }
@@ -211,6 +211,44 @@ public static class Sdl3MappingActivation
         }
     }
 
+    /// <summary>Every control active in this sample, in the same preference order as Detect.</summary>
+    public static IReadOnlyList<Sdl3MappingControl> Active(
+        Sdl3JoystickSnapshot now,
+        int axisDeadzone = Sdl3MappingDefaults.AxisDeadzone)
+    {
+        var found = new List<Sdl3MappingControl>();
+        for (var i = 0; i < now.Buttons.Count; i++)
+        {
+            if (now.Button(i))
+            {
+                found.Add(new Sdl3MappingControl(Sdl3MappingControlKind.Button, i, $"b{i}"));
+            }
+        }
+
+        for (var h = 0; h < now.Hats.Count; h++)
+        {
+            var mask = now.Hat(h);
+            if (IsHatMask(mask))
+            {
+                found.Add(new Sdl3MappingControl(Sdl3MappingControlKind.Hat, h, $"h{h}.{mask}"));
+            }
+        }
+
+        for (var a = 0; a < now.Axes.Count; a++)
+        {
+            var value = (int)now.Axis(a);
+            if (Math.Abs(value) >= axisDeadzone)
+            {
+                found.Add(new Sdl3MappingControl(Sdl3MappingControlKind.Axis, a, $"a{a}")
+                {
+                    AxisSign = value > 0 ? 1 : -1,
+                });
+            }
+        }
+
+        return found;
+    }
+
     /// <summary>SDL hat masks are a bitmask of the four directions; anything else is not a hat.</summary>
     public static bool IsHatMask(byte mask) => mask is > 0 and <= 0x0F;
 }
@@ -226,6 +264,9 @@ public sealed class Sdl3MappingCaptureSession
     private readonly List<Sdl3MappingStep> _steps;
     private readonly Dictionary<string, string> _tokens = new(StringComparer.Ordinal);
     private readonly List<Sdl3MappingStep> _skipped = [];
+    private Sdl3MappingControl? _lastCapturedControl;
+    private Sdl3JoystickSnapshot? _lastCapturedSnapshot;
+    private bool _lastCapturedControlReturnedToNeutral;
 
     public Sdl3MappingCaptureSession(IReadOnlyList<Sdl3MappingStep>? steps = null)
     {
@@ -249,8 +290,9 @@ public sealed class Sdl3MappingCaptureSession
     public bool IsCancelled { get; private set; }
 
     /// <summary>
-    /// The sample taken when the current step started. A control that is active here does not
-    /// count as newly activated, which is what stops a held button from being captured twice.
+    /// The latest sample that did not satisfy the current step. A control active in two
+    /// consecutive samples is not newly activated; a release replaces the held baseline, so
+    /// the next press can be captured even when the control was already held at step start.
     /// </summary>
     public Sdl3JoystickSnapshot Baseline { get; private set; }
 
@@ -274,9 +316,18 @@ public sealed class Sdl3MappingCaptureSession
 
     /// <summary>
     /// Records the baseline for the current step. Called by the caller each time it starts
-    /// polling a step, so a control held from an earlier step is not captured again.
+    /// polling a step, so the control that completed the previous step is not captured again
+    /// before it returns to neutral. A neutral baseline is itself the proof of that return.
     /// </summary>
-    public void BeginStep(Sdl3JoystickSnapshot baseline) => Baseline = baseline;
+    public void BeginStep(Sdl3JoystickSnapshot baseline)
+    {
+        Baseline = baseline;
+        if (_lastCapturedControl is { } previous
+            && Sdl3MappingActivation.Active(baseline).All(control => control.Token != previous.Token))
+        {
+            _lastCapturedControlReturnedToNeutral = true;
+        }
+    }
 
     /// <summary>
     /// Looks for a newly activated control that fits the current step and, when one appears,
@@ -291,13 +342,51 @@ public sealed class Sdl3MappingCaptureSession
             return false;
         }
 
-        var control = Choose(step, Sdl3MappingActivation.Detect(Baseline, now, axisDeadzone));
-        if (control is null)
+        var candidates = Sdl3MappingActivation.Detect(Baseline, now, axisDeadzone).ToList();
+        if (_lastCapturedControl is { } previous && _lastCapturedSnapshot is { } previousSnapshot)
         {
+            var active = Sdl3MappingActivation.Active(now, axisDeadzone);
+            if (active.All(control => control.Token != previous.Token))
+            {
+                _lastCapturedControlReturnedToNeutral = true;
+            }
+
+            if (!_lastCapturedControlReturnedToNeutral)
+            {
+                candidates.RemoveAll(control => control.Token == previous.Token);
+            }
+
+            // A control that became active after the previous capture is a valid answer even
+            // when it was already active at this step's prompt. A control that was active in
+            // the previous captured frame is stale input, not a new answer: on this DInput
+            // device one physical stick reports the same Y travel on two axes, and accepting
+            // the unselected duplicate would fill the next stick with the previous one.
+            var previouslyActive = Sdl3MappingActivation.Active(previousSnapshot, axisDeadzone);
+            foreach (var control in active)
+            {
+                if (previouslyActive.All(old => old.Token != control.Token)
+                    && (_lastCapturedControlReturnedToNeutral || control.Token != previous.Token)
+                    && candidates.All(candidate => candidate.Token != control.Token))
+                {
+                    candidates.Add(control);
+                }
+            }
+        }
+
+        var selected = Choose(step, candidates);
+        if (selected is null)
+        {
+            // Keep the comparison moving while this step stays open. A fixed step-start
+            // baseline would permanently reject a control that was held then: even a release
+            // followed by a fresh press would still compare against the original held frame.
+            Baseline = now;
             return false;
         }
 
-        _tokens[step.Key] = Sdl3MappingActivation.TokenFor(step, control);
+        _tokens[step.Key] = Sdl3MappingActivation.TokenFor(step, selected);
+        _lastCapturedControl = selected;
+        _lastCapturedSnapshot = now;
+        _lastCapturedControlReturnedToNeutral = false;
         Index++;
         return true;
     }
@@ -333,6 +422,9 @@ public sealed class Sdl3MappingCaptureSession
 
         _skipped.Add(step);
         _tokens.Remove(step.Key);
+        _lastCapturedControl = null;
+        _lastCapturedSnapshot = null;
+        _lastCapturedControlReturnedToNeutral = false;
         Index++;
     }
 

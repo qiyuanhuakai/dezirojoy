@@ -10,6 +10,7 @@ using DeziroJoy.Core.Input;
 using DeziroJoy.Core.Mapping;
 using DeziroJoy.Core.Profiles;
 using DeziroJoy.Platform.Linux;
+using DeziroJoy.Platform.Sdl3;
 using DeziroJoy.Platform.Windows.Gaming;
 
 namespace DeziroJoy.App.ViewModels;
@@ -245,7 +246,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         ISchemeImportRecoveryStore? schemeImportRecoveryStore = null,
         Func<Task<bool>>? restartDaemon = null,
         Func<Task<DaemonRecoveryReport>>? recoverDaemon = null,
-        IUiFrameClock? sampleFrameClock = null)
+        IUiFrameClock? sampleFrameClock = null,
+        Func<Sdl3JoystickScan>? scanJoysticks = null)
     {
         _host = host;
         _daemon = daemon;
@@ -287,7 +289,8 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
         Visualizer = new GamepadVisualizerViewModel();
         Appearance = new AppearanceViewModel();
         DaemonSettings = new DaemonSettingsViewModel(
-            restartDaemon: daemon is not null ? restartDaemon : null);
+            restartDaemon: daemon is not null ? restartDaemon : null,
+            scanJoysticks: scanJoysticks);
         Update = new UpdateSettingsViewModel(_updateService, _settings);
         LayerHint = new LayerHintViewModel();
 
@@ -1402,10 +1405,14 @@ public partial class MainWindowViewModel : ObservableObject, IAsyncDisposable
     }
 
     [RelayCommand]
-    private void OpenSettings()
+    private void OpenSettings() => IsSettingsOpen = true;
+
+    partial void OnIsSettingsOpenChanged(bool value)
     {
-        IsSettingsOpen = true;
-        DaemonSettings.RefreshDInputDevicesCommand.Execute(null);
+        if (value)
+        {
+            DaemonSettings.RefreshDInputDevicesCommand.Execute(null);
+        }
     }
 
     [RelayCommand]
